@@ -350,8 +350,9 @@
       f.appendChild(row(t('set.about.version'), 'enana ' + (v ? 'v' + v : '—')));
       if (p.os) f.appendChild(row(t('set.about.system'), fmt0(p)));
       f.appendChild(row(t('set.about.command'), h('code', null, 'enana')));
-      if (e.shortcut) f.appendChild(row(t('set.about.shortcut'), h('code', null, String(e.shortcut))));
-      f.appendChild(row(t('set.about.ports'), t('set.about.portsVal', { proxy: TP.cfg.proxyPort, ui: TP.cfg.uiPort })));
+      if (e.shortcut) f.appendChild(row(t('set.about.shortcutPath'), h('code', null, String(e.shortcut))));
+      f.appendChild(row(t('set.about.admin'), h('code', null, location.origin + location.pathname)));                                   // 后台地址 (现在正在用的这个)
+      f.appendChild(row(t('set.about.ports'), t('set.about.portsVal', { proxy: TP.cfg.proxyPort, admin: TP.cfg.apiPort, ui: TP.cfg.uiPort })));
       return f;
     });
     setText(el.about.querySelector('.cr-t'), t('set.about.credits'));

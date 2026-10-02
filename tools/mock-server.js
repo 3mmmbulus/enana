@@ -819,7 +819,7 @@ const ports = () => ({ proxy: 7890, ui: PORT, api: HPORT, speed: 7892 });
 const platform = () => (M.os === 'windows' ? { os: 'windows', osver: '11 23H2', arch: 'amd64' } : { os: 'darwin', osver: '15.1', arch: 'arm64' });
 const latestApp = () => (M.upd.on ? LATEST_APP : M.upd.cur), latestCore = () => (M.upd.on ? LATEST_CORE : M.upd.coreCur);
 const appAvail = () => verCmp(latestApp(), M.upd.cur) > 0, coreAvail = () => verCmp(latestCore(), M.upd.coreCur) > 0;
-const envOut = () => { const miss = M.rs.filter((s) => s.enabled && !s.present).map((s) => s.tag); return { core: M.env.core, rules: miss.length === 0, service: M.env.service, sysproxy: M.env.sysproxy, shortcut: M.env.shortcut ? shortcutText() : null, rules_updated: M.rulesUpdated, rules_missing: miss }; };
+const envOut = () => { const miss = M.rs.filter((s) => s.enabled && !s.present).map((s) => s.tag); return { core: M.env.core, rules: miss.length === 0, service: M.env.service, sysproxy: M.env.sysproxy, shortcut: M.env.shortcut ? shortcutText() : null, shortcut_cmd: M.env.shortcut ? 'enana' : '~/.enana/enana', rules_updated: M.rulesUpdated, rules_missing: miss }; };
 
 /* ---- 账号: 登录 / 注册 / 退出 / 代理总开关 (中心账号库是内存里的假 enana.cc) ---- */
 const EMAIL_RE = /^[A-Za-z0-9._%+'-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$/;
@@ -2180,9 +2180,11 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 const envJson = () => ({ apiBase: SPLIT ? 'http://' + HOST + ':' + HPORT : '', apiPort: HPORT, proxyPort: 7890, uiPort: PORT, version: M.upd.cur,
   probe: { ipPin: '/mock/ipify', ipAuto: '/mock/ipinfo', speedUrl: '/mock/down?bytes=10000000', delayUrl: '/mock/gen204' } });
 const notFound = (req, res, lang) => jsonRes(req, res, 404, { ok: false, code: 'E_NOT_FOUND', error: tr(lang || 'zh', 'e.noRoute'), message: 'Not found' });
+const PAGES = ['overview', 'apps', 'sites', 'rules', 'dns', 'servers', 'conns', 'traffic', 'speed', 'logs', 'settings', 'login', 'register'];     // 页面路由: /ui/apps 等直接给 index.html (和真机的 /enana/admin/apps 一样)
 function serveUi(req, res, u) {
-  let rel; try { rel = decodeURIComponent(u.pathname.replace(/^\/ui\/?/, '')) || 'index.html'; } catch (e) { return jsonRes(req, res, 400, { ok: false, code: 'E_INVALID', error: tr('zh', 'e.badReq') }); }
+  let rel; try { rel = decodeURIComponent(u.pathname.replace(/^\/(?:ui|enana\/admin)\/?/, '')) || 'index.html'; } catch (e) { return jsonRes(req, res, 400, { ok: false, code: 'E_INVALID', error: tr('zh', 'e.badReq') }); }
   if (rel.indexOf('\0') >= 0) return jsonRes(req, res, 400, { ok: false, code: 'E_INVALID', error: tr('zh', 'e.badReq') });
+  if (PAGES.indexOf(rel) >= 0) rel = 'index.html';
   if (rel === 'env.json') return jsonRes(req, res, 200, envJson());
   if (rel === 'catalog.json') return jsonRes(req, res, 200, catalogNow());
   if (rel.indexOf('appicons/') === 0 && /\.png$/i.test(rel)) return serveIcon(req, res, rel.slice(9, -4));       // 运行时生成的应用图标 (不读磁盘)
@@ -2320,9 +2322,10 @@ async function mainHandler(req, res) {
   if (req.method === 'OPTIONS') { res.writeHead(204, corsHeaders(req)); return res.end(); }
   if (p === '/') { res.writeHead(302, { Location: '/ui/' }); return res.end(); }
   if (p === '/ui') { res.writeHead(302, { Location: '/ui/' }); return res.end(); }
+  if (p === '/enana/admin') { res.writeHead(302, { Location: '/enana/admin/' }); return res.end(); }
   if (p === '/favicon.ico') { res.writeHead(204); return res.end(); }
   if (p.indexOf('/mock/') === 0) return mockEntry(req, res, u);
-  if (p.indexOf('/ui/') === 0) return serveUi(req, res, u);
+  if (p.indexOf('/ui/') === 0 || p.indexOf('/enana/admin/') === 0) return serveUi(req, res, u);
   if (p.indexOf('/api/') === 0) { if (SPLIT) return jsonRes(req, res, 404, { ok: false, code: 'E_NOT_FOUND', error: 'The helper API is on port ' + HPORT + ' in --split mode', message: 'Not found' }); return helperEntry(req, res, u); }
   return clashEntry(req, res, u);
 }

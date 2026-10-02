@@ -55,6 +55,25 @@ srv_secret_fields() { # <tag> -> 打印 JSON 数组 [{name,value}] (只含凭据
 srv_has_tag() { srv_list | awk -F'\t' -v t="$1" '$1==t {f=1} END{exit f?0:1}'; }
 srv_count() { srv_list | wc -l | tr -d ' '; }
 
+# ---------- 哪些服务器 / 订阅同步到云端 (端到端加密) ----------
+# 添加服务器时勾选「保存到云端」的才会进入云端同步; 没有记录的 (老版本添加的) 只在本机, 不会被悄悄上传。清单只在本机, 本身不同步:
+#   $H/servers.sync  每行一个节点名      $H/subs.sync  每行一个订阅名
+sync_list() { case $1 in sub) printf '%s\n' "$H/subs.sync" ;; *) printf '%s\n' "$H/servers.sync" ;; esac; }
+srv_sync_has() { grep -qxF -- "$1" "$H/servers.sync" 2>/dev/null; }                    # 这个节点会同步吗
+sync_list_set() { # <srv|sub> <名称> 0|1
+  local f; f=$(sync_list "$1"); touch "$f"; chmod 600 "$f"
+  { grep -vxF -- "$2" "$f" || true; if [ "$3" = 1 ]; then printf '%s\n' "$2"; fi; } > "$f.new"; mv "$f.new" "$f"; chmod 600 "$f"
+}
+sync_list_batch() { # <srv|sub> 0|1 <名称文件 (每行一个)>   批量 (导入几百个节点时不逐个改写文件)
+  local f; f=$(sync_list "$1"); touch "$f"; chmod 600 "$f"
+  if [ "$2" = 1 ]; then { cat "$f" "$3"; } | LC_ALL=C sort -u > "$f.new"; else grep -vxFf "$3" "$f" > "$f.new" || true; fi
+  mv "$f.new" "$f"; chmod 600 "$f"
+}
+sync_list_all() { # 把现有的全部服务器和订阅都标成「同步」(用户在设置里明确打开云端同步时, 和以前「全部同步」的行为一致)
+  local t; t=$(mktemp); srv_list | cut -f1 | awk 'NF' > "$t"; sync_list_batch srv 1 "$t"
+  awk -F'|' 'NF {print $1}' "$H/subs.tsv" 2>/dev/null > "$t"; sync_list_batch sub 1 "$t"; rm -f "$t"
+}
+
 # ---------- 写入 (带锁与备份) ----------
 lock_take() { # 简单目录锁, 最多等 10 秒; 超过 60 秒的旧锁视为残留
   local i=0
@@ -82,8 +101,8 @@ srv_check_line() { # 仪表盘提交的一行是否合法 (正则闸门; 真正�
 srv_import() { # srv_import [订阅名] [merge|replace] < JSONL  -> 打印 "added replaced removed", 逐行错误写 stderr
   # 目标文件默认 $H/servers.jsonl; 设置 SRV_FILE 可对副本做「干跑」(仪表盘预览数量用)
   local sub=${1:-} mode=${2:-merge} line n=0 added=0 replaced=0 removed=0 tag f=${SRV_FILE:-$H/servers.jsonl}
-  local tmp="$f.new"
-  : > "$tmp"
+  local tmp="$f.new" tags="$f.tags"
+  : > "$tmp"; : > "$tags"
   [ -f "$f" ] && cp "$f" "$tmp"
   if [ "$mode" = replace ] && [ -n "$sub" ]; then
     removed=$(LC_ALL=C grep -c "^{\"role\":\"[a-z]*\",\"sub\":\"$sub\"," "$tmp" || true)
@@ -99,14 +118,20 @@ srv_import() { # srv_import [订阅名] [merge|replace] < JSONL  -> 打印 "adde
     if LC_ALL=C grep -qF ",\"tag\":\"$tag\"" "$tmp" 2>/dev/null; then
       LC_ALL=C awk -v needle=",\"tag\":\"$tag\"" 'index($0, needle) == 0' "$tmp" > "$tmp.2"; mv "$tmp.2" "$tmp"; replaced=$((replaced+1))
     else added=$((added+1)); fi
-    printf '%s\n' "$line" >> "$tmp"
+    printf '%s\n' "$line" >> "$tmp"; printf '%s\n' "$tag" >> "$tags"
   done
   mv "$tmp" "$f"; chmod 600 "$f"
+  if [ -n "${SRV_SAVE:-}" ] && [ -z "${SRV_FILE:-}" ]; then          # 导入时的「保存到云端」: 1 = 这些节点 (和订阅) 进入云端同步, 0 = 只留在本机
+    [ -s "$tags" ] && sync_list_batch srv "$SRV_SAVE" "$tags"
+    [ -n "$sub" ] && sync_list_set sub "$sub" "$SRV_SAVE"
+  fi
+  rm -f "$tags"
   printf '%s %s %s\n' "$added" "$replaced" "$removed"
 }
 
 srv_delete() { # tag
   [ -f "$H/servers.jsonl" ] || return 0
+  [ -f "$H/servers.sync" ] && sync_list_set srv "$1" 0
   LC_ALL=C awk -v needle=",\"tag\":\"$1\"" 'index($0, needle) == 0' "$H/servers.jsonl" > "$H/servers.jsonl.new" && mv "$H/servers.jsonl.new" "$H/servers.jsonl"
   chmod 600 "$H/servers.jsonl"
 }
@@ -169,7 +194,7 @@ sub_touch() { # name count interval used total expire  (拉取并导入成功后
   [ -f "$H/subs.tsv" ] || return 0
   awk -F'|' -v n="$1" -v t="$(now)" -v c="${2:-0}" -v iv="${3:-12}" -v us="${4:-0}" -v to="${5:-0}" -v ex="${6:-0}" 'BEGIN{OFS="|"} $1==n {$3=t; $4=c; $5=iv; $6=us; $7=to; $8=ex} {print}' "$H/subs.tsv" > "$H/subs.tsv.new" && mv "$H/subs.tsv.new" "$H/subs.tsv"; chmod 600 "$H/subs.tsv"
 }
-sub_delete() { [ -f "$H/subs.tsv" ] && { awk -F'|' -v n="$1" '$1!=n' "$H/subs.tsv" > "$H/subs.tsv.new"; mv "$H/subs.tsv.new" "$H/subs.tsv"; chmod 600 "$H/subs.tsv"; }; srv_delete_sub "$1"; }
+sub_delete() { [ -f "$H/subs.sync" ] && sync_list_set sub "$1" 0; [ -f "$H/subs.tsv" ] && { awk -F'|' -v n="$1" '$1!=n' "$H/subs.tsv" > "$H/subs.tsv.new"; mv "$H/subs.tsv.new" "$H/subs.tsv"; chmod 600 "$H/subs.tsv"; }; srv_delete_sub "$1"; }
 subs_json() { # 不含链接/令牌, 只给主机名
   [ -s "$H/subs.tsv" ] || { printf '[]'; return; }
   awk -F'|' 'BEGIN{printf "["} {

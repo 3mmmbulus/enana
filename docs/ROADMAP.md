@@ -27,6 +27,14 @@
 
 仪表盘与 `importer.js` 与系统无关, 可直接复用。目前 `get.ps1` 只是占位 (提示「即将支持」); 实现前网站上的 Windows 命令也只会给出这个提示。
 
+Windows 版要和 macOS 版达到同样的体验 (需要在真机上逐项测试):
+
+- **一行命令**: `irm https://install.enana.cc | iex`; 先检测 PowerShell 版本 / Windows 版本 / 架构 / 是否能访问下载服务, 缺什么说清楚; 下载 `manifest.json` + 安装包并用 `Get-FileHash` 校验 SHA-256 (与 `get.sh` 同一套两线路交叉校验)。
+- **终端快捷命令 `enana`**: 安装 `enana.cmd` / `enana.ps1` 到用户目录下的 `bin`, 并把它加进用户 PATH (写 `HKCU\Environment` 后广播 `WM_SETTINGCHANGE`), 新开的 PowerShell / cmd 里输入 `enana` 就能打开控制台; 这一步不需要管理员权限。
+- **后台地址**: 和 macOS 一样固定为 `http://127.0.0.1:<端口>/enana/admin/`, 默认端口被占用时自动换随机空闲端口, 安装结束时打印。
+- **开机自启 / 崩溃重启**: 计划任务 (用户登录时启动, 失败自动重启); **系统代理**: 注册表 `Internet Settings` + 通知 WinINet。
+- **本地辅助服务**: 在 PowerShell `HttpListener` 重写同一份接口, 还是复用现有脚本 (需要 Git for Windows 的 bash) 要在真机上评估后决定。
+
 ## 🔜 会员 (收费) 功能
 
 套餐 / 订阅 / 权益已经在云端和本地接口里预留 (`GET /api/plan`: `features.<key>.{tier,enabled,coming_soon,reason}`)。计划中的第一个付费功能是「enana 官方线路」: 订阅用户登录后自动出现官方节点 (凭据不可查看 / 不可导出, 订阅过期后下次同步自动消失, 本机缓存最多再保留 3 天宽限); 免费版永远拿不到任何官方节点。

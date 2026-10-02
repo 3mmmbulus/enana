@@ -8,6 +8,10 @@
   /* [页面 id, 图标别名]; 词典键 nav.<id> */
   var NAV = [['overview', 'nav-overview'], ['apps', 'nav-apps'], ['sites', 'nav-sites'], ['rules', 'nav-rules'], ['dns', 'nav-dns'], ['servers', 'nav-servers'], ['conns', 'nav-connections'], ['traffic', 'nav-traffic'], ['speed', 'nav-speed'], ['logs', 'nav-logs'], ['settings', 'nav-settings']];
   var navEls = {}, panels = {}, badges = {}, hd = {}, root = document.documentElement;
+  /* 路由: 页面地址是路径形式 —— 后台地址 + 页面 id, 例如 /enana/admin/apps (开发时是 /ui/apps); 旧的 #apps 写法 (书签 / 外部链接) 也认。
+   * 页面里的相对地址 (style.css / env.json …) 都相对后台地址解析, 所以页面 id 后面不带斜杠。 */
+  var ROUTE_RE = /^(.*\/)([^/]*)$/, ROUTE_BASE = (ROUTE_RE.exec(location.pathname) || [0, '/'])[1];
+  function routeId() { var seg = (ROUTE_RE.exec(location.pathname) || [])[2] || ''; return panels[seg] ? seg : (location.hash || '').replace(/^#/, ''); }
   var BP_DRAWER = '(max-width:759px)', BP_WIDE = '(min-width:1100px)';
   var mqDrawer = window.matchMedia ? window.matchMedia(BP_DRAWER) : { matches: false };
   var mqWide = window.matchMedia ? window.matchMedia(BP_WIDE) : { matches: true };
@@ -53,7 +57,7 @@
       if (on) navEls[n[0]].setAttribute('aria-current', 'page'); else navEls[n[0]].removeAttribute('aria-current');
     });
     TP.prefs.set('ui.tab', id);
-    try { if (location.hash !== '#' + id) history.replaceState(null, '', '#' + id); } catch (e) { /* 忽略 */ }
+    try { if (location.pathname !== ROUTE_BASE + id || location.hash) history.replaceState(null, '', ROUTE_BASE + id + location.search); } catch (e) { /* 忽略 */ }
     crumbFn = null; paintTitle();
     var V = TP.V[id];
     if (V && V.show) { try { V.show(); } catch (e) { console.error('[' + id + '.show]', e); } }
@@ -111,7 +115,7 @@
     hd.nav = TP.byId('nav');
     NAV.forEach(function (n) {
       var id = n[0], badge = h('span', { class: 'nav-badge', hidden: true });
-      var a = h('a', { class: 'nav-i', href: '#' + id, 'data-id': id },
+      var a = h('a', { class: 'nav-i', href: ROUTE_BASE + id, 'data-id': id },
         h('span', { class: 'nav-ic' }, ui.icon(n[1], 20)), h('span', { class: 'nav-l' }, L('nav.' + id)), badge);
       a.setAttribute('aria-label', t('nav.' + id)); a.title = t('nav.' + id); a.setAttribute('data-tip', t('nav.' + id));
       a.addEventListener('click', function (e) {
@@ -277,8 +281,9 @@
   /* ================= 页脚 / 图标栏状态下键盘焦点的提示 / 弹窗里的输入框不被软键盘挡住 ================= */
   function renderFoot() {
     var f = TP.byId('foot'); if (!f) return;
-    TP.clear(f); f.appendChild(I.rich('foot.text', { cmd: h('code', null, 'enana') }));
-    var v = TP.updates.version(); if (v) f.appendChild(document.createTextNode(' · enana v' + v));
+    var v = TP.updates.version(), l = h('span', { class: 'foot-l' }, I.rich('foot.text', { cmd: h('code', null, 'enana') }), v ? ' · enana v' + v : '');
+    var site = h('a', { class: 'foot-site', href: TP.auth.url('account_url'), target: '_blank', rel: 'noopener noreferrer', title: t('site.title') }, ui.icon('globe', 14, 'ci'), h('span', null, t('site.name')), ui.icon('external-link', 13, 'ci'));
+    TP.clear(f); f.appendChild(l); f.appendChild(h('span', { class: 'foot-r' }, site, h('span', { class: 'foot-copy' }, t('foot.copy', { year: new Date().getFullYear() }))));      // 固定在底部: enana 官网链接 + 版权
   }
   function setupTips() {
     var tip = h('div', { id: 'navtip', class: 'navtip', role: 'tooltip', hidden: true }); document.body.appendChild(tip);
@@ -336,7 +341,7 @@
     var shown = TP.ss.get('updated', '');
     if (shown) { TP.ss.del('updated'); setTimeout(function () { ui.toast(t('upd.updatedTo', { v: shown }), 'ok', 6000); }, 800); }
 
-    var start = (location.hash || '').replace(/^#/, '');
+    var start = routeId();
     if (!panels[start]) start = TP.prefs.get('ui.tab', TP.ls.get('tab', 'overview'));
     TP.go(start);
     TP.auth.start();

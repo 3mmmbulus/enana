@@ -164,6 +164,13 @@
     }
     TP.on('plan', paintGate); paintGate(); TP.plan.load(false);
     el.tabSub = h('p', { class: 'imp-tabsub muted sm', 'aria-live': 'polite' });
+    /* 「保存到云端」: 默认勾选 —— 这次添加的服务器 (和订阅) 加密后同步到我的账号, 其它电脑登录同一账号时自动恢复; 不勾选就只留在这台电脑上 */
+    el.saveCb = h('input', { type: 'checkbox', checked: true });
+    el.saveCb.addEventListener('change', function () { el.saveCb._touched = true; });
+    el.saveNote = h('span', { class: 'muted sm imp-save-n' });
+    el.saveBox = h('label', { class: 'chk-inline imp-save' }, el.saveCb, h('span', null, L('imp.save')), el.saveNote);
+    function paintSave(d) { if (!el.saveCb._touched) el.saveCb.checked = !!d.checked; setText(el.saveNote, d.off ? t('imp.saveOff') : ''); el.saveNote.hidden = !d.off; }
+    if (TP.sync && TP.sync.prime) TP.sync.prime().then(paintSave);
     el.root = h('div', { class: 'imp-in' }, el.tabs.el, el.tabSub, el.subRow, el.paneImp, el.paneMan, el.paneVps, el.stepBox, el.job, el.preview, el.result);
 
     api = ui.modal({
@@ -238,6 +245,7 @@
           { label: t('common.close'), kind: 'primary', id: 'close', cancel: true }];
       } else list = [];
       api.setActions(list);
+      if (p === 'idle' || p === 'preview') api.foot.insertBefore(el.saveBox, api.foot.firstChild);        // 底部左侧: 「保存到云端」
       api.setBusy(p === 'working' || p === 'committing');
       if (p === 'preview') refresh();
     }
@@ -531,6 +539,7 @@
         } else lines.push(t('imp.cf.single', { n: g.servers.length }));
       });
       lines.push(t('imp.cf.roles', { pin: cnt.pin, auto: cnt.auto, dl: cnt.dl, off: cnt.off }));
+      lines.push(t(el.saveCb.checked ? 'imp.cf.saveYes' : 'imp.cf.saveNo'));
       lines.push(t('imp.cf.apply'));
       var ok = await ui.confirmDialog({ title: t('imp.cf.title'), message: t('imp.cf.msg', { n: total }), detail: lines, confirmText: t('imp.cf.go') });
       if (!ok) return;
@@ -547,13 +556,13 @@
       var card = ui.taskCard(t('imp.card.applying'), { horizontal: false });
       TP.clear(el.job); el.job.appendChild(card.el); card.set({ pct: 0, msg: t('imp.msg.submitting') });
       el.preview.hidden = true; el.paneImp.hidden = true; el.paneMan.hidden = true; el.tabs.el.hidden = true;             // 提交期间收起预览, 避免重复点击
-      var total = { added: 0, replaced: 0, removed: 0, errors: [] }, tags = [], gi, g, res, base, span;
+      var total = { added: 0, replaced: 0, removed: 0, errors: [] }, tags = [], gi, g, res, base, span, save = el.saveCb.checked ? 1 : 0;
       try {
         for (gi = 0; gi < groups.length; gi++) {
           g = groups[gi]; base = gi / groups.length * 100; span = 100 / groups.length;
           card.set({ pct: base, msg: t('imp.msg.writingGroup', { label: groupLabel(g) }) });
-          if (g.sub && g.url) await TP.helper('POST', '/api/sub/save', { q: { name: g.sub }, body: g.url });
-          res = await TP.helper('POST', '/api/servers/import', { q: { sub: g.sub, mode: g.mode }, body: TPImporter.toJSONL(g.servers, g.sub) });
+          if (g.sub && g.url) await TP.helper('POST', '/api/sub/save', { q: { name: g.sub, save: save }, body: g.url });
+          res = await TP.helper('POST', '/api/servers/import', { q: { sub: g.sub, mode: g.mode, save: save }, body: TPImporter.toJSONL(g.servers, g.sub) });
           total.added += +res.added || 0; total.replaced += +res.replaced || 0; total.removed += +res.removed || 0;
           total.errors = total.errors.concat(res.errors || []);
           g.servers.forEach(function (s) { tags.push(s.outbound.tag); });
@@ -696,6 +705,7 @@
       var sv = res.servers[0]; sv.role = f.role; sv.sel = true;
       var summary = [t('imp.man.cf.type', { type: ty.label }), t('imp.man.cf.addr', { addr: hostPart(f.host) + ':' + f.port }), t('imp.man.cf.role', { role: TP.name.role(f.role) })];
       if (pem) summary.push(t('imp.man.cf.cert'));
+      summary.push(t(el.saveCb.checked ? 'imp.cf.saveYes' : 'imp.cf.saveNo'));
       summary.push(t('imp.cf.apply'));
       var ok = await ui.confirmDialog({ title: t('imp.man.cf.title'), message: t('imp.man.cf.msg', { tag: sv.outbound.tag }), detail: summary, confirmText: t('imp.cf.go') });
       f = null;

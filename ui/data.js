@@ -27,7 +27,8 @@
     var c = TP.cfg;
     c.apiPort = +j.apiPort || c.apiPort; c.proxyPort = +j.proxyPort || c.proxyPort; c.uiPort = +j.uiPort || c.uiPort; c.version = j.version || '';
     c.probe = (j.probe && typeof j.probe === 'object') ? j.probe : {};   // 可选: 覆盖探测地址 (开发/离线测试用)
-    c.apiBase = (typeof j.apiBase === 'string') ? j.apiBase.replace(/\/+$/, '') : 'http://127.0.0.1:' + c.apiPort;
+    c.apiBase = (typeof j.apiBase === 'string') ? j.apiBase.replace(/\/+$/, '') : '';                                  // 仪表盘由辅助服务提供, 接口默认同源
+    c.clashBase = (typeof j.clashBase === 'string') ? j.clashBase.replace(/\/+$/, '') : '';                          // 代理核心的控制接口 (Clash API) 在另一个端口, 跨域访问 (带令牌)
   };
 
   /* 网站目录 (schema 2/3): groups={id:名称}, groups_en={id:English}, order=[分组显示顺序], entries=[{id,tag,name,name_en,group,default,desc,desc_en,domains,rulesets,cidrs}] */

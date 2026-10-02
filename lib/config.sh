@@ -33,7 +33,7 @@ gen_catalog_json() { # $1 = 临时目录 (含 cat) -> $H/ui/catalog.json (中文
     [ "$l" = zh ] && continue; [ -f "$DATA/i18n/$l.tsv" ] || continue
     LC_ALL=C awk -v tbl="$(i18n_tbl "$l")" -v keys="$keys" -f "$LIB/i18n-lib.awk" -f "$LIB/i18n-json.awk" "$H/ui/catalog.json" > "$H/ui/catalog.$l.json.new" && mv "$H/ui/catalog.$l.json.new" "$H/ui/catalog.$l.json"
   done
-  printf '{"apiPort":%s,"proxyPort":%s,"uiPort":%s,"version":"%s"}\n' "$API_PORT" "$PORT" "$UI_PORT" "$VERSION" > "$H/ui/env.json"
+  printf '{"apiPort":%s,"proxyPort":%s,"uiPort":%s,"apiBase":"","clashBase":"http://127.0.0.1:%s","version":"%s"}\n' "$API_PORT" "$PORT" "$UI_PORT" "$UI_PORT" "$VERSION" > "$H/ui/env.json"
 }
 
 gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
@@ -133,8 +133,9 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
     printf '"inbounds":[{"type":"mixed","tag":"in","listen":"127.0.0.1","listen_port":%s}%s],\n' "$PORT" "$speed_in"
     printf '"outbounds":[{"type":"direct","tag":"direct"},\n%s],\n' "$(paste -sd, - < "$T/ob")"
     printf '"route":{"rule_set":[%s],\n"rules":[\n%s],\n"final":"Final","find_process":true%s},\n' "$rs_defs" "$(paste -sd, - < "$T/rules")" "$resolver"
-    printf '"experimental":{"cache_file":{"enabled":true,"path":"%s/cache.db"},"clash_api":{"external_controller":"127.0.0.1:%s","external_ui":"%s/ui","default_mode":"%s"%s,"access_control_allow_origin":["http://127.0.0.1:%s","http://localhost:%s"]}}\n}\n' \
-      "$H" "$UI_PORT" "$H" "$(proxy_clash_mode)" "${secret:+,\"secret\":\"$secret\"}" "$UI_PORT" "$UI_PORT"
+    # 仪表盘页面不再由核心提供 (改由本地辅助服务在 /enana/admin/ 提供), 核心只留控制接口; 只允许仪表盘的来源跨域访问它 (还要有令牌)
+    printf '"experimental":{"cache_file":{"enabled":true,"path":"%s/cache.db"},"clash_api":{"external_controller":"127.0.0.1:%s","default_mode":"%s"%s,"access_control_allow_origin":["http://127.0.0.1:%s","http://localhost:%s"]}}\n}\n' \
+      "$H" "$UI_PORT" "$(proxy_clash_mode)" "${secret:+,\"secret\":\"$secret\"}" "$API_PORT" "$API_PORT"
   } > "$H/config.json.new"
   chmod 600 "$H/config.json.new"
   gen_catalog_json "$T"

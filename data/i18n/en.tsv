@@ -34,8 +34,9 @@ sing-box 核心 · 来源	sing-box core · source
 # --- install.sh · install steps
 检查环境	Check the environment
 macOS * 较旧: 官方 sing-box 1.14 可能无法在此运行 (Intel 会自动尝试兼容包)	macOS * is quite old: the official sing-box 1.14 may not run here (on Intel, a compatibility build is tried automatically)
-本地端口 * 已被占用	Local port * is already in use
-先退出占用它的程序 (如其它代理软件), 或换端口: PORT=7891 UI_PORT=9190 API_PORT=9191 bash install.sh	Quit the program that is using it (such as another proxy app), or pick different ports: PORT=7891 UI_PORT=9190 API_PORT=9191 bash install.sh
+本地端口 * 已被其它程序占用, 已自动改用 *	Local port * is used by another program; switched to * automatically
+找不到空闲的本地端口	No free local port could be found
+请先关闭一些占用端口的程序, 再重新运行安装命令	Close some programs that use ports, then run the install command again
 本地端口 * / * / * / * 可用	Local ports * / * / * / * are available
 网络服务「*」已有其它系统代理设置, 继续会覆盖 (原设置已备份到 */proxy-backup.txt)	Network service “*” already has other system proxy settings, and continuing will overwrite them (the originals are backed up to */proxy-backup.txt)
 继续?	Continue?
@@ -72,7 +73,7 @@ sing-box * 偏旧, 建议 enana upgrade	sing-box * is a bit old; consider runnin
 安装快捷命令	Install the shortcut command
 快捷命令已存在: *	Shortcut command already exists: *
 已安装: *  → 以后在任何终端输入 *enana* 即可打开控制台	Installed: *  → from now on, type *enana* in any terminal to open the console
-已在 * 里加入 PATH; 请重新打开终端后生效	Added to PATH in *; reopen your terminal for it to take effect
+* 还不在当前终端的 PATH 里: 已写入 *, 重新打开终端后生效 (想立刻用: export PATH="$HOME/.local/bin:$PATH")	* is not in this terminal’s PATH yet: it was added to *, so reopen your terminal (to use it right now: export PATH="$HOME/.local/bin:$PATH")
 快捷命令安装失败; 仍可用 */enana	Couldn’t install the shortcut command; you can still use */enana
 验证	Verify the installation
 代理服务运行中	Proxy service running
@@ -101,13 +102,14 @@ Windows 请用 PowerShell 一行命令安装 (见 README); Linux 计划见 docs/
 生成配置并重启服务	Generate configuration and restart the service
 已升级到 enana v*	Upgraded to enana v*
 \n%s════════════════ 环境安装完成 ════════════════%s\n	\n%s════════════════ Environment installed ════════════════%s\n
-  %s仪表盘%s   %s%s%s   (已尝试自动打开)\n	  %sDashboard%s   %s%s%s   (tried to open it automatically)\n
+  %s后台地址%s   %s%s%s   (已尝试自动打开; 以后在终端输入 enana open 也能打开)\n	  %sDashboard%s   %s%s%s   (tried to open it automatically; you can also run enana open in a terminal any time)\n
   %s登录%s     仪表盘需要登录才能使用: 用 enana.cc 账号 (邮箱 + 密码) 登录; 还没有账号? 直接在登录框里点「注册」\n	  %sSign in%s     You need to sign in to use the dashboard: use your enana.cc account (email + password). No account yet? Click “Register” in the sign-in box\n
   %s代理%s     默认是关闭的 (全部直连): 登录后在仪表盘里打开「代理」总开关才会生效; 退出账号会自动关闭代理\n	  %sProxy%s       Off by default (everything goes direct): it only takes effect after you sign in and turn on the “Proxy” master switch in the dashboard; logging out turns it off automatically\n
   接下来在仪表盘里完成 (终端不需要再做任何事):\n	  Next, finish in the dashboard (nothing more to do in the terminal):\n
     ① 添加固定出口服务器 (如日本)    ② 导入其它代理 / 订阅链接 (自动识别)\n	    ① Add a Fixed exit server (e.g. Japan)    ② Import other proxies / subscription links (detected automatically)\n
     ③ 确认应用与网站的推荐设置       ④ 新装的应用会自动识别, 默认关闭\n	    ③ Review the recommended app and site settings    ④ New apps are detected automatically and start off\n
-  命令行控制台   在任何终端输入 %senana%s  (状态 · 一键重启 · 退出账号 · 卸载 …)\n\n	  Command-line console   type %senana%s in any terminal  (status · one-click restart · log out · uninstall …)\n\n
+  命令行控制台   在任何终端输入 %senana%s  (状态 · 一键重启 · 退出账号 · 卸载 …)\n	  Command-line console   type %senana%s in any terminal  (status · one-click restart · log out · uninstall …)\n
+                 注意: 要先重新打开终端 (或在当前终端运行 %sexport PATH="$HOME/.local/bin:$PATH"%s); 现在也可以直接运行 %s%s/enana%s\n	                 Note: reopen your terminal first (or run %sexport PATH="$HOME/.local/bin:$PATH"%s in this one); you can also run %s%s/enana%s right now\n
 
 # --- install.sh · status / start / stop / update / upgrade / logout / lang
 服务运行中 (sing-box *)	Service running (sing-box *)
@@ -119,7 +121,7 @@ Windows 请用 PowerShell 一行命令安装 (见 README); Linux 计划见 docs/
 代理: 已开启 (按规则分流)	Proxy: on (routing by rules)
 代理: 已关闭 (全部直连) — 登录后在仪表盘里打开「代理」总开关	Proxy: off (everything goes direct) — sign in, then turn on the “Proxy” master switch in the dashboard
 有新版本 (enana self-update 更新)	A new version is available (update with enana self-update)
-服务器 * 台 · 仪表盘 *	Servers: * · dashboard: *
+服务器 * 台 · 后台地址 *	Servers: * · dashboard: *
 已启动	Started
 启动失败: enana doctor	Couldn’t start — run enana doctor
 正在重启服务…	Restarting the service…
@@ -160,6 +162,7 @@ enana * · macOS * * · bash * · 安装目录 * · 语言 *	enana * · macOS * 
 每日维护: 未加载	Daily maintenance: not loaded
 端口 *: 监听中	Port *: listening
 端口 *: 未监听	Port *: not listening
+后台地址: *	Dashboard address: *
 == 账号 ==	== Account ==
 已登录 *	Signed in as *
 未登录	Not signed in
@@ -264,7 +267,7 @@ GitHub 不通: 将依次尝试镜像; 也可手动下载安装包 (SINGBOX_TGZ=�
   自动线路  %s  %s\n	  Auto route    %s  %s\n
   账号      已登录 %s\n	  Account       signed in as %s\n
   账号      未登录 (打开仪表盘, 用 enana.cc 账号登录或注册)\n	  Account       not signed in (sign in or register with an enana.cc account in the dashboard)\n
-  仪表盘    %s%s%s\n	  Dashboard     %s%s%s\n
+  后台地址  %s%s%s\n	  Dashboard     %s%s%s\n
 \n  %s提示%s 还没有添加服务器 → 按 1 打开仪表盘, 在「服务器」页添加\n	\n  %sTip%s No servers added yet → press 1 to open the dashboard and add one on the Servers page\n
 \n  %s提示%s 发现 %s 个新应用 (默认关闭) → 按 1 到仪表盘「应用」页处理\n	\n  %sTip%s New apps found: %s (off by default) → press 1 and review them on the dashboard’s Apps page\n
   [1] 打开仪表盘     [2] 重启服务        [3] %s\n	  [1] Open dashboard   [2] Restart service   [3] %s\n

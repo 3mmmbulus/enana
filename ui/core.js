@@ -7,7 +7,7 @@
   'use strict';
 
   var TP = window.TP = {
-    cfg: { apiBase: 'http://127.0.0.1:9091', apiPort: 9091, proxyPort: 7890, uiPort: 9090, version: '', probe: {} },
+    cfg: { apiBase: '', clashBase: '', apiPort: 9091, proxyPort: 7890, uiPort: 9090, version: '', probe: {} },      // apiBase / clashBase 为空 = 和页面同源; env.json 可以覆盖 (clashBase: 代理核心控制接口的地址)
     /* 可调常量 */
     CFG: {
       ALLOW_SKIP_CONFIRM: true,     // 低风险开关 (策略切换/监控) 的确认框是否提供「本次登录期间不再询问」
@@ -219,7 +219,7 @@
   }
   TP.noHelper = function () { return S.helperUp === false; };
 
-  /* 辅助服务 (独立端口, 跨域): 每个请求都带 X-Enana: 1 和 X-Enana-Lang (后端据此本地化任务进度和错误文字), 登录后还带 X-Enana-Token
+  /* 辅助服务 (本页面就是它提供的, 默认同源; env.json 的 apiBase 可以改): 每个请求都带 X-Enana: 1 和 X-Enana-Lang (后端据此本地化任务进度和错误文字), 登录后还带 X-Enana-Token
    * o: {q:{查询参数}, body:文本, form:{表单字段 (urlencoded)}, timeout:毫秒, text:true -> 返回 {text, headers}, noAuth:true -> 不带令牌且 401 不触发重新登录}
    * 不信任 Content-Type: 一律按文本读取, 看起来像 JSON 才解析。 */
   TP.helper = async function (method, path, o) {
@@ -252,7 +252,7 @@
     return j || text;
   };
 
-  /* Clash API (与页面同源): 登录后带 Authorization: Bearer <令牌>。核心重启期间的失败是正常现象: 安静处理。 */
+  /* Clash API (TP.cfg.clashBase; 为空 = 同源): 登录后带 Authorization: Bearer <令牌>。核心重启期间的失败是正常现象: 安静处理。 */
   var clashFails = 0, applying = 0, graceUntil = 0;
   function setClash(st) { if (S.clash !== st) { S.clash = st; TP.emit('clash', st); } }
   TP.isApplying = function () { return applying > 0 || Date.now() < graceUntil; };
@@ -261,7 +261,7 @@
     if (body) headers['Content-Type'] = 'application/json';
     if (token) headers.Authorization = 'Bearer ' + token;
     try {
-      res = await fetchT(path, { method: method, headers: headers, body: body ? JSON.stringify(body) : undefined }, (o && o.timeout) || 8000);
+      res = await fetchT(TP.cfg.clashBase + path, { method: method, headers: headers, body: body ? JSON.stringify(body) : undefined }, (o && o.timeout) || 8000);
     } catch (e) {
       clashFails++;
       if (TP.isApplying()) setClash('applying');

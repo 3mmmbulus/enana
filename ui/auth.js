@@ -9,6 +9,9 @@
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, I = window.I18N, t = I.t, L = I.L;
   var A = TP.auth = { account: '', hint: '', required: true, expectMsg: '', status: null };
   var lastActive = Date.now(), login = null;
+  var firstPage = (/^(.*\/)([^/]*)$/.exec(location.pathname) || [])[2] === 'register' ? 'register' : 'login';      // 打开的地址是 …/register 就先显示注册页 (在 app.js 把地址改成当前页之前记下来)
+  /* 登录页顶部的提示: 带词典键的对象, 切换语言后会按新语言重新生成文字 (String(x) 取当前语言的文字) */
+  A.msg = function (key, vars) { return { key: key, vars: vars || null, toString: function () { return t(key, vars); } }; };
   var DEF = { account_url: 'https://enana.cc' };      // 官网只有一个首页: 注册 / 登录 / 改密码 / 设备管理都在仪表盘里完成
 
   /* 来自辅助服务的链接只接受 https:// ; 否则用默认地址 */
@@ -26,7 +29,7 @@
   A.touch = function () { lastActive = Date.now(); };
   ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(function (ev) { document.addEventListener(ev, A.touch, { passive: true, capture: true }); });
   setInterval(function () {
-    if (!S.locked && A.required && Date.now() - lastActive > TP.CFG.AUTO_LOCK_MIN * 60000) A.lock(t('auth.autoLock', { n: TP.CFG.AUTO_LOCK_MIN }));
+    if (!S.locked && A.required && Date.now() - lastActive > TP.CFG.AUTO_LOCK_MIN * 60000) A.lock(A.msg('auth.autoLock', { n: TP.CFG.AUTO_LOCK_MIN }));
   }, 15000);
 
   function unlock(relogin) {
@@ -36,7 +39,9 @@
   }
 
   /* ---------- 启动: 读取状态, 决定要不要登录 ---------- */
+  function ready() { document.documentElement.classList.add('ui-ready'); }       // 显示页面外壳 (boot.js 在登录状态确定之前把它藏起来)
   A.start = async function () {
+    if (!TP.getToken()) A.lock(''); else ready();                  // 没有令牌: 马上显示登录页 / 注册页, 不等状态请求 (不会先闪一下仪表盘); 有令牌: 直接显示仪表盘
     try {
       var st = await TP.helper('GET', '/api/auth/status', { noAuth: true, timeout: 6000 });
       if (st && typeof st === 'object') {
@@ -44,8 +49,12 @@
         if (st.required === false) A.required = false;
       }
     } catch (e) { /* 辅助服务暂时连不上: 仍然显示登录框, 提交时会给出原因 */ }
-    if (!A.required || TP.getToken()) { unlock(false); return; }     // 令牌如果已失效, 第一个请求会 401 并重新弹出登录框
-    A.lock('');
+    if (!A.required || TP.getToken()) {                             // 令牌如果已失效, 第一个请求会 401 并重新弹出登录框
+      if (login) { var cur = login; login = null; cur.close('ok'); }  // 不需要登录 (开发用的模拟服务): 收起已经显示的登录页
+      unlock(false); ready(); return;
+    }
+    if (!login) A.lock('');
+    ready();
   };
   /* 重新读取公开状态 (登录框显示后悄悄刷新: 限流剩余时间、上次账号提示) */
   async function refreshStatus() {
@@ -61,7 +70,7 @@
   };
   A.expire = function (msg) {
     if (A._exp || (S.locked && login)) return;
-    var m = A.expectMsg || msg || t('auth.expired'), o = A.expectOpt || {}, plain = !A.expectMsg && !msg;
+    var m = A.expectMsg || msg || A.msg('auth.expired'), o = A.expectOpt || {}, plain = !A.expectMsg && !msg;
     A.expectMsg = ''; A.expectOpt = null;
     A._exp = true; S.locked = true;                                  // 立刻停掉轮询; 先重新读一次 /api/auth/status (被其它设备下线时里面有 notice), 再显示登录框
     refreshStatus().then(function () { A._exp = false; A.lock(plain && A.status && A.status.notice ? '' : m, o); });     // 有后端给的说明 (例如被其它设备下线) 时, 不再重复显示「登录已过期」
@@ -97,38 +106,76 @@
     });
   };
 
-  /* ---------- 登录 / 注册 弹窗 ---------- */
+  /* ---------- 登录 / 注册: 两个独立的整页 (地址 …/login 与 …/register), 用页面里的链接互相跳转, 不是标签 ----------
+   * 页面结构: 右上角语言切换 · 居中的卡片 (标题 + 副标题 / 分隔线 / 表单 / 「还没有账号? 立即注册」) · 卡片下的说明 · 最底部 enana 官网链接和版权。
+   * 登录成功后回到锁定之前所在的页面 (A.returnTo)。 */
+  var ROUTE = (/^(.*\/)([^/]*)$/.exec(location.pathname) || [0, '/'])[1];            // 后台地址 (和 app.js 里的 ROUTE_BASE 一样)
+  function pageFromUrl() { var m = /^(.*\/)([^/]*)$/.exec(location.pathname); return m && m[2] === 'register' ? 'register' : 'login'; }
+  function setUrl(mode, push) {
+    try { var want = ROUTE + mode; if (location.pathname !== want || location.hash) history[push ? 'pushState' : 'replaceState'](null, '', want + location.search); } catch (e) { /* 忽略 */ }
+  }
+  function openPage(content) {                                                         // 整页的 <dialog>: 背景不可操作, 焦点锁定在页面里, ESC 关不掉
+    var dlg = h('dialog', { class: 'authpage login' }, content);
+    dlg.addEventListener('cancel', function (e) { e.preventDefault(); });
+    document.body.appendChild(dlg); if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
+    ui.hostFloaters();
+    return {
+      el: dlg, setLabel: function (v) { dlg.setAttribute('aria-label', v); },
+      close: function () {
+        try { if (dlg.open) dlg.close(); } catch (e) { /* 忽略 */ }
+        var f = TP.byId('floaters'); if (f && dlg.contains(f)) document.body.appendChild(f);
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+        ui.hostFloaters();
+      }
+    };
+  }
   function showLogin(msg, opt) {
-    var st = A.status || {}, mode = 'login';
-    var email = h('input', { class: 'inp', type: 'text', name: 'username', inputmode: 'email', autocomplete: 'username', autocapitalize: 'off', spellcheck: 'false', 'aria-label': L('auth.email'), placeholder: L('auth.emailPh'), value: opt.noPrefill ? '' : TP.ls.get('login.email', '') });
-    var pw = h('input', { class: 'inp', type: 'password', name: 'password', autocomplete: 'current-password', 'aria-label': L('auth.password'), spellcheck: 'false' });
-    var pw2 = h('input', { class: 'inp', type: 'password', name: 'password2', autocomplete: 'new-password', 'aria-label': L('auth.confirm'), spellcheck: 'false' });
-    var eye = ui.ibtn('eye', L('auth.showPw'), { size: 18 }); eye.classList.add('pw-eye'); eye.setAttribute('aria-pressed', 'false');
-    eye.addEventListener('click', function () {
-      var show = pw.type === 'password'; pw.type = show ? 'text' : 'password'; pw2.type = pw.type;
-      eye.setAttribute('aria-pressed', show ? 'true' : 'false');
-      var lab = t(show ? 'auth.hidePw' : 'auth.showPw'); eye.setAttribute('aria-label', lab); eye.title = lab; eye._tip = lab;
-      eye.replaceChild(ui.icon(show ? 'eye-off' : 'eye', 18, 'bi'), eye.firstChild); eye._iconEl = eye.firstChild; pw.focus();
-    });
+    var st = A.status || {}, mode = firstPage, api = null;
+    firstPage = 'login';
+    if (TP.tab) A.returnTo = TP.tab;                                      // 登录后回到这一页
+    var email = h('input', { id: 'ap-email', type: 'text', name: 'username', inputmode: 'email', autocomplete: 'username', autocapitalize: 'off', spellcheck: 'false', placeholder: L('auth.ph.email'), value: opt.noPrefill ? '' : TP.ls.get('login.email', '') });
+    var pw = h('input', { id: 'ap-pw', type: 'password', name: 'password', autocomplete: 'current-password', spellcheck: 'false', placeholder: L('auth.ph.pw') });
+    var pw2 = h('input', { id: 'ap-pw2', type: 'password', name: 'password2', autocomplete: 'new-password', spellcheck: 'false', placeholder: L('auth.ph.pw2') });
+    var eyes = [];
+    function mkEye(target) {                                              // 显示 / 隐藏密码: 两个密码框一起切换
+      var eye = ui.ibtn('eye', L('auth.showPw'), { size: 18 }); eye.classList.add('pw-eye'); eye.setAttribute('aria-pressed', 'false'); eyes.push(eye);
+      eye.addEventListener('click', function () {
+        var show = pw.type === 'password'; pw.type = show ? 'text' : 'password'; pw2.type = pw.type;
+        var lab = t(show ? 'auth.hidePw' : 'auth.showPw');
+        eyes.forEach(function (e2) { e2.setAttribute('aria-pressed', show ? 'true' : 'false'); e2.setAttribute('aria-label', lab); e2.title = lab; e2._tip = lab; e2.replaceChild(ui.icon(show ? 'eye-off' : 'eye', 18, 'bi'), e2.firstChild); e2._iconEl = e2.firstChild; });
+        target.focus();
+      });
+      return eye;
+    }
     var msgEl = h('p', { class: 'login-msg', 'aria-live': 'polite' }), noticeEl = h('p', { class: 'login-notice', role: 'status' }, ui.icon('info', 16, 'ci'), h('span'));
     var pending = null;                                                    // 设备已满时: {user, password} 只留在这个变量里 (内存); 登录成功 / 取消 / 关闭后清掉
     function wipePending() { if (pending) { pending.password = ''; pending = null; } }
     var err = h('div', { class: 'login-err', role: 'alert' }), errTxt = h('span');
     var errBtn = ui.btn(L('auth.retry'), { sm: true, icon: 'refresh' }); errBtn.hidden = true;
     err.appendChild(errTxt); err.appendChild(errBtn);
-    var btn = ui.btn(L('auth.login'), { kind: 'primary', icon: 'lock', type: 'submit', cls: 'login-btn' });
-    var fPw2 = ui.field(L('auth.confirm'), pw2), fHint = h('p', { class: 'fld-h login-pwhint' }, L('auth.pwRule'));
-    var form = h('form', { class: 'login-form', novalidate: true }, ui.field(L('auth.email'), email), ui.field(L('auth.password'), h('span', { class: 'pw' }, pw, eye)), fPw2, fHint, err, btn);
+    var btn = ui.btn(L('auth.submit.login'), { kind: 'primary', type: 'submit', cls: 'ap-btn' });
+    function afield(labelKey, input, icon, extra, hintKey) {              // 带必填星号的标签 + 左侧图标的输入框 (右侧可放「显示密码」按钮 / 标签行右侧放提示)
+      var hint = hintKey ? h('span', { class: 'ap-lh' }, L(hintKey)) : null;
+      return h('div', { class: 'ap-f' },
+        h('div', { class: 'ap-lr' }, h('label', { class: 'ap-l', for: input.id }, L(labelKey), h('span', { class: 'ap-req', 'aria-hidden': 'true' }, '*')), hint),
+        h('span', { class: 'ap-in' }, ui.icon(icon, 18, 'ap-ic'), input, extra || null));
+    }
+    var fEmail = afield('auth.f.email', email, 'mail'), fPw = afield('auth.f.pw', pw, 'lock', mkEye(pw), 'auth.pwMin'), fPw2 = afield('auth.f.pw2', pw2, 'lock', mkEye(pw2));
+    var pwMin = fPw.querySelector('.ap-lh');
+    var form = h('form', { class: 'ap-form', novalidate: true }, fEmail, fPw, fPw2, err, btn);
     var last = h('p', { class: 'login-bind' }, ui.icon('account', 16, 'ci'), h('span'));
-    var note = h('p', { class: 'login-help' }, ui.icon('info', 15, 'ci'), h('span'));
-    var tabs = ui.tabs(L('auth.tabs.aria'), [{ id: 'login', label: L('auth.tab.login'), icon: 'lock' }, { id: 'register', label: L('auth.tab.register'), icon: 'plus' }], function (id) { setMode(id); });
+    var note = h('p', { class: 'ap-note' }, ui.icon('info', 14, 'ci'), h('span'));
+    var titleEl = h('h1', { class: 'ap-t' }), subEl = h('p', { class: 'ap-sub' });
+    var swQ = h('span'), swA = h('a', { class: 'ap-sw', href: ROUTE + 'register' });
+    var site = h('a', { class: 'ap-site', href: A.url('account_url'), target: '_blank', rel: 'noopener noreferrer' }, ui.icon('globe', 15, 'ci'), h('span', null, L('site.name')), ui.icon('external-link', 13, 'ci'));
+    var copy = h('p', { class: 'ap-copy' });
     var wait = +st.wait > 0 ? Math.ceil(+st.wait) : 0, timer = 0, busy = false, curMsg = msg, errState = null, errAct = null;
 
     function paint() {
       var reg = mode === 'register';
-      if (wait > 0) { ui.setBtn(btn, t('auth.waitBtn', { n: wait }), 'lock'); ui.avail(btn, t('auth.waitReason', { n: wait })); }
-      else if (busy) { ui.setBtn(btn, t(reg ? 'auth.contacting' : 'auth.verifying'), 'refresh'); ui.avail(btn, t('auth.busyReason')); }
-      else { ui.setBtn(btn, t(reg ? 'auth.registerGo' : 'auth.login'), reg ? 'plus' : 'lock'); ui.avail(btn, ''); }
+      if (wait > 0) { ui.setBtn(btn, t('auth.waitBtn', { n: wait })); ui.avail(btn, t('auth.waitReason', { n: wait })); }
+      else if (busy) { ui.setBtn(btn, t(reg ? 'auth.contacting' : 'auth.verifying')); ui.avail(btn, t('auth.busyReason')); }
+      else { ui.setBtn(btn, t(reg ? 'auth.submit.reg' : 'auth.submit.login')); ui.avail(btn, ''); }
       btn.classList.toggle('is-busy', busy); if (busy) btn.setAttribute('aria-busy', 'true'); else btn.removeAttribute('aria-busy');
       email.readOnly = busy; pw.readOnly = busy; pw2.readOnly = busy;
     }
@@ -145,30 +192,36 @@
       if (errAct) ui.setBtn(errBtn, t(errAct.label), errAct.icon || 'refresh');
       err.classList.toggle('on', !!e);
     }
-    function setMsg(text) { curMsg = text || ''; TP.setText(msgEl, curMsg); msgEl.hidden = !curMsg; }
+    function setMsg(text) { curMsg = text || ''; TP.setText(msgEl, String(curMsg)); msgEl.hidden = !curMsg || mode === 'register'; }
     function renderNotice() {
       var n = A.status && A.status.notice ? String(A.status.notice) : '';
       noticeEl.hidden = !n; TP.setText(noticeEl.lastChild, n);
     }
-    function renderNote() {
-      renderNotice();
-      TP.setText(note.lastChild, t(mode === 'register' ? 'auth.note.register' : 'auth.note.login'));
-      last.hidden = !(mode === 'login' && A.hint); TP.setText(last.lastChild, A.hint ? t('auth.last', { hint: A.hint }) : '');
-    }
-    function setMode(m) {
-      mode = m === 'register' ? 'register' : 'login';
-      tabs.set(mode);
+    function renderNote() {                                                // 当前页的文字: 标题 / 副标题 / 跳到另一页的链接 / 说明 / 上次账号 / 版权
       var reg = mode === 'register';
-      fPw2.hidden = !reg; fHint.hidden = !reg;
+      renderNotice(); setMsg(curMsg);                         // 「登录已过期」之类的提示只在登录页显示
+      TP.setText(titleEl, t(reg ? 'auth.page.reg' : 'auth.page.login')); TP.setText(subEl, t(reg ? 'auth.page.regSub' : 'auth.page.loginSub'));
+      TP.setText(swQ, t(reg ? 'auth.hasAcct' : 'auth.noAcct')); TP.setText(swA, t(reg ? 'auth.toLogin' : 'auth.toReg')); swA.setAttribute('href', ROUTE + (reg ? 'login' : 'register'));
+      TP.setText(note.lastChild, t(reg ? 'auth.note.register' : 'auth.note.login'));
+      last.hidden = !(mode === 'login' && A.hint); TP.setText(last.lastChild, A.hint ? t('auth.last', { hint: A.hint }) : '');
+      TP.setText(copy, t('foot.copy', { year: new Date().getFullYear() })); site.title = t('site.title');
+      if (api) api.setLabel(t(reg ? 'auth.page.reg' : 'auth.page.login'));
+    }
+    function setMode(m, push) {                                            // 切换到另一个整页: 地址跟着变 (push = 记入浏览历史, 后退键可以回来)
+      mode = m === 'register' ? 'register' : 'login';
+      var reg = mode === 'register';
+      setUrl(mode, push);
+      fPw2.hidden = !reg; pwMin.hidden = !reg;
       pw.setAttribute('autocomplete', reg ? 'new-password' : 'current-password');
       setErr(null); pw.value = ''; pw2.value = ''; renderNote(); paint();
+      if (api) { try { (reg || !email.value ? email : pw).focus(); } catch (e) { /* 忽略 */ } }
     }
 
     function fail(e) {
       var code = e && e.code, d = (e && e.data) || {}, reg = mode === 'register';
       var retry = { label: 'auth.retry', icon: 'refresh', fn: function () { if (pw.value) submit(); else pw.focus(); } };
       if (e.kind === 'unreachable') setErr({ key: 'auth.unreachable', act: retry });
-      else if (code === 'E_EMAIL_TAKEN') setErr({ key: 'auth.err.taken', act: { label: 'auth.goLogin', icon: 'lock', fn: function () { var keep = email.value; setMode('login'); email.value = keep; pw.focus(); } } });
+      else if (code === 'E_EMAIL_TAKEN') setErr({ key: 'auth.err.taken', act: { label: 'auth.goLogin', icon: 'lock', fn: function () { var keep = email.value; setMode('login', true); email.value = keep; pw.focus(); } } });
       else if (code === 'E_WEAK_PASSWORD') { setErr({ key: 'auth.err.weak' }); pw.focus(); }
       else if (code === 'E_ACCOUNT_UNREACHABLE') setErr({ key: reg ? 'auth.err.unreachableReg' : 'auth.err.unreachableAcct', act: retry });
       else if (code && I.has('error.' + code)) setErr({ key: 'error.' + code });
@@ -213,6 +266,7 @@
       clearInterval(timer);
       var cur = login; login = null; cur.close('ok');
       unlock(true);
+      if (A.returnTo && TP.go) { var back = A.returnTo; A.returnTo = ''; TP.go(back); }
       TP.emit('login', { registered: reg });
       if (reg) ui.toast(t('auth.registered', { account: A.account }), 'ok', 6000);
       else if (r.via === 'offline') ui.toast(t('auth.offlineLogin'), 'warn', 5200);
@@ -263,31 +317,39 @@
     }
     form.addEventListener('submit', submit);
     errBtn.addEventListener('click', function () { if (busy || !errAct) return; errAct.fn(); });
+    swA.addEventListener('click', function (e) {
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return;      // 新标签页打开等照常
+      e.preventDefault(); if (busy) return; setMode(mode === 'register' ? 'login' : 'register', true);
+    });
 
-    /* 语言切换 (锁定状态下也能换语言) */
-    var langBtn = ui.btn(langName(), { sm: true, kind: 'ghost', icon: 'globe' });
+    /* 语言切换: 页面右上角 (锁定状态下也能换语言) */
+    var langBtn = ui.btn(langName(), { sm: true, kind: 'ghost', icon: 'globe', cls: 'ap-lang' });
     ui.menu(langBtn, function () {
       return I.available.map(function (a) { return { label: a.name, check: a.code === I.lang, onClick: function () { TP.setLang(a.code); } }; });
-    }, { label: t('lang.menu'), place: 'top' });
+    }, { label: t('lang.menu'), place: 'bottom-end' });
     function repaint() {                                   // 切换语言后重新生成文字
       ui.setBtn(langBtn, langName()); paint(); setMsg(curMsg); renderErr(); renderNote();
     }
     A._repaint = repaint;
+    function onPop() { if (login && !busy) setMode(pageFromUrl(), false); }       // 浏览器的后退 / 前进: 在登录页和注册页之间跟着走
+    window.addEventListener('popstate', onPop);
 
-    var api = ui.modal({
-      title: L('auth.title'), icon: 'lock', iconKind: 'pri', size: 'sm', cls: 'login', static: true,
-      body: function () {
-        setMsg(msg);
-        return h('div', { class: 'login-in' }, h('p', { class: 'muted sm login-sub' }, L('auth.sub')), msgEl, noticeEl, tabs.el, last, form, note, h('div', { class: 'login-lang' }, langBtn));
-      },
-      actions: []
-    });
-    setMode('login');
+    setMsg(msg);
+    api = openPage(h('div', { class: 'ap' },
+      h('div', { class: 'ap-top' }, langBtn),
+      h('div', { class: 'ap-main' },
+        h('section', { class: 'ap-card' },
+          h('header', { class: 'ap-head' }, titleEl, subEl),
+          h('div', { class: 'ap-body' }, msgEl, noticeEl, last, form),
+          h('div', { class: 'ap-switch' }, swQ, swA)),
+        note),
+      h('footer', { class: 'ap-foot' }, site, copy)));
+    setMode(mode, false);
     (email.value ? pw : email).setAttribute('data-autofocus', '');
-    try { (email.value ? pw : email).focus(); } catch (e) { /* 忽略 */ }
-    login = { close: function (v) { api.close(v); }, setMsg: setMsg, clearEmail: function () { email.value = ''; pw.value = ''; try { email.focus(); } catch (e) { /* 忽略 */ } } };
+    try { (mode === 'login' && email.value ? pw : email).focus(); } catch (e) { /* 忽略 */ }
+    login = { close: function (v) { window.removeEventListener('popstate', onPop); clearInterval(timer); api.close(v); }, setMsg: setMsg, clearEmail: function () { email.value = ''; pw.value = ''; try { email.focus(); } catch (e) { /* 忽略 */ } } };
     if (wait > 0) setWait(wait);
-    /* 弹窗已经显示; 悄悄刷新一次状态 (限流剩余时间 / 上次账号提示可能变了) */
+    /* 页面已经显示; 悄悄刷新一次状态 (限流剩余时间 / 上次账号提示可能变了) */
     refreshStatus().then(function () { if (login) { renderNote(); if (+(A.status && A.status.wait) > 0 && wait <= 0) setWait(A.status.wait); } });
   }
 
@@ -304,7 +366,7 @@
     var card = ui.taskCard(t(sw ? 'auth.switch.running' : 'auth.logout.running')), busy = true;
     var m = ui.modal({ title: t(sw ? 'auth.switch.title' : 'auth.logout.title'), icon: 'logout', size: 'sm', static: true, lock: function () { return busy; }, body: card.el, actions: [] });
     m.setBusy(true); card.set({ pct: null, msg: t('job.submitting') });
-    A.expectMsg = t(sw ? 'auth.switched' : 'auth.signedOut'); A.expectOpt = sw ? { noPrefill: true } : null;
+    A.expectMsg = A.msg(sw ? 'auth.switched' : 'auth.signedOut'); A.expectOpt = sw ? { noPrefill: true } : null;
     try {
       await TP.helper('POST', '/api/logout', { timeout: 20000 });
     } catch (e) {
@@ -319,7 +381,7 @@
     A.account = ''; A.expectMsg = ''; A.expectOpt = null;
     if (S.state) { S.state.account = null; if (S.state.proxy) S.state.proxy.enabled = false; }
     TP.emit('proxy', false);
-    A.lock(t(sw ? 'auth.switched' : 'auth.signedOut'), { noPrefill: sw });
+    A.lock(A.msg(sw ? 'auth.switched' : 'auth.signedOut'), { noPrefill: sw });
   };
 
   /* ================= 敏感操作: 再次输入登录密码 (step-up) =================

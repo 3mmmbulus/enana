@@ -1,13 +1,14 @@
 #!/usr/bin/perl
 # 配置快照 (导出备份 / 云端同步用): 把「可以跨电脑同步」的本机配置打成一个 JSON, 或把快照里的内容应用回本机。
-#   snapshot.pl build <家目录> <应用版本> <设备名>              -> stdout: 快照 JSON
+#   snapshot.pl build <家目录> <应用版本> <设备名> [all]        -> stdout: 快照 JSON (默认只含「保存到云端」的服务器 / 订阅; all = 全部, 导出备份用)
 #   snapshot.pl hash  <家目录>                                  -> stdout: 当前可同步内容的 SHA-256 (不含创建时间 / 设备名; 判断「本机有没有没上传的改动」用)
 #   snapshot.pl hashfile <快照文件>                             -> stdout: 快照里可同步内容的 SHA-256 (和 hash 同一算法, 用于合并拉取之后记录「已同步」的内容)
 #   snapshot.pl info  <快照文件>                                -> stdout: 摘要 JSON (各类数量 / 创建时间 / 设备名 …); 格式不对时退出码 2
 #   snapshot.pl apply <家目录> <快照文件> <replace|merge>       -> 把快照写进家目录 (只写白名单里的文件, 每个文件原子替换); stdout: 摘要 JSON
 # 快照里永远没有: 令牌 / 会话 / 设备编号 / 端口 / 代理总开关 / 开机自启 / SSH 密码或私钥 (这些只属于这台电脑, 或根本不会被保存)。
 # 格式: {"format":1,"app":"enana","version":"2.1.0","created":1760000000,"device":"MacBook","files":{"servers.jsonl":"…",…},"certs":{"x.crt":"…"},"settings":{"LOG_DAYS":"30"}}
-# 合并 (merge): servers.jsonl 按节点名、subs.tsv 按订阅名取并集 (本机已有的保留); 其它文件以快照为准。替换 (replace): 快照里没有的文件视为「空」, 删除本机的。
+# 合并 (merge): servers.jsonl 按节点名、subs.tsv 按订阅名取并集 (本机已有的保留); 其它文件以快照为准。替换 (replace): 快照里没有的文件视为「空」, 删除本机的
+# (但本机没有勾选「保存到云端」的服务器 / 订阅属于这台电脑, 替换时保留)。取回来的服务器 / 订阅会记入本机的 servers.sync / subs.sync, 之后继续同步。
 use strict;
 use warnings;
 use JSON::PP;
@@ -45,6 +46,19 @@ sub spit {    # 原子写 (权限 600)
 
 sub lines { my ($t) = @_; return grep { length } split /\n/, ($t // ''); }
 
+sub read_set {    # 一行一个名称的清单文件 (servers.sync / subs.sync) -> hash
+    my ($f) = @_;
+    my %s;
+    if (open my $fh, '<:encoding(UTF-8)', $f) { while (<$fh>) { chomp; $s{$_} = 1 if length } close $fh }
+    return %s;
+}
+
+sub server_sub {    # servers.jsonl 一行 -> 它所属的订阅名 (没有返回 undef)
+    my ($l) = @_;
+    my $d = eval { $JSON->decode(Encode::encode('UTF-8', $l)) };
+    return (ref $d eq 'HASH' && defined $d->{sub} && !ref $d->{sub} && length $d->{sub}) ? $d->{sub} : undef;
+}
+
 sub server_tag {    # servers.jsonl 一行 -> 节点名 (不是合法的节点行返回 undef)
     my ($l) = @_;
     my $d = eval { $JSON->decode(Encode::encode('UTF-8', $l)) };
@@ -75,12 +89,25 @@ sub summary {
 my ($cmd, @a) = @ARGV;
 die "usage\n" unless $cmd;
 
-sub collect {    # 读取家目录里可同步的内容 -> (文件 hash 引用, 证书 hash 引用, 设置 hash 引用)
-    my ($home) = @_;
+sub collect {    # 读取家目录里可同步的内容 -> (文件 hash 引用, 证书 hash 引用, 设置 hash 引用); $all 为真时不按「保存到云端」清单过滤 (导出备份)
+    my ($home, $all) = @_;
     my (%files, %certs, %settings);
+    my %st = read_set("$home/servers.sync");
+    my %sb = read_set("$home/subs.sync");
     for my $f (@FILES) {
         my $c = slurp("$home/$f");
         next unless defined $c && length $c;
+        unless ($all) {
+            if ($f eq 'servers.jsonl') {          # 只带「保存到云端」的节点 (节点名在清单里, 或它所属的订阅在清单里)
+                my @keep = grep { my $t = server_tag($_); my $s = server_sub($_); defined $t && ($st{$t} || (defined $s && $sb{$s})) } lines($c);
+                next unless @keep;
+                $c = join("\n", @keep) . "\n";
+            } elsif ($f eq 'subs.tsv') {
+                my @keep = grep { $sb{ (split /\|/, $_, 2)[0] } } lines($c);
+                next unless @keep;
+                $c = join("\n", @keep) . "\n";
+            }
+        }
         die "file too large: $f\n" if length($c) > $MAX_FILE;
         $files{$f} = $c;
     }
@@ -109,9 +136,9 @@ sub collect {    # 读取家目录里可同步的内容 -> (文件 hash 引用, 
 }
 
 if ($cmd eq 'build') {
-    my ($home, $ver, $dev) = @a;
+    my ($home, $ver, $dev, $all) = @a;
     $dev = Encode::decode('UTF-8', $dev // '');         # 命令行参数是 UTF-8 字节 (设备名可能有中文): 先解码成字符, 否则 JSON 里会被二次编码成乱码
-    my ($files, $certs, $settings) = collect($home);
+    my ($files, $certs, $settings) = collect($home, ($all // '') eq 'all');
     my $total = 0; $total += length($_) for values %$files;
     die "snapshot too large\n" if $total > 1_000_000;
     print $JSON->encode({ format => 1, app => 'enana', version => $ver // '', created => time() + 0, device => $dev // '', files => $files, certs => $certs, settings => $settings });
@@ -146,9 +173,20 @@ if ($cmd eq 'info' || $cmd eq 'hashfile' || $cmd eq 'apply') {
     }
 
     my @changed;
+    my %st = read_set("$home/servers.sync");
+    my %sb = read_set("$home/subs.sync");
+    my (%inTags, %inSubs);                                  # 快照里带来的节点名 / 订阅名: 之后继续同步
+    for my $l (lines($files{'servers.jsonl'})) { my $t = server_tag($l); $inTags{$t} = 1 if defined $t }
+    for my $l (lines($files{'subs.tsv'})) { my $k = (split /\|/, $l, 2)[0]; $inSubs{$k} = 1 if defined $k && length $k }
     for my $f (@FILES) {
         my $new = $files{$f};
         my $old = slurp("$home/$f");
+        if ($mode eq 'replace' && ($f eq 'servers.jsonl' || $f eq 'subs.tsv') && defined $old && length $old) {    # 本机没有「保存到云端」的留下 (它们只属于这台电脑)
+            my @mine = $f eq 'servers.jsonl'
+                ? grep { my $t = server_tag($_); my $s = server_sub($_); defined $t && !$st{$t} && !(defined $s && $sb{$s}) && !$inTags{$t} } lines($old)
+                : grep { my $k = (split /\|/, $_, 2)[0]; !$sb{$k} && !$inSubs{$k} } lines($old);
+            if (@mine) { $new = join("\n", (defined $new ? lines($new) : ()), @mine) . "\n" }
+        }
         if ($mode eq 'merge' && ($f eq 'servers.jsonl' || $f eq 'subs.tsv') && defined $old && length $old) {
             my %have;
             my @keep = lines($old);
@@ -173,6 +211,12 @@ if ($cmd eq 'info' || $cmd eq 'hashfile' || $cmd eq 'apply') {
             unlink "$home/$f";
             push @changed, $f;
         }
+    }
+    for my $pair ([ "$home/servers.sync", \%st, \%inTags ], [ "$home/subs.sync", \%sb, \%inSubs ]) {      # 记下取回来的名称 (之后它们继续同步)
+        my ($file, $have, $inc) = @$pair;
+        my @add = grep { !$have->{$_} } sort keys %$inc;
+        next unless @add;
+        spit($file, join("\n", (sort keys %$have), @add) . "\n");
     }
     if (%certs) {
         mkdir "$home/certs", 0700 unless -d "$home/certs";

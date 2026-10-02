@@ -85,7 +85,7 @@ echo "$OUT" | grep -q 'SHA-256 校验通过' && tpass "下载并通过 SHA-256 �
 echo "$OUT" | grep -q '环境安装完成' && tpass "安装器跑完" || tfail "安装器跑完"
 expect "安装的版本 = 发布的版本" test "$(installed)" = "$VER"
 expect "get.sh 已复制到安装目录 (供 enana self-update 使用)" test -s "$W/h/get.sh"
-expect "仪表盘 /ui/ 返回 200" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $U/ui/)" = 200
+expect "后台 /enana/admin/ 返回 200" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $A/enana/admin/)" = 200
 expect "快捷命令可用" test "$("$W/shortcut/enana" version)" = "enana $VER"
 expect "辅助服务在监听且要求自定义请求头" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $A/api/auth/status)" != 000
 expect "没有生成任何本地密码文件" test ! -e "$W/h/auth.conf"
@@ -95,18 +95,18 @@ echo "== 2. 安全: 包被篡改 / 清单不一致时必须拒绝, 且不改动�
 cp "$W/www/dl/manifest.json" "$W/manifest.good"; cp "$W/gh/test/enana/releases/latest/download/manifest.json" "$W/manifest.gh.good"
 sed -i '' 's/"sha256":"[0-9a-f]\{64\}"/"sha256":"0000000000000000000000000000000000000000000000000000000000000000"/' "$W/www/dl/manifest.json"
 rm -f "$W/gh/test/enana/releases/latest/download/manifest.json"
-OUT=$(ENANA_GH_BASE=http://127.0.0.1:1 bash "$GET" --yes --lang zh --force 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
+OUT=$(ENANA_GH_BASE=http://127.0.0.1:1 bash "$GET" --yes --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
 expect "清单里的哈希与包不符 → 失败 (退出码非 0)" test "$RC" != 0
 echo "$OUT" | grep -q '下载或校验失败' && tpass "提示「下载或校验失败」" || tfail "提示「下载或校验失败」"
 expect "已安装的版本没有被改动" test "$(installed)" = "$VER"
 cp "$W/manifest.good" "$W/www/dl/manifest.json"                      # 官网清单恢复; GitHub 线路给一份「不一致」的清单
 sed 's/"sha256":"[0-9a-f]\{64\}"/"sha256":"1111111111111111111111111111111111111111111111111111111111111111"/' "$W/manifest.gh.good" > "$W/gh/test/enana/releases/latest/download/manifest.json"
-OUT=$(bash "$GET" --yes --lang zh --force 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
+OUT=$(bash "$GET" --yes --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
 expect "两条线路的清单不一致 → 失败" test "$RC" != 0
 echo "$OUT" | grep -q '清单不一致' && tpass "提示「清单不一致」(可能被篡改)" || tfail "提示「清单不一致」(可能被篡改)"
 cp "$W/manifest.gh.good" "$W/gh/test/enana/releases/latest/download/manifest.json"
 : > "$W/www/dl/enana-$VER.tar.gz"                                    # 官网线路的包坏了 (空文件), GitHub 线路是好的 → 自动换线路
-OUT=$(bash "$GET" --yes --lang zh --force 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
+OUT=$(bash "$GET" --yes --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
 expect "主线路的包损坏 → 自动换到下一条线路并成功" test "$RC" = 0
 echo "$OUT" | grep -q '换下一条' && tpass "提示「换下一条」" || tfail "提示「换下一条」"
 expect "换线路安装后版本正确" test "$(installed)" = "$VER"
@@ -124,7 +124,7 @@ expect "升级到新版本" test "$(installed)" = "$NEW"
 expect "服务器列表原样保留" test "$(sha "$W/h/servers.jsonl")" = "$before"
 expect "用户设置保留 (LOG_DAYS=45)" grep -q '^LOG_DAYS=45$' "$W/h/settings.env"
 waitport "$API_PORT" && expect "升级后辅助服务可用" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $A/api/auth/status)" != 000
-expect "升级后仪表盘仍可访问" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $U/ui/)" = 200
+expect "升级后仪表盘仍可访问" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $A/enana/admin/)" = 200
 OUT=$(bash "$GET" --upgrade --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
 expect "已是最新版本: 退出码 0" test "$RC" = 0
 echo "$OUT" | grep -q '已经是最新版本' && tpass "提示「已经是最新版本」且不再下载" || tfail "提示「已经是最新版本」且不再下载"
@@ -137,6 +137,59 @@ expect "self-update 退出码 0" test "$RC" = 0
 expect "self-update 升到更新的版本" test "$(installed)" = "$NEW2"
 expect "self-update 后快捷命令版本一致" test "$("$W/shortcut/enana" version)" = "enana $NEW2"
 OUT=$(ENANA_YES=1 "$W/shortcut/enana" self-update 2>&1 | plain); echo "$OUT" | grep -q '已经是最新版本' && tpass "再次 self-update: 已经是最新版本" || tfail "再次 self-update: 已经是最新版本"
+
+echo "== 5. 没有 curl 的系统: 用 wget 下载 (ENANA_DL=wget + 本机的 wget 替身)"
+mkdir -p "$W/wbin"; cat > "$W/wbin/wget" <<'EOF'
+#!/bin/bash
+# 测试用的 wget 替身: 支持 get.sh 用到的参数 (-q -O- -O 文件 -T 秒 --tries=N --show-progress), 实际用 curl 下载
+out=''; url=''; while [ $# -gt 0 ]; do case $1 in -qO-) out=- ;; -q) ;; -O) out=$2; shift ;; -O-) out=- ;; -T) shift ;; --tries=*) ;; --show-progress) ;; *) url=$1 ;; esac; shift; done
+echo "wget $url" >> "$WGET_LOG"
+if [ "$out" = - ]; then exec curl -fsSL --max-time 20 "$url"; else exec curl -fsSL --max-time 60 -o "$out" "$url"; fi
+EOF
+chmod +x "$W/wbin/wget"; export WGET_LOG=$W/wget.log; : > "$WGET_LOG"
+NEW3=9.9.11; mkpkg "$NEW3" "$W/pkg4"; serve "$W/pkg4"
+OUT=$(PATH="$W/wbin:$PATH" ENANA_DL=wget bash "$GET" --upgrade --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
+expect "ENANA_DL=wget: 升级成功 (退出码 0)" test "$RC" = 0
+expect "实际走的是 wget (清单和安装包都是通过它下载的)" sh -c "grep -q 'dl/manifest.json' '$WGET_LOG' && grep -q 'enana-$NEW3.tar.gz' '$WGET_LOG'"
+expect "升级到新版本" test "$(installed)" = "$NEW3"
+OUT=$(ENANA_DL=nothing PATH=/usr/bin:/bin bash "$GET" --upgrade --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
+echo "(指定一个不存在的下载工具) 退出码 $RC"; [ "$RC" != 0 ] && tpass "指定的下载工具用不了 → 失败, 而不是半路崩溃" || tfail "指定的下载工具用不了 → 失败"
+OUT=$(sh "$GET" --help 2>&1 | head -3 | plain); echo "$OUT" | grep -q 'enana' && tpass "sh 运行 get.sh 也能切回 bash (--help)" || tfail "sh 运行 get.sh 也能切回 bash (--help)"
+OUT=$(cat "$GET" | zsh -s -- --help 2>&1 | plain); echo "$OUT" | grep -q 'run the installer with bash' && tpass "管道给 zsh 运行 → 提示用 bash (不是一堆语法错误)" || tfail "管道给 zsh 运行 → 提示用 bash"
+
+echo "== 6. 端口被占用 → 自动换一个随机的空闲端口; 安装完成后打印后台地址 (/enana/admin/)"
+B1=$((BASE+10)); B2=$((BASE+11)); B3=$((BASE+12)); B4=$((BASE+13))
+python3 -c "
+import socket,sys,time
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('127.0.0.1',$B1)); s.listen(5)
+while True: time.sleep(1)" & echo $! > "$W/pid-busy"; sleep 0.5
+mkdir -p "$W/s2/"{state,tmp,home/Library/LaunchAgents,shortcut,h/rules}; cp "$SB" "$W/s2/h/sing-box"; chmod +x "$W/s2/h/sing-box"
+env2() { HOME=$W/s2/home ENANA_HOME=$W/s2/h FAKE_STATE=$W/s2/state ENANA_PLIST_DIR=$W/s2/home/Library/LaunchAgents ENANA_SHORTCUT_DIR=$W/s2/shortcut TMPDIR=$W/s2/tmp PORT=$B1 UI_PORT=$B2 API_PORT=$B3 SPEED_PORT=$B4 "$@"; }
+OUT=$(env2 bash "$GET" --yes --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain); echo "$OUT" | grep -E '已自动改用|后台地址' | sed 's/^/    /'
+expect "端口被占用时安装仍然成功 (退出码 0)" test "$RC" = 0
+NEWP=$(sed -n 's/^PORT=//p' "$W/s2/h/settings.env" | tail -1)
+expect "代理端口已自动换成别的空闲端口 (写进了设置, 不是被占用的那个)" sh -c "[ -n '$NEWP' ] && [ '$NEWP' != '$B1' ] && [ '$NEWP' -ge 20000 ] && [ '$NEWP' -le 59999 ]"
+echo "$OUT" | grep -q "本地端口 $B1 已被其它程序占用, 已自动改用 $NEWP" && tpass "输出里说明了「端口 $B1 被占用, 已自动改用 $NEWP」" || tfail "输出里说明了端口被占用并自动改用了哪个"
+expect "新端口上代理在监听; 被占用的端口没有被动过 (占用它的程序还在)" sh -c "nc -z 127.0.0.1 '$NEWP' && kill -0 \$(cat '$W/pid-busy')"
+echo "$OUT" | grep -q "后台地址.*http://127.0.0.1:$B3/enana/admin/" && tpass "安装完成后打印了后台地址 http://127.0.0.1:$B3/enana/admin/" || tfail "安装完成后打印了后台地址 http://127.0.0.1:$B3/enana/admin/"
+expect "后台地址能打开 (由本地辅助服务提供)" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' http://127.0.0.1:$B3/enana/admin/)" = 200
+expect "核心配置里没有 external_ui, 并且只允许后台的来源跨域访问核心" sh -c "! grep -q external_ui '$W/s2/h/config.json' && grep -q 'http://127.0.0.1:$B3' '$W/s2/h/config.json'"
+expect "env.json 里有 clashBase (核心控制端口) 且 apiBase 为空 (后台与辅助服务同源)" sh -c "grep -q '\"clashBase\":\"http://127.0.0.1:$B2\"' '$W/s2/h/ui/env.json' && grep -q '\"apiBase\":\"\"' '$W/s2/h/ui/env.json'"
+OUT=$(env2 bash "$GET" --yes --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
+expect "再次运行 (升级): 退出码 0, 不再提示换端口, 端口保持不变" sh -c "[ '$RC' = 0 ] && ! echo '$OUT' | grep -q '已自动改用' && [ \"\$(sed -n 's/^PORT=//p' '$W/s2/h/settings.env' | tail -1)\" = '$NEWP' ]"
+kill "$(cat "$W/pid-busy")" 2>/dev/null
+
+echo "== 7. 快捷命令 enana: 装完马上能用 (放进 PATH 里已有的可写目录), 没有这样的目录才写 shell 配置"
+SC() { # SC <SHELL> <PATH> <候选目录…>  在隔离环境里调用 shortcut_install, 打印 "SHORTCUT=… RC=…"
+  local sh=$1 pth=$2; shift 2
+  ( export HOME=$W/sc/home ENANA_HOME=$W/sc/h SHELL=$sh PATH=$pth ENANA_SHORTCUT_DIRS="$*"; unset ENANA_SHORTCUT_DIR ENANA_PLIST_DIR; rm -rf "$W/sc"; mkdir -p "$HOME" "$ENANA_HOME" "$W/binA" "$W/binB"; : > "$ENANA_HOME/enana"; chmod 755 "$ENANA_HOME/enana"
+    . "$REPO/lib/common.sh"; init_paths "$REPO/install.sh"; . "$REPO/lib/i18n.sh"; . "$REPO/lib/os-darwin.sh"; load_settings
+    shortcut_install; echo "SHORTCUT=$SHORTCUT RC=$SHORTCUT_RC" )
+}
+R=$(SC /bin/zsh "$W/binB:/usr/bin:/bin" "$W/binA" "$W/binB"); echo "$R" | grep -q "^SHORTCUT=$W/binB/enana RC=\$" && [ -L "$W/binB/enana" ] && [ ! -e "$W/binA/enana" ] && tpass "候选目录里「已经在 PATH 里」的 binB 被选中 (不在 PATH 里的 binA 跳过); 不需要重开终端" || tfail "候选目录里已经在 PATH 里的被选中 ($R)"
+R=$(SC /bin/zsh "/usr/bin:/bin" "$W/binA"); echo "$R" | grep -q "^SHORTCUT=$W/sc/home/.local/bin/enana RC=$W/sc/home/.zshrc\$" && grep -q 'export PATH="$HOME/.local/bin:$PATH"' "$W/sc/home/.zshrc" && grep -q '# enana 快捷命令' "$W/sc/home/.zshrc" && tpass "没有 PATH 里的可写目录 → ~/.local/bin + 写进 ~/.zshrc (RC 非空: 提示重开终端)" || tfail "没有可用目录 → ~/.local/bin + ~/.zshrc ($R)"
+R=$(SC /usr/local/bin/fish "/usr/bin:/bin" "$W/binA"); echo "$R" | grep -q "enana.fish\$" && grep -q 'set -gx PATH' "$W/sc/home/.config/fish/conf.d/enana.fish" && tpass "fish: 写 ~/.config/fish/conf.d/enana.fish" || tfail "fish 的 PATH 配置 ($R)"
+R=$(SC /bin/bash "/usr/bin:/bin" "$W/binA"); echo "$R" | grep -q "RC=$W/sc/home/.bash_profile\$" && tpass "bash: 写 ~/.bash_profile" || tfail "bash 的 PATH 配置 ($R)"
 
 P=$(grep -c p "$W/.pass" 2>/dev/null); F=$(grep -c f "$W/.fail" 2>/dev/null)
 echo; echo "通过 ${P:-0} · 失败 ${F:-0}"

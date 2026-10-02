@@ -234,7 +234,10 @@
       rolePin = h('span', null, L('vps.f.rolePin')); roleAuto = h('span', null, L('vps.f.roleAuto')); roleSug = h('span', { class: 'vps-sug' }, L('vps.f.roleSuggest'));
       b.name = fieldBox(L('vps.f.name'), f.name, L('vps.f.nameHint'), null, 'vps.name'); // i18n-ignore: help topic ids
       b.role = fieldBox(L('vps.f.role'), f.role, h('span', null, rolePin, roleAuto, roleSug), null, 'vps.role'); // i18n-ignore: help topic ids
-      parts.push(grp('vps.g.node', 'vps.node', h('div', { class: 'vps-grid vps-g-node' }, b.name, b.role))); // i18n-ignore: help topic ids
+      f.save = h('input', { type: 'checkbox', checked: true }); f.save.addEventListener('change', function () { f.save._touched = true; });      // 「保存到云端」: 默认勾选
+      b.save = h('label', { class: 'chk-inline vps-save' }, f.save, h('span', null, L('imp.save')));
+      if (TP.sync && TP.sync.prime) TP.sync.prime().then(function (d) { if (!f.save._touched) f.save.checked = !!d.checked; });
+      parts.push(grp('vps.g.node', 'vps.node', h('div', { class: 'vps-grid vps-g-node' }, b.name, b.role), b.save)); // i18n-ignore: help topic ids
     }
     c.el = h('div', { class: 'vps-fields' }, parts);
 
@@ -266,7 +269,7 @@
       return {
         host: fixedHost || cleanHost(f.host.value), port: f.port.value.trim(), user: f.user.value.trim(), mode: c.mode,
         password: key ? '' : sec.pw.inp.value, key: key ? normKey(f.key.value) : '', passphrase: key ? sec.pass.inp.value : '', sudo: sec.sudo.inp.value,
-        name: f.name ? f.name.value.trim() : '', role: f.role ? f.role.value : ''
+        name: f.name ? f.name.value.trim() : '', role: f.role ? f.role.value : '', save: f.save ? (f.save.checked ? 1 : 0) : 1
       };
     };
     /* 校验: 全部通过 -> 返回读到的值 (只读一次); 否则在字段下显示错误、聚焦第一个有问题的字段并返回 null */
@@ -286,6 +289,7 @@
     c.refreshDefaults = function () { if (f.role && !c.touched.role) { f.role.value = TP.hasRole('pin') ? 'auto' : 'pin'; } paintRole(); };
     c.reset = function () {
       c.touched.name = false; c.touched.role = false;
+      if (f.save) { f.save._touched = false; f.save.checked = true; }
       if (f.host) f.host.value = '';
       f.port.value = String(o.port || 22); f.user.value = o.user || 'root';
       c.wipeSecrets(); syncName();
@@ -293,12 +297,13 @@
       c.refreshDefaults();
     };
     c.hasInput = function () { return !!((f.host && f.host.value.trim()) || sec.pw.inp.value || sec.pass.inp.value || sec.sudo.inp.value || f.key.value.trim() || (f.name && c.touched.name)); };
-    c.snapshot = function () { return { host: f.host ? f.host.value : '', port: f.port.value, user: f.user.value, name: f.name ? f.name.value : '', nameTouched: c.touched.name, role: f.role ? f.role.value : '', roleTouched: c.touched.role }; };
+    c.snapshot = function () { return { host: f.host ? f.host.value : '', port: f.port.value, user: f.user.value, name: f.name ? f.name.value : '', nameTouched: c.touched.name, role: f.role ? f.role.value : '', roleTouched: c.touched.role, save: f.save ? f.save.checked : true }; };
     c.apply = function (s) {
       if (!s) return;
       if (f.host) f.host.value = s.host;
       f.port.value = s.port; f.user.value = s.user;
       if (f.name) { f.name.value = s.name; c.touched.name = !!s.nameTouched; c.touched.role = !!s.roleTouched; if (s.role) f.role.value = s.role; paintRole(); }
+      if (f.save && s.save != null) f.save.checked = !!s.save;
     };
     c.firstInput = function () { return f.host || (c.mode === 'key' ? f.key : sec.pw.inp); };
     c.setMode(c.mode); c.reset();
@@ -418,7 +423,7 @@
       var v = cf.check();
       if (!v) return;
       st.creds = { host: v.host, port: +v.port, user: v.user, mode: v.mode, password: v.password, key: v.key, passphrase: v.passphrase, sudo: v.sudo };
-      st.meta = { name: v.name || defName(v.host), role: v.role };
+      st.meta = { name: v.name || defName(v.host), role: v.role, save: v.save ? 1 : 0 };
       v = null; cf.wipeSecrets();                                   // 输入框里的秘密立即清空, 之后只剩闭包里这一份
       runProbe();
     }
@@ -464,13 +469,14 @@
       if (p.firewall === 'ufw_active') d.push(t('vps.cf2.ufw', { port: NODE_PORT }));
       d.push(t('vps.cf2.verify'));
       d.push(t('vps.cf2.save', { n: ips.length, name: st.meta.name, role: TP.name.role(st.meta.role) }));
+      d.push(t(st.meta.save ? 'imp.cf.saveYes' : 'imp.cf.saveNo'));
       if (p.node && p.node.installed) d.push(t('vps.cf2.node'));
       d.push(t('vps.cf2.cloud', { port: NODE_PORT }));
       return d;
     }
     async function runProvision() {
       var my = ++st.run, p = st.probe, f = formOf(st.creds, st.sudoIn);
-      f.hostkey = String(p.hostkey); f.name = st.meta.name; f.role = st.meta.role; f.install_deps = missingOf(p).length ? '1' : '0';
+      f.hostkey = String(p.hostkey); f.name = st.meta.name; f.role = st.meta.role; f.install_deps = missingOf(p).length ? '1' : '0'; f.save = st.meta.save ? '1' : '0';
       st.card = ui.taskCard(t('vps.card.progress'), { horizontal: false });
       setPhase('provisioning');
       try {

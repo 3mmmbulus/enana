@@ -81,13 +81,15 @@ op_txn() {
 txn_none()   { return 0; }
 txn_import() { # sub mode   (内容来自 $JOB_BODY; 订阅信息来自 TXN_* 变量)
   local sub=${1:-} mode=${2:-merge} res a r
-  res=$(srv_import "$sub" "$mode" < "$JOB_BODY" 2>/dev/null) || return 1
+  res=$(SRV_SAVE=${TXN_SAVE:-} srv_import "$sub" "$mode" < "$JOB_BODY" 2>/dev/null) || return 1
   a=${res%% *}; r=${res#* }; r=${r%% *}
   [ $(( ${a:-0} + ${r:-0} )) -gt 0 ] || return 1
   if [ -n "$sub" ]; then
     sub_touch "$sub" "$(srv_list | awk -F'\t' -v s="$sub" '$6==s' | wc -l | tr -d ' ')" "${TXN_INTERVAL:-12}" "${TXN_USED:-0}" "${TXN_TOTAL:-0}" "${TXN_EXPIRE:-0}"
   fi
   rm -f "$JOB_BODY"
+  if [ "${TXN_SAVE:-}" = 1 ]; then sync_after_save; fi                    # 勾选了「保存到云端」: 第一次用会自动打开云端同步, 马上上传
+  return 0
 }
 txn_delete() { srv_delete "$1"; }
 txn_role()   { srv_set_role "$1" "$2"; }
@@ -262,7 +264,7 @@ job_dispatch() {
     apply)          op_apply ;;
     restart)        op_restart ;;
     update-rules)   op_update_rules ;;
-    servers-import) TXN_INTERVAL=${3:-}; TXN_USED=${4:-}; TXN_TOTAL=${5:-}; TXN_EXPIRE=${6:-}; op_txn "导入服务器" txn_import "${1:-}" "${2:-merge}" ;;
+    servers-import) TXN_INTERVAL=${3:-}; TXN_USED=${4:-}; TXN_TOTAL=${5:-}; TXN_EXPIRE=${6:-}; TXN_SAVE=${7:-}; op_txn "导入服务器" txn_import "${1:-}" "${2:-merge}" ;;
     servers-delete) op_txn "删除服务器" txn_delete "$1" ;;
     servers-role)   op_txn "修改服务器角色" txn_role "$1" "$2" ;;
     sub-delete)     op_txn "删除订阅" txn_subdel "$1" ;;
@@ -278,6 +280,7 @@ job_dispatch() {
     vps-provision)  vps_provision_job "$@" ;;
     vps-redetect)   vps_redetect_job "$@" ;;
     sync-push)      sync_push_job "$@" ;;
+    sync-login)     sync_login_auto ;;
     sync-pull)      sync_pull_job "$@" ;;
     settings-apply) APPLY_BASE=2; op_txn "修改设置" txn_settings "$@" ;;
     site-domain)    op_txn "修改网站域名" txn_site_domain "$@" ;;

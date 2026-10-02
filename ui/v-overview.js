@@ -340,6 +340,7 @@
   }
 
   /* ================= 环境状态 ================= */
+  function copyBtn(text) { var b = ui.ibtn('copy', t('common.copy') + ': ' + text, { size: 15, cls: 'chk-cp' }); ui.act(b, function () { ui.copy(text); }); return b; }
   function renderEnv() {
     var st = S.state;
     if (!st) { memo(el.env, 'none' + TP.noHelper(), function () { return h('p', { class: 'muted' }, t(TP.noHelper() ? 'ov.env.noHelper' : 'ov.env.loading')); }); return; }
@@ -350,13 +351,13 @@
         ['ov.env.rules', !!e.rules, ''],
         ['ov.env.service', !!e.service, ''],
         ['ov.env.sysproxy', !!e.sysproxy, e.sysproxy ? '' : t('ov.env.sysproxyOff')],
-        ['ov.env.shortcut', !!e.shortcut, e.shortcut || '']
+        ['ov.env.shortcut', !!e.shortcut, e.shortcut_cmd || (e.shortcut ? 'enana' : ''), e.shortcut ? t('ov.env.shortcutTip', { path: e.shortcut }) : t('ov.env.shortcutMissing')]       // 值 = 在终端里直接可运行的完整命令 (不是文件路径)
       ];
       var bad = rows.some(function (r) { return !r[1]; }), miss = (e.missing || e.rules_missing || []);
       var upd = +e.rules_updated || 0, stale = upd > 0 && (Date.now() / 1000 - upd) > 14 * 86400;
       return h('div', null,
         h('ul', { class: 'chk' }, rows.map(function (r) {
-          return h('li', { class: r[1] ? 'ok' : 'bad' }, h('span', { class: 'ck', 'aria-label': t(r[1] ? 'ov.env.ok' : 'ov.env.problem') }, ui.icon(r[1] ? 'check' : 'x', 13)), h('span', { class: 'chk-n' }, t(r[0])), r[2] ? h('span', { class: 'muted sm mono chk-d' }, r[2]) : null);
+          return h('li', { class: r[1] ? 'ok' : 'bad' }, h('span', { class: 'ck', 'aria-label': t(r[1] ? 'ov.env.ok' : 'ov.env.problem') }, ui.icon(r[1] ? 'check' : 'x', 13)), h('span', { class: 'chk-n' }, t(r[0])), r[2] ? h('span', { class: 'muted sm mono chk-d', title: r[3] || null }, r[2]) : null, r[2] && r[3] ? copyBtn(r[2]) : null);
         })),
         h('div', { class: 'kv-row rules-row' },
           h('span', { class: 'kv-k' }, t('ov.env.rulesUpdated')),

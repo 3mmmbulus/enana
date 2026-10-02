@@ -137,7 +137,21 @@ echo "$OUT" | grep -q 'enana.cc' && tpass "安装结尾提示用 enana.cc 账号
 echo "$OUT" | grep -qiE '密码[:：] *[A-Za-z0-9]{8,}' && tfail "安装过程没有生成/打印任何密码" || tpass "安装过程没有生成/打印任何密码"
 expect "代理端口在监听" nc -z 127.0.0.1 "$PORT"
 expect "测速专用入站在监听" nc -z 127.0.0.1 "$SPEED_PORT"
-expect "仪表盘 /ui/ 返回 200" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $U/ui/)" = 200
+D=$A/enana/admin; AH() { curl -s --noproxy '*' "$@"; }
+expect "后台 /enana/admin/ 由本地辅助服务直接提供 (200, text/html, nosniff, 禁止嵌入)" sh -c "H=\$(curl -sI --noproxy '*' $D/ | tr -d '\r'); echo \"\$H\" | head -1 | grep -q ' 200 ' && echo \"\$H\" | grep -qi '^content-type: text/html' && echo \"\$H\" | grep -qi '^x-content-type-options: nosniff' && echo \"\$H\" | grep -qi '^x-frame-options: DENY'"
+expect "不带斜杠的 /enana/admin 跳转到 /enana/admin/" sh -c "H=\$(curl -sI --noproxy '*' $A/enana/admin | tr -d '\r'); echo \"\$H\" | head -1 | grep -q ' 302 ' && echo \"\$H\" | grep -qi '^location: /enana/admin/\$'"
+expect "根路径 / 也跳转到后台" sh -c "curl -sI --noproxy '*' $A/ | tr -d '\r' | grep -qi '^location: /enana/admin/\$'"
+expect "页面路由 /enana/admin/apps 直接给 index.html (和 #apps 旧写法并存)" sh -c "curl -s --noproxy '*' $D/apps | grep -q 'id=\"v-apps\"'"
+expect "页面路由带斜杠 /enana/admin/apps/ 跳到不带斜杠 (相对地址要靠它)" sh -c "curl -sI --noproxy '*' $D/apps/ | tr -d '\r' | grep -qi '^location: /enana/admin/apps\$'"
+expect "后台能取到 style.css / app.js / i18n 词典 / env.json (扩展名白名单内的文件)" sh -c "for f in style.css app.js i18n/zh.js env.json catalog.json; do test \"\$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $D/\$f)\" = 200 || exit 1; done"
+AH $D/env.json | chk "env.json: apiBase 为空 (仪表盘与辅助服务同源), clashBase 指向核心控制端口" 'assert d["apiBase"]=="" and d["clashBase"]=="http://127.0.0.1:'"$UI_PORT"'" and d["apiPort"]=='"$API_PORT"' and d["uiPort"]=='"$UI_PORT"
+expect "目录穿越被拒 (../ 与 %2e%2e)" sh -c "test \"\$(curl -s --path-as-is -o /dev/null -w '%{http_code}' --noproxy '*' $D/../../../etc/hosts)\" != 200 && test \"\$(curl -s --path-as-is -o /dev/null -w '%{http_code}' --noproxy '*' $D/%2e%2e/%2e%2e/etc/hosts)\" = 404"
+expect "隐藏文件 / 不在白名单里的扩展名 (appicons/index.tsv) 一律 404" sh -c "test \"\$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $D/.x.js)\" = 404 && test \"\$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $D/appicons/index.tsv)\" = 404 && test \"\$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $D/nonexistent.js)\" = 404"
+expect "静态文件只接受 GET / HEAD (POST → 405)" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -X POST $D/)" = 405
+expect "别的网站的页面不能把后台文件当子资源加载 (Sec-Fetch-Site: cross-site 且不是导航 → 403; 自己打开 / 同源 / 导航照常 200)" sh -c "test \"\$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H 'Sec-Fetch-Site: cross-site' -H 'Sec-Fetch-Mode: no-cors' $D/style.css)\" = 403 && test \"\$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H 'Sec-Fetch-Site: same-origin' -H 'Sec-Fetch-Mode: no-cors' $D/style.css)\" = 200 && test \"\$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H 'Sec-Fetch-Site: cross-site' -H 'Sec-Fetch-Mode: navigate' $D/)\" = 200"
+expect "Host 头不对 (DNS 重绑定) → 403, 静态文件也一样" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H 'Host: evil.example:80' $D/)" = 403
+expect "核心 (Clash API) 端口不再提供 /ui/ (页面已改由辅助服务提供)" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $U/ui/)" != 200
+expect "核心只对后台的来源开放 CORS (别的来源没有 Access-Control-Allow-Origin)" sh -c "curl -sI --noproxy '*' -H 'Origin: http://127.0.0.1:$API_PORT' -H 'Access-Control-Request-Method: GET' -X OPTIONS $U/version | tr -d '\r' | grep -qi '^access-control-allow-origin: http://127.0.0.1:$API_PORT\$' && ! curl -sI --noproxy '*' -H 'Origin: http://evil.example' -H 'Access-Control-Request-Method: GET' -X OPTIONS $U/version | grep -qi '^access-control-allow-origin'"
 expect "catalog.json 与 env.json 已生成" test -s "$W/h/ui/catalog.json" -a -s "$W/h/ui/env.json"
 expect "令牌文件已生成 (权限 600) 且没有 auth.conf / 本地密码" sh -c "test -s '$W/h/secret' && test \"\$(stat -f %Lp '$W/h/secret')\" = 600 && test ! -e '$W/h/auth.conf'"
 expect "快捷命令可从符号链接运行" test "$("$W/shortcut/enana" version)" = "enana $VER"
@@ -333,7 +347,7 @@ api -X POST "$A/api/apps/scan" | chk "再次扫描不会重复标记" 'assert d[
 echo "   (应用图标 / 自定义软件: 校验 + 两步添加)"
 for i in $(seq 1 30); do sleep 0.5; [ "$(api "$A/api/apps" | jp 'print(sum(1 for a in d["apps"] if a["icon"]))' 2>/dev/null)" -ge 1 ] 2>/dev/null && break; done
 api "$A/api/apps" | chk "应用图标: 后台提取了真实图标, 条目带 icon 路径 (没有的是空串, 前端用字母头像)" 'ic=[a["icon"] for a in d["apps"] if a["icon"]]; assert ic and all(i.startswith("appicons/") and i.endswith(".png") for i in ic)'
-ICON=$(api "$A/api/apps" | jp 'print([a["icon"] for a in d["apps"] if a["icon"]][0])'); expect "图标文件是 PNG 且在核心的静态目录下可访问" sh -c "file '$W/h/ui/$ICON' | grep -q 'PNG image' && test \"\$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $U/ui/$ICON)\" = 200"
+ICON=$(api "$A/api/apps" | jp 'print([a["icon"] for a in d["apps"] if a["icon"]][0])'); expect "图标文件是 PNG 且由后台 (辅助服务) 提供, Content-Type 为 image/png" sh -c "file '$W/h/ui/$ICON' | grep -q 'PNG image' && test \"\$(curl -s -o /dev/null -w '%{http_code} %{content_type}' --noproxy '*' $A/enana/admin/$ICON)\" = '200 image/png'"
 CA=$(mkapp "$W/Custom" "Foo Tool"); mkapp "$HOME/Applications" "Searchable Tool" >/dev/null; mkdir -p "$W/bin" "$W/Custom/Broken.app"; cp /usr/bin/true "$W/bin/mytool"; codesign --force -s - "$W/bin/mytool" >/dev/null 2>&1
 insp() { api -X POST --data-urlencode "input=$1" "$A/api/apps/inspect"; }
 insp "relative/path" | chk "自定义软件校验: 相对路径 → 无效 + 原因" 'c=d["candidates"][0]; assert not c["valid"] and "绝对路径" in c["reason"]'
@@ -530,7 +544,7 @@ echo "== 7c. 配置快照 (备份 / 同步的数据格式) · 云端同步 (端�
 SP_=/usr/bin/perl; SNAPPL="$REPO/lib/snapshot.pl"; SYNCPL="$REPO/lib/sync.pl"
 SD="$W/snaps"; mkdir -p "$SD/a/certs" "$SD/b" "$SD/c"
 printf '%s\n' '{"role":"auto","outbound":{"type":"trojan","tag":"Snap-A","server":"127.0.0.1","server_port":1,"password":"pa"}}' '{"role":"pin","outbound":{"type":"trojan","tag":"Snap-B","server":"127.0.0.1","server_port":2,"password":"pb"}}' > "$SD/a/servers.jsonl"
-printf 'sub1|https://sub.example.com/a|1|2|12|0|0|0\n' > "$SD/a/subs.tsv"; printf 'hosts-snap.example|127.0.0.1\n' > "$SD/a/hosts.tsv"
+printf 'sub1|https://sub.example.com/a|1|2|12|0|0|0\n' > "$SD/a/subs.tsv"; printf 'hosts-snap.example|127.0.0.1\n' > "$SD/a/hosts.tsv"; printf 'Snap-A\nSnap-B\n' > "$SD/a/servers.sync"; printf 'sub1\n' > "$SD/a/subs.sync"
 printf 'LANG_UI=zh\nPORT=9999\nLOG_DAYS=45\nPROXY_ENABLED=1\nACCOUNT_URL=https://evil.example\n' > "$SD/a/settings.env"; cp "$W/c.pem" "$SD/a/certs/snap.crt"
 $SP_ "$SNAPPL" build "$SD/a" 2.1.0 "Mac A" > "$SD/a.json"
 cat "$SD/a.json" | chk "快照: 格式 1, 含白名单里的文件 / 证书 / 设置; 不含端口 / 代理总开关 / 账号地址" 'f=d["files"]; assert d["format"]==1 and d["device"]=="Mac A" and set(f)=={"servers.jsonl","subs.tsv","hosts.tsv"} and d["settings"]=={"LANG_UI":"zh","LOG_DAYS":"45"} and "snap.crt" in d["certs"]'
@@ -696,6 +710,65 @@ sy settings -d 'enabled=0' | chk "关闭同步 (自动同步一起关)" 'assert 
 api "$A/api/sync" | chk "已关闭" 'assert not d["enabled"] and not d["auto"]'
 api -X POST "$A/api/settings" -d 'log_days=30' >/dev/null
 sy push | chk "关闭后不能上传" 'assert not d["ok"]'
+
+echo "-- 添加服务器的「保存到云端」: 只有勾选的进入云端同步 · 导出备份带全部 · 登录后自动取回 · 明确关闭过的不动"
+SO="$SD/o"; mkdir -p "$SO"
+printf '%s\n' '{"role":"auto","outbound":{"type":"trojan","tag":"O-Synced","server":"127.0.0.1","server_port":1,"password":"p"}}' '{"role":"auto","outbound":{"type":"trojan","tag":"O-Local","server":"127.0.0.1","server_port":2,"password":"p"}}' '{"role":"auto","sub":"os","outbound":{"type":"trojan","tag":"O-FromSub","server":"127.0.0.1","server_port":3,"password":"p"}}' > "$SO/servers.jsonl"
+printf 'os|https://sub.example.com/o|1|1|12|0|0|0\nol|https://sub.example.com/l|1|0|12|0|0|0\n' > "$SO/subs.tsv"
+printf 'O-Synced\n' > "$SO/servers.sync"; printf 'os\n' > "$SO/subs.sync"
+$SP_ "$SNAPPL" build "$SO" 2.1.0 X | chk "快照只带「保存到云端」的服务器 (O-Synced, 以及已保存订阅 os 的 O-FromSub) 和订阅 os; 只在本机的 O-Local / ol 不在里面" 'f=d["files"]; s=f["servers.jsonl"]; assert "O-Synced" in s and "O-FromSub" in s and "O-Local" not in s and f["subs.tsv"].startswith("os|") and "ol|" not in f["subs.tsv"]'
+$SP_ "$SNAPPL" build "$SO" 2.1.0 X all | chk "导出备份 (build … all) 带全部服务器和订阅" 'f=d["files"]; assert "O-Local" in f["servers.jsonl"] and "ol|" in f["subs.tsv"] and "O-Synced" in f["servers.jsonl"]'
+H1=$($SP_ "$SNAPPL" hash "$SO"); printf '%s\n' '{"role":"auto","outbound":{"type":"trojan","tag":"O-Local2","server":"127.0.0.1","server_port":4,"password":"p"}}' >> "$SO/servers.jsonl"
+[ "$H1" = "$($SP_ "$SNAPPL" hash "$SO")" ] && tpass "只在本机的服务器变化不影响「有没有未上传的改动」(哈希不变)" || tfail "只在本机的服务器变化不影响「有没有未上传的改动」(哈希不变)"
+$SP_ "$SNAPPL" apply "$SO" "$SD/a.json" replace >/dev/null
+expect "替换 (replace): 云端的 Snap-A / Snap-B / sub1 进来, 之前同步过但云端没有的 O-Synced / O-FromSub / os 被替换掉, 只在本机的 O-Local / O-Local2 / ol 保留" sh -c "grep -q Snap-A '$SO/servers.jsonl' && grep -q Snap-B '$SO/servers.jsonl' && ! grep -q O-Synced '$SO/servers.jsonl' && ! grep -q O-FromSub '$SO/servers.jsonl' && grep -q O-Local '$SO/servers.jsonl' && grep -q O-Local2 '$SO/servers.jsonl' && grep -q '^sub1|' '$SO/subs.tsv' && grep -q '^ol|' '$SO/subs.tsv' && ! grep -q '^os|' '$SO/subs.tsv'"
+expect "取回来的 Snap-A / Snap-B / sub1 记入本机的同步清单 (之后继续同步)" sh -c "grep -qx Snap-A '$SO/servers.sync' && grep -qx Snap-B '$SO/servers.sync' && grep -qx sub1 '$SO/subs.sync'"
+SG="$SD/m2"; mkdir -p "$SG"; printf '%s\n' '{"role":"auto","outbound":{"type":"trojan","tag":"G-Local","server":"127.0.0.1","server_port":5,"password":"p"}}' > "$SG/servers.jsonl"
+$SP_ "$SNAPPL" apply "$SG" "$SD/a.json" merge >/dev/null
+expect "合并 (merge): 本机原有的 G-Local 保留 (仍然只在本机), 云端的 Snap-A / Snap-B 加进来并记入同步清单" sh -c "grep -q G-Local '$SG/servers.jsonl' && grep -q Snap-A '$SG/servers.jsonl' && ! grep -qx G-Local '$SG/servers.sync' && grep -qx Snap-A '$SG/servers.sync'"
+
+echo "-- 接口: save=1 / save=0 · 第一次勾选自动打开同步 · 老服务器不会被连带上传 · 登录后自动取回"
+sy settings -d 'enabled=0' >/dev/null; rm -f "$W/h/servers.sync" "$W/h/subs.sync" "$W/h/.sync-pending"; sed -i '' -e '/^ENABLED=/d' -e '/^AUTO=/d' "$W/h/sync.conf"
+api "$A/api/sync" | chk "还没做过选择: decided=false, enabled=false" 'assert d["decided"] is False and d["enabled"] is False'
+LY='{"role":"auto","outbound":{"type":"socks","tag":"Save-Yes","server":"127.0.0.1","server_port":'$HOP_PORT',"version":"5"}}'
+LN='{"role":"auto","outbound":{"type":"socks","tag":"Save-No","server":"127.0.0.1","server_port":'$HOP_PORT',"version":"5"}}'
+api -X POST "$A/api/servers/import?mode=merge&save=2" --data-binary "$LY" | chk "save 参数只接受 0 / 1" 'assert not d["ok"]'
+J=$(api -X POST "$A/api/servers/import?mode=merge&save=1" --data-binary "$LY" | jp 'print(d["job"])'); [ "$(job_wait "$J")" = done ] && tpass "导入 (save=1) 完成" || tfail "导入 (save=1) 完成"
+expect "save=1: 节点进入同步清单; 第一次勾选自动打开云端同步 (enabled + auto) 并标记「马上上传」" sh -c "grep -qx 'Save-Yes' '$W/h/servers.sync' && grep -qx 'ENABLED=1' '$W/h/sync.conf' && grep -qx 'AUTO=1' '$W/h/sync.conf' && test -e '$W/h/.sync-pending'"
+expect "老服务器 (没有记录, 例如 Fix-Pin) 不会被连带同步: 只有这次勾选的进了清单" sh -c "! grep -qx 'Fix-Pin' '$W/h/servers.sync' && [ \$(grep -c . '$W/h/servers.sync') = 1 ]"
+J=$(api -X POST "$A/api/servers/import?mode=merge&save=0" --data-binary "$LN" | jp 'print(d["job"])'); [ "$(job_wait "$J")" = done ] && tpass "导入 (save=0) 完成" || tfail "导入 (save=0) 完成"
+expect "save=0: 服务器已添加但只留在本机 (不进同步清单)" sh -c "grep -q Save-No '$W/h/servers.jsonl' && ! grep -qx 'Save-No' '$W/h/servers.sync'"
+api "$A/api/export" -o "$SD/export-all.json"
+cat "$SD/export-all.json" | jp 'import json; f=d["files"]["servers.jsonl"]; assert "Save-No" in f and "Save-Yes" in f and "Fix-Pin" in f' && tpass "导出备份带全部服务器 (包括只在本机的)" || tfail "导出备份带全部服务器 (包括只在本机的)"
+J=$(api -X POST "$A/api/servers/delete?tag=Save-Yes" | jp 'print(d.get("job",""))'); [ -z "$J" ] || job_wait "$J" >/dev/null
+expect "删除服务器时从同步清单里去掉" sh -c "! grep -qx 'Save-Yes' '$W/h/servers.sync'"
+J=$(api -X POST "$A/api/servers/delete?tag=Save-No" | jp 'print(d.get("job",""))'); [ -z "$J" ] || job_wait "$J" >/dev/null
+# 登录后自动取回: 云端有「另一台电脑」保存的服务器 Cloud-New → 退出再登录, 它自动出现 (合并, 本机已有的都在)
+python3 - "$SD" <<'PY2'
+import json, sys
+sd = sys.argv[1]
+d = json.load(open(sd + "/export-all.json"))
+d["files"]["servers.jsonl"] = d["files"]["servers.jsonl"].rstrip("\n") + '\n{"role":"auto","outbound":{"type":"socks","tag":"Cloud-New","server":"127.0.0.1","server_port":1,"version":"5"}}\n'
+json.dump(d, open(sd + "/cloud-login.json", "w"))
+PY2
+$SP_ "$SYNCPL" seal "$W/h/sync.key" "$SD/cloud-login.json" "$SD/cloud-login.b64"; V=$(remote_v); put_remote "$SD/cloud-login.b64" "$V" >/dev/null
+sed -i '' -e '/^ENABLED=/d' -e '/^AUTO=/d' -e '/^BASE_VERSION=/d' -e '/^SYNCED_HASH=/d' "$W/h/sync.conf"
+ACC_=$(cut -d' ' -f1 "$W/h/loggedin"); PW_=$(sudo_pw)
+api -X POST "$A/api/logout" >/dev/null; wait_clash_401 "$TOKEN"
+R=$(login "$ACC_" "$PW_"); TOKEN=$(echo "$R" | jp 'print(d["token"])')
+for i in $(seq 1 40); do api "$A/api/state" | jp 'import sys; sys.exit(0 if "Cloud-New" in {s["tag"] for s in d["servers"]} else 1)' >/dev/null 2>&1 && break; sleep 0.5; done
+api "$A/api/state" | chk "登录后自动取回云端保存的服务器: Cloud-New 出现, 本机原有的服务器都在 (合并, 不覆盖)" 'ts={s["tag"] for s in d["servers"]}; assert "Cloud-New" in ts and {"Fix-Pin","Local-Hop"} <= ts'
+expect "取回来的服务器记入同步清单, 同步自动打开 (之前没做过选择)" sh -c "grep -qx 'Cloud-New' '$W/h/servers.sync' && grep -qx 'ENABLED=1' '$W/h/sync.conf'"
+expect "云端快照里带来的全部服务器 (包括 Fix-Pin) 都记入同步清单, 之后继续同步" sh -c "grep -qx 'Fix-Pin' '$W/h/servers.sync' && grep -qx 'Local-Hop' '$W/h/servers.sync'"
+# 在设置里明确关闭过同步 → 登录后不自动取回
+J=$(api -X POST "$A/api/servers/delete?tag=Cloud-New" | jp 'print(d.get("job",""))'); [ -z "$J" ] || job_wait "$J" >/dev/null
+sy settings -d 'enabled=0' >/dev/null; sed -i '' -e '/^BASE_VERSION=/d' -e '/^SYNCED_HASH=/d' "$W/h/sync.conf"; V=$(remote_v)
+api -X POST "$A/api/logout" >/dev/null; wait_clash_401 "$TOKEN"
+R=$(login "$ACC_" "$PW_"); TOKEN=$(echo "$R" | jp 'print(d["token"])'); sleep 4
+api "$A/api/state" | chk "明确关闭过同步 → 登录后不会自动取回 (Cloud-New 没有出现), ENABLED 仍是 0" 'assert "Cloud-New" not in {s["tag"] for s in d["servers"]}'
+expect "ENABLED=0 没有被登录流程改回去" grep -qx 'ENABLED=0' "$W/h/sync.conf"
+rm -f "$W/h/servers.sync" "$W/h/subs.sync" "$W/h/.sync-pending"
+api -X POST "$A/api/proxy" -d 'on=1' >/dev/null           # 上面退出再登录会关掉代理 (这是设计): 后面的章节要在「代理已开启」的状态下继续
 
 echo "== 7d. 添加自己的服务器 (SSH 一键部署): 探测 / 主机指纹 / 部署 / 重新识别出口 IP / 凭据不落盘"
 if ! waitport "$SSHD_PORT"; then tfail "本机测试用的 sshd 没有起来 (跳过 SSH 部署测试)"; else

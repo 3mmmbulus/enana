@@ -2,6 +2,7 @@
 # enana 一键安装 / 升级 (macOS)  ·  One-line installer / upgrader for macOS
 #
 #   安装 (在任意终端执行):   curl -fsSL https://install.enana.cc | bash
+#                            没有 curl 时:  wget -qO- https://install.enana.cc | bash
 #   升级:                    enana self-update        (或再执行一遍上面的命令)
 #   选项 (curl … | bash -s -- <选项>):
 #       --yes        不询问, 直接安装          --upgrade   升级模式 (沿用现有设置, 不弹菜单)
@@ -9,7 +10,10 @@
 #
 # 它会: 查询最新的 enana 版本 → 下载安装包 → 校验 SHA-256 (清单与安装包来自不同线路时要求一致) → 运行安装器。
 # 安装的是「最新版本」; 终端只安装环境, 其余设置都在安装完成后打开的仪表盘里完成。
-[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
+if [ -z "${BASH_VERSION:-}" ]; then          # 被 zsh / dash 等当脚本跑: 能找到脚本文件就切回 bash, 管道进来 (curl … | zsh) 的没有文件可切, 给出提示
+  if [ -f "$0" ] && [ -r "$0" ]; then exec bash "$0" "$@"; fi
+  printf '%s\n' "enana: please run the installer with bash:  curl -fsSL https://install.enana.cc | bash   (请用 bash 运行, 不是 sh / zsh)" >&2; exit 1
+fi
 set -eu
 
 INSTALL_BASE=${ENANA_INSTALL_BASE:-https://install.enana.cc}
@@ -50,12 +54,30 @@ die()  { printf '\n  %s✗ %s%s\n' "$R" "$(T "$1" "$2")" "$N" >&2; [ -z "${3:-}"
 progress() { [ "${ENANA_PROGRESS:-}" = 1 ] && printf '##job %s %s %s\n' "$1" "$2" "$3"; return 0; }    # 供仪表盘「更新」任务读取进度
 
 # ---------- 环境检查 ----------
-[ "$(uname -s)" = Darwin ] || die "目前只支持 macOS; Windows 请用 PowerShell 命令: irm https://install.enana.cc | iex" "enana currently supports macOS only; on Windows use the PowerShell command: irm https://install.enana.cc | iex"
+case "$(uname -s 2>/dev/null)" in
+  Darwin) ;;
+  Linux) die "Linux 版暂未提供 (规划中); 目前支持 macOS, Windows 请用 PowerShell 命令: irm https://install.enana.cc | iex" "The Linux edition is not available yet (planned). enana supports macOS today; on Windows use the PowerShell command: irm https://install.enana.cc | iex" ;;
+  MINGW*|MSYS*|CYGWIN*) die "这里是 Windows 上的 bash (Git Bash / MSYS)。请改用 PowerShell: irm https://install.enana.cc | iex (Windows 版即将支持)" "This is a bash on Windows (Git Bash / MSYS). Please use PowerShell instead: irm https://install.enana.cc | iex (the Windows edition is coming soon)" ;;
+  *) die "不支持的系统: $(uname -s); 目前只支持 macOS" "Unsupported system: $(uname -s); enana currently supports macOS only" ;;
+esac
 [ "$(id -u)" -ne 0 ] || die "请不要用 sudo 运行 (需要管理员权限的步骤会自己要密码)" "Do not run this with sudo (steps that need admin rights will ask for your password)"
-for c in curl tar shasum; do command -v "$c" >/dev/null 2>&1 || die "缺少命令: $c" "Missing command: $c"; done
+# 下载工具: curl (macOS 自带) → wget; 校验工具: shasum → sha256sum → openssl。缺什么就说清楚怎么办, 而不是半路报错
+DL=''
+if [ -n "${ENANA_DL+x}" ]; then case $ENANA_DL in curl|wget) DL=$ENANA_DL ;; esac            # ENANA_DL 只给测试 / 排查用: 指定用哪个 (curl | wget), 写别的值 = 当作两个都没有
+elif command -v curl >/dev/null 2>&1; then DL=curl; elif command -v wget >/dev/null 2>&1; then DL=wget; fi
+[ -n "$DL" ] || die "找不到下载工具 (curl 或 wget)" "Neither curl nor wget was found" "macOS 自带 curl; 如果被卸载了, 请安装 Xcode 命令行工具 (xcode-select --install) 或 Homebrew 后重试" "macOS ships with curl; if it was removed, install the Xcode Command Line Tools (xcode-select --install) or Homebrew and try again"
+command -v tar >/dev/null 2>&1 || die "缺少命令: tar" "Missing command: tar"
+if command -v shasum >/dev/null 2>&1; then SUMCMD='shasum -a 256'; elif command -v sha256sum >/dev/null 2>&1; then SUMCMD=sha256sum; elif command -v openssl >/dev/null 2>&1; then SUMCMD='openssl dgst -sha256 -r'
+else die "缺少校验工具 (shasum / sha256sum / openssl)" "No checksum tool found (shasum / sha256sum / openssl)"; fi
+sha256_of() { $SUMCMD "$1" | cut -d' ' -f1; }
 
 # ---------- 查询最新版本 ----------
-fetch() { curl -fsSL --connect-timeout 8 --max-time "${2:-20}" "$1" 2>/dev/null; }
+fetch() { # fetch <url> [最长秒数] -> stdout
+  if [ "$DL" = wget ]; then wget -qO- -T "${2:-20}" --tries=1 "$1" 2>/dev/null; else curl -fsSL --connect-timeout 8 --max-time "${2:-20}" "$1" 2>/dev/null; fi
+}
+fetch_file() { # fetch_file <url> <输出文件>  (显示进度)
+  if [ "$DL" = wget ]; then wget -q --show-progress -T 30 --tries=1 -O "$2" "$1" 2>/dev/null || wget -q -T 30 --tries=1 -O "$2" "$1"; else curl -fL --connect-timeout 10 --max-time 600 --progress-bar -o "$2" "$1"; fi
+}
 mfield() { printf '%s' "$1" | sed -n "s/.*\"$2\":\"\\([^\"]*\\)\".*/\\1/p" | head -1; }
 mnum()   { printf '%s' "$1" | sed -n "s/.*\"$2\":\\([0-9]*\\).*/\\1/p" | head -1; }
 
@@ -91,8 +113,8 @@ FILE=$(basename "$URL"); case $FILE in enana-*.tar.gz) ;; *) die "安装包文�
 got=0
 for src in "$INSTALL_BASE/dl/$FILE" "$GH_BASE/$GH_REPO/releases/download/v$VER/$FILE"; do
   info "下载 $src" "Downloading $src"
-  curl -fL --connect-timeout 10 --max-time 600 --progress-bar -o "$TMP/pkg.tgz" "$src" || true
-  if [ -s "$TMP/pkg.tgz" ] && [ "$(wc -c < "$TMP/pkg.tgz" | tr -d ' ')" = "$SIZE" ] && [ "$(shasum -a 256 "$TMP/pkg.tgz" | cut -d' ' -f1)" = "$SHA" ]; then got=1; break; fi
+  fetch_file "$src" "$TMP/pkg.tgz" || true
+  if [ -s "$TMP/pkg.tgz" ] && [ "$(wc -c < "$TMP/pkg.tgz" | tr -d ' ')" = "$SIZE" ] && [ "$(sha256_of "$TMP/pkg.tgz")" = "$SHA" ]; then got=1; break; fi
   warn "这条线路的下载不完整或校验不通过, 换下一条" "This source failed (incomplete or checksum mismatch); trying the next one"; rm -f "$TMP/pkg.tgz"
 done
 [ "$got" = 1 ] || die "安装包下载或校验失败 (已尝试所有线路)" "Package download or verification failed (all sources tried)"

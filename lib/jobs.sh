@@ -16,7 +16,7 @@ job_new() { # job_new 名称 "步骤1|步骤2|…"  -> 打印 id
   find "$H/jobs" -type f -mtime +1 -exec rm -f {} + 2>/dev/null || true
   id="$name-$(now)-$RANDOM"
   printf '%s' "$steps" > "$H/jobs/$id.steps"
-  case $name in net-info|speedtest|self-update|core-upgrade|maintain|dns-bench|sync-push|vps-probe|vps-provision|vps-redetect) ;; *) job_ticket > "$H/jobs/$id.ticket" ;; esac   # 长时间的只读/独立任务不排队
+  case $name in net-info|speedtest|self-update|core-upgrade|maintain|dns-bench|sync-push|sync-login|vps-probe|vps-provision|vps-redetect) ;; *) job_ticket > "$H/jobs/$id.ticket" ;; esac   # 长时间的只读/独立任务不排队
   JOB_NAME=$name; job_write "$id" "$name" running 0 0 "准备中" '{}'
   printf '%s\n' "$id"
 }

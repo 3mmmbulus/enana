@@ -12,18 +12,15 @@ exec 1>&0
 export LC_ALL=C
 _self="${BASH_SOURCE[0]}"; _dir=$(cd "$(dirname "$_self")" && pwd -P)
 . "$_dir/common.sh"; init_paths "$_self"
-for _f in i18n jobs servers apps sites fetch os-darwin auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps; do . "$LIB/$_f.sh"; done
 load_settings
 QUIET=1; cd "$H" || exit 0
-OP_WHO=dashboard; export OP_WHO
 
-ORIGIN=''; HOST=''; XT=''; TOK=''; SUD=''; LHDR=''; CT=''; CL=0
-BODY=$(mktemp "${TMPDIR:-/tmp}/enana-body.XXXXXX"); trap 'rm -f "$BODY" "$BODY".*' EXIT
+ORIGIN=''; HOST=''; XT=''; TOK=''; SUD=''; LHDR=''; CT=''; CL=0; SFS=''; SFM=''
 
 # ---------- 响应 ----------
 set_cors() { # 设置 CORS_H (含结尾 CRLF; 不能用 $(...) 返回, 否则结尾换行会被吞掉)
   local o; CORS_H=''
-  for o in "http://127.0.0.1:$UI_PORT" "http://localhost:$UI_PORT"; do
+  for o in "http://127.0.0.1:$API_PORT" "http://localhost:$API_PORT"; do
     if [ -n "$ORIGIN" ] && [ "$o" = "$ORIGIN" ]; then
       printf -v CORS_H 'Access-Control-Allow-Origin: %s\r\nVary: Origin\r\nAccess-Control-Expose-Headers: X-Subscription-Userinfo, X-Profile-Update-Interval, Content-Disposition\r\n' "$o"
     fi
@@ -48,20 +45,61 @@ deny() { send "$1" application/json "{\"ok\":false,\"code\":\"$2\",\"error\":\"$
 IFS= read -r req || exit 0; req=${req%$'\r'}
 method=${req%% *}; _rest=${req#* }; target=${_rest%% *}
 path=${target%%\?*}; query=''; case $target in *\?*) query=${target#*\?} ;; esac
+shopt -s nocasematch                                                  # 头名不区分大小写; 不用 tr, 每个请求少起十几个进程
 while IFS= read -r line; do
   line=${line%$'\r'}; [ -z "$line" ] && break
-  _hn=$(printf '%s' "${line%%:*}" | tr 'A-Z' 'a-z'); _hv=${line#*:}; _hv=${_hv# }
+  _hn=${line%%:*}; _hv=${line#*:}; _hv=${_hv# }
   case $_hn in
     host) HOST=$_hv ;; origin) ORIGIN=$_hv ;; x-enana|x-tproxy) XT=$_hv ;; x-enana-token|x-tproxy-token) TOK=$_hv ;; x-enana-sudo) SUD=$_hv ;;
-    x-enana-lang) LHDR=$_hv ;; content-type) CT=$_hv ;; content-length) CL=$_hv ;;
+    x-enana-lang) LHDR=$_hv ;; content-type) CT=$_hv ;; content-length) CL=$_hv ;; sec-fetch-site) SFS=$_hv ;; sec-fetch-mode) SFM=$_hv ;;
   esac
 done
+shopt -u nocasematch
 case $CL in ''|*[!0-9]*) CL=0 ;; esac
 set_cors
-case " $I18N_LANGS " in *" $LHDR "*) [ -n "$LHDR" ] && I18N_LANG=$LHDR ;; esac       # 本次请求的语言 (错误文字 / 任务进度都按它翻译)
-: "${I18N_LANG:=${LANG_UI:-zh}}"; export I18N_LANG
 
 case $HOST in "127.0.0.1:$API_PORT"|"localhost:$API_PORT") ;; *) deny 403 E_FORBIDDEN "拒绝访问" ;; esac
+
+# ---------- 仪表盘 (后台) 的静态文件: /enana/admin/… ----------
+# 仪表盘页面由这里直接提供 (和接口同一个来源, 同源请求不需要 CORS 预检)。放在加载其它模块之前处理: 一次打开要取几十个文件, 每个请求都要快。
+# 只提供 $H/ui 下白名单扩展名的普通文件: 不跟随符号链接, 不允许 .. / 反斜杠 / 百分号编码 / 隐藏文件。
+serve_static() {
+  local rel=${path#"$ADMIN_PATH"} f ct len
+  case $method in GET|HEAD) ;; *) send 405 text/plain 'Method Not Allowed' 'Allow: GET, HEAD\r\n'; exit 0 ;; esac
+  # 别的网站的页面不能把这里的文件当子资源加载 (<img> / <script> 探测装了哪些应用 · 取图标): 浏览器会带 Sec-Fetch-Site; 用户自己打开 / 点链接过来 (navigate) 照常
+  if [ "$SFS" = cross-site ] && [ "$SFM" != navigate ]; then send 403 text/plain 'Forbidden'; exit 0; fi
+  case $path in
+    /|"$ADMIN_PATH") printf 'HTTP/1.1 302 Found\r\nLocation: %s/\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n' "$ADMIN_PATH"; exit 0 ;;
+  esac
+  case $rel in    # 页面路由 (和 ui/app.js 的 NAV 一致, 加上未登录时的 login / register 两个整页): /enana/admin/apps 等直接给 index.html, 由页面里的路由决定显示哪一页; 末尾带斜杠的跳到不带的 (页面里的相对地址要靠它)
+    /overview|/apps|/sites|/rules|/dns|/servers|/conns|/traffic|/speed|/logs|/settings|/login|/register) rel=/index.html ;;
+    /overview/|/apps/|/sites/|/rules/|/dns/|/servers/|/conns/|/traffic/|/speed/|/logs/|/settings/|/login/|/register/)
+      printf 'HTTP/1.1 302 Found\r\nLocation: %s%s\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n' "$ADMIN_PATH" "${rel%/}"; exit 0 ;;
+  esac
+  [ "$rel" = / ] && rel=/index.html
+  case $rel in *..*|*%*|*\\*|*//*|*/.*) send 404 text/plain 'Not Found'; exit 0 ;; esac
+  case ${rel##*.} in
+    html) ct='text/html; charset=utf-8' ;; js) ct='text/javascript; charset=utf-8' ;; css) ct='text/css; charset=utf-8' ;;
+    json) ct='application/json; charset=utf-8' ;; svg) ct='image/svg+xml' ;; png) ct='image/png' ;; jpg|jpeg) ct='image/jpeg' ;;
+    ico) ct='image/x-icon' ;; webp) ct='image/webp' ;; woff2) ct='font/woff2' ;; txt) ct='text/plain; charset=utf-8' ;;
+    *) send 404 text/plain 'Not Found'; exit 0 ;;
+  esac
+  f="$H/ui$rel"
+  if [ ! -f "$f" ] || [ -L "$f" ]; then send 404 text/plain 'Not Found'; exit 0; fi
+  len=$(wc -c < "$f"); len=${len// /}
+  printf 'HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %s\r\nCache-Control: no-cache\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n' "$ct" "$len"
+  [ "$method" = HEAD ] || cat "$f"
+  exit 0
+}
+case $path in /|"$ADMIN_PATH"|"$ADMIN_PATH"/*) serve_static ;; esac
+
+# ---------- 以下是 JSON 接口: 到这里才加载其余模块 ----------
+for _f in i18n jobs servers apps sites fetch os-darwin auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps; do . "$LIB/$_f.sh"; done
+i18n_init
+OP_WHO=dashboard; export OP_WHO
+BODY=$(mktemp "${TMPDIR:-/tmp}/enana-body.XXXXXX"); trap 'rm -f "$BODY" "$BODY".*' EXIT
+case " $I18N_LANGS " in *" $LHDR "*) [ -n "$LHDR" ] && I18N_LANG=$LHDR ;; esac       # 本次请求的语言 (错误文字 / 任务进度都按它翻译)
+: "${I18N_LANG:=${LANG_UI:-zh}}"; export I18N_LANG
 if [ "$method" = OPTIONS ]; then
   send 204 text/plain '' "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: X-Enana, X-Enana-Token, X-Enana-Lang, X-Enana-Sudo, Content-Type\r\nAccess-Control-Max-Age: 600\r\n"; exit 0
 fi
@@ -117,7 +155,7 @@ ep_login() {
   case $k in ''|*[!A-Za-z0-9-]*) [ -z "$k" ] || fail "设备编号无效" ;; esac
   if auth_login "$u" "$p" "$k"; then
     oplog dashboard "登录" "$(auth_mask_email "$AUTH_EMAIL") ($AUTH_VIA)" ok
-    [ "$AUTH_VIA" = online ] && { job_spawn content-sync "$RULE_STEPS" >/dev/null; ( plan_refresh >/dev/null 2>&1 & ); }       # 登录后顺带拉取云端内容和套餐 (后台, 失败不影响登录)
+    [ "$AUTH_VIA" = online ] && { job_spawn content-sync "$RULE_STEPS" >/dev/null; job_spawn sync-login "$RULE_STEPS" >/dev/null; ( plan_refresh >/dev/null 2>&1 & ); }       # 登录后顺带拉取云端内容和套餐 (后台, 失败不影响登录)
     okj "\"token\":\"$(auth_secret)\",\"account\":\"$(jesc "$AUTH_EMAIL")\",\"via\":\"$AUTH_VIA\""
     return
   fi
@@ -206,7 +244,7 @@ ep_sub_url() { # 查看订阅链接 (需 sudo)
   json "{\"ok\":true,\"name\":\"$(jesc "$name")\",\"url\":\"$(jesc "$url")\"}"
 }
 ep_export() { # 导出配置备份 (含凭据, 需 sudo)
-  local body; body=$(snap_build) || fail "配置太大, 无法导出" E_INVALID
+  local body; body=$(snap_build all) || fail "配置太大, 无法导出" E_INVALID
   oplog dashboard "导出配置备份" "" ok
   send 200 application/json "$body" "Content-Disposition: attachment; filename=\"enana-backup-$(date +%Y%m%d).json\"\r\n"
 }
@@ -221,6 +259,7 @@ ep_sync_settings() { # enabled=0|1 auto=0|1 [password=…: 第一次开启时本
     fi
     sync_key_derive "$(auth_acc_get id)" "$pw" || fail "无法生成同步密钥" E_INVALID
   fi
+  [ "$en" = 1 ] && ! sync_enabled && sync_list_all                                    # 在设置里明确打开: 现有的服务器和订阅都开始同步 (和以前「全部同步」一致)
   [ -z "$en" ] || sync_set ENABLED "$en"
   [ -z "$au" ] || sync_set AUTO "$au"
   [ "$en" != 0 ] || sync_set AUTO 0                                                  # 关闭同步时自动同步也一起关
@@ -279,13 +318,13 @@ vps_form() { # 读表单 -> F_HOST F_PORT F_USER F_MODE F_PASSWORD F_KEY F_PASSP
   F_HOST=$(fp host); F_PORT=$(fp port); [ -n "$F_PORT" ] || F_PORT=22; F_USER=$(fp user); [ -n "$F_USER" ] || F_USER=root; F_MODE=$(fp mode); [ -n "$F_MODE" ] || F_MODE=password
   F_PASSWORD=$(fp password); F_KEY=$(fp key); F_PASSPHRASE=$(fp passphrase); F_SUDOPW=$(fp sudo_password); F_HOSTKEY=$(fp hostkey)
 }
-vps_launch() { # <任务名> <步骤> <name> <role> <install_deps> <id> <confirm_hostkey>   校验 -> 写凭据文件 -> 启动任务
+vps_launch() { # <任务名> <步骤> <name> <role> <install_deps> <id> <confirm_hostkey> [save]   校验 -> 写凭据文件 -> 启动任务
   local job=$1 steps=$2 id
   vps_cred_check "$F_HOST" "$F_PORT" "$F_USER" "$F_MODE" "$F_PASSWORD" "$F_KEY" "$F_PASSPHRASE" "$F_SUDOPW" "$F_HOSTKEY" || fail "$VPS_ERR" E_INVALID
   command -v "$(vps_ssh_bin)" >/dev/null 2>&1 || fail "这台电脑上找不到 ssh 命令" E_SSH_NO_CLIENT
   vps_playbook_ok || fail "部署脚本由 enana 云端下发: 请先登录, 并等「云端内容」同步完成后再试" E_VPS_NO_PLAYBOOK
   id=$(job_new "$job" "$steps")
-  vps_cred_write "$H/jobs/$id.cred" "$F_HOST" "$F_PORT" "$F_USER" "$F_MODE" "$F_PASSWORD" "$F_KEY" "$F_PASSPHRASE" "$F_SUDOPW" "$F_HOSTKEY" "$3" "$4" "$5" "$6" "$7"
+  vps_cred_write "$H/jobs/$id.cred" "$F_HOST" "$F_PORT" "$F_USER" "$F_MODE" "$F_PASSWORD" "$F_KEY" "$F_PASSPHRASE" "$F_SUDOPW" "$F_HOSTKEY" "$3" "$4" "$5" "$6" "$7" "${8:-}"
   job_launch "$job" "$id" "$H/jobs/$id.cred"
   okj "\"job\":\"$id\""
 }
@@ -294,11 +333,12 @@ ep_vps_probe() {
   vps_launch vps-probe '连接服务器|检测系统与环境|整理结果' '' pin 0 '' "${cf:-0}"
 }
 ep_vps_provision() {
-  local name role deps; vps_form; name=$(fp name); role=$(fp role); deps=$(fp install_deps)
+  local name role deps save; vps_form; name=$(fp name); role=$(fp role); deps=$(fp install_deps); save=$(fp save)
+  case $save in ''|0|1) ;; *) fail "参数无效" ;; esac
   [ -n "$F_HOSTKEY" ] || fail "需要先确认并固定服务器的主机指纹 (先调用探测)" E_SSH_HOSTKEY
   case $role in ''|pin|auto) ;; *) fail "角色无效" ;; esac; case $deps in ''|0|1) ;; *) fail "参数无效" ;; esac
   [ -z "$name" ] || vps_name_ok "$name" || fail "服务器名称只能用字母 / 数字 / . _ - (最多 40 个字符)" E_INVALID
-  vps_launch vps-provision '连接服务器|检测系统与环境|安装依赖|安装服务端|生成配置与密钥|开放端口并启动|验证连通|识别出口 IP|保存到本机' "$name" "${role:-pin}" "${deps:-0}" '' 0
+  vps_launch vps-provision '连接服务器|检测系统与环境|安装依赖|安装服务端|生成配置与密钥|开放端口并启动|验证连通|识别出口 IP|保存到本机' "$name" "${role:-pin}" "${deps:-0}" '' 0 "$save"
 }
 ep_vps_redetect() {
   local id; vps_form; id=$(fp id); case $id in v-[0-9a-f]*) ;; *) fail "服务器编号无效" ;; esac
@@ -326,12 +366,13 @@ ep_plan() {
 
 # ---------- 状态 ----------
 ep_state() {
-  local core svc sp sc missing='' t rs=1 osver arch
+  local core svc sp sc scmd missing='' t rs=1 osver arch
   core=$(core_version); os_service_info; svc=$SVC_RUNNING; os_sysproxy_cached && sp=1 || sp=0
   sc=$(shortcut_path 2>/dev/null || true)
+  if [ -n "$sc" ]; then scmd=enana; else scmd="$H/enana"; fi              # 在终端里能直接运行、打开控制台的完整命令: 装了快捷命令就是 enana, 没装就是脚本的完整路径
   for t in $(rules_missing); do missing="$missing${missing:+,}\"$t\""; rs=0; done
   [ -s "$H/.osver" ] || sw_vers -productVersion > "$H/.osver" 2>/dev/null; IFS= read -r osver < "$H/.osver"; arch=$(uname -m)
-  json "{\"ok\":true,\"version\":\"$VERSION\",\"prefs_version\":$(prefs_version),\"core\":\"${core:-}\",\"lang\":\"${LANG_UI:-zh}\",\"platform\":{\"os\":\"darwin\",\"osver\":\"${osver:-}\",\"arch\":\"$arch\"},\"ports\":{\"proxy\":$PORT,\"ui\":$UI_PORT,\"api\":$API_PORT,\"speed\":$SPEED_PORT},\"env\":{\"core\":$([ -n "$core" ] && echo true || echo false),\"rules\":$(bool $rs),\"service\":$(bool $svc),\"sysproxy\":$(bool $sp),\"shortcut\":$([ -n "$sc" ] && printf '"%s"' "$sc" || printf null),\"rules_updated\":$(rules_updated_at),\"rules_missing\":[$missing]},\"update\":$(update_available),\"proxy\":{\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\"},\"account\":{\"email\":\"$(jesc "$(auth_current_email)")\"},\"servers\":$(servers_json),\"subs\":$(subs_json),\"overrides\":$(overrides_json),\"first_run\":$([ "$(srv_count)" = 0 ] && echo true || echo false)}"
+  json "{\"ok\":true,\"version\":\"$VERSION\",\"prefs_version\":$(prefs_version),\"core\":\"${core:-}\",\"lang\":\"${LANG_UI:-zh}\",\"platform\":{\"os\":\"darwin\",\"osver\":\"${osver:-}\",\"arch\":\"$arch\"},\"ports\":{\"proxy\":$PORT,\"ui\":$UI_PORT,\"api\":$API_PORT,\"speed\":$SPEED_PORT},\"env\":{\"core\":$([ -n "$core" ] && echo true || echo false),\"rules\":$(bool $rs),\"service\":$(bool $svc),\"sysproxy\":$(bool $sp),\"shortcut\":$([ -n "$sc" ] && printf '"%s"' "$sc" || printf null),\"shortcut_cmd\":\"$(jesc "$scmd")\",\"rules_updated\":$(rules_updated_at),\"rules_missing\":[$missing]},\"update\":$(update_available),\"proxy\":{\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\"},\"account\":{\"email\":\"$(jesc "$(auth_current_email)")\"},\"servers\":$(servers_json),\"subs\":$(subs_json),\"overrides\":$(overrides_json),\"first_run\":$([ "$(srv_count)" = 0 ] && echo true || echo false)}"
 }
 apps_resp() {
   [ -f "$H/ui/appicons/index.tsv" ] || ( apps_icons >/dev/null 2>&1 & )          # 第一次: 后台提取应用图标
@@ -383,8 +424,9 @@ ep_override() {
 }
 
 ep_servers_import() { # 先对副本「干跑」, 立即返回数量与逐行错误; 真正的写入在后台任务里 (持锁, 失败自动回滚)
-  local sub mode res added replaced removed errs='' id e plan="$BODY.plan"
+  local sub mode res added replaced removed errs='' id e plan="$BODY.plan" save
   sub=$(qp sub); mode=$(qp mode); [ "$mode" = replace ] || mode=merge
+  save=$(qp save); case $save in ''|0|1) ;; *) fail "参数无效" ;; esac            # 1 = 保存到云端 (进入云端同步清单), 0 = 只留在本机, 空 = 不改动 (例如订阅自动刷新)
   [ -z "$sub" ] || sub_valid_name "$sub" || fail "订阅名称不合法"
   [ -s "$BODY" ] || fail "没有收到服务器数据"
   if [ -f "$H/servers.jsonl" ]; then cp "$H/servers.jsonl" "$plan"; else : > "$plan"; fi
@@ -393,7 +435,7 @@ ep_servers_import() { # 先对副本「干跑」, 立即返回数量与逐行错
   while IFS= read -r e; do [ -n "$e" ] && errs="$errs${errs:+,}\"$(printf '%s' "$(_t "$e")" | tr -d '"\\')\""; done < "$BODY.err"
   [ $((added + replaced)) -gt 0 ] || { json "{\"ok\":false,\"code\":\"E_INVALID\",\"error\":\"$(jesc "$(_t "没有可导入的服务器")")\",\"errors\":[$errs]}"; return; }
   id=$(job_new servers-import "$APPLY_STEPS"); cp "$BODY" "$H/jobs/$id.body"
-  job_launch servers-import "$id" "$sub" "$mode" "$(num "$(qp interval)")" "$(num "$(qp used)")" "$(num "$(qp total)")" "$(num "$(qp expire)")"
+  job_launch servers-import "$id" "$sub" "$mode" "$(num "$(qp interval)")" "$(num "$(qp used)")" "$(num "$(qp total)")" "$(num "$(qp expire)")" "$save"
   okj "\"added\":$added,\"replaced\":$replaced,\"removed\":$removed,\"errors\":[$errs],\"job\":\"$id\""
 }
 
@@ -431,9 +473,11 @@ ep_sub_fetch() {
 
 ep_sub_save() { # name + body=url
   local name url; name=$(qp name); url=$(tr -d '\r\n ' < "$BODY")
+  local save; save=$(qp save); case $save in ''|0|1) ;; *) fail "参数无效" ;; esac
   sub_valid_name "$name" || fail "订阅名称不合法"
   sub_url_ok "$url" || fail "订阅链接不合法"
-  op_lock || fail "系统繁忙, 请重试" E_BUSY; sub_save "$name" "$url"; op_unlock
+  op_lock || fail "系统繁忙, 请重试" E_BUSY; sub_save "$name" "$url"; [ -z "$save" ] || sync_list_set sub "$name" "$save"; op_unlock
+  [ "$save" = 1 ] && sync_after_save || true
   oplog dashboard "保存订阅" "$name" ok
   okj
 }

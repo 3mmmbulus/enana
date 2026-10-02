@@ -56,7 +56,7 @@
     if (!r || typeof r !== 'object') return null;
     var rm = r.remote || {}, lc = r.local || {};
     return {
-      enabled: yes(r.enabled), auto: yes(r.auto), account: str(r.account), online: !(r.online === false || r.online === 0 || r.online === '0'),
+      enabled: yes(r.enabled), auto: yes(r.auto), decided: yes(r.decided), account: str(r.account), online: !(r.online === false || r.online === 0 || r.online === '0'),
       remote: { exists: yes(rm.exists), version: pos(rm.version), updated: pos(rm.updated), size: pos(rm.size), device: str(rm.device), servers: rm.servers == null || rm.servers === '' ? -1 : pos(rm.servers) },   // servers: 可选扩展, -1 = 不知道
       local: { version: pos(lc.version), dirty: yes(lc.dirty) },
       lastPull: pos(r.last_pull), lastPush: pos(r.last_push)
@@ -610,13 +610,21 @@
     });
   }
 
+  /* 添加服务器时的「保存到云端」: 默认勾选; 只有用户在设置里明确关闭过同步时默认不勾选 (勾选会重新开启) */
+  SY.prime = function () { return load(true).then(function () { return SY.saveDefault(); }, function () { return SY.saveDefault(); }); };
+  SY.saveDefault = function () {
+    var off = !!(D && D.decided && !D.enabled);
+    return { checked: !off, off: off };
+  };
+
   SY.offerAfterLogin = async function () {
     if (offerRun) return;
     offerRun = true;
     try {
       var sv = S.state && S.state.servers;                                      // 调用方保证 S.state 已加载; 还没有就不提示
       if (S.locked || !Array.isArray(sv) || sv.length) return;                  // 本机已经有服务器: 不打扰
-      var d = await load(true), who;
+      await TP.sleep(3000);                                                     // 登录时辅助服务会自动取回云端的服务器 (后台任务): 等它先做完, 已经同步了就不再提示
+      var d = await load(), who;
       if (!d || S.locked || !d.online || !d.remote.exists || d.enabled) return;
       who = (d.account || (TP.auth && TP.auth.email ? TP.auth.email() : '')).toLowerCase();
       if (offered[who] || declined(who)) return;

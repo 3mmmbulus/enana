@@ -5,7 +5,7 @@
 #   enana                  安装后在任何终端输入它, 打开控制台 (状态 / 一键重启 / 解除账号绑定 / 卸载 …)
 #   enana <命令>           status start stop restart on off update upgrade self-update doctor logs open env logout lang uninstall help
 #
-# 终端只负责「安装环境」。服务器、订阅、应用与网站设置全部在仪表盘里完成: http://127.0.0.1:9090/ui/
+# 终端只负责「安装环境」。服务器、订阅、应用与网站设置全部在仪表盘 (后台) 里完成: http://127.0.0.1:<端口>/enana/admin/ (安装完成后会打印; enana open 也能打开)
 # 仪表盘的登录账号是你在 https://enana.cc 注册的账号 (本机不生成任何密码)。本仓库不含任何服务器地址/密码。
 [ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"          # 被 zsh/sh 误调用时切回 bash
 set -u
@@ -102,17 +102,37 @@ migrate_legacy() {
   return 0
 }
 
+# 本地端口 (默认 代理 7890 / 核心控制 9090 / 辅助服务+后台 9091 / 测速 7892): 被别的程序占着就自动换一个随机的空闲端口, 并写进设置。
+# 已经由我们自己的服务占着的不算冲突 (如 off 之后重新安装 / 升级)。
+port_busy() { nc -z 127.0.0.1 "$1" >/dev/null 2>&1; }
+port_random() { # 随机空闲端口 (20000-59999), 避开 $1 里已经选了的; 打印端口, 找不到返回 1
+  local n=0 p
+  while [ "$n" -lt 300 ]; do
+    p=$((20000 + (RANDOM * 32768 + RANDOM) % 40000)); n=$((n + 1))
+    case " $1 " in *" $p "*) continue ;; esac
+    port_busy "$p" || { printf '%s' "$p"; return 0; }
+  done
+  return 1
+}
+pick_ports() {
+  local spec name lbl cur new used=" $PORT $UI_PORT $API_PORT $SPEED_PORT "
+  for spec in "PORT:$LABEL" "UI_PORT:$LABEL" "API_PORT:$LABEL_API" "SPEED_PORT:$LABEL"; do
+    name=${spec%%:*}; lbl=${spec#*:}; cur=${!name}
+    launchctl print "$GUI/$lbl" >/dev/null 2>&1 && continue
+    port_busy "$cur" || continue
+    new=$(port_random "$used") || die "找不到空闲的本地端口" "请先关闭一些占用端口的程序, 再重新运行安装命令"
+    warn "本地端口 $cur 已被其它程序占用, 已自动改用 $new"
+    printf -v "$name" '%s' "$new"; export "$name"; settings_set "$name" "$new"; used="$used$new "
+  done
+  set_ui_url
+}
+
 st_preflight() {
   step "检查环境"
   [ "$MACOS_MAJOR" -ge 12 ] || warn "macOS $MACOS 较旧: 官方 sing-box 1.14 可能无法在此运行 (Intel 会自动尝试兼容包)"
   ok "macOS $MACOS · $ARCH"
   mkdir -p "$H"
-  local p lbl                                  # 端口被我们自己的服务占着不算冲突 (如 off 之后重新安装)
-  for p in "$PORT:$LABEL" "$UI_PORT:$LABEL" "$API_PORT:$LABEL_API" "$SPEED_PORT:$LABEL"; do
-    lbl=${p#*:}; p=${p%%:*}
-    launchctl print "$GUI/$lbl" >/dev/null 2>&1 && continue
-    ! nc -z 127.0.0.1 "$p" 2>/dev/null || die "本地端口 $p 已被占用" "先退出占用它的程序 (如其它代理软件), 或换端口: PORT=7891 UI_PORT=9190 API_PORT=9191 bash install.sh"
-  done
+  pick_ports
   ok "本地端口 $PORT / $UI_PORT / $API_PORT / $SPEED_PORT 可用"
   if [ "$SEL_sysproxy" = 1 ]; then
     local foreign; foreign=$(os_sysproxy_foreign | paste -sd, -)
@@ -186,7 +206,7 @@ st_shortcut() {
   if shortcut_path >/dev/null 2>&1; then ok "快捷命令已存在: $(shortcut_path)"; return 0; fi
   if shortcut_install; then
     ok "已安装: $SHORTCUT  → 以后在任何终端输入 ${B}enana${N} 即可打开控制台"
-    [ -n "$SHORTCUT_RC" ] && warn "已在 $SHORTCUT_RC 里加入 PATH; 请重新打开终端后生效"
+    [ -n "$SHORTCUT_RC" ] && warn "$(dirname "$SHORTCUT") 还不在当前终端的 PATH 里: 已写入 $SHORTCUT_RC, 重新打开终端后生效 (想立刻用: export PATH=\"\$HOME/.local/bin:\$PATH\")"
   else warn "快捷命令安装失败; 仍可用 $H/enana"; fi
 }
 
@@ -251,13 +271,15 @@ cmd_install() {
   st_verify
   if [ -n "$UPGRADE" ]; then ok "已升级到 enana v$VERSION"; return 0; fi
   pf '\n%s════════════════ 环境安装完成 ════════════════%s\n' "$G$B" "$N"
-  pf '  %s仪表盘%s   %s%s%s   (已尝试自动打开)\n' "$B" "$N" "$C$B" "$UI_URL" "$N"
+  pf '  %s后台地址%s   %s%s%s   (已尝试自动打开; 以后在终端输入 enana open 也能打开)\n' "$B" "$N" "$C$B" "$UI_URL" "$N"
   pf '  %s登录%s     仪表盘需要登录才能使用: 用 enana.cc 账号 (邮箱 + 密码) 登录; 还没有账号? 直接在登录框里点「注册」\n' "$B" "$N"
   pf '  %s代理%s     默认是关闭的 (全部直连): 登录后在仪表盘里打开「代理」总开关才会生效; 退出账号会自动关闭代理\n' "$B" "$N"
   pf '  接下来在仪表盘里完成 (终端不需要再做任何事):\n'
   pf '    ① 添加固定出口服务器 (如日本)    ② 导入其它代理 / 订阅链接 (自动识别)\n'
   pf '    ③ 确认应用与网站的推荐设置       ④ 新装的应用会自动识别, 默认关闭\n'
-  pf '  命令行控制台   在任何终端输入 %senana%s  (状态 · 一键重启 · 退出账号 · 卸载 …)\n\n' "$B" "$N"
+  pf '  命令行控制台   在任何终端输入 %senana%s  (状态 · 一键重启 · 退出账号 · 卸载 …)\n' "$B" "$N"
+  [ -n "${SHORTCUT_RC:-}" ] && pf '                 注意: 要先重新打开终端 (或在当前终端运行 %sexport PATH="$HOME/.local/bin:$PATH"%s); 现在也可以直接运行 %s%s/enana%s\n' "$B" "$N" "$B" "$H" "$N"
+  pf '\n'
   os_open "$UI_URL"
 }
 
@@ -268,7 +290,7 @@ cmd_status() {
   if auth_logged_in; then ok "账号: 已登录 $(auth_mask_email "$(auth_current_email)")"; else info "账号: 未登录 — 打开仪表盘, 用 enana.cc 账号登录 (没有账号可以直接注册)"; fi
   if [ "${PROXY_ENABLED:-0}" = 1 ]; then ok "代理: 已开启 (按规则分流)"; else info "代理: 已关闭 (全部直连) — 登录后在仪表盘里打开「代理」总开关"; fi
   update_has_new && warn "有新版本 (enana self-update 更新)"
-  info "服务器 $(srv_count) 台 · 仪表盘 $UI_URL"
+  info "服务器 $(srv_count) 台 · 后台地址 $UI_URL"
 }
 cmd_start() { os_service_start && wait_port "$PORT" 15 && { proxy_sync_mode; ok "已启动"; } || warn "启动失败: enana doctor"; }
 cmd_restart() { info "正在重启服务…"; os_service_restart; if wait_port "$PORT" 15; then proxy_sync_mode; ok "已重启"; oplog terminal "重启服务" "" ok; else warn "没有在 15 秒内启动: 运行 enana doctor"; fi; }
@@ -339,6 +361,7 @@ _doctor_body() { # 诊断信息 (不含任何密码/订阅链接), 出问题时�
   launchctl print "$GUI/$LABEL_API" >/dev/null 2>&1 && echo "辅助服务: 已加载" || echo "辅助服务: 未加载"
   launchctl print "$GUI/$LABEL_UPD" >/dev/null 2>&1 && echo "每日维护: 已加载" || echo "每日维护: 未加载"
   for _p in $PORT $UI_PORT $API_PORT $SPEED_PORT; do nc -z 127.0.0.1 "$_p" 2>/dev/null && echo "端口 $_p: 监听中" || echo "端口 $_p: 未监听"; done
+  echo "后台地址: $UI_URL"
   echo "== 账号 =="; if auth_logged_in; then echo "已登录 $(auth_mask_email "$(auth_current_email)")"; else echo "未登录"; fi; echo "离线登录缓存: $(auth_cache_has && echo "有 ($(auth_hint))" || echo 无) · 代理总开关: $([ "${PROXY_ENABLED:-0}" = 1 ] && echo 开启 || echo 关闭)"
   echo "账号服务: ${ACCOUNT_URL%/} → HTTP $(curl -s -o /dev/null -m 8 --noproxy '*' -w '%{http_code}' "${ACCOUNT_URL%/}/api/health" || echo 000)"
   echo "== 配置 =="; "$SB" check -c "$H/config.json" 2>&1 | head -5 && echo "(配置校验结束)"

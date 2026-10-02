@@ -348,6 +348,8 @@
     el.nodeCount = h('span', { class: 'muted sm' });
     el.nodeDef = ui.btn(L('speed.nodes.defaults'), { sm: true, kind: 'ghost', icon: 'rotate-ccw' });
     ui.act(el.nodeDef, function () { setPref(PK.nodes, undefined); loadSel(); renderTest(); });         // 不再保存选择 -> 回到 plan 推荐的节点
+    el.nodeAll = ui.btn(L('speed.sel.all'), { sm: true, kind: 'ghost', icon: 'check' }); ui.act(el.nodeAll, function () { setNodes('all'); });
+    el.nodeNone = ui.btn(L('speed.sel.none'), { sm: true, kind: 'ghost', icon: 'x' }); ui.act(el.nodeNone, function () { setNodes('none'); });
     el.nodeList = h('div', { class: 'spd-chips', role: 'group', 'aria-label': L('speed.nodes.aria') });
     el.nodeNote = h('div', { class: 'spd-note' });
     el.form = h('div', { class: 'spd-form' },
@@ -356,7 +358,7 @@
         h('label', { class: 'spd-sw' }, h('span', { class: 'sw' }, el.spd, h('span', { class: 'sw-ui' })),
           h('span', { class: 'spd-sw-t' }, h('b', { id: 'spd-sw-l' }, L('speed.measure')), el.spdHint)),
         ui.help('speed.download')),
-      h('div', { class: 'spd-block' }, h('div', { class: 'spd-lab-row' }, h('span', { class: 'spd-lab' }, L('speed.nodes.title'), ui.help('speed.nodes')), el.nodeCount, h('span', { class: 'spd-lab-r' }, el.nodeDef)), el.nodeList, el.nodeNote));
+      h('div', { class: 'spd-block' }, h('div', { class: 'spd-lab-row' }, h('span', { class: 'spd-lab' }, L('speed.nodes.title'), ui.help('speed.nodes')), el.nodeCount, h('span', { class: 'spd-lab-r' }, el.nodeAll, el.nodeNone, el.nodeDef)), el.nodeList, el.nodeNote));
 
     /* 测速目标: 标题行 (含「管理测速目标」) 在测速进行中也保留, 按钮「暂不可用」并说明原因; 选择器本体 (el.tgBody) 在测速时隐藏 */
     el.tgCount = h('span', { class: 'muted sm', 'aria-live': 'polite' });
@@ -507,6 +509,13 @@
     setText(b._delay, d ? ms(d) : DASH);
     b.title = d ? t('speed.nodes.delayTip', { ms: ms(d) }) : t('speed.nodes.noDelay');
   }
+  /* 节点「全选 / 全不选」: 一次最多测 MAX_NODES 个, 节点更多时只选前 MAX_NODES 个并说明 */
+  function setNodes(how) {
+    var tags = arr(plan.data && plan.data.nodes).filter(Boolean).map(function (n) { return n.tag; });
+    sel.nodes = how === 'all' ? tags.slice(0, MAX_NODES) : [];
+    if (how === 'all' && tags.length > MAX_NODES) ui.toast(t('speed.nodes.allMax', { n: MAX_NODES, total: tags.length }), 'warn', 5200);
+    setPref(PK.nodes, sel.nodes.slice()); renderTest();
+  }
   function toggleNode(tag) {
     var i = sel.nodes.indexOf(tag);
     if (i >= 0) sel.nodes.splice(i, 1);
@@ -602,7 +611,8 @@
     ['node', 'both'].forEach(function (m) { el.mode.avail(m, nOk ? '' : t('speed.noNodes.reason'), nOk ? null : addFix()); });
     el.spd.checked = !!sel.speed;
     setText(el.spdHint, sel.speed ? t('speed.measure.on', { mb: fmt.num(e.mb) }) : t('speed.measure.off'));
-    el.nodeList.hidden = !showChips; el.nodeNote.hidden = showChips; el.nodeDef.hidden = !showChips;
+    el.nodeList.hidden = !showChips; el.nodeNote.hidden = showChips; el.nodeDef.hidden = !showChips; el.nodeAll.hidden = !showChips; el.nodeNone.hidden = !showChips;
+    el.nodeAll.setAttribute('aria-label', t('speed.nodes.allAria')); el.nodeNone.setAttribute('aria-label', t('speed.nodes.noneAria'));
     setText(el.nodeCount, showChips ? t('speed.nodes.count', { n: sel.nodes.length, max: MAX_NODES }) : '');
     if (showChips) ui.syncList(el.nodeList, arr(p.nodes).filter(Boolean), function (n) { return n.tag; }, makeNode, updateNode);
     else ui.memo(el.nodeNote, nOk ? 'direct' : 'none', function () {

@@ -46,27 +46,27 @@ vps_cred_check() {
 }
 
 # ---------- 凭据文件 (接口 → 后台任务) ----------
-# vps_cred_write <文件> <host> <port> <user> <mode> <password> <key> <passphrase> <sudo_password> <hostkey> <name> <role> <install_deps> <id> <confirm_hostkey>
+# vps_cred_write <文件> <host> <port> <user> <mode> <password> <key> <passphrase> <sudo_password> <hostkey> <name> <role> <install_deps> <id> <confirm_hostkey> [save]
 #   每个字段一行 "键=值" (值里的换行已在校验里排除; 私钥里有换行 → 存成 \n 转义, 读取时还原)
 vps_cred_write() {
   local f=$1; shift
   ( umask 077; {
     printf 'host=%s\nport=%s\nuser=%s\nmode=%s\npassword=%s\n' "$1" "$2" "$3" "$4" "$5"
     printf 'key=%s\n' "$(printf '%s' "$6" | awk 'BEGIN { ORS = "" } { gsub(/\r/, ""); print (NR > 1 ? "\\n" : "") $0 }')"
-    printf 'passphrase=%s\nsudo_password=%s\nhostkey=%s\nname=%s\nrole=%s\ninstall_deps=%s\nid=%s\nconfirm_hostkey=%s\n' "$7" "$8" "$9" "${10}" "${11}" "${12}" "${13}" "${14}"
+    printf 'passphrase=%s\nsudo_password=%s\nhostkey=%s\nname=%s\nrole=%s\ninstall_deps=%s\nid=%s\nconfirm_hostkey=%s\nsave=%s\n' "$7" "$8" "$9" "${10}" "${11}" "${12}" "${13}" "${14}" "${15:-}"
   } > "$f" )
 }
 # vps_cred_load <文件>  读出并立刻删除; 设置 V_HOST V_PORT V_USER V_MODE V_PASSWORD V_KEY V_PASSPHRASE V_SUDOPW V_HOSTKEY V_NAME V_ROLE V_DEPS V_ID V_CONFIRM
 vps_cred_load() {
   local f=$1 k v
-  V_HOST=''; V_PORT=22; V_USER=root; V_MODE=''; V_PASSWORD=''; V_KEY=''; V_PASSPHRASE=''; V_SUDOPW=''; V_HOSTKEY=''; V_NAME=''; V_ROLE=pin; V_DEPS=0; V_ID=''; V_CONFIRM=0
+  V_HOST=''; V_PORT=22; V_USER=root; V_MODE=''; V_PASSWORD=''; V_KEY=''; V_PASSPHRASE=''; V_SUDOPW=''; V_HOSTKEY=''; V_NAME=''; V_ROLE=pin; V_DEPS=0; V_ID=''; V_CONFIRM=0; V_SAVE=''
   [ -f "$f" ] || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     k=${line%%=*}; v=${line#*=}
     case $k in
       host) V_HOST=$v ;; port) V_PORT=$v ;; user) V_USER=$v ;; mode) V_MODE=$v ;; password) V_PASSWORD=$v ;;
       key) V_KEY=$(printf '%b' "$v") ;; passphrase) V_PASSPHRASE=$v ;; sudo_password) V_SUDOPW=$v ;; hostkey) V_HOSTKEY=$v ;;
-      name) V_NAME=$v ;; role) V_ROLE=$v ;; install_deps) V_DEPS=$v ;; id) V_ID=$v ;; confirm_hostkey) V_CONFIRM=$v ;;
+      name) V_NAME=$v ;; role) V_ROLE=$v ;; install_deps) V_DEPS=$v ;; id) V_ID=$v ;; confirm_hostkey) V_CONFIRM=$v ;; save) V_SAVE=$v ;;
     esac
   done < "$f"
   rm -f "$f"
@@ -350,7 +350,7 @@ vps_rec_field() { vps_list | awk -v i="\"id\":\"$1\"" -v f="$2" 'index($0, i) { 
 # ---------- 任务: 部署 ----------
 vps_provision_progress() { case $1 in 1) job_step 1 12 "检测系统与环境" ;; 2) job_step 2 25 "安装依赖" ;; 3) job_step 3 45 "安装服务端" ;; 4) job_step 4 62 "生成配置与密钥" ;; 5) job_step 5 75 "开放端口并启动" ;; esac; }
 vps_provision_job() { # <凭据文件>
-  local role name priv os_pretty id ips tags
+  local rc role name priv os_pretty id ips tags
   trap 'vps_cleanup' EXIT
   vps_connect "$1" || return 1
   vps_playbook_ok || { VPS_CODE=E_VPS_NO_PLAYBOOK; VPS_ERR="部署脚本由 enana 云端下发: 请先登录, 并等「云端内容」同步完成后再试"; vps_job_error; return 1; }
@@ -378,7 +378,9 @@ vps_provision_job() { # <凭据文件>
   VPS_NODES_FILE=$VD/nodes.jsonl; VPS_REC_ID=$id; VPS_REC_NAME=$name; VPS_REC_HOST=$V_HOST; VPS_REC_PORT=$V_PORT; VPS_REC_USER=$V_USER; VPS_REC_OS=$os_pretty; VPS_REC_HOSTKEY=$V_HOSTKEY; VPS_REC_IPS=$ips; VPS_REC_TAGS=$tags
   job_step 8 96 "保存到本机"
   TXN_RESULT="{\"nodes\":[$(vps_nodes_json "$VD/nodes.tsv")],\"ips\":[$ips],\"vps\":\"$id\"}"
-  APPLY_QUIET=1; op_txn "添加自己的服务器" txn_vps_save "$V_HOST"
+  SRV_SAVE=$V_SAVE; APPLY_QUIET=1; op_txn "添加自己的服务器" txn_vps_save "$V_HOST"; rc=$?; SRV_SAVE=''      # 「保存到云端」: 节点进入云端同步清单 (见 servers.sh)
+  [ "$rc" = 0 ] && [ "$V_SAVE" = 1 ] && sync_after_save
+  return $rc
 }
 
 # ---------- 任务: 重新识别出口 IP (补充新增 IP 的节点) ----------

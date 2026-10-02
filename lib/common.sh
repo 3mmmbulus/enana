@@ -2,6 +2,7 @@
 # 约定: 先 source 本文件, 再 init_paths, 再 source 其它 lib, 最后 load_settings。不含任何服务器/密码信息。
 
 CORE_PIN=1.14.2          # 经过测试的 sing-box 版本; 升级用 `enana upgrade`
+ADMIN_PATH=/enana/admin     # 仪表盘 (后台) 的访问路径: http://127.0.0.1:<辅助服务端口>/enana/admin/
 LABEL=com.enana.proxy
 LABEL_API=com.enana.proxy.api
 LABEL_UPD=com.enana.proxy.update
@@ -44,6 +45,8 @@ init_paths() {
   VERSION=2.1.0; [ -s "$SRC/VERSION" ] && IFS= read -r VERSION < "$SRC/VERSION"
 }
 
+set_ui_url() { UI_URL="http://127.0.0.1:$API_PORT$ADMIN_PATH/"; }     # 后台地址: 由本地辅助服务直接提供, 路径固定为 /enana/admin/ (端口变了要重新调用)
+
 settings_set() { # settings_set KEY VALUE   (调用方负责校验值; 写入 $H/settings.env)
   local k=$1 v=$2 f="$H/settings.env"
   mkdir -p "$H"; touch "$f"
@@ -58,7 +61,7 @@ load_settings() { # 可调项: 环境变量 > $H/settings.env > 默认值
   [ -n "$p" ] && PORT=$p; [ -n "$u" ] && UI_PORT=$u; [ -n "$a" ] && API_PORT=$a; [ -n "$s" ] && SPEED_PORT=$s
   [ -n "${ENANA_ACCOUNT_URL:-}" ] && { ACCOUNT_URL=$ENANA_ACCOUNT_URL; ACCOUNT_SITE=${ENANA_ACCOUNT_SITE:-$ENANA_ACCOUNT_URL}; }     # 测试 / 自建
   [ -n "$SPEED_PORT" ] || SPEED_PORT=$((PORT + 2))
-  UI_URL="http://127.0.0.1:$UI_PORT/ui/"
+  set_ui_url                                          # 仪表盘 (后台) 地址; UI_PORT 现在只是代理核心的控制端口
   SB="$H/sing-box"
   GUI="gui/$(id -u)"
   PLIST_DIR="${ENANA_PLIST_DIR:-$HOME/Library/LaunchAgents}"

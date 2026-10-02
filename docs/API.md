@@ -1,7 +1,7 @@
 # enana 本地辅助服务接口 (v2.1)
 
-仪表盘 (浏览器) 与本地辅助服务 `lib/api.sh` 之间的契约。仪表盘页面由代理核心在 `http://127.0.0.1:9090/ui/` 提供,
-辅助服务监听 `http://127.0.0.1:9091` (跨域, 只放行仪表盘自己的来源)。代理核心自带的 Clash API 与页面同源 (`/proxies`、`/connections` …)。
+仪表盘 (浏览器) 与本地辅助服务 `lib/api.sh` 之间的契约。仪表盘页面由辅助服务自己在 `http://127.0.0.1:9091/enana/admin/` 提供 (端口被占用时安装器会换成别的空闲端口), 接口与页面同源 (不需要 CORS 预检)。
+代理核心的 Clash API 监听 `http://127.0.0.1:9090` (`/proxies`、`/connections` …), 只允许仪表盘的来源跨域访问并要求令牌; 它的地址由 `env.json` 的 `clashBase` 给出。
 
 > 本文件是前后端的唯一约定。改接口时先改这里。`tools/mock-server.js` 必须与本文件一致 (前端在没有后端时靠它开发)。
 
@@ -110,12 +110,14 @@
 
 ## 状态 / 应用 / 覆盖 / 服务器 / 订阅 (与 v2 相同, 新增字段见 ★)
 
-`GET /api/state` → `{ok,version,prefs_version★,core,platform:{os,osver,arch},ports:{proxy,ui,api,speed★},env:{core,rules,service,sysproxy,shortcut,rules_updated,rules_missing[]},servers[],subs[],overrides[],first_run,`
+`GET /enana/admin/…` (无需 `X-Enana` 头; 只读, 白名单扩展名, 只给 GET / HEAD): 仪表盘静态文件由辅助服务直接提供 (`/enana/admin/` = index.html, `/enana/admin/<页面>` 也给 index.html, 页面名 = overview apps sites rules dns servers conns traffic speed logs settings login register; 不带斜杠的 `/enana/admin` 与 `/` 跳转到 `/enana/admin/`)。核心控制接口 (Clash API) 在 `ports.ui` 上, 只允许这个来源跨域访问, 地址写在 `env.json` 的 `clashBase`, 接口同源 (`apiBase` 为空)。
+
+`GET /api/state` → `{ok,version,prefs_version★,core,platform:{os,osver,arch},ports:{proxy,ui,api,speed★},env:{core,rules,service,sysproxy,shortcut (快捷命令的安装位置, 没装是 null),shortcut_cmd★ (在终端里直接可运行、打开控制台的完整命令: 装了快捷命令 = `enana`, 没装 = 脚本的完整路径),rules_updated,rules_missing[]},servers[],subs[],overrides[],first_run,`
 `update★:{available,latest,checked},lang★,proxy★:{enabled,mode:"auto|global"},account★:{email}}`
 
 `GET /api/apps` · `POST /api/apps/scan` · `POST /api/apps/adopt` · `POST /api/apps/ack?name=|all=1` · `POST /api/override?kind=&value=&state=` ·
-`POST /api/servers/import?sub=&mode=merge|replace` (正文=JSONL) · `POST /api/servers/delete?tag=` · `POST /api/servers/role?tag=&role=pin|auto|off|dl` ·
-`POST /api/cert?name=` · `POST /api/sub/fetch` · `POST /api/sub/save?name=` · `POST /api/sub/delete?name=` · `POST /api/restart` — 形状不变。
+`POST /api/servers/import?sub=&mode=merge|replace&save=0|1` (正文=JSONL; **save★**: 1 = 「保存到云端」, 这些节点 (和订阅) 进入云端同步清单, 第一次用时自动打开云端同步; 0 = 只留在本机; 不带 = 不改动, 例如订阅自动刷新) · `POST /api/servers/delete?tag=` · `POST /api/servers/role?tag=&role=pin|auto|off|dl` ·
+`POST /api/cert?name=` · `POST /api/sub/fetch` · `POST /api/sub/save?name=&save=0|1` · `POST /api/sub/delete?name=` · `POST /api/restart` — 形状不变。
 
 ### `GET /api/job?id=`
 `{"ok":true,"id","name","state":"running|done|error","pct":0-100,"msg":"…","steps":[{"label":"…","state":"todo|run|done|error"}],"result":{}}`; `msg`/`label` 按 `X-Enana-Lang` 翻译。
@@ -250,7 +252,7 @@
 失败 (`job.state=error`, 接口里的 `code` 在 `job.result.code`, `job.msg` 是已翻译的原因): `E_SSH_NO_CLIENT` (本机没有 ssh) · `E_SSH_UNREACHABLE` (连不上 / 超时 / 被拒 / 服务器没拿到主机密钥) · `E_SSH_AUTH` (用户名 / 密码 / 私钥不对) · `E_SSH_KEY` (私钥格式不对 / 口令不对) · `E_SSH_HOSTKEY` (指纹与固定的不一致) · `E_VPS_NO_PLAYBOOK` (云端还没有下发部署脚本; 这个错误在接口里就直接返回, 不进任务)。
 前端流程: (确认指纹) → 探测成功 → 弹窗展示「系统 / 依赖 / 出口 IP / 指纹」; `missing` 非空 → 问用户是否安装依赖; 要安装依赖或服务端时 → **二次弹窗** 逐条列出 `actions` 再让用户确认 → 调 provision。
 
-### `POST /api/vps/provision` (通用凭据 + `hostkey` 必填 + `name` + `role=pin|auto` (默认 pin) + `install_deps=0|1`) → `{"ok":true,"job":"…"}`
+### `POST /api/vps/provision` (通用凭据 + `hostkey` 必填 + `name` + `role=pin|auto` (默认 pin) + `install_deps=0|1` + `save=0|1`★ (同 `servers/import`)) → `{"ok":true,"job":"…"}`
 任务步骤 (9 步): `连接服务器` → `检测系统与环境` → `安装依赖` (apt-get: curl, ca-certificates, tar, iproute2, gzip; 只在 `install_deps=1` 时, 否则缺依赖 → `E_VPS_DEPS`) → `安装服务端` (sing-box, 固定版本 + SHA-256 校验, 装到 `/usr/local/bin/enana-sing-box`, 不覆盖用户已有的 sing-box) → `生成配置与密钥` (VLESS + Reality, 无需域名; 每个公网出口 IP 一个入站, 出口 IP = 入站 IP; 密钥 / 端口 / 伪装域名保存在服务器 `/etc/enana/state.json`, **重复部署沿用它们, 已有节点不会失效**) → `开放端口并启动` (专用系统用户 + systemd 服务 `enana-singbox`, 开机自启; ufw 活跃时放行端口; 云厂商安全组需用户自己放行) → `验证连通` (本机起一个**临时核心**, 逐个节点真实访问一次, 对比出口 IP; 全部不通 → `E_VPS_VERIFY` + 提示放行 `端口/tcp`) → `识别出口 IP` → `保存到本机` (走和导入服务器一样的事务: 校验 → 应用 → 失败自动回滚)。
 权限: root 直接执行; 非 root 用 `sudo -n` (免密) 或 `sudo -S` (密码经标准输入传递, 不进命令行), 没有 sudo → `E_VPS_PRIVILEGE` (sudo 密码不对也是)。系统 / 架构不支持 → `E_VPS_UNSUPPORTED` (不改动服务器); 没有 systemd / apt-get 同理。服务端启动失败 → `E_VPS_VERIFY` (带最近的日志片段)。
 完成时 `job.result` (节点 tag 规则: `<name>-<出口公网 IP>`, `name` 默认 `my-vps-<host>`; 同一台服务器的多个出口 IP 各一个节点): `{"nodes":[{"tag":"My-VPS-1.2.3.4","server":"1.2.3.4","port":443,"type":"vless","egress":"1.2.3.4"}],"ips":["1.2.3.4"],"vps":"v-1a2b3c"}`; `egress` 是验证时从这个节点出去实际看到的 IP。节点已写入本机服务器列表并生效。同一 host:port 再部署 = 更新同一条记录 (`vps` 编号不变)。
@@ -276,6 +278,10 @@
 ### `POST /api/sync/preview` 表单 `old_password` (可选) → `{"ok":true,"summary":{"servers":2,"subs":1,"hosts":0,"site_domains":0,"custom_apps":0,"speed_targets":0,"custom_rulesets":0,"vps":0,"certs":0,"prefs":true,"created":1760000000,"device":"MacBook","version":"2.1.0"},"remote":{"version":7}}`
 下载并解密云端快照, **只返回摘要, 不改动本机** (云端没有数据 → `E_NOT_FOUND`; 其余错误同 `pull`)。新电脑第一次登录成功后, 如果 `GET /api/sync` 的 `remote.exists` 且本机没有任何服务器, 前端应弹窗「检测到云端配置 (N 台服务器, 更新于 …), 是否一键同步到这台电脑?」(N 来自 `preview`; 用户可以选「不同步」, 之后在设置里再开)。
 ### `POST /api/sync/clear` (需 sudo) → `{ok}` 删除云端的同步数据 (二次确认); 本机版本归零。
+### 同步清单 (「保存到云端」) 与登录后自动取回
+- **哪些服务器同步**: 只有添加时勾选「保存到云端」的 (`servers/import` / `sub/save` / `vps/provision` 的 `save=1`) 才进入本机的 `servers.sync` / `subs.sync` 清单 (一行一个名称, 只在本机, 不同步); 快照 / 同步只带清单里的服务器 (和它们所属的订阅), 老版本添加的、没勾选过的只在本机, 不会被连带上传。在设置里**明确打开**云端同步时, 现有的全部服务器和订阅都会加入清单 (和以前「全部同步」一致)。导出备份 (`GET /api/export`) 不受清单限制, 始终包含全部。
+- **`GET /api/sync` 的 `decided`★**: 用户有没有做过选择 (`ENABLED` 有值)。没做过选择时, 第一次勾选「保存到云端」会自动打开同步 (`enabled` + `auto`) 并让下一次定时任务立刻上传; 明确关闭过 (`decided:true, enabled:false`) 的不会被自动打开, 前端把「保存到云端」默认设为不勾选并提示「勾选会重新开启」。
+- **登录后自动取回**: 登录成功后 (在线) 辅助服务启动后台任务 `sync-login`: 云端有这个账号的快照就**合并**进本机 (本机已有的保留, 不覆盖; 取回的服务器记入清单继续同步); 在设置里明确关闭过同步的、连不上云端的、解不开的 (改过密码) 都静默跳过, 由设置里的同步卡片处理。
 ### 自动同步
 `auto=1` 时, 本机每分钟的定时任务里每 10 分钟检查一次: 本机有改动且云端没变 → 自动上传; 云端有新版本且本机没改动 → 自动拉取 (替换); 两边都变了 → 只标记 `conflict:true`, 不动任何数据。
 
@@ -294,7 +300,7 @@
   - `domains` = 当前生效的列表 (一行一个, `source`: `system` 系统自带 / `added` 用户添加); `removed` = 用户从系统列表里删掉的; `rulesets` / `cidrs` 是社区规则集与 IP 段 (只读, 弹窗里单独一块说明「由社区规则集维护, 不能逐条编辑」)。
 - `POST /api/sites/domains` 表单 `id` `action=add|remove|update|restore` + `domain` (+ `new` 仅 update 用: 把 `domain` 改成 `new`) → `{"ok":true,"job":"…"}` (重新生成配置, 热生效)。`remove` 系统域名 = 记为「已删除」(可 `restore` 恢复); `remove` 用户添加的域名 = 直接删除。域名校验: 小写字母/数字/连字符 + 点, 每段 ≤ 63、总长 ≤ 253, 不含通配符/空格/协议/路径; 非法 → `E_INVALID` + 原因; 重复 → `E_INVALID`。
 - `POST /api/sites/domains/reset` 表单 `id` → `{"ok":true,"job":"…"}` 还原为系统默认 (前端先二次确认, 说明会丢掉这条目的所有自定义改动)。
-- 目录条目 (`/ui/catalog.json` 的 `entries[]`) 新增 `modified:true|false`, `domains` 为生效后的域名数组。
+- 目录条目 (`/enana/admin/catalog.json` 的 `entries[]`) 新增 `modified:true|false`, `domains` 为生效后的域名数组。
 
 ## 自定义软件 (应用页「添加自定义软件」) ★
 

@@ -19,7 +19,7 @@ sync_enabled() { [ "$(sync_get ENABLED)" = 1 ]; }
 sync_auto() { [ "$(sync_get AUTO)" = 1 ]; }
 sync_have_key() { [ -s "$H/sync.key" ]; }
 snap_hash() { /usr/bin/perl "$LIB/snapshot.pl" hash "$H"; }
-sync_local_has_data() { [ -s "$H/servers.jsonl" ] || [ -s "$H/subs.tsv" ] || [ -s "$H/overrides.tsv" ] || [ -s "$H/custom-rulesets.tsv" ]; }      # 本机有没有用户自己的配置 (自动同步在本机有数据时不会静默覆盖)
+sync_local_has_data() { [ -s "$H/servers.sync" ] || [ -s "$H/subs.sync" ] || [ -s "$H/overrides.tsv" ] || [ -s "$H/custom-rulesets.tsv" ]; }      # 本机有没有用户自己的配置 (自动同步在本机有数据时不会静默覆盖)
 
 # 登录 / 退出时调用: 换了账号就重置版本信息 (同一账号再登录保留, 不会多出「冲突」提示)
 sync_on_login() { # <账号 id> <密码>   (best-effort: 失败只是不能同步, 不影响登录)
@@ -131,8 +131,8 @@ sync_state_json() {
   lv=$(sync_get BASE_VERSION); lh=$(sync_get SYNCED_HASH); nowh=$(snap_hash)
   if [ -n "$lh" ]; then [ "$lh" != "$nowh" ] && dirty=true; else sync_local_has_data && dirty=true; fi       # 从没同步过: 本机有数据才算「有没上传的改动」
   lp=$(sync_get LAST_PULL); lq=$(sync_get LAST_PUSH)
-  printf '"enabled":%s,"auto":%s,"has_key":%s,"account":"%s","remote":%s,"local":{"version":%s,"dirty":%s},"conflict":%s,"last_pull":%s,"last_push":%s,"online":%s' \
-    "$en" "$au" "$(sync_have_key && echo true || echo false)" "$(jesc "$(auth_current_email)")" "$remote" "${lv:-0}" "$dirty" \
+  printf '"enabled":%s,"auto":%s,"decided":%s,"has_key":%s,"account":"%s","remote":%s,"local":{"version":%s,"dirty":%s},"conflict":%s,"last_pull":%s,"last_push":%s,"online":%s' \
+    "$en" "$au" "$([ -n "$(sync_get ENABLED)" ] && echo true || echo false)" "$(sync_have_key && echo true || echo false)" "$(jesc "$(auth_current_email)")" "$remote" "${lv:-0}" "$dirty" \
     "$([ "$(sync_get CONFLICT)" = 1 ] && echo true || echo false)" "${lp:-0}" "${lq:-0}" "$online"
 }
 
@@ -207,7 +207,9 @@ sync_pull_job() { # <replace|merge> <用旧密码解的 0|1> <云端版本>
 sync_auto_tick() {
   local last now_ lh nowh base dirty=0 rc
   sync_enabled && sync_auto && sync_have_key && auth_logged_in && [ -n "$(session_id)" ] || return 0
-  now_=$(now); last=$(sync_get CHECKED); [ $(( now_ - ${last:-0} )) -ge 600 ] || return 0
+  now_=$(now); last=$(sync_get CHECKED)
+  [ -f "$H/.sync-pending" ] && { rm -f "$H/.sync-pending"; last=0; }                  # 刚勾选了「保存到云端」: 不等 10 分钟, 这一分钟就同步
+  [ $(( now_ - ${last:-0} )) -ge 600 ] || return 0
   sync_set CHECKED "$now_"; sync_remote_forget
   sync_remote_meta || return 0
   base=$(sync_get BASE_VERSION); base=${base:-0}; lh=$(sync_get SYNCED_HASH); nowh=$(snap_hash)
@@ -221,4 +223,31 @@ sync_auto_tick() {
     [ "$rc" = 2 ] && sync_set CONFLICT 1
   fi
   return 0
+}
+
+# ---------- 添加服务器时的「保存到云端」+ 登录后自动同步 ----------
+# sync_after_save: 添加 / 导入 / 部署服务器时勾选了「保存到云端」之后调用: 第一次用就自动打开云端同步 (在设置里明确关闭过的不动), 并让这一分钟的 tick 立刻上传。
+# 老版本添加的服务器 (清单里没有) 不会被连带上传, 只有这次勾选的才会。
+sync_after_save() {
+  sync_have_key || return 0
+  case "$(sync_get ENABLED)" in
+    0) return 0 ;;
+    1) ;;
+    *) sync_set ENABLED 1; [ -n "$(sync_get AUTO)" ] || sync_set AUTO 1 ;;
+  esac
+  : > "$H/.sync-pending"
+}
+# sync_login_auto (登录之后的后台任务): 云端有这个账号保存的服务器就自动取回来 —— 合并进本机, 本机已有的保留, 不覆盖; 在设置里明确关闭过同步的不动。
+# 取回来的服务器记入同步清单, 之后和这台电脑的改动一起继续同步 (由 tick 上传)。解不开 (改过密码) / 连不上云端时静默放弃, 由设置里的同步卡片处理。
+sync_login_auto() {
+  local id
+  sync_have_key && auth_logged_in || return 0
+  [ "$(sync_get ENABLED)" = 0 ] && return 0
+  id=$(auth_acc_get id)
+  sync_remote_forget; sync_remote_meta || return 0
+  [ "$R_EXISTS" = 1 ] || return 0                                                      # 云端还没有数据: 等第一次勾选「保存到云端」
+  if [ "$(sync_get ACCOUNT)" = "$id" ] && [ "$R_VERSION" = "$(sync_get BASE_VERSION)" ] && [ -n "$(sync_get SYNCED_HASH)" ]; then return 0; fi     # 这台电脑已经是最新的
+  sync_open_remote || return 0
+  case "$(sync_get ENABLED)" in 1) ;; *) sync_set ENABLED 1; [ -n "$(sync_get AUTO)" ] || sync_set AUTO 1 ;; esac
+  OP_WHO=terminal sync_pull_job merge 0 "$SYNC_IN_VERSION" || true
 }

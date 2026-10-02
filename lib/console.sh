@@ -45,7 +45,7 @@ console_draw() {
     [ -n "$CS_auto" ] && pf '  自动线路  %s  %s\n' "$CS_auto" "$(_cs_ms "$CS_auto_ms")"
   fi
   if [ -n "$CS_acc" ]; then pf '  账号      已登录 %s\n' "$CS_acc"; else pf '  账号      未登录 (打开仪表盘, 用 enana.cc 账号登录或注册)\n'; fi
-  pf '  仪表盘    %s%s%s\n' "$C" "$UI_URL" "$N"
+  pf '  后台地址  %s%s%s\n' "$C" "$UI_URL" "$N"
   if [ "$CS_srv" -eq 0 ]; then pf '\n  %s提示%s 还没有添加服务器 → 按 1 打开仪表盘, 在「服务器」页添加\n' "$Y" "$N"
   elif [ "$CS_new" -gt 0 ]; then pf '\n  %s提示%s 发现 %s 个新应用 (默认关闭) → 按 1 到仪表盘「应用」页处理\n' "$Y" "$N" "$CS_new"; fi
   _cs_rule

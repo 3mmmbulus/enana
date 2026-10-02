@@ -150,31 +150,57 @@ os_sysproxy_set() { # on|off  (需要管理员密码)
 }
 
 # ---------- 快捷命令 enana ----------
+# 目标: 装完在任何终端输入 enana 都能打开控制台。优先放进「已经在 PATH 里、当前用户能写」的目录 (马上可用, 不用密码, 不用重开终端);
+# 没有这样的目录再用管理员权限放进 /usr/local/bin (macOS 默认 PATH 里一定有它); 都不行才放 ~/.local/bin 并把它写进 shell 配置 (新开的终端才生效)。
 SHORTCUT_NAME=enana
-SHORTCUT_DIR=${ENANA_SHORTCUT_DIR:-/usr/local/bin}
+SHORTCUT_DIR=${ENANA_SHORTCUT_DIR:-}           # 指定了就只用这个目录 (测试 / 自定义)
+_path_has() { case ":$PATH:" in *":$1:"*) return 0 ;; *) return 1 ;; esac; }
+shortcut_dirs() { # 可能放着快捷命令的目录 (每行一个), 按优先顺序; ENANA_SHORTCUT_DIRS (空格分隔) 只给测试用
+  if [ -n "$SHORTCUT_DIR" ]; then printf '%s\n' "$SHORTCUT_DIR"
+  elif [ -n "${ENANA_SHORTCUT_DIRS:-}" ]; then printf '%s\n' $ENANA_SHORTCUT_DIRS
+  else printf '%s\n' /usr/local/bin /opt/homebrew/bin "$HOME/.local/bin" "$HOME/bin"; fi
+}
 shortcut_path() { # 打印已安装的快捷命令路径 (指向本程序的才算)
-  local p
-  for p in "$SHORTCUT_DIR/$SHORTCUT_NAME" "$HOME/.local/bin/$SHORTCUT_NAME"; do
+  local d p
+  while IFS= read -r d; do
+    p="$d/$SHORTCUT_NAME"
     [ -L "$p" ] && [ "$(readlink "$p")" = "$H/enana" ] && { printf '%s\n' "$p"; return 0; }
-  done
+  done < <(shortcut_dirs)
   return 1
 }
-shortcut_install() {
-  local link=$SHORTCUT_DIR/$SHORTCUT_NAME rc marker='# enana 快捷命令'
-  if { mkdir -p "$SHORTCUT_DIR" 2>/dev/null && ln -sf "$H/enana" "$link" 2>/dev/null; }; then SHORTCUT=$link; return 0; fi
-  if [ "$IS_ADMIN" = 1 ] && sudo -v 2>/dev/null && sudo mkdir -p "$SHORTCUT_DIR" && sudo ln -sf "$H/enana" "$link"; then SHORTCUT=$link; return 0; fi
-  mkdir -p "$HOME/.local/bin" && ln -sf "$H/enana" "$HOME/.local/bin/$SHORTCUT_NAME" || return 1
+shortcut_rc_file() { # 当前登录 shell 的启动配置文件 (把 ~/.local/bin 加进 PATH 用)
+  case ${SHELL:-} in */zsh) printf '%s' "$HOME/.zshrc" ;; */fish) printf '%s' "$HOME/.config/fish/conf.d/enana.fish" ;; *) printf '%s' "$HOME/.bash_profile" ;; esac
+}
+shortcut_install() { # 成功时设置 SHORTCUT (路径); SHORTCUT_RC 非空 = 当前终端还用不了, 要重新打开终端 (或执行 PATH 那一行)
+  local d rc marker='# enana 快捷命令'
+  SHORTCUT=''; SHORTCUT_RC=''
+  while IFS= read -r d; do                                     # ① 已经在 PATH 里的可写目录
+    [ -n "$SHORTCUT_DIR" ] && mkdir -p "$d" 2>/dev/null
+    { [ -n "$SHORTCUT_DIR" ] || _path_has "$d"; } && [ -d "$d" ] && [ -w "$d" ] || continue
+    ln -sf "$H/enana" "$d/$SHORTCUT_NAME" 2>/dev/null && { SHORTCUT=$d/$SHORTCUT_NAME; return 0; }
+  done < <(shortcut_dirs)
+  if [ -z "$SHORTCUT_DIR" ] && [ "${IS_ADMIN:-0}" = 1 ] && sudo -v 2>/dev/null && sudo mkdir -p /usr/local/bin && sudo ln -sf "$H/enana" "/usr/local/bin/$SHORTCUT_NAME"; then   # ② 管理员权限 (要密码)
+    SHORTCUT=/usr/local/bin/$SHORTCUT_NAME; return 0
+  fi
+  mkdir -p "$HOME/.local/bin" && ln -sf "$H/enana" "$HOME/.local/bin/$SHORTCUT_NAME" || return 1     # ③ 用户目录 + PATH 配置
   SHORTCUT="$HOME/.local/bin/$SHORTCUT_NAME"
-  case ":$PATH:" in *":$HOME/.local/bin:"*) return 0 ;; esac
-  case ${SHELL:-} in */zsh) rc="$HOME/.zshrc" ;; *) rc="$HOME/.bash_profile" ;; esac
-  grep -qF "$marker" "$rc" 2>/dev/null || printf '\n%s\nexport PATH="$HOME/.local/bin:$PATH"\n' "$marker" >> "$rc"
+  _path_has "$HOME/.local/bin" && return 0
+  rc=$(shortcut_rc_file); mkdir -p "$(dirname "$rc")"
+  if ! grep -qF "$marker" "$rc" 2>/dev/null; then
+    case $rc in
+      */enana.fish) printf '%s\ncontains $HOME/.local/bin $PATH; or set -gx PATH $HOME/.local/bin $PATH\n' "$marker" >> "$rc" ;;
+      *) printf '\n%s\nexport PATH="$HOME/.local/bin:$PATH"\n' "$marker" >> "$rc" ;;
+    esac
+  fi
   SHORTCUT_RC=$rc
 }
 shortcut_remove() {
-  local p rc
-  for p in "$SHORTCUT_DIR/$SHORTCUT_NAME" "$HOME/.local/bin/$SHORTCUT_NAME"; do
+  local d p rc
+  while IFS= read -r d; do
+    p="$d/$SHORTCUT_NAME"
     if [ -L "$p" ] && [ "$(resolve_path "$p")" = "$H/enana" ]; then rm -f "$p" 2>/dev/null || sudo rm -f "$p"; fi
-  done
+  done < <(shortcut_dirs)
+  rm -f "$HOME/.config/fish/conf.d/enana.fish"
   for rc in "$HOME/.zshrc" "$HOME/.bash_profile"; do
     if [ -f "$rc" ] && grep -qF '# enana 快捷命令' "$rc"; then   # 只删除我们加的两行 (标记行 + 紧随其后的 export)
       awk -v m='# enana 快捷命令' '$0==m {skip=1; next} skip && /^export PATH="\$HOME\/\.local\/bin:\$PATH"$/ {skip=0; next} {skip=0; print}' "$rc" > "$rc.tmp" && cat "$rc.tmp" > "$rc"; rm -f "$rc.tmp"
@@ -195,7 +221,7 @@ os_legacy_cleanup() { # 卸载旧的 launchd 任务、旧快捷命令、旧 shel
     rm -f "$PLIST_DIR/$l.plist"
   done
   for f in tproxy ereldaili; do
-    for d in "$SHORTCUT_DIR" "$HOME/.local/bin"; do
+    for d in /usr/local/bin /opt/homebrew/bin "$HOME/.local/bin" ${SHORTCUT_DIR:+"$SHORTCUT_DIR"}; do
       p="$d/$f"
       [ -L "$p" ] || continue
       case "$(readlink "$p")" in *"/$LEGACY_HOME_NAME/"*|*"/.enana/"*) rm -f "$p" 2>/dev/null || sudo rm -f "$p" ;; esac
