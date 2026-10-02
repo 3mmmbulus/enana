@@ -2299,7 +2299,7 @@ function serveIcon(req, res, slug) {                                       // GE
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
   '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8', '.map': 'application/json; charset=utf-8', '.webmanifest': 'application/manifest+json' };
 const envJson = () => ({ apiBase: SPLIT ? 'http://' + HOST + ':' + HPORT : '', apiPort: HPORT, proxyPort: 7890, uiPort: PORT, version: M.upd.cur,
-  probe: { ipPin: '/mock/ipify', ipAuto: '/mock/ipinfo', speedUrl: '/mock/down?bytes=10000000', delayUrl: '/mock/gen204' } });
+  probe: { speedUrl: '/mock/down?bytes=10000000', delayUrl: '/mock/gen204' } });
 const notFound = (req, res, lang) => jsonRes(req, res, 404, { ok: false, code: 'E_NOT_FOUND', error: tr(lang || 'zh', 'e.noRoute'), message: 'Not found' });
 const PAGES = ['overview', 'apps', 'sites', 'rules', 'dns', 'servers', 'conns', 'traffic', 'speed', 'logs', 'settings', 'login', 'register'];     // 页面路由: /ui/apps 等直接给 index.html (和真机的 /enana/admin/apps 一样)
 function serveUi(req, res, u) {
@@ -2387,8 +2387,6 @@ async function mockCtl(req, res, u) {
 async function mockEntry(req, res, u) {
   const p = u.pathname;
   if (p === '/mock/ctl') return mockCtl(req, res, u);
-  if (p === '/mock/ipify') { await sleep(200); return jsonRes(req, res, 200, { ip: '203.0.113.7' }); }
-  if (p === '/mock/ipinfo') { await sleep(300); return jsonRes(req, res, 200, { ip: '198.51.100.23', city: 'Tokyo', region: 'Tokyo', country: 'JP', org: 'AS64500 Example Net' }); }
   if (p === '/mock/gen204') { res.writeHead(204, { 'Cache-Control': 'no-store' }); return res.end(); }
   if (p === '/mock/down') {
     const total = Math.min(num(u.searchParams.get('bytes'), 1e7), 5e7), chunk = Buffer.alloc(100000, 97); let sent = 0;
@@ -2444,7 +2442,7 @@ async function mainHandler(req, res) {
   if (p === '/') { res.writeHead(302, { Location: '/ui/' }); return res.end(); }
   if (p === '/ui') { res.writeHead(302, { Location: '/ui/' }); return res.end(); }
   if (p === '/enana/admin') { res.writeHead(302, { Location: '/enana/admin/' }); return res.end(); }
-  if (p === '/favicon.ico') { res.writeHead(204); return res.end(); }
+  if (p === '/favicon.ico') { try { const b = fs.readFileSync(path.join(UI, 'favicon.png')); res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': b.length }); return res.end(b); } catch (e) { res.writeHead(204); return res.end(); } }
   if (p.indexOf('/mock/') === 0) return mockEntry(req, res, u);
   if (p.indexOf('/ui/') === 0 || p.indexOf('/enana/admin/') === 0) return serveUi(req, res, u);
   if (p.indexOf('/api/') === 0) { if (SPLIT) return jsonRes(req, res, 404, { ok: false, code: 'E_NOT_FOUND', error: 'The helper API is on port ' + HPORT + ' in --split mode', message: 'Not found' }); return helperEntry(req, res, u); }
@@ -2868,13 +2866,13 @@ async function selftest() {
   /* ---- 静态文件 / 目录 / 探测 / Clash / 平台 ---- */
   r = await rq('GET', '/', { noHdr: true }); ck('/ redirects to /ui/', r.status === 302 && r.headers.location === '/ui/');
   r = await rq('GET', '/ui/env.json', { noHdr: true }); const env = jx(r);
-  ck('ui/env.json: apiBase "" (single origin), ports, probes', env.apiBase === '' && env.apiPort === PORT && env.uiPort === PORT && env.proxyPort === 7890 && env.probe.ipPin === '/mock/ipify' && env.probe.ipAuto === '/mock/ipinfo' && env.probe.speedUrl === '/mock/down?bytes=10000000' && env.probe.delayUrl === '/mock/gen204');
+  ck('ui/env.json: apiBase "" (single origin), ports, probes', env.apiBase === '' && env.apiPort === PORT && env.uiPort === PORT && env.proxyPort === 7890 && env.probe.speedUrl === '/mock/down?bytes=10000000' && env.probe.delayUrl === '/mock/gen204');
   const cj = jx(await rq('GET', '/ui/catalog.json', { noHdr: true })), gids = GROUPS.map((g) => g[0]);
   ck('ui/catalog.json schema 3: 12 groups + groups_en + order + 56 entries with name_en/desc_en/policy/modified', cj.schema === 3 && JSON.stringify(cj.order) === JSON.stringify(gids) && gids.length === 12 && gids.every((g) => cj.groups[g] && cj.groups_en[g]) && cj.entries.length === 56
     && cj.entries.every((e) => e.tag === 'svc-' + e.id && e.name && e.name_en && !CJK.test(e.name_en) && e.desc_en && ['pin', 'auto', 'direct'].indexOf(e.default) >= 0 && Array.isArray(e.domains) && Array.isArray(e.rulesets) && typeof e.cidrs === 'number' && e.group in cj.groups && e.policy === e.default && e.modified === false && e.domains.length >= 3 && e.domains.every((d) => /\.example\.(com|net|org)$/.test(d))));
   if (fs.existsSync(path.join(UI, 'index.html'))) { r = await rq('GET', '/ui/', { noHdr: true }); ck('ui/ serves index.html as text/html', r.status === 200 && /^text\/html/.test(r.headers['content-type'])); }
   r = await rq('GET', '/ui/..%2ftools%2fmock-server.js', { noHdr: true }); r2 = await rq('GET', '/ui/../tools/mock-server.js', { noHdr: true }); ck('no directory traversal out of ui/', r.status !== 200 && r2.status !== 200 && r.text.indexOf('use strict') < 0 && r2.text.indexOf('use strict') < 0);
-  r = await rq('GET', '/mock/gen204', { noHdr: true }); r2 = await rq('GET', '/mock/ipify', { noHdr: true }); ck('probes: /mock/gen204 204, /mock/ipify {ip}', r.status === 204 && /^203\.0\.113\./.test(jx(r2).ip));
+  r = await rq('GET', '/mock/gen204', { noHdr: true }); ck('probes: /mock/gen204 204 (the exit IPs now come from /api/net/info, not from third-party sites)', r.status === 204);
   r = await rq('GET', '/proxies', { noHdr: true }); ck('Clash API needs Authorization: Bearer (401 otherwise)', r.status === 401);
   r = await clash('GET', '/proxies'); const P = jx(r).proxies, sv = jx(await api('GET', '/api/state')).servers, nAuto = sv.filter((x) => x.role === 'auto').length, nPin = sv.filter((x) => x.role === 'pin').length;
   ck('Clash /proxies: PIN selector, AUTO urltest, Global, Final, svc-<id> per catalog entry, nodes with histories', P.PIN.type === 'Selector' && P.AUTO.type === 'URLTest' && P.Global.type === 'Selector' && P.Final.type === 'Selector' && P['svc-claude'].type === 'Selector'

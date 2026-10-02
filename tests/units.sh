@@ -276,6 +276,11 @@ eq "只勾选「网站访问」「代理日志」: meta + access + proxy" "$(gre
 logs_bundle abc ops > "$UW/b4.txt" 2>/dev/null; eq "时间范围写错 → 回落到 24 小时, 不会失败" "$(grep -c '^#range since=' "$UW/b4.txt")" "1"
 python3 "$REPO/tools/diag-summary.py" "$UW/bundle.txt" > "$UW/summary.txt" 2>&1; eq "tools/diag-summary.py 能解读导出文件 (有概览 / 自动判断)" "$(grep -c '^== 概览\|^== 自动判断' "$UW/summary.txt")" "2"
 echo
+
+echo "== U7. 仪表盘静态检查 (控制台报错的回归保护)"
+t "仪表盘不会自动去访问第三方网站查 IP (ipify / ipinfo): 出口 IP 由本机辅助服务查, 浏览器里不再出现 ERR_CONNECTION_RESET" sh -c "! grep -nE 'api\\.ipify\\.org|ipinfo\\.io' '$REPO'/ui/*.js"
+t "v-vps.js: 重置错误提示时只对有 setErr 的项调用 (「保存到云端」勾选框不是输入项; 以前这里抛 TypeError, 「添加自己的服务器」面板打不开)" grep -q 'b\[k\] && b\[k\].setErr' "$REPO/ui/v-vps.js"
+t "页面声明了标签页图标, 文件都在" sh -c "grep -q 'rel=\"icon\"' '$REPO/ui/index.html' && test -s '$REPO/ui/favicon.svg' && test -s '$REPO/ui/favicon.png'"
 PASS=$(wc -l < "$UW/.pass" 2>/dev/null | tr -d ' '); FAIL=$(wc -l < "$UW/.fail" 2>/dev/null | tr -d ' ')
 echo "单元测试: ${PASS:-0} 通过, ${FAIL:-0} 失败"
 [ "${FAIL:-0}" = 0 ]

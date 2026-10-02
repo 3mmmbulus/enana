@@ -145,6 +145,8 @@ expect "根路径 / 也跳转到后台" sh -c "curl -sI --noproxy '*' $A/ | tr -
 expect "页面路由 /enana/admin/apps 直接给 index.html (和 #apps 旧写法并存)" sh -c "curl -s --noproxy '*' $D/apps | grep -q 'id=\"v-apps\"'"
 expect "页面路由带斜杠 /enana/admin/apps/ 跳到不带斜杠 (相对地址要靠它)" sh -c "curl -sI --noproxy '*' $D/apps/ | tr -d '\r' | grep -qi '^location: /enana/admin/apps\$'"
 expect "后台能取到 style.css / app.js / i18n 词典 / env.json (扩展名白名单内的文件)" sh -c "for f in style.css app.js i18n/zh.js env.json catalog.json; do test \"\$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $D/\$f)\" = 200 || exit 1; done"
+expect "/favicon.ico 给出标签页图标 (200, image/png): 浏览器总会请求它, 以前是 403, 控制台里一条红色报错" sh -c "H=\$(curl -sI --noproxy '*' $A/favicon.ico | tr -d '\r'); echo \"\$H\" | head -1 | grep -q ' 200 ' && echo \"\$H\" | grep -qi '^content-type: image/png'"
+expect "页面里声明了图标 (rel=icon), favicon.svg / favicon.png 都能取到" sh -c "curl -s --noproxy '*' $D/ | grep -q 'rel=\"icon\"' && test \"\$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $D/favicon.svg)\" = 200 && test \"\$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $D/favicon.png)\" = 200"
 AH $D/env.json | chk "env.json: apiBase 为空 (仪表盘与辅助服务同源), clashBase 指向核心控制端口" 'assert d["apiBase"]=="" and d["clashBase"]=="http://127.0.0.1:'"$UI_PORT"'" and d["apiPort"]=='"$API_PORT"' and d["uiPort"]=='"$UI_PORT"
 expect "目录穿越被拒 (../ 与 %2e%2e)" sh -c "test \"\$(curl -s --path-as-is -o /dev/null -w '%{http_code}' --noproxy '*' $D/../../../etc/hosts)\" != 200 && test \"\$(curl -s --path-as-is -o /dev/null -w '%{http_code}' --noproxy '*' $D/%2e%2e/%2e%2e/etc/hosts)\" = 404"
 expect "隐藏文件 / 不在白名单里的扩展名 (appicons/index.tsv) 一律 404" sh -c "test \"\$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $D/.x.js)\" = 404 && test \"\$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $D/appicons/index.tsv)\" = 404 && test \"\$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $D/nonexistent.js)\" = 404"
@@ -1026,6 +1028,60 @@ J=$(api -X POST "$A/api/settings" -d 'access_log=1&log_core=1' | jp 'print(d["jo
 grep -q '"level":"info"' "$W/h/config.json" && ! grep -q '"disabled":true' "$W/h/config.json" && tpass "配置恢复: info 级别, 没有 disabled" || tfail "配置恢复"
 api -X POST "$A/api/settings" -d 'log_ops=2' | chk "开关值无效 → 被拒" 'assert not d["ok"]'
 sleep 3
+
+echo "== 8c. 自动识别打不开的网站 (设置里打开才工作): enana tick 读核心日志 → 候选 → 经过代理验证 → 加入 / 放弃 · 撤销 · 审计"
+fakefail() { # fakefail <域名> <次数> [出口名]: 往核心日志里追加「走直连却超时」的连接 (出口 direct-cn / direct 才会被自动识别参考)
+  local h=$1 n=$2 tg=${3:-direct-cn} i id ts; ts=$(date '+%F %T')
+  for i in $(seq 1 "$n"); do
+    id=$((RANDOM * 100 + i))
+    { printf '+0800 %s INFO [%s 0ms] router: found process path: /Applications/Safari.app/Contents/MacOS/Safari, user: u\n' "$ts" "$id"
+      printf '+0800 %s INFO [%s 1ms] outbound/direct[%s]: outbound connection to %s:443\n' "$ts" "$id" "$tg" "$h"
+      printf '+0800 %s ERROR [%s 9s] connection: open connection to %s:443 using outbound/direct[%s]: dial tcp 9.9.9.9:443: i/o timeout\n' "$ts" "$id" "$h" "$tg"; } >> "$W/h/sing-box.log"
+  done
+}
+fakeok() { # fakeok <次数>: 往核心日志里追加「走直连、成功了」的连接 (没有这些, 窗口里全是失败, 会被当成断网而不添加任何网站 —— 这是故意的保护)
+  local n=$1 i id ts; ts=$(date '+%F %T')
+  for i in $(seq 1 "$n"); do id=$((RANDOM * 100 + i + 50)); printf '+0800 %s INFO [%s 1ms] outbound/direct[direct]: outbound connection to www.fine-site.com:443\n' "$ts" "$id" >> "$W/h/sing-box.log"; done
+}
+atick() { ENANA_AUTOSITE_VERIFY_URL=${1:-http://127.0.0.1:$N_PORT/ip} "$W/shortcut/enana" tick --quiet >/dev/null 2>&1; }
+api -X POST "$A/api/proxy" -d 'on=1&mode=auto' >/dev/null
+api -X POST "$A/api/settings" -d 'auto_sites=1' | chk "打开「自动识别」(默认关闭; 有服务器才允许)" 'assert d["ok"]'
+api "$A/api/settings" | chk "设置里 auto_sites = true" 'assert d["settings"]["auto_sites"] is True'
+atick; sleep 1                                                               # 第一次只记下日志位置 (不翻历史)
+fakefail cdn.stuck-site.io 4 direct-cn; fakefail mine-site.io 4 direct-site; fakefail viaok-site.io 1 direct; fakeok 30
+atick; sleep 3
+expect "同一网站 4 次直连超时 → 自动加入代理 (取最后两段: stuck-site.io, 有自动线路用自动线路)" grep -q '^site|stuck-site.io|auto|' "$W/h/overrides.tsv"
+expect "你明确设为直连的 (出口 direct-site) 不参与, 失败太少的 (1 次) 也不加" sh -c "! grep -q 'mine-site.io' '$W/h/overrides.tsv' && ! grep -q 'viaok-site.io' '$W/h/overrides.tsv'"
+api "$A/api/state" | chk "状态里: src=auto, 带 添加时间 / 失败类型 / 失败次数 / 触发的应用" 'o={x["value"]:x for x in d["overrides"]}["stuck-site.io"]; assert o["src"]=="auto" and o["state"]=="auto" and o["why"]=="timeout" and o["fails"]==4 and o["app"]=="Safari" and o["at"]>0'
+api "$A/api/logs?type=ops&f=auto" | chk "操作记录 (来源 auto): 添加网站到代理 —— 域名 / 失败次数 / 失败类型 / 应用 / 原来的出口 / 验证结果" 'r=[x for x in d["rows"] if x["action"]=="自动识别: 添加网站到代理"]; assert r and "domain=stuck-site.io" in r[0]["detail"] and "fails=4" in r[0]["detail"] and "err=timeout" in r[0]["detail"] and "app=Safari" in r[0]["detail"] and "was=direct-cn" in r[0]["detail"] and "verify=\"http=200" in r[0]["detail"] and r[0]["who"]=="auto"'
+fakefail cdn.stuck-site.io 4 direct-cn; atick; sleep 1
+expect "已经加过的不会重复添加" test "$(grep -c '^site|stuck-site.io|' "$W/h/overrides.tsv")" = 1
+# 验证没通过 (经过代理也连不上) → 撤销, 24 小时内不再试
+fakefail dead-site.io 4 direct; atick "https://127.0.0.1:1/"; sleep 3
+expect "经过代理验证不通 → 撤销 (不留下覆盖), 记入冷却" sh -c "! grep -q 'dead-site.io|' '$W/h/overrides.tsv' && grep -q '^dead-site.io ' '$W/h/.autosite.cool'"
+api "$A/api/logs?type=ops&f=auto" | chk "操作记录: 放弃网站 (结果 error, 说明为什么)" 'r=[x for x in d["rows"] if x["action"]=="自动识别: 放弃网站"]; assert r and "domain=dead-site.io" in r[0]["detail"] and r[0]["result"]=="error"'
+# 你从自动识别里删掉 (网站页「恢复跟随」) → 以后不再自动添加
+api -X POST "$A/api/override?kind=site&value=stuck-site.io&state=follow" | chk "网站页把自动识别的网站恢复跟随 → 成功" 'assert d["ok"]'
+expect "从自动识别记录里去掉, 并记入「不再自动添加」" sh -c "! grep -q '^stuck-site.io|' '$W/h/autosites.tsv' && grep -qx 'stuck-site.io' '$W/h/autosites.dismissed'"
+fakefail cdn.stuck-site.io 4 direct-cn; atick; sleep 1
+expect "删除过的网站不会再被自动添加" sh -c "! grep -q 'stuck-site.io' '$W/h/overrides.tsv'"
+# 全部撤销
+fakefail second-stuck.io 4 direct-cn; atick; sleep 3
+expect "又自动添加了一个 (second-stuck.io)" grep -q '^site|second-stuck.io|auto|' "$W/h/overrides.tsv"
+api -X POST "$A/api/sites/auto/clear" | chk "全部撤销 → removed = 1" 'assert d["ok"] and d["removed"]==1'
+expect "撤销后覆盖和记录都没了, 并且不会再被自动添加" sh -c "! grep -q 'second-stuck.io' '$W/h/overrides.tsv' && test ! -s '$W/h/autosites.tsv' && grep -qx 'second-stuck.io' '$W/h/autosites.dismissed'"
+api "$A/api/logs?type=ops&f=dashboard&q=%E5%85%A8%E9%83%A8%E6%92%A4%E9%94%80" | chk "操作记录: 自动识别: 全部撤销" 'assert d["total"]>=1 and "count=1" in d["rows"][0]["detail"]'
+# 关闭后不工作
+api -X POST "$A/api/settings" -d 'auto_sites=0' | chk "关闭「自动识别」" 'assert d["ok"]'
+fakefail third-stuck.io 4 direct-cn; atick; sleep 1
+expect "关闭后即使日志里有失败也不添加" sh -c "! grep -q 'third-stuck.io' '$W/h/overrides.tsv'"
+api -X POST "$A/api/settings" -d 'auto_sites=maybe' | chk "开关值无效 → 被拒" 'assert not d["ok"]'
+# 审计: 仪表盘直接对核心做的操作 (断开连接) 事后补一条操作记录
+api -X POST "$A/api/audit" -d 'ev=kill&scope=host&n=3&host=a.example' | chk "审计: 断开连接 (按网站) → 成功" 'assert d["ok"]'
+api "$A/api/logs?type=ops&q=%E6%96%AD%E5%BC%80%E8%BF%9E%E6%8E%A5" | chk "操作记录: 断开连接 —— 范围 / 数量 / 网站" 'r=d["rows"][0]; assert "scope=host" in r["detail"] and "count=3" in r["detail"] and "host=a.example" in r["detail"] and r["who"]=="dashboard"'
+api -X POST "$A/api/audit" -d 'ev=bogus' | chk "审计: 不认识的事件 → 被拒" 'assert not d["ok"]'
+api -X POST "$A/api/audit" -d 'ev=kill&scope=host&n=1&host=bad%20host;rm' | chk "审计: 网站名里有奇怪字符 → 不写进记录" 'assert d["ok"]'
+expect "奇怪字符的网站名没有被写进操作记录" sh -c "! cat '$W/h/logs/'ops-*.log | grep -qF 'host=bad'"
 
 echo "== 9. 规则库 / DNS"
 api "$A/api/rules" | chk "规则库列表: 必选项不可停用, 含自定义标记" 'n={s["tag"]:s for s in d["sets"]}; assert n["geosite-cn"]["essential"] and n["geosite-cn"]["present"] and len(d["sets"])>=5'

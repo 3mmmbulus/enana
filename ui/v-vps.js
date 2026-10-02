@@ -293,7 +293,7 @@
       if (f.host) f.host.value = '';
       f.port.value = String(o.port || 22); f.user.value = o.user || 'root';
       c.wipeSecrets(); syncName();
-      Object.keys(b).forEach(function (k) { if (b[k]) b[k].setErr(''); });
+      Object.keys(b).forEach(function (k) { if (b[k] && b[k].setErr) b[k].setErr(''); });      // (b.save 是「保存到云端」的勾选框, 不是输入框, 没有 setErr; 以前在这里抛 TypeError, 整个「添加自己的服务器」面板打不开)
       c.refreshDefaults();
     };
     c.hasInput = function () { return !!((f.host && f.host.value.trim()) || sec.pw.inp.value || sec.pass.inp.value || sec.sudo.inp.value || f.key.value.trim() || (f.name && c.touched.name)); };

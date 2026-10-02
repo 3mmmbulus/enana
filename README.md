@@ -105,6 +105,7 @@ enana uninstall      卸载 (--keep-data 保留数据)
 bash tests/run.sh                  # 约 700 条测试: 在隔离目录里完整跑一遍 (需要一个 sing-box 二进制: SINGBOX=/路径/sing-box)
 bash tests/units.sh                # 几秒钟的单元测试: 日志解析 / 自动识别 / 保留期 / 应用扫描 / 规则集拆分 / 诊断导出 (不需要 sing-box; run.sh 末尾也会跑)
 python3 tools/i18n-verify.py       # 检查英文译文覆盖了所有会显示给用户的中文提示
+# tools/ui-audit.js              # 粘进浏览器控制台 (登录本机 mock / 开发实例后): 把每个页面、标签、弹窗点一遍并收集 JS 报错 (发布前跑一遍)
 bash tests/get-test.sh [发布目录]    # 一行安装命令 (get.sh) 的整条链路: 首次安装 / 篡改拦截 / 两线路交叉校验 / 升级 / wget / 端口占用自动换 / 快捷命令; 全部用本机模拟的下载服务
 ```
 

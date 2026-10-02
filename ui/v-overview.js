@@ -106,7 +106,7 @@
     var ipRow = null;
     if (k !== 'direct') {
       c.ipBtn = ui.ibtn('refresh', t('ov.ip.refresh', { name: t(RT[k].name) }));
-      ui.act(c.ipBtn, function () { return fetchIp(k, true); });
+      ui.act(c.ipBtn, function () { return fetchIp(true, true); });
       ipRow = h('div', { class: 'kv-row' }, h('span', { class: 'kv-k' }, L('ov.exitIp')), h('span', { class: 'kv-v' }, c.ip, c.ipx), c.ipBtn);
     }
     c.el = h('section', { class: 'card route r-' + k },
@@ -203,34 +203,60 @@
     });
   }
 
-  /* ================= 出口 IP (只在加载 / 节点变化 / 手动刷新时请求, 避免打扰第三方服务) ================= */
-  var IPURL = { pin: 'https://api.ipify.org?format=json', auto: 'https://ipinfo.io/json' };
-  async function fetchIp(k, manual) {
-    var url = (TP.cfg.probe && (k === 'pin' ? TP.cfg.probe.ipPin : TP.cfg.probe.ipAuto)) || IPURL[k];
-    if (manual && navigator.onLine === false) { ui.toast(t('ov.ip.offline'), 'warn'); return; }
-    ipInfo[k] = { st: 'load' }; ipLast[k] = Date.now(); renderIp();
-    try {
-      var r = await TP.fetchT(url, { credentials: 'omit' }, 9000);
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      var j = await r.json();
-      if (!j || !j.ip) throw new Error('bad response');
-      var loc = [j.city, j.region, j.country].filter(Boolean).join(' · ');
-      ipInfo[k] = { st: 'ok', ip: String(j.ip), loc: loc, org: j.org ? String(j.org) : '' };
-      ipFor[k] = TP.leaf(k === 'pin' ? 'PIN' : 'Global');
-    } catch (e) {
-      ipInfo[k] = { st: 'err' };
-      if (manual) ui.toast(t('ov.ip.failToast', { name: t(RT[k].name) }), 'warn');
+  /* ================= 出口 IP: 向本机辅助服务要 (它用每条线路各自的出口去查, 结果缓存 10 分钟); 浏览器自己不去访问任何第三方网站 =================
+   * GET /api/net/info -> {checked, routes:[{id:'PIN'|'Global', ok, ip, country, region, city, isp, asn, reason}]}
+   * 从没查过 / 手动刷新 / 节点换了 -> 先 POST /api/net/refresh (后台任务, 约 3–8 秒) 再读一次。两张卡片共用一次查询。 */
+  var ipBusy = null;
+  function netRoute(d, k) { var id = k === 'pin' ? 'PIN' : 'Global', rs = (d && d.routes) || [], i; for (i = 0; i < rs.length; i++) if (rs[i] && rs[i].id === id) return rs[i]; return null; }
+  function setIpFrom(d) {
+    ['pin', 'auto'].forEach(function (k) {
+      var r = netRoute(d, k);
+      if (!r) ipInfo[k] = { st: 'none' };
+      else if (r.ok === false || !r.ip) ipInfo[k] = { st: 'err' };
+      else { ipInfo[k] = { st: 'ok', ip: String(r.ip), loc: [r.city, r.region, r.country].filter(function (x, i, a) { return x && a.indexOf(x) === i; }).join(' · '), org: [r.isp, r.asn].filter(Boolean).join(' · ') }; ipFor[k] = TP.leaf(k === 'pin' ? 'PIN' : 'Global'); }
+    });
+  }
+  async function waitNetJob(id) {
+    var t0 = Date.now(), j, fails = 0;
+    for (;;) {
+      try { j = await TP.helper('GET', '/api/job', { q: { id: id }, timeout: 8000 }); fails = 0; }
+      catch (e) { if (e.kind === 'api' || e.kind === 'auth' || ++fails > 8) throw e; await TP.sleep(600); continue; }
+      if (j.state === 'done') return j;
+      if (j.state === 'error') throw TP.mkErr('job', j.msg || '', j);
+      if (Date.now() - t0 > 60000) throw TP.mkErr('job', '');
+      await TP.sleep(700);
     }
-    renderIp();
+  }
+  function fetchIp(refresh, manual) {
+    if (ipBusy) return ipBusy;
+    if (manual && navigator.onLine === false) { ui.toast(t('ov.ip.offline'), 'warn'); return Promise.resolve(); }
+    ipLast.all = Date.now(); ['pin', 'auto'].forEach(function (k) { ipInfo[k] = { st: 'load' }; }); renderIp();
+    ipBusy = (async function () {
+      try {
+        var d = await TP.helper('GET', '/api/net/info'), r;
+        if (refresh || !d || !(+d.checked > 0)) {
+          r = await TP.helper('POST', '/api/net/refresh');
+          if (r && r.job) await waitNetJob(r.job);
+          d = await TP.helper('GET', '/api/net/info');
+        }
+        setIpFrom(d);
+      } catch (e) {
+        ['pin', 'auto'].forEach(function (k) { ipInfo[k] = { st: 'err' }; });
+        if (manual && !(e && e.kind === 'auth')) ui.toast(t('ov.ip.failToast', { name: t(RT.pin.name) + ' / ' + t(RT.auto.name) }), 'warn');
+      }
+      ipBusy = null; renderIp();
+    })();
+    return ipBusy;
   }
   function maybeIp() {
     if (S.locked || (!S.proxies.PIN && !S.proxies.Global)) return;
+    var first = false, changed = false;
     ['pin', 'auto'].forEach(function (k) {
       var leaf = TP.leaf(k === 'pin' ? 'PIN' : 'Global');
       if (!leaf || leaf === 'direct') return;
-      var changed = ipFor[k] && ipFor[k] !== leaf, first = !ipInfo[k];
-      if ((first || changed) && (!ipLast[k] || Date.now() - ipLast[k] > 30000)) fetchIp(k, false);
+      if (!ipInfo[k]) first = true; else if (ipFor[k] && ipFor[k] !== leaf) changed = true;
     });
+    if ((first || changed) && (!ipLast.all || Date.now() - ipLast.all > 30000)) fetchIp(changed, false);
   }
   function renderIp() {
     ['pin', 'auto'].forEach(function (k) {
@@ -238,6 +264,7 @@
       if (!i) { setText(c.ip, '—'); setText(c.ipx, ''); return; }
       if (i.st === 'load') { setText(c.ip, t('ov.ip.loading')); setText(c.ipx, ''); ui.avail(c.ipBtn, t('ov.ip.refreshing')); return; }
       ui.avail(c.ipBtn, '');
+      if (i.st === 'none') { setText(c.ip, '—'); setText(c.ipx, ''); return; }
       if (i.st === 'err') { setText(c.ip, t('ov.ip.fail')); setText(c.ipx, t('ov.ip.retry')); return; }
       setText(c.ip, i.ip); setText(c.ipx, [i.loc, i.org].filter(Boolean).join(' · '));
     });

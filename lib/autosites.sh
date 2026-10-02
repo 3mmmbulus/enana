@@ -100,7 +100,7 @@ autosite_add() { # <域名> <失败数> <尝试数> <失败类型> <应用> <示
   lock_take || return 2
   ovr_set site "$d" "$st" ack ''; ovr_sync; lock_drop
   sleep 2                                                                       # 规则集是文件监视热加载, 等它生效
-  out=$(curl -s -o /dev/null -m 8 --connect-timeout 6 -x "http://127.0.0.1:$PORT" -w 'ENANA:%{http_code}:%{time_total}' "https://${host:-$d}/" 2>/dev/null || true)
+  out=$(curl -s -o /dev/null -m 8 --connect-timeout 6 -x "http://127.0.0.1:$PORT" -w 'ENANA:%{http_code}:%{time_total}' "${ENANA_AUTOSITE_VERIFY_URL:-https://${host:-$d}/}" 2>/dev/null || true)       # (ENANA_AUTOSITE_VERIFY_URL: 只给测试用, 让验证不去连真实的互联网)
   code=${out#ENANA:}; code=${code%%:*}
   case $code in
     000|'') ;;                                                                  # 没有任何响应 (超时 / 被重置 / 代理也连不上)

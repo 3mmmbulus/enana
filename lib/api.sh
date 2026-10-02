@@ -91,6 +91,7 @@ serve_static() {
   [ "$method" = HEAD ] || cat "$f"
   exit 0
 }
+case $path in /favicon.ico) path="$ADMIN_PATH/favicon.png" ;; esac      # 浏览器不管页面里写了什么, 总会顺手请求 /favicon.ico (Safari 尤其): 给它标签页图标, 而不是一个 403
 case $path in /|"$ADMIN_PATH"|"$ADMIN_PATH"/*) serve_static ;; esac
 
 # ---------- 以下是 JSON 接口: 到这里才加载其余模块 ----------

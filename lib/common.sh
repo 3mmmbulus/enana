@@ -42,7 +42,7 @@ init_paths() {
   LIB="$SRC/lib"; DATA="$SRC/data"
   if [ -f "$SRC/.enana-home" ]; then H=$SRC          # 已安装的副本: 目录就是它所在位置
   else H="${ENANA_HOME:-$HOME/.enana}"; fi          # 源码目录: 安装到 $H
-  VERSION=2.1.1; [ -s "$SRC/VERSION" ] && IFS= read -r VERSION < "$SRC/VERSION"
+  VERSION=2.1.2; [ -s "$SRC/VERSION" ] && IFS= read -r VERSION < "$SRC/VERSION"
 }
 
 set_ui_url() { UI_URL="http://127.0.0.1:$API_PORT$ADMIN_PATH/"; }     # 后台地址: 由本地辅助服务直接提供, 路径固定为 /enana/admin/ (端口变了要重新调用)
