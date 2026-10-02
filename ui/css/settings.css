@@ -1,0 +1,42 @@
+/* enana · settings.css — 设置页: 标签页 / 套餐卡片 / 修改密码 */
+.set-intro{margin:0 0 8px}
+.set-intro p{margin:0}
+.set-tabs{margin:0 0 14px;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:thin;padding-bottom:3px}
+.set-tabs .subtabs{display:inline-flex;flex-wrap:nowrap;max-width:none}
+.set-tabs .subtab{flex:none}
+.set-panel>.card+.card{margin-top:14px}
+.set-panel[hidden]{display:none}
+.set-svc{font-weight:600}
+.sudo-hint{display:flex;align-items:flex-start;gap:6px;margin:12px 0 0}
+.sudo-hint .ci{flex:none;margin-top:3px;color:var(--warn)}
+
+/* 套餐 */
+.plan-h{display:flex;align-items:center;flex-wrap:wrap;gap:10px 14px;margin:2px 0 8px}
+.plan-ic{display:grid;place-items:center;flex:none;width:44px;height:44px;border-radius:12px;background:var(--ok-bg);color:var(--ok)}
+.plan-ic.pro{background:linear-gradient(135deg,#fff3cd,#ffe08a);color:#8a5a00}
+.plan-t{flex:1 1 200px;min-width:0}
+.plan-t b{font-size:16px}
+.plan-fh{display:flex;align-items:center;margin:16px 0 8px;font-size:15px}
+.plan-feats{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+.plan-f{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 12px;padding:9px 12px}
+.plan-f+.plan-f{border-top:1px solid var(--line)}
+.plan-fn{display:inline-flex;align-items:center;gap:8px;min-width:0;overflow-wrap:anywhere}
+.plan-fb{display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px}
+.pro-ic{color:#c68a00}
+.plan-ex>*+*{margin-top:10px}
+.plan-ex-b{display:flex;flex-wrap:wrap;gap:6px}
+.plan-ex-a{display:flex}
+
+/* 修改密码 */
+.pw-form>*+*{margin-top:10px}
+.pw-meter{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pw-meter .bar{flex:1 1 120px;min-width:80px}
+.pw-form .fld-h.bad-t{display:block}
+
+@media (pointer:coarse){
+  .plan-f .btn{min-height:44px}
+}
+@media (max-width:759px){
+  .set-tabs{margin-left:-2px;margin-right:-2px}
+  .plan-f{align-items:flex-start}
+}

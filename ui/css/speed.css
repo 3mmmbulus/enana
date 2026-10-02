@@ -1,0 +1,232 @@
+/* enana · 测速页 (v-speed.js) — 只用主题变量 (深色模式自动跟随); 类名都以 .spd- 开头 */
+
+/* ===== 通用 ===== */
+.spd-sec{display:flex;flex-direction:column;gap:12px}
+.spd-hd{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px}
+.spd-hd-t{flex:1 1 220px;min-width:0;display:flex;align-items:center;flex-wrap:wrap;gap:2px 12px}
+.spd-hd h3{margin:0;font-size:15px}
+.spd-ht{display:inline-flex;align-items:center;min-width:0}                     /* 标题 + 「!」 */
+.spd-ht h3,.spd-ht h4{margin:0}
+.spd-acts{display:flex;align-items:center;gap:4px;margin-left:auto}
+.spd-intro{display:flex;align-items:flex-start;gap:2px}
+/* 只给读屏器看的文字 */
+.spd-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
+.spd-ci{flex:none;vertical-align:-2px}
+.spd-ci.limited{color:var(--warn)} .spd-ci.fail{color:var(--err)} .spd-ci.pending,.spd-ci.skip{color:var(--muted)}
+
+/* ===== A) IP 卡片 ===== */
+.spd-stat{display:flex;align-items:flex-start;flex-wrap:wrap;gap:6px 12px;padding:10px 12px;border-radius:10px;background:var(--surface2)}
+.spd-stat-ic{flex:none;display:grid;place-items:center;margin-top:1px}
+.spd-stat-b{flex:1 1 220px;min-width:0}
+.spd-stat-b b{display:block}
+.spd-stat-r{margin-top:2px;font-size:var(--fs-12-5);color:var(--muted);overflow-wrap:anywhere}
+.spd-stat-time{margin-left:auto;align-self:center;white-space:nowrap}
+.spd-stat.ok{background:var(--ok-bg)} .spd-stat.ok .spd-stat-ic{color:var(--ok)}
+.spd-stat.warn{background:var(--warn-bg)} .spd-stat.warn .spd-stat-ic{color:var(--warn)}
+.spd-stat.bad{background:var(--err-bg)} .spd-stat.bad .spd-stat-ic{color:var(--err)}
+.spd-stat.mute .spd-stat-ic{color:var(--muted)}
+.spd-job .task{margin-top:0}
+.spd-sec .hint{margin:0}
+.spd-run .hint{margin-top:6px}
+.spd-ipgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:10px}
+.spd-ipc{min-width:0;padding:10px 12px;border:1px solid var(--line);border-top:3px solid var(--c,var(--line2));border-radius:10px;background:var(--surface)}
+.spd-ipc.is-direct{--c:var(--direct)} .spd-ipc.is-pin{--c:var(--pin)} .spd-ipc.is-auto{--c:var(--auto)}
+.spd-ipc.is-empty{border-top-style:dashed;display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.spd-ipc-h{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.spd-ipc-h h4{margin:0;min-width:0;font-size:14.5px;overflow-wrap:anywhere}
+.spd-ipc-ic{flex:none;display:grid;place-items:center;color:var(--c,var(--muted))}
+.spd-ipc-n{margin:6px 0 0}
+.spd-ipc.is-empty .spd-ipc-n{margin:0}
+.spd-kv{display:flex;align-items:baseline;gap:10px;padding:5px 0;border-top:1px solid var(--line)}
+.spd-k{flex:none;width:68px;font-size:var(--fs-12-5);color:var(--muted)}
+.spd-v{flex:1;min-width:0;overflow-wrap:anywhere}
+.spd-ip{font-size:var(--fs-13)}
+.spd-cc{display:inline-flex;align-items:baseline;gap:6px}
+.spd-flag{font-size:15px;line-height:1}
+.spd-fail{color:var(--err)}
+
+/* ===== B) 测速面板 ===== */
+.spd-form{display:flex;flex-direction:column;gap:14px}
+.spd-row{display:flex;align-items:center;flex-wrap:wrap;gap:6px 14px}
+.spd-lab{flex:none;min-width:84px;display:inline-flex;align-items:center;flex-wrap:wrap;font-size:var(--fs-12-5);color:var(--muted)}      /* 小标签 (后面可以跟一个「!」) */
+.spd-lab-row{display:flex;align-items:center;flex-wrap:wrap;gap:2px 10px;margin-bottom:6px}
+.spd-lab-row .spd-lab{min-width:0}
+.spd-lab-r{display:inline-flex;align-items:center;gap:2px;margin-left:auto}
+.spd-swrow{display:flex;align-items:flex-start;gap:4px}
+.spd-swrow>.spd-sw{flex:0 1 auto;min-width:0}
+.spd-sw{display:flex;align-items:flex-start;gap:10px;cursor:pointer}
+.spd-sw .sw{margin-top:1px}
+.spd-sw-t{display:flex;flex-direction:column;gap:1px;min-width:0}
+.spd-block{min-width:0}
+.spd-chips{display:flex;flex-wrap:wrap;gap:6px;max-height:210px;overflow:auto;padding:2px}
+/* 节点 / 目标 都是「圆角胶囊 + 勾选圈」的开关按钮 */
+.spd-node,.spd-tc{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-height:34px;padding:4px 11px 4px 8px;border:1px solid var(--line2);border-radius:99px;background:var(--surface);color:var(--text);font:inherit;font-size:var(--fs-13);line-height:1.3;text-align:left;cursor:pointer}
+.spd-node:hover,.spd-tc:hover{border-color:var(--muted)}
+.spd-node[aria-pressed=true],.spd-tc[aria-pressed=true]{border-color:var(--pri);background:var(--pri-bg)}
+.spd-node:focus-visible,.spd-tc:focus-visible{outline:2px solid var(--pri);outline-offset:2px}
+.spd-ck{flex:none;display:grid;place-items:center;width:16px;height:16px;border-radius:50%;border:1.5px solid var(--line2);color:transparent}
+.spd-node[aria-pressed=true] .spd-ck,.spd-tc[aria-pressed=true] .spd-ck{background:var(--pri);border-color:var(--pri);color:var(--pri-fg)}
+.spd-ck .spd-ci{vertical-align:0}
+.spd-nn{min-width:0;overflow-wrap:anywhere;font-weight:600}
+.spd-nd{flex:none;font-size:var(--fs-12);font-variant-numeric:tabular-nums;white-space:nowrap}
+.spd-role{display:inline-block;flex:none;padding:0 7px;border:1px solid var(--line);border-radius:6px;font-size:var(--fs-11-5);line-height:19px;color:var(--muted);white-space:nowrap}
+.spd-role.pin{color:var(--pin);border-color:var(--pin)}
+.spd-role.auto{color:var(--auto);border-color:var(--auto)}
+.spd-note{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;margin:0;padding:8px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface2);font-size:var(--fs-13)}
+
+/* 测速目标选择器: 分组可折叠, 每组一行 (名称 + 已选 N / 共 M + 全选 / 清除 / 默认), 展开后是目标胶囊 */
+.spd-tgbar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.spd-groups{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.spd-tg{min-width:0}
+.spd-tg+.spd-tg{border-top:1px solid var(--line)}
+.spd-tg-h{display:flex;align-items:center;flex-wrap:wrap;gap:2px 8px;padding:3px 8px 3px 4px;background:var(--surface2)}
+.spd-tg.is-open>.spd-tg-h{border-bottom:1px solid var(--line)}
+.spd-tg-t{flex:1 1 200px;min-width:0;display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px 8px;min-height:36px;padding:3px 8px;border:0;border-radius:8px;background:none;color:var(--text);font:inherit;font-size:var(--fs-13-5);text-align:left;cursor:pointer}
+.spd-tg-t:hover{background:var(--surface)}
+.spd-tg-t:focus-visible{outline:2px solid var(--pri);outline-offset:-2px}
+.spd-tg-chev{flex:none;color:var(--muted);transition:transform .15s}
+.spd-tg-t[aria-expanded=true] .spd-tg-chev{transform:rotate(90deg)}
+.spd-tg-ic,.spd-tc-ic{flex:none;display:inline-grid;place-items:center;color:var(--muted)}
+.spd-tc[aria-pressed=true] .spd-tc-ic{color:var(--pri)}
+.spd-tg-n{min-width:0;overflow-wrap:anywhere}
+.spd-tg-a{display:inline-flex;flex-wrap:wrap;gap:2px;margin-left:auto}
+.spd-tg-b{display:flex;flex-wrap:wrap;gap:6px;padding:10px;background:var(--surface)}
+
+.spd-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;padding-top:12px;border-top:1px solid var(--line)}
+.spd-actions .btn{padding:8px 16px}
+.spd-est{flex:1 1 220px;min-width:0;margin:0}
+.spd-run{display:flex;flex-direction:column;gap:2px}
+.spd-run-h{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 12px}
+.spd-run-h b{font-size:15px}
+.spd-run-p{font-weight:600}
+.spd-run-m{min-height:1.3em;overflow-wrap:anywhere}
+
+/* ===== C) 结果 ===== */
+.spd-strip-in{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px}
+.spd-strip-t{font-size:var(--fs-13);color:var(--muted)}
+.spd-strip-m{flex-basis:100%;font-size:var(--fs-13);overflow-wrap:anywhere}
+.spd-scroll{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;border:1px solid var(--line);border-radius:10px}
+.spd-mx{width:100%;border-collapse:separate;border-spacing:0;font-size:var(--fs-13);font-variant-numeric:tabular-nums}
+.spd-mx th,.spd-mx td{padding:7px 10px;border-bottom:1px solid var(--line);background:var(--surface);text-align:left;vertical-align:middle}
+.spd-mx thead th{background:var(--surface2);font-weight:500;vertical-align:top}
+.spd-mx tbody:last-child tr:last-child>*{border-bottom:0}
+.spd-mx td{white-space:nowrap}
+/* 第一列固定在左边, 横向滚动时目标名始终可见 */
+.spd-c1{position:sticky;left:0;z-index:1;min-width:112px;max-width:160px;white-space:normal;overflow-wrap:anywhere;font-weight:500;box-shadow:1px 0 0 var(--line)}
+.spd-mx thead .spd-c1{z-index:2}
+.spd-mx tr.spd-grp>*{padding-top:5px;padding-bottom:5px;background:var(--surface2);font-size:var(--fs-12);font-weight:600;color:var(--muted)}
+.spd-mx tbody tr:not(.spd-grp):hover>*{background:var(--surface2)}
+.spd-mx .is-best{background:var(--pri-bg)}
+.spd-mx tbody tr:not(.spd-grp):hover>.is-best{background:var(--pri-bg)}
+.spd-rh{min-width:112px}
+.spd-rt{display:flex;align-items:center;flex-wrap:wrap;gap:4px 6px;color:var(--text);font-weight:600}
+.spd-rn{max-width:130px;white-space:normal;overflow-wrap:anywhere}
+.spd-rs{display:flex;flex-wrap:wrap;gap:0 8px;margin-top:2px;font-size:var(--fs-12);font-weight:400}
+.btn.spd-rmore{margin:4px 0 0 -6px;padding-left:8px;padding-right:8px}
+.spd-best{display:inline-flex;align-items:center;gap:3px;padding:0 7px;border-radius:99px;background:var(--pri);color:var(--pri-fg);font-size:var(--fs-11);font-weight:600;line-height:18px}
+.spd-cell{position:relative}
+.spd-cell.has-b{padding:0}
+/* 有结果的格子是一个按钮: 点开 (回车) 看连接 / 首字节 / HTTP / 错误 */
+.spd-cb{display:flex;align-items:center;width:100%;min-height:36px;padding:7px 10px;border:0;background:none;color:inherit;font:inherit;font-variant-numeric:tabular-nums;text-align:left;cursor:pointer}
+.spd-cb:hover .spd-cv{text-decoration:underline;text-underline-offset:3px}
+.spd-cb:focus-visible{outline:2px solid var(--pri);outline-offset:-2px}
+.spd-cv{display:inline-flex;align-items:center;gap:6px}
+.spd-dot{display:inline-block;flex:none;width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.spd-dot.ok{background:var(--ok-s)} .spd-dot.slow{background:var(--warn-s)}
+.s-slow .spd-cv,.s-limited .spd-cv{color:var(--warn)}
+.s-fail .spd-cv{color:var(--err)}
+.s-pending .spd-cv,.s-skip .spd-cv{color:var(--muted)}
+.spd-legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:var(--fs-12);color:var(--muted)}
+.spd-lg{display:inline-flex;align-items:center;gap:6px}
+.spd-dl{display:flex;flex-direction:column;gap:12px}
+.spd-dl-t{margin:0;font-size:14px}
+.spd-dl-body{display:flex;flex-direction:column;gap:12px}
+.spd-dl-k{display:flex;flex-direction:column;gap:6px}
+.spd-dl-kt{font-size:var(--fs-12-5);color:var(--muted)}
+.spd-sp{display:grid;grid-template-columns:minmax(72px,150px) minmax(0,1fr) auto;align-items:center;gap:8px 10px}
+.spd-sp-n{display:flex;align-items:center;flex-wrap:wrap;gap:2px 6px;min-width:0;font-size:var(--fs-13);overflow-wrap:anywhere}
+.spd-sp-b{display:block;height:10px;border-radius:99px;background:var(--line);overflow:hidden}
+.spd-sp-b>i{display:block;height:100%;border-radius:99px;background:var(--c,var(--pri));transition:width .25s ease}
+.spd-sp-v{min-width:76px;font-size:var(--fs-13);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.spd-sp.is-direct{--c:var(--direct)} .spd-sp.is-pin{--c:var(--pin)} .spd-sp.is-auto{--c:var(--auto)}
+
+/* ===== 详情弹窗 (单元格 / 线路) ===== */
+.spd-dt{display:flex;flex-direction:column;gap:12px;min-width:0}
+.spd-dt-top{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px}
+.spd-dt-big{font-size:22px;font-weight:650;font-variant-numeric:tabular-nums}
+.spd-dt-say,.spd-dt-n{margin:0}
+.spd-dt-dl{display:flex;flex-wrap:wrap;gap:2px 16px}
+.spd-kv2{margin:0;min-width:0}
+.spd-kv2-r{display:flex;align-items:baseline;gap:4px 14px;padding:8px 0;border-top:1px solid var(--line)}
+.spd-kv2 dt{flex:0 0 112px;margin:0;font-size:var(--fs-12-5);color:var(--muted)}
+.spd-kv2 dd{flex:1;min-width:0;margin:0;overflow-wrap:anywhere}
+.spd-kv2 .spd-role{margin-left:6px}
+.spd-rtbl td{vertical-align:top}
+.spd-rtbl .c-name{min-width:140px}
+
+/* ===== D) 管理测速目标 (弹窗) ===== */
+.spd-mg{display:flex;flex-direction:column;gap:10px;min-width:0}
+.spd-mg .hint{margin:0}
+.spd-mg-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px}
+.spd-mg-bar .inp{flex:1 1 220px;min-width:0}
+.spd-mg-chips{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+.spd-mg-list{display:flex;flex-direction:column;min-width:0}
+.spd-mg-gh{display:flex;align-items:center;gap:8px;margin:14px 0 2px;padding:0 2px;font-size:var(--fs-12-5);font-weight:650;color:var(--muted);letter-spacing:.2px}
+.spd-mg-list>.spd-mg-gh:first-child{margin-top:2px}
+.spd-mg-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:4px 12px;padding:10px 2px;border-top:1px solid var(--line)}
+.spd-mg-gh+.spd-mg-row{border-top:0}
+.spd-mg-ic{display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:var(--surface2);color:var(--muted)}
+.spd-mg-main{min-width:0}
+.spd-mg-t{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px}
+.spd-mg-name{min-width:0;overflow-wrap:anywhere}
+.spd-mg-url{margin-top:2px;font-size:var(--fs-12-5);color:var(--muted);overflow-wrap:anywhere;word-break:break-all}
+.spd-mg-meta{margin-top:2px;overflow-wrap:anywhere}
+.spd-mg-acts{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:2px 4px}
+.spd-mg-row.is-hidden .spd-mg-name{color:var(--muted)}
+/* 恢复 / 还原 = 绿色链接样式; 删除 = 红色 */
+.btn.spd-link-ok{border-color:transparent;background:transparent;color:var(--ok);text-decoration:underline;text-underline-offset:3px}
+.btn.spd-link-ok:hover{border-color:transparent;background:var(--ok-bg);color:var(--ok)}
+.spd-mg-acts .btn.danger-t:hover{border-color:transparent;background:var(--err-bg);color:var(--err)}
+.spd-tg-rhelp{margin-right:auto}                                              /* 「全部还原」+「!」靠左, 「关闭」靠右 */
+
+/* 添加 / 编辑表单 */
+.spd-tf{display:flex;flex-direction:column;gap:12px}
+.spd-tf .hint{margin:0}
+.spd-tf .fld-h.bad-t{color:var(--err)}                                          /* 出错的字段说明: 红色 (style.css 里 .fld-h 的灰色会盖过通用的 .bad-t) */
+.spd-tf .inp[aria-invalid=true]{border-color:var(--err)}
+.spd-fl{display:flex;align-items:center}
+.spd-fl label{cursor:pointer}
+.spd-icons{display:grid;grid-template-columns:repeat(auto-fill,minmax(52px,1fr));gap:6px}
+.spd-ico{position:relative;display:block;cursor:pointer}
+.spd-ico input[type=radio]{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
+.spd-ico>span{display:grid;place-items:center;min-height:40px;padding:0 6px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);color:var(--muted);font-size:var(--fs-12)}
+.spd-ico:hover>span{border-color:var(--muted);color:var(--text)}
+.spd-ico input[type=radio]:checked+span{border-color:var(--pri);background:var(--pri-bg);color:var(--pri);font-weight:600}
+.spd-ico input[type=radio]:focus-visible+span{outline:2px solid var(--pri);outline-offset:2px}
+
+/* ===== 手机宽度 ===== */
+@media (max-width:640px){
+  .spd-mg-row{grid-template-columns:auto minmax(0,1fr)}
+  .spd-mg-acts{grid-column:1/-1;justify-content:flex-start}
+}
+@media (max-width:520px){
+  .spd-k{width:62px}
+  .spd-row .spd-lab{flex-basis:100%}
+  .spd-stat-time{margin-left:0}
+  .spd-actions .btn{flex:1 1 100%}
+  .spd-sp{grid-template-columns:minmax(64px,110px) minmax(0,1fr) auto}
+  .spd-sp-v{min-width:68px}
+  .spd-kv2 dt{flex-basis:96px}
+  .spd-tg:not(.is-open) .spd-tg-a{display:none}                                   /* 手机上折叠的分组只留一行 (名称 + 已选 N / 共 M); 展开后才出现 全选 / 清除 / 默认 */
+  .spd-tg-a{flex:1 1 100%;justify-content:flex-end}
+}
+@media (prefers-reduced-motion:reduce){
+  .spd-sp-b>i{transition:none}
+  .spd-tg-chev{transition:none}
+}
+
+/* 触屏: 节点 / 目标 / 分组标题 / 单元格 / 图标选项 >= 44px */
+@media (pointer:coarse){
+  .spd-node,.spd-tc,.spd-tg-t,.spd-cb{min-height:44px} .spd-ico>span{min-height:44px}
+  .spd-tf label.fld-l,.spd-fl label{padding:11px 0;margin:-11px 0}                  /* 表单标签: 点击区域 >= 44px (版面间距不变), 点标签会聚焦对应的输入框 */
+}

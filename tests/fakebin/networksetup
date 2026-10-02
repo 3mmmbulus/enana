@@ -1,0 +1,9 @@
+#!/bin/bash
+echo "networksetup $*" >> "$FAKE_STATE/calls.log"
+case $1 in
+  -listallnetworkservices) echo "An asterisk (*) denotes that a network service is disabled."; echo "Wi-Fi"; echo "Ethernet" ;;
+  -get*) if [ -f "$FAKE_STATE/sysproxy-on" ]; then echo "Enabled: Yes"; echo "Server: 127.0.0.1"; echo "Port: ${FAKE_PORT:-17890}"; else echo "Enabled: No"; echo "Server: "; echo "Port: 0"; fi ;;
+  -setwebproxy|-setsecurewebproxy|-setsocksfirewallproxy) touch "$FAKE_STATE/sysproxy-on" ;;
+  -set*state) rm -f "$FAKE_STATE/sysproxy-on" ;;
+esac
+exit 0

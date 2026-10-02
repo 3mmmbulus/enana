@@ -1,0 +1,110 @@
+#!/bin/bash
+# enana 一键安装 / 升级 (macOS)  ·  One-line installer / upgrader for macOS
+#
+#   安装 (在任意终端执行):   curl -fsSL https://install.enana.cc | bash
+#   升级:                    enana self-update        (或再执行一遍上面的命令)
+#   选项 (curl … | bash -s -- <选项>):
+#       --yes        不询问, 直接安装          --upgrade   升级模式 (沿用现有设置, 不弹菜单)
+#       --lang zh|en 指定界面语言              --force     已是最新版本时也重新安装
+#
+# 它会: 查询最新的 enana 版本 → 下载安装包 → 校验 SHA-256 (清单与安装包来自不同线路时要求一致) → 运行安装器。
+# 安装的是「最新版本」; 终端只安装环境, 其余设置都在安装完成后打开的仪表盘里完成。
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
+set -eu
+
+INSTALL_BASE=${ENANA_INSTALL_BASE:-https://install.enana.cc}
+GH_REPO=${ENANA_GH_REPO:-3mmmbulus/enana}
+GH_BASE=${ENANA_GH_BASE:-https://github.com}      # 测试时指向本机模拟的 GitHub
+HOME_DIR=${ENANA_HOME:-$HOME/.enana}
+YES=0; UPGRADE=0; FORCE=0; LANG_OPT=''
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --yes|-y) YES=1 ;;
+    --upgrade) UPGRADE=1; YES=1 ;;
+    --force) FORCE=1 ;;
+    --lang) shift; LANG_OPT=${1:-} ;;
+    --lang=*) LANG_OPT=${1#--lang=} ;;
+    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+    *) echo "unknown option: $1 (use --help)" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+# ---------- 语言 ----------
+if [ -z "$LANG_OPT" ]; then LANG_OPT=${ENANA_LANG:-}; fi
+if [ -z "$LANG_OPT" ] && [ -f "$HOME_DIR/settings.env" ]; then LANG_OPT=$(sed -n 's/^LANG_UI=//p' "$HOME_DIR/settings.env" | head -1); fi
+if [ -z "$LANG_OPT" ]; then
+  _l=$(defaults read -g AppleLanguages 2>/dev/null | awk 'NR==2 { gsub(/[ ",]/, ""); print; exit }'); [ -n "$_l" ] || _l=${LANG:-}
+  case $_l in zh*|ZH*) LANG_OPT=zh ;; *) LANG_OPT=en ;; esac
+fi
+case $LANG_OPT in zh|en) ;; *) LANG_OPT=en ;; esac
+T() { if [ "$LANG_OPT" = zh ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }   # T "中文" "English"
+
+if [ -t 1 ]; then B=$'\033[1m'; D=$'\033[2m'; G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; C=$'\033[36m'; N=$'\033[0m'; else B=; D=; G=; Y=; R=; C=; N=; fi
+step() { printf '\n%s▸ %s%s\n' "$B$C" "$(T "$1" "$2")" "$N"; }
+ok()   { printf '  %s✓%s %s\n' "$G" "$N" "$(T "$1" "$2")"; }
+info() { printf '    %s%s%s\n' "$D" "$(T "$1" "$2")" "$N"; }
+warn() { printf '  %s!%s %s\n' "$Y" "$N" "$(T "$1" "$2")"; }
+die()  { printf '\n  %s✗ %s%s\n' "$R" "$(T "$1" "$2")" "$N" >&2; [ -z "${3:-}" ] || printf '    %s\n' "$(T "$3" "$4")" >&2; exit 1; }
+progress() { [ "${ENANA_PROGRESS:-}" = 1 ] && printf '##job %s %s %s\n' "$1" "$2" "$3"; return 0; }    # 供仪表盘「更新」任务读取进度
+
+# ---------- 环境检查 ----------
+[ "$(uname -s)" = Darwin ] || die "目前只支持 macOS; Windows 请用 PowerShell 命令: irm https://install.enana.cc | iex" "enana currently supports macOS only; on Windows use the PowerShell command: irm https://install.enana.cc | iex"
+[ "$(id -u)" -ne 0 ] || die "请不要用 sudo 运行 (需要管理员权限的步骤会自己要密码)" "Do not run this with sudo (steps that need admin rights will ask for your password)"
+for c in curl tar shasum; do command -v "$c" >/dev/null 2>&1 || die "缺少命令: $c" "Missing command: $c"; done
+
+# ---------- 查询最新版本 ----------
+fetch() { curl -fsSL --connect-timeout 8 --max-time "${2:-20}" "$1" 2>/dev/null; }
+mfield() { printf '%s' "$1" | sed -n "s/.*\"$2\":\"\\([^\"]*\\)\".*/\\1/p" | head -1; }
+mnum()   { printf '%s' "$1" | sed -n "s/.*\"$2\":\\([0-9]*\\).*/\\1/p" | head -1; }
+
+step "查询最新版本" "Looking up the latest version"
+progress 0 10 "检查新版本"
+M1=$(fetch "$INSTALL_BASE/dl/manifest.json" 15 || true)
+M2=$(fetch "$GH_BASE/$GH_REPO/releases/latest/download/manifest.json" 15 || true)
+[ -n "$M1$M2" ] || die "连不上下载服务, 请检查网络后重试" "Cannot reach the download service; check your network and retry" "离线安装: 在有网络的电脑下载 $INSTALL_BASE/dl/ 里的 enana-<版本>.tar.gz, 解压后运行 bash install.sh" "Offline: download enana-<version>.tar.gz from $INSTALL_BASE/dl/ on another machine, extract it and run bash install.sh"
+MAN=${M1:-$M2}
+VER=$(mfield "$MAN" version); SHA=$(mfield "$MAN" sha256); SIZE=$(mnum "$MAN" size); URL=$(mfield "$MAN" url)
+[ -n "$VER" ] && [ ${#SHA} -eq 64 ] && [ -n "$SIZE" ] && [ -n "$URL" ] || die "版本清单格式不对, 已中止" "The version manifest is malformed; aborting"
+case $VER in *[!0-9.]*|'') die "版本号不合法: $VER" "Invalid version number: $VER" ;; esac
+if [ -n "$M1" ] && [ -n "$M2" ]; then      # 两条线路都能连上: 两份清单必须一致 (防单点被篡改)
+  [ "$(mfield "$M2" sha256)" = "$SHA" ] && [ "$(mfield "$M2" version)" = "$VER" ] || die "两条线路的版本清单不一致, 已中止 (可能被篡改)" "The manifests from the two sources disagree; aborting (possible tampering)"
+fi
+OLD=''; [ -f "$HOME_DIR/VERSION" ] && IFS= read -r OLD < "$HOME_DIR/VERSION" || true
+ok "最新版本: v$VER${OLD:+ (已安装 v$OLD)}" "Latest version: v$VER${OLD:+ (installed: v$OLD)}"
+if [ -n "$OLD" ] && [ "$OLD" = "$VER" ] && [ "$FORCE" = 0 ] && [ "$UPGRADE" = 1 ]; then ok "已经是最新版本, 无需升级" "Already up to date"; progress 3 100 "完成"; exit 0; fi
+
+# ---------- 确认 ----------
+if [ "$YES" = 0 ]; then
+  printf '\n  %s%s%s\n' "$B" "$(T "即将安装 enana v$VER 到 $HOME_DIR (只写你的用户目录; 设置系统代理时才会要管理员密码)。" "About to install enana v$VER into $HOME_DIR (user directory only; the admin password is asked only to set the system proxy).")" "$N"
+  if [ ! -r /dev/tty ]; then die "需要确认, 但当前没有可交互的终端: 请加 --yes (curl -fsSL $INSTALL_BASE | bash -s -- --yes)" "Confirmation needed but there is no interactive terminal: add --yes (curl -fsSL $INSTALL_BASE | bash -s -- --yes)"; fi
+  printf '  %s [Y/n] ' "$(T "继续安装?" "Continue?")"; read -r ans < /dev/tty || ans=n
+  case $ans in ''|y|Y|yes|YES|是) ;; *) echo; info "已取消" "Cancelled"; exit 0 ;; esac
+fi
+
+# ---------- 下载 + 校验 ----------
+step "下载并校验安装包" "Downloading and verifying the package"
+progress 1 30 "下载并校验新版本"
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/enana-get.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
+FILE=$(basename "$URL"); case $FILE in enana-*.tar.gz) ;; *) die "安装包文件名不合法" "Invalid package name" ;; esac
+got=0
+for src in "$INSTALL_BASE/dl/$FILE" "$GH_BASE/$GH_REPO/releases/download/v$VER/$FILE"; do
+  info "下载 $src" "Downloading $src"
+  curl -fL --connect-timeout 10 --max-time 600 --progress-bar -o "$TMP/pkg.tgz" "$src" || true
+  if [ -s "$TMP/pkg.tgz" ] && [ "$(wc -c < "$TMP/pkg.tgz" | tr -d ' ')" = "$SIZE" ] && [ "$(shasum -a 256 "$TMP/pkg.tgz" | cut -d' ' -f1)" = "$SHA" ]; then got=1; break; fi
+  warn "这条线路的下载不完整或校验不通过, 换下一条" "This source failed (incomplete or checksum mismatch); trying the next one"; rm -f "$TMP/pkg.tgz"
+done
+[ "$got" = 1 ] || die "安装包下载或校验失败 (已尝试所有线路)" "Package download or verification failed (all sources tried)"
+ok "SHA-256 校验通过" "SHA-256 verified"
+if tar -tzf "$TMP/pkg.tgz" 2>/dev/null | sed 's#^\./##' | grep -Eq '^/|(^|/)\.\.(/|$)'; then die "安装包里有不安全的路径, 已中止" "The package contains unsafe paths; aborting"; fi
+mkdir -p "$TMP/src"; tar -xzf "$TMP/pkg.tgz" -C "$TMP/src" || die "解压失败" "Extraction failed"
+SRC=$(find "$TMP/src" -maxdepth 2 -name install.sh -print | head -1); [ -n "$SRC" ] || die "安装包里没有 install.sh" "install.sh is missing from the package"
+SRC=$(dirname "$SRC")
+
+# ---------- 运行安装器 ----------
+step "运行安装器" "Running the installer"
+progress 2 50 "安装并重新生成配置"
+args=(--lang "$LANG_OPT"); [ "$YES" = 1 ] && args+=(--yes); [ "$UPGRADE" = 1 ] && args+=(--upgrade); [ "$FORCE" = 1 ] && args+=(--force)
+if [ "$YES" = 0 ] && [ -r /dev/tty ]; then bash "$SRC/install.sh" "${args[@]}" < /dev/tty; else bash "$SRC/install.sh" "${args[@]}" < /dev/null; fi
+progress 3 100 "完成"

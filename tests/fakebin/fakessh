@@ -1,0 +1,17 @@
+#!/bin/bash
+# 测试用的假 ssh 包装 (ENANA_SSH 指向它):
+#  - 密钥登录: 原样交给真的 ssh (连测试用的本机 sshd), 所以主机指纹固定 / 私钥 / 错误分类都是真实的;
+#  - 密码登录 (PreferredAuthentications=password…): 真正的 sshd 只有 root 才能验证密码, 这里模拟: 通过 $SSH_ASKPASS 取密码, 与 $FAKE_SSH_PW 比较,
+#    对了就在本机执行远程命令 (标准输入原样传给它), 不对就像真 ssh 一样报错退出 255。
+# 无论哪种都把收到的参数和 askpass 相关的环境记到 $FAKE_STATE/ssh.log (用来断言密码没有出现在命令行里)。
+log=${FAKE_STATE:-/tmp}/ssh.log
+{ printf 'argv:'; printf ' [%s]' "$@"; printf '\nASKPASS_REQUIRE=%s askpass=%s\n' "${SSH_ASKPASS_REQUIRE:-}" "$(basename "${SSH_ASKPASS:-}")"; } >> "$log"
+case " $* " in
+  *" PreferredAuthentications=password"*)
+    [ -n "${SSH_ASKPASS:-}" ] && [ "${SSH_ASKPASS_REQUIRE:-}" = force ] || { echo "fakessh: SSH_ASKPASS is not set up" >&2; exit 255; }
+    pw=$("$SSH_ASKPASS" "user@host's password: ")
+    [ "$pw" = "${FAKE_SSH_PW:-}" ] || { echo "user@127.0.0.1: Permission denied (publickey,password)." >&2; exit 255; }
+    cmd=''; for a in "$@"; do cmd=$a; done
+    exec bash -c "$cmd" ;;
+  *) exec /usr/bin/ssh "$@" ;;
+esac

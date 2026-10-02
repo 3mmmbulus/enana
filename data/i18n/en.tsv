@@ -1,0 +1,793 @@
+# enana 终端 / 后台提示的英文译文。格式: 中文原文<TAB>English (每行一条; # 开头为注释)。
+# · 中文原文就是 msgid, 必须与源码里的字符串一字不差 (空格、标点、\n、%s 都算); 源码里的 $变量 / $(…) 在这里写成 * (通配)。
+# · 通配符 * 匹配任意内容并按出现顺序回填到译文的 * 处, 所以译文里的 * 个数和顺序必须与原文一致; printf 格式串 (pf) 里的 %s、\n 个数也必须一致。
+# · 匹配顺序: 先精确匹配 (哈希), 再按本文件从上到下匹配通配条目 —— 更具体的通配条目要写在更宽泛的前面 (python3 tools/i18n-check.py 会提示)。
+# · 菜单选项 (lib/menu.sh) 只翻译「键:显示」里冒号后面的显示文字; 品牌名 / 命令 / 文件名保持原样。
+# · 检查: python3 tools/i18n-extract.py (列出缺译文) 与 python3 tools/i18n-check.py (校验本文件)。
+# · 最后一段 "# === DATA (cloud bundle) ===" 是 data/*.conf 里的目录文案 (网站 / 分组 / 社区规则集), 整段可以单独拆出去; 它之上的内容与它无关。
+
+# --- install.sh · banner and install menu
+\n%s  enana · 代理环境安装器%s  v%s\n	\n%s  enana · proxy environment installer%s  v%s\n
+  %s终端只安装环境; 服务器 / 订阅 / 应用 / 网站设置请在安装完成后打开的仪表盘里操作。%s\n	  %sThe terminal only installs the environment. Set up servers, subscriptions, apps and sites in the dashboard that opens when installation finishes.%s\n
+GitHub 官方包(多线路+校验)	GitHub official package (multi-route + verified)
+本地安装包	Local package
+已就绪	Ready
+界面语言 / Language	Language
+终端与仪表盘共用的界面语言 (安装后也可在仪表盘「设置」里改) / Used by the terminal and the dashboard	Used by both the terminal and the dashboard (you can also change it later under Settings in the dashboard)
+按 ←/→ 切换, Enter 确认 / Use ←/→ then Enter	Use ←/→ to change, then press Enter to confirm
+sing-box 核心 (已安装 *)	sing-box core (* installed)
+sing-box 核心 · 来源	sing-box core · source
+社区规则集 (国内直连 / 海外分流 / AI)	Community rule sets (domestic direct / overseas routing / AI)
+仪表盘 + 本地辅助服务	Dashboard + local helper service
+必装: 服务器、订阅、应用、网站的设置与监控都在仪表盘里完成	Required: servers, subscriptions, apps and sites are set up and monitored in the dashboard
+开机自启 + 崩溃自动重启	Start at login + auto-restart on crash
+每 3 天自动更新规则集 / 订阅	Auto-update rule sets / subscriptions every 3 days
+设置系统代理 (需管理员密码)	Set the system proxy (needs admin password)
+快捷命令 enana	Shortcut command (enana)
+
+# --- install.sh · migration from older installs
+已迁移 * 个 v1 自定义域名 (在仪表盘「网站」页可见)	Migrated custom domains from v1: * (shown on the dashboard’s Sites page)
+已把旧版安装 (*) 迁移到 *, 服务器与设置原样保留	Moved the old installation (*) to *; servers and settings are kept as they were
+发现旧版安装目录 *, 但 * 已存在, 没有自动迁移 (需要的话请手动复制 servers.jsonl 等文件)	Found an old installation directory *, but * already exists, so nothing was migrated automatically (copy servers.jsonl and other files by hand if you need them)
+已从 v1 迁移你的服务器配置 (无需重新输入, 在仪表盘「服务器」页可见)	Migrated your server configuration from v1 (no need to enter it again; see the dashboard’s Servers page)
+
+# --- install.sh · install steps
+检查环境	Check the environment
+macOS * 较旧: 官方 sing-box 1.14 可能无法在此运行 (Intel 会自动尝试兼容包)	macOS * is quite old: the official sing-box 1.14 may not run here (on Intel, a compatibility build is tried automatically)
+本地端口 * 已被占用	Local port * is already in use
+先退出占用它的程序 (如其它代理软件), 或换端口: PORT=7891 UI_PORT=9190 API_PORT=9191 bash install.sh	Quit the program that is using it (such as another proxy app), or pick different ports: PORT=7891 UI_PORT=9190 API_PORT=9191 bash install.sh
+本地端口 * / * / * / * 可用	Local ports * / * / * / * are available
+网络服务「*」已有其它系统代理设置, 继续会覆盖 (原设置已备份到 */proxy-backup.txt)	Network service “*” already has other system proxy settings, and continuing will overwrite them (the originals are backed up to */proxy-backup.txt)
+继续?	Continue?
+已取消	Canceled
+安装 sing-box 核心 (代理引擎)	Install the sing-box core (the proxy engine)
+已安装 sing-box *, 无需重装	sing-box * is already installed, no need to reinstall
+sing-box * 安装完成	sing-box * installed
+sing-box 已下载但无法在这台 Mac 上运行	sing-box was downloaded but can’t run on this Mac
+你的系统是 macOS * (*); 请把这行信息反馈出来, 或升级系统	Your system is macOS * (*). Please report this line, or upgrade macOS
+sing-box 下载失败 (已尝试: 直连 / 本地代理 / 备用线路 / 镜像)	Couldn’t download sing-box (tried: direct / local proxy / backup routes / mirrors)
+离线安装: 用浏览器从 https://github.com/SagerNet/sing-box/releases 下载 sing-box-<版本>-darwin-*.tar.gz 放到 ~/Downloads, 再运行 bash install.sh (自动发现), 或 SINGBOX_TGZ=/路径/文件.tar.gz bash install.sh	Offline install: download sing-box-<version>-darwin-*.tar.gz from https://github.com/SagerNet/sing-box/releases in a browser and put it in ~/Downloads, then run bash install.sh (it is picked up automatically), or SINGBOX_TGZ=/path/to/file.tar.gz bash install.sh
+下载社区规则集 (国内直连 / 海外分流 / AI)	Download the community rule sets (domestic direct / overseas routing / AI)
+规则集已就绪 (*前更新), 跳过	Rule sets are up to date (updated * ago), skipping
+规则集就绪 (* 个更新, * 个失败)	Rule sets ready (* updated, * failed)
+规则集下载失败: 国内网站暂时会走代理; 稍后运行 enana update 重试 (不影响其余功能)	Couldn’t download the rule sets: domestic sites will go through the proxy for now; run enana update later to retry (everything else still works)
+生成配置	Generate configuration
+sing-box * 偏旧, 建议 enana upgrade	sing-box * is a bit old; consider running enana upgrade
+生成的配置没有通过 sing-box 校验	The generated configuration didn’t pass sing-box validation
+* — 请把这段信息反馈出来	* — please include this message when you report the problem
+配置已生成并通过 sing-box 校验 (服务器 * 台 · 目录 * 项)	Configuration generated and validated by sing-box (servers: * · catalog entries: *)
+注册后台服务	Register the background service
+后台服务注册失败	Couldn’t register the background service
+运行 enana doctor 查看原因	Run enana doctor to see why
+服务没有启动	The service didn’t start
+日志: */sing-box.log   *	Log: */sing-box.log   *
+代理服务运行中 (127.0.0.1:*) · 开机自启	Proxy service running (127.0.0.1:*) · starts at login
+代理服务运行中 (127.0.0.1:*)*	Proxy service running (127.0.0.1:*)*
+ · 开机自启	 · starts at login
+本地辅助服务就绪 (127.0.0.1:*, 仪表盘用)	Local helper service ready (127.0.0.1:*, used by the dashboard)
+设置系统代理 (让 Claude App / 浏览器等自动走本地代理)	Set the system proxy (so apps like Claude and your browser use the local proxy automatically)
+系统代理已指向本程序, 无需密码	The system proxy already points to enana, no password needed
+需要输入 Mac 登录密码 (仅用于修改系统代理设置):	Enter your Mac login password (only used to change the system proxy settings):
+系统代理没有设置成功; 之后可运行 enana on	Couldn’t set the system proxy; you can run enana on later
+安装快捷命令	Install the shortcut command
+快捷命令已存在: *	Shortcut command already exists: *
+已安装: *  → 以后在任何终端输入 *enana* 即可打开控制台	Installed: *  → from now on, type *enana* in any terminal to open the console
+已在 * 里加入 PATH; 请重新打开终端后生效	Added to PATH in *; reopen your terminal for it to take effect
+快捷命令安装失败; 仍可用 */enana	Couldn’t install the shortcut command; you can still use */enana
+验证	Verify the installation
+代理服务运行中	Proxy service running
+代理服务没有运行	The proxy service isn’t running
+仪表盘可访问	The dashboard is reachable
+仪表盘暂时打不开 (HTTP 无响应)	The dashboard can’t be opened right now (HTTP: no response)
+仪表盘暂时打不开 (HTTP *)	The dashboard can’t be opened right now (HTTP *)
+本地辅助服务可用	The local helper service is available
+本地辅助服务没有响应 (仪表盘里的写操作会不可用): 运行 enana doctor	The local helper service isn’t responding (changes made in the dashboard won’t work): run enana doctor
+经本地代理访问网站正常 (直连路径 · HTTP *)	Reaching the web through the local proxy works (direct path · HTTP *)
+经本地代理访问网站失败, 请检查网络	Couldn’t reach the web through the local proxy; check your network
+系统代理已开启	System proxy is on
+系统代理未开启 (enana on)	System proxy is off (enana on)
+尚未添加服务器 — 当前所有流量直连; 请在仪表盘里添加	No servers added yet — all traffic goes direct for now; add one in the dashboard
+
+# --- install.sh · cmd_install
+目前只支持 macOS	Only macOS is supported for now
+Windows 请用 PowerShell 一行命令安装 (见 README); Linux 计划见 docs/ROADMAP.md	On Windows, install with the one-line PowerShell command (see the README); Linux plans are in docs/ROADMAP.md
+请不要用 sudo 运行	Please don’t run this with sudo
+直接: bash install.sh  (需要管理员权限的步骤会自己要密码)	Just run: bash install.sh  (steps that need admin rights will ask for the password themselves)
+\n  %s正在识别系统与网络…%s\n	\n  %sDetecting your system and network…%s\n
+本版本要求 sing-box *, 将升级核心	This version needs sing-box *, so the core will be upgraded
+\n%s选择要安装的内容%s (已按识别结果给出推荐; 用键盘修改):\n\n	\n%sChoose what to install%s (recommendations are based on what was detected; change them with the keyboard):\n\n
+\n%s非交互模式: 按识别结果的推荐设置安装%s\n	\n%sNon-interactive mode: installing with the recommended settings%s\n
+更新规则集	Update rule sets
+生成配置并重启服务	Generate configuration and restart the service
+已升级到 enana v*	Upgraded to enana v*
+\n%s════════════════ 环境安装完成 ════════════════%s\n	\n%s════════════════ Environment installed ════════════════%s\n
+  %s仪表盘%s   %s%s%s   (已尝试自动打开)\n	  %sDashboard%s   %s%s%s   (tried to open it automatically)\n
+  %s登录%s     仪表盘需要登录才能使用: 用 enana.cc 账号 (邮箱 + 密码) 登录; 还没有账号? 直接在登录框里点「注册」\n	  %sSign in%s     You need to sign in to use the dashboard: use your enana.cc account (email + password). No account yet? Click “Register” in the sign-in box\n
+  %s代理%s     默认是关闭的 (全部直连): 登录后在仪表盘里打开「代理」总开关才会生效; 退出账号会自动关闭代理\n	  %sProxy%s       Off by default (everything goes direct): it only takes effect after you sign in and turn on the “Proxy” master switch in the dashboard; logging out turns it off automatically\n
+  接下来在仪表盘里完成 (终端不需要再做任何事):\n	  Next, finish in the dashboard (nothing more to do in the terminal):\n
+    ① 添加固定出口服务器 (如日本)    ② 导入其它代理 / 订阅链接 (自动识别)\n	    ① Add a Fixed exit server (e.g. Japan)    ② Import other proxies / subscription links (detected automatically)\n
+    ③ 确认应用与网站的推荐设置       ④ 新装的应用会自动识别, 默认关闭\n	    ③ Review the recommended app and site settings    ④ New apps are detected automatically and start off\n
+  命令行控制台   在任何终端输入 %senana%s  (状态 · 一键重启 · 退出账号 · 卸载 …)\n\n	  Command-line console   type %senana%s in any terminal  (status · one-click restart · log out · uninstall …)\n\n
+
+# --- install.sh · status / start / stop / update / upgrade / logout / lang
+服务运行中 (sing-box *)	Service running (sing-box *)
+服务未运行 (enana start)	Service not running (enana start)
+系统代理: 已开启	System proxy: on
+系统代理: 未开启 (enana on)	System proxy: off (enana on)
+账号: 已登录 *	Account: signed in as *
+账号: 未登录 — 打开仪表盘, 用 enana.cc 账号登录 (没有账号可以直接注册)	Account: not signed in — open the dashboard and sign in with your enana.cc account (you can register there if you don’t have one)
+代理: 已开启 (按规则分流)	Proxy: on (routing by rules)
+代理: 已关闭 (全部直连) — 登录后在仪表盘里打开「代理」总开关	Proxy: off (everything goes direct) — sign in, then turn on the “Proxy” master switch in the dashboard
+有新版本 (enana self-update 更新)	A new version is available (update with enana self-update)
+服务器 * 台 · 仪表盘 *	Servers: * · dashboard: *
+已启动	Started
+启动失败: enana doctor	Couldn’t start — run enana doctor
+正在重启服务…	Restarting the service…
+已重启	Restarted
+重启服务	Restart service
+没有在 15 秒内启动: 运行 enana doctor	Didn’t start within 15 seconds — run enana doctor
+还没有登录: 请先打开仪表盘 (*) 用 enana.cc 账号登录, 再开启代理	You’re not signed in yet: open the dashboard (*), sign in with your enana.cc account, then turn the proxy on
+系统代理没有关闭成功 (需要管理员密码), 服务未停止以免断网; 请重试 enana off	Couldn’t turn off the system proxy (it needs your admin password). The service was left running so you don’t lose your connection; try enana off again
+已关闭系统代理并停止服务	System proxy turned off and service stopped
+(暂无日志)	(no logs yet)
+更新规则集…	Updating rule sets…
+规则集下载失败, 保留旧版本	Couldn’t download the rule sets; keeping the old version
+刷新订阅…	Refreshing subscriptions…
+已更新	Updated
+应用配置失败: enana doctor	Couldn’t apply the configuration — run enana doctor
+当前 sing-box *; 查询最新版本…	Current sing-box: *; checking for the latest version…
+找不到升级脚本	Couldn’t find the upgrade script
+重新运行安装命令: curl -fsSL https://enana.cc/get.sh | bash	Run the install command again: curl -fsSL https://enana.cc/get.sh | bash
+已经是最新版本 (v*)	Already on the latest version (v*)
+当前没有登录, 也没有本机登录缓存	You’re not signed in, and there’s no sign-in cache on this computer
+退出账号后: 代理会被关闭 (全部直连), 所有已打开的仪表盘需要重新登录, 本机保存的离线登录缓存也会清除。	After logging out: the proxy is turned off (everything goes direct), every open dashboard has to sign in again, and the offline sign-in cache stored on this computer is cleared.
+之后在仪表盘里用 enana.cc 账号 (可以换另一个账号, 也可以直接注册) 登录, 再手动开启代理。	Afterwards, sign in to the dashboard with an enana.cc account (a different one, or register a new one), then turn the proxy on again by hand.
+确认退出账号?	Log out?
+不支持的语言: *	Unsupported language: *
+可选: *	Available: *
+界面语言已设为 * (终端与仪表盘)	Language set to * (terminal and dashboard)
+
+# --- install.sh · doctor
+== 环境 ==	== Environment ==
+enana * · macOS * * · bash * · 安装目录 * · 语言 *	enana * · macOS * * · bash * · install dir * · language *
+核心: * 无法运行	Core: * can’t run
+核心: * *	Core: * *
+== 服务 ==	== Service ==
+未加载	Not loaded
+辅助服务: 已加载	Helper service: loaded
+辅助服务: 未加载	Helper service: not loaded
+每日维护: 已加载	Daily maintenance: loaded
+每日维护: 未加载	Daily maintenance: not loaded
+端口 *: 监听中	Port *: listening
+端口 *: 未监听	Port *: not listening
+== 账号 ==	== Account ==
+已登录 *	Signed in as *
+未登录	Not signed in
+有 (*)	yes (*)
+离线登录缓存: 有 (*) · 代理总开关: 开启	Offline sign-in cache: yes (*) · proxy master switch: on
+离线登录缓存: 有 (*) · 代理总开关: 关闭	Offline sign-in cache: yes (*) · proxy master switch: off
+离线登录缓存: 无 · 代理总开关: 开启	Offline sign-in cache: none · proxy master switch: on
+离线登录缓存: 无 · 代理总开关: 关闭	Offline sign-in cache: none · proxy master switch: off
+离线登录缓存: * · 代理总开关: *	Offline sign-in cache: * · proxy master switch: *
+账号服务: * → HTTP *	Account service: * → HTTP *
+== 配置 ==	== Configuration ==
+(配置校验结束)	(end of configuration check)
+服务器 * 台, 订阅 * 个, 应用覆盖 * 个	Servers: *, subscriptions: *, app overrides: *
+规则集缺失: *	Missing rule sets: *
+== 更新 ==	== Updates ==
+== 系统代理 ==	== System proxy ==
+== 网络 ==	== Network ==
+GitHub *ms · jsDelivr *ms · Google *ms · 百度 *ms → *	GitHub *ms · jsDelivr *ms · Google *ms · Baidu *ms → *
++系统时间: %F %T %Z	+System time: %F %T %Z
+系统时间: *	System time: *
+== 日志最后 20 行 ==	== Last 20 log lines ==
+(无日志)	(no logs)
+
+# --- install.sh · uninstall / help / apply
+没有找到安装目录 (*)	Couldn’t find the installation directory (*)
+确认卸载? 将关闭系统代理、停止服务、删除快捷命令	Uninstall? This turns off the system proxy, stops the service and removes the shortcut command
+确认卸载? 将关闭系统代理、停止服务、删除快捷命令 (保留 * 里的数据)	Uninstall? This turns off the system proxy, stops the service and removes the shortcut command (the data in * is kept)
+确认卸载? 将关闭系统代理、停止服务、删除快捷命令, 并删除 * (含你的服务器 / 订阅配置)	Uninstall? This turns off the system proxy, stops the service and removes the shortcut command, and deletes * (including your server and subscription settings)
+ (数据保留在 *)	 (data kept in *)
+已卸载 (数据保留在 *)	Uninstalled (data kept in *)
+已卸载*	Uninstalled*
+enana * — 代理环境控制台 (服务器/订阅/应用/网站请在仪表盘里设置: *)	enana * — proxy environment console (set up servers / subscriptions / apps / sites in the dashboard: *)
+  enana                打开控制台 (状态 · 一键重启 · 暂停 · 更新 · 日志 · 诊断 · 退出账号 · 卸载)	  enana                Open the console (status · one-click restart · pause · update · logs · diagnostics · log out · uninstall)
+  enana status         查看运行状态	  enana status         Show the running status
+  enana restart        重启代理服务	  enana restart        Restart the proxy service
+  enana on | off       开启 / 关闭 (系统代理 + 服务)	  enana on | off       Turn on / off (system proxy + service)
+  enana start | stop   仅启动 / 停止服务 (stop 同时会关闭系统代理, 避免断网)	  enana start | stop   Start / stop the service only (stop also turns off the system proxy, so you stay online)
+  enana update         更新规则集 + 订阅 (--quiet 只刷新到期的订阅)	  enana update         Update rule sets + subscriptions (--quiet only refreshes subscriptions that are due)
+  enana self-update    更新 enana 本体 (先询问确认; --yes 跳过)	  enana self-update    Update enana itself (asks first; --yes skips the question)
+  enana upgrade [版本]  升级 sing-box 核心 (先校验现有配置, 不通过自动回退)	  enana upgrade [ver]  Upgrade the sing-box core (validates your configuration first; rolls back on failure)
+  enana logout         退出账号: 关闭代理, 清除本机登录信息 (之后要重新登录才能再开启代理)	  enana logout         Log out: turns off the proxy and clears this computer’s sign-in (sign in again to turn the proxy back on)
+  enana lang [zh|en]   切换界面语言 (终端与仪表盘)	  enana lang [zh|en]   Switch the interface language (terminal and dashboard)
+  enana doctor         诊断信息 (不含密码, 反馈问题时贴出来)	  enana doctor         Diagnostics (no passwords included; paste it when you report a problem)
+  enana logs [行数]     查看日志	  enana logs [lines]   Show the log
+  enana open           打开仪表盘	  enana open           Open the dashboard
+  enana env            打印终端代理变量 (命令行工具不读系统代理): eval "$(enana env)"	  enana env            Print the terminal proxy variables (command-line tools don’t read the system proxy): eval "$(enana env)"
+  enana uninstall      卸载 (--keep-data 保留数据目录)	  enana uninstall      Uninstall (--keep-data keeps the data directory)
+选项: --yes 全部采用推荐值 · --force 强制重装环境 · --quiet 静默 · --lang zh|en 指定语言	Options: --yes accept all recommended settings · --force force a reinstall · --quiet quiet mode · --lang zh|en set the language
+配置已应用	Configuration applied
+配置无效	Invalid configuration
+
+# --- lib/menu.sh · install menu hints
+推荐	recommended
+(必装/已就绪)	(required / ready)
+↑↓ 移动 · 空格/←→ 切换 · r 恢复推荐 · Enter 开始安装 · q 退出	↑↓ move · space/←→ change · r reset to recommended · Enter start installing · q quit
+
+# --- lib/detect.sh · what was detected + install recommendations
+\n%s识别结果%s\n	\n%sDetection results%s\n
+  系统      macOS %s · %s · %s\n	  System          macOS %s · %s · %s\n
+  管理员    %s\n	  Admin           %s\n
+是	Yes
+否 (无法设置系统代理)	No (can’t set the system proxy)
+百度 ✓*ms	Baidu ✓*ms
+百度 ✗	Baidu ✗
+  网络      %s\n	  Network         %s\n
+  判断      中国大陆网络: 下载环境将自动尝试 直连 → 镜像/备用线路; 规则集用 jsDelivr 镜像\n	  Assessment      Mainland China network: downloads will try direct first, then mirrors / backup routes; rule sets use the jsDelivr mirror\n
+  判断      可直连国际网络\n	  Assessment      International sites are reachable directly\n
+  判断      网络几乎不通: 请先检查网络; 也可离线安装 (见提示)\n	  Assessment      The network is almost unreachable: check your connection first, or install offline (see the hint)\n
+  Homebrew  已安装 (%s)\n	  Homebrew        installed (%s)\n
+  应用      已识别 %s 个已安装应用 (推荐设置在仪表盘「应用」页给出; 新装应用默认关闭)\n	  Apps            Installed apps detected: %s (recommended settings are on the dashboard’s Apps page; new apps start off)\n
+  已有环境  sing-box %s%s%s\n	  Existing setup  sing-box %s%s%s\n
+ · 服务运行中	 · service running
+ · 系统代理已设置	 · system proxy set
+  已有环境  检测到 v1 安装, 将原地升级 (服务器自动迁移)\n	  Existing setup  Found a v1 installation; it will be upgraded in place (servers are migrated automatically)\n
+  已有环境  无 (全新安装)\n	  Existing setup  none (fresh install)\n
+  %s注意%s      检测到其它代理软件: %s — 建议先退出它们, 否则会互相冲突\n	  %sNote%s            Other proxy software detected: %s — quit it first, or the two will conflict\n
+GitHub 官方发布包 + SHA-256 校验; 失败自动换线路	Official GitHub release + SHA-256 verification; switches routes automatically on failure
+GitHub 不通, 检测到 Homebrew → 推荐用 Homebrew	GitHub isn’t reachable and Homebrew was detected → Homebrew is recommended
+GitHub 不通: 将依次尝试镜像; 也可手动下载安装包 (SINGBOX_TGZ=…)	GitHub isn’t reachable: mirrors will be tried in turn; you can also download the package by hand (SINGBOX_TGZ=…)
+已安装 sing-box *, 无需重装 (enana upgrade 可升级)	sing-box * is already installed, no need to reinstall (enana upgrade can upgrade it)
+国内直连 / 海外分流 / AI 规则 (SagerNet 社区规则集, 约 1 MB)	Rules for domestic direct / overseas routing / AI (SagerNet community rule sets, about 1 MB)
+规则集已就绪, 将检查更新	Rule sets are ready; they will be checked for updates
+登录后自动启动, 崩溃自动重启	Starts automatically at login and restarts if it crashes
+每 3 天更新规则集 / 订阅 (后台静默, 失败不影响使用)	Updates rule sets / subscriptions every 3 days (quietly in the background; a failure doesn’t affect use)
+让 Claude App / 浏览器等自动走本地代理 (需要管理员密码)	Makes apps like Claude and your browser use the local proxy automatically (needs your admin password)
+当前账户不是管理员, 无法设置系统代理 (之后可用管理员账户运行 enana on)	This account isn’t an administrator, so the system proxy can’t be set (run enana on from an admin account later)
+系统代理已指向本程序, 无需重设	The system proxy already points to enana, no need to set it again
+之后在任何终端输入 enana 即可打开控制台	Afterwards, type enana in any terminal to open the console
+快捷命令已存在	The shortcut command already exists
+
+# --- lib/console.sh · command-line console
+%s enana 代理控制台%s   v%s%s\n	%s enana proxy console%s   v%s%s\n
+有新版本	New version
+已运行	up
+  服务      %s 运行中   sing-box %s%s\n	  Service       %s running   sing-box %s%s\n
+  服务      %s 未运行   (按 2 启动)\n	  Service       %s not running   (press 2 to start)\n
+  系统代理  %s 已开启   127.0.0.1:%s\n	  System proxy  %s on   127.0.0.1:%s\n
+  系统代理  %s 未开启   (按 s 开启)\n	  System proxy  %s off   (press s to turn on)\n
+  代理      %s已关闭%s — 全部直连 (登录后按 3 或在仪表盘里打开总开关)\n	  Proxy         %soff%s — everything goes direct (sign in, then press 3 or use the dashboard switch)\n
+  代理      已开启 (规则分流)\n	  Proxy         on (routing by rules)\n
+  固定出口  %s  %s\n	  Fixed exit    %s  %s\n
+  自动线路  %s  %s\n	  Auto route    %s  %s\n
+  账号      已登录 %s\n	  Account       signed in as %s\n
+  账号      未登录 (打开仪表盘, 用 enana.cc 账号登录或注册)\n	  Account       not signed in (sign in or register with an enana.cc account in the dashboard)\n
+  仪表盘    %s%s%s\n	  Dashboard     %s%s%s\n
+\n  %s提示%s 还没有添加服务器 → 按 1 打开仪表盘, 在「服务器」页添加\n	\n  %sTip%s No servers added yet → press 1 to open the dashboard and add one on the Servers page\n
+\n  %s提示%s 发现 %s 个新应用 (默认关闭) → 按 1 到仪表盘「应用」页处理\n	\n  %sTip%s New apps found: %s (off by default) → press 1 and review them on the dashboard’s Apps page\n
+  [1] 打开仪表盘     [2] 重启服务        [3] %s\n	  [1] Open dashboard   [2] Restart service   [3] %s\n
+开启代理	Turn proxy on
+关闭代理(全部直连)	Turn proxy off (all direct)
+  [4] 更新规则/订阅  [5] 查看日志        [6] 诊断\n	  [4] Update rules/subscriptions   [5] View logs   [6] Diagnose\n
+  [7] 退出账号 (关闭代理并清除登录)   [8] 更新 enana   [9] 卸载\n	  [7] Log out (turns the proxy off and clears your sign-in)   [8] Update enana   [9] Uninstall\n
+  [s] %s   [l] 语言 / Language   [r] 刷新   [q] 退出\n	  [s] %s   [l] Language   [r] Refresh   [q] Quit\n
+关闭系统代理	Turn system proxy off
+开启系统代理	Turn system proxy on
+  命令行: %senana%s status | restart | on | off | update | self-update | logout | lang | doctor | logs | uninstall | help\n	  Command line: %senana%s status | restart | on | off | update | self-update | logout | lang | doctor | logs | uninstall | help\n
+无响应	no response
+请选择	Choose
+按任意键返回…	Press any key to go back…
+还没有登录: 请先打开仪表盘用 enana.cc 账号登录, 再开启代理	You’re not signed in yet: open the dashboard, sign in with your enana.cc account, then turn the proxy on
+
+# --- lib/api.sh · request errors and sign-in
+拒绝访问	Access denied
+缺少 X-Enana 请求头	The X-Enana request header is missing
+请求内容过大	The request is too large
+需要登录	Sign-in required
+尝试次数过多, 请 * 秒后再试	Too many attempts — please wait * s and try again
+账号或密码错误	Wrong account or password
+这个邮箱已经注册过了, 请直接登录	That email is already registered — sign in instead
+密码至少 8 位	The password needs at least 8 characters
+连不上 enana.cc, 暂时无法完成 (这个账号没有可用的离线登录缓存)。请检查网络后重试	Can’t reach enana.cc, so this can’t be completed right now (this account has no usable offline sign-in cache). Check your network and try again
+系统繁忙, 请重试	The system is busy — please try again
+邮箱或密码格式不正确	The email or password format isn’t valid
+登录	Sign in
+登录失败	Sign-in failed
+注册账号	Register account
+退出账号	Log out
+同步令牌	Sync token
+参数无效	Invalid parameter
+代理服务没有运行, 启动也失败了 (运行 enana doctor 查看原因)	The proxy service isn’t running and couldn’t be started (run enana doctor to see why)
+关闭代理	Turn proxy off
+密码在 enana.cc 管理: 请到网站的账号页修改	Passwords are managed on enana.cc — change yours on the website’s account page
+
+# --- lib/api.sh · devices, proxy mode, statistics (lib/session.sh too)
+这个账号在当前平台上已有 * 台设备在线, 请先下线其中一台	This account already has * devices signed in on this platform. Sign one of them out first
+设备编号无效	Invalid device ID
+代理模式无效	Invalid proxy mode
+切换代理模式	Change proxy mode
+连不上云端, 暂时无法读取设备列表	Can’t reach enana.cc, so the device list can’t be loaded right now
+下线失败: 连不上云端, 或这台设备已不在线 / 不能下线自己	Couldn’t sign that device out: enana.cc can’t be reached, the device is no longer signed in, or it’s this device itself
+下线设备	Sign out device
+统计范围无效	Invalid statistics range
+已被退出登录	Logged out automatically
+
+# --- lib/api.sh · apps, sites, servers, subscriptions
+状态无效	Invalid state
+名称格式不正确	The name format isn’t valid
+修改应用/网站策略	Change app/site policy
+订阅名称不合法	The subscription name isn’t valid
+没有收到服务器数据	No server data was received
+没有可导入的服务器	There are no servers to import
+找不到这台服务器	Couldn’t find that server
+角色无效	Invalid role
+证书名称不合法	The certificate name isn’t valid
+证书内容为空或过大	The certificate is empty or too large
+不是有效的 PEM 证书	Not a valid PEM certificate
+没有订阅链接	No subscription link was provided
+订阅链接不合法 (只支持公网 http/https)	The subscription link isn’t valid (only public http/https links are supported)
+订阅下载失败 (已尝试直连与已配置的备用线路)	Couldn’t download the subscription (tried direct and the configured backup routes)
+订阅链接不合法	The subscription link isn’t valid
+保存订阅	Save subscription
+采用推荐设置	Adopt recommended settings
+新应用	New apps
+缺少应用名	The app name is missing
+接口不存在	That endpoint doesn’t exist
+
+# --- lib/api.sh · settings, logs, rules, DNS, update, speed test
+不支持的语言	Unsupported language
+保留天数必须是 1–365 的整数	Log retention must be a whole number of days from 1 to 365
+修改设置	Change settings
+日志保留 * 天	Log retention: * days
+没有要修改的设置	There are no settings to change
+日志类型无效	Invalid log type
+日期格式不正确	The date format isn’t valid
+清除日志	Clear logs
+* (早于 *)	* (before *)
+找不到这个规则集	Couldn’t find that rule set
+必选规则集不能停用	Required rule sets can’t be disabled
+名称只能用字母/数字/._- (最多 30 位)	Names can only use letters, digits and . _ - (30 characters at most)
+链接不合法 (只支持公网 http/https)	The link isn’t valid (only public http/https links are supported)
+策略无效	Invalid policy
+没有要修改的 DNS 设置	There are no DNS settings to change
+DNS 设置无效	Invalid DNS settings
+域名格式不正确	The domain name format isn’t valid
+没有解析到结果 (域名不存在, 或 DNS 服务器无响应)	No result came back (the domain doesn’t exist, or the DNS server didn’t respond)
+已经是最新版本	Already on the latest version
+目标无效	Invalid target
+已经有测速在运行	A speed test is already running
+还没有可测的节点, 请先添加服务器	There are no nodes to test yet — add a server first
+测速参数无效	Invalid speed test parameters
+测速任务编号无效	Invalid speed test ID
+
+# --- background-task step labels and progress messages
+准备	Prepare
+准备中	Preparing
+下载规则集	Download rule sets
+下载规则集 */*	Downloading rule sets */*
+校验配置	Validate configuration
+应用并重启	Apply and restart
+等待就绪	Wait until ready
+等待服务就绪	Wait for the service to be ready
+应用规则集	Apply rule sets
+完成	Done
+检查新版本	Check for a new version
+下载并校验新版本	Download and verify the new version
+安装并重新生成配置	Install and regenerate the configuration
+查询最新版本	Look up the latest version
+下载并校验新核心	Download and verify the new core
+用新核心校验现有配置	Validate your configuration with the new core
+查询本机与各线路的出口 IP	Look up exit IPs for this computer and each route
+任务编号无效	Invalid task ID
+找不到该任务	Couldn’t find that task
+未知任务: *	Unknown task: *
+
+# --- lib/config.sh
+自定义规则集	Custom rule set
+社区规则集未通过校验, 已临时停用 (运行 enana update 重新下载)	The community rule sets didn’t pass validation and are disabled for now (run enana update to download them again)
+
+# --- lib/ops.sh · transactions (op_txn)
+另一个配置任务正在运行, 请稍后重试	Another configuration task is running — please try again shortly
+配置未通过校验, 已撤销本次更改*	The configuration didn’t pass validation, so the change was rolled back*
+新配置无法启动, 已撤销本次更改并恢复原配置	The new configuration couldn’t start, so the change was rolled back and your previous configuration restored
+名称、链接或策略不合法 (链接必须是 http/https 的 .srs 规则集)	The name, link or policy isn’t valid (the link must point to an http/https .srs rule set)
+已经有同名的规则集	A rule set with that name already exists
+规则集下载失败或不是有效的 .srs 文件	The rule set couldn’t be downloaded or isn’t a valid .srs file
+
+# --- lib/ops.sh · actions as shown in the operation log
+应用配置	Apply configuration
+导入服务器	Import servers
+删除服务器	Delete server
+修改服务器角色	Change server role
+删除订阅	Delete subscription
+启用/停用规则集	Enable/disable rule set
+添加规则集	Add rule set
+删除规则集	Delete rule set
+修改 DNS 设置	Change DNS settings
+升级核心	Upgrade core
+更新 enana	Update enana
+自动更新	Auto-update
+规则集与订阅	Rule sets and subscriptions
+失败	Failed
+测速	Speed test
+
+# --- lib/ops.sh · op_txn result messages (one exact entry per action)
+应用配置 完成, 配置已应用	Configuration applied
+应用配置 完成 (配置无变化, 未重启)	Configuration unchanged — nothing to restart
+应用配置 失败: 没有可应用的更改	Applying the configuration failed: no changes to apply
+导入服务器 完成, 配置已应用	Servers imported; configuration applied
+导入服务器 完成 (配置无变化, 未重启)	Servers imported (configuration unchanged, no restart)
+导入服务器 失败: 没有可应用的更改	Importing servers failed: no changes to apply
+删除服务器 完成, 配置已应用	Server deleted; configuration applied
+删除服务器 完成 (配置无变化, 未重启)	Server deleted (configuration unchanged, no restart)
+删除服务器 失败: 没有可应用的更改	Deleting the server failed: no changes to apply
+修改服务器角色 完成, 配置已应用	Server role changed; configuration applied
+修改服务器角色 完成 (配置无变化, 未重启)	Server role changed (configuration unchanged, no restart)
+修改服务器角色 失败: 没有可应用的更改	Changing the server role failed: no changes to apply
+删除订阅 完成, 配置已应用	Subscription deleted; configuration applied
+删除订阅 完成 (配置无变化, 未重启)	Subscription deleted (configuration unchanged, no restart)
+删除订阅 失败: 没有可应用的更改	Deleting the subscription failed: no changes to apply
+启用/停用规则集 完成, 配置已应用	Rule set switched on or off; configuration applied
+启用/停用规则集 完成 (配置无变化, 未重启)	Rule set switched on or off (configuration unchanged, no restart)
+启用/停用规则集 失败: 没有可应用的更改	Switching the rule set failed: no changes to apply
+添加规则集 完成, 配置已应用	Rule set added; configuration applied
+添加规则集 完成 (配置无变化, 未重启)	Rule set added (configuration unchanged, no restart)
+添加规则集 失败: 没有可应用的更改	Adding the rule set failed: no changes to apply
+删除规则集 完成, 配置已应用	Rule set deleted; configuration applied
+删除规则集 完成 (配置无变化, 未重启)	Rule set deleted (configuration unchanged, no restart)
+删除规则集 失败: 没有可应用的更改	Deleting the rule set failed: no changes to apply
+修改 DNS 设置 完成, 配置已应用	DNS settings changed; configuration applied
+修改 DNS 设置 完成 (配置无变化, 未重启)	DNS settings changed (configuration unchanged, no restart)
+修改 DNS 设置 失败: 没有可应用的更改	Changing the DNS settings failed: no changes to apply
+修改设置 完成, 配置已应用	Settings changed; configuration applied
+修改设置 完成 (配置无变化, 未重启)	Settings changed (configuration unchanged, no restart)
+修改设置 失败: 没有可应用的更改	Changing the settings failed: no changes to apply
+
+# --- lib/ops.sh · subscriptions refresh (patterns; must stay before the generic op_txn patterns)
+订阅「*」刷新	Refresh subscription “*”
+订阅「*」刷新 完成, 配置已应用	Subscription “*” refreshed; configuration applied
+订阅「*」刷新 完成 (配置无变化, 未重启)	Subscription “*” refreshed (configuration unchanged, no restart)
+订阅「*」刷新 失败: 没有可应用的更改	Refreshing subscription “*” failed: no changes to apply
+订阅「*」已刷新: * 个节点	Subscription “*” refreshed (nodes: *)
+订阅「*」刷新后配置无效, 已保留旧节点	Subscription “*” gave an invalid configuration after refreshing; the old nodes were kept
+订阅「*」刷新失败 (保留旧节点)	Couldn’t refresh subscription “*” (the old nodes were kept)
+
+# --- lib/ops.sh · restart / rules update / logout / core upgrade / self-update
+服务已重启	Service restarted
+服务没有在 15 秒内启动, 运行 enana doctor 查看原因	The service didn’t start within 15 seconds — run enana doctor to see why
+* 个有变化, * 个失败	* changed, * failed
+规则集已更新 (* 个有变化, * 个失败)	Rule sets updated (* changed, * failed)
+全部下载失败	All downloads failed
+所有规则集下载失败, 已保留旧规则	Every rule set failed to download; the old rules were kept
+已退出账号并关闭代理, 所有浏览器需要重新登录	Logged out and turned the proxy off; every browser has to sign in again
+代理已关闭、令牌已更换, 但核心没有成功重启, 运行 enana doctor 查看原因	The proxy is off and the token was replaced, but the core didn’t restart successfully — run enana doctor to see why
+升级失败, 保持原版本 *	Upgrade failed; staying on version *
+已升级到 sing-box *	Upgraded to sing-box *
+新版本无法加载当前配置, 已回退	The new version can’t load the current configuration; rolled back
+新版本无法加载当前配置, 已回退到 *	The new version can’t load the current configuration; rolled back to *
+已经是最新版本 (*)	Already on the latest version (*)
+缺少升级脚本 get.sh, 请重新运行安装命令	The upgrade script get.sh is missing — please run the install command again
+已更新到 v*	Updated to v*
+更新失败, 已保留当前版本 (详情见 */api.log)	The update failed; the current version was kept (details in */api.log)
+
+# --- lib/dns.sh · validation errors (shown in the dashboard)
+未知的国内 DNS 预设	Unknown China DNS preset
+未知的海外 DNS 预设	Unknown Global DNS preset
+国内自定义 DNS 地址格式不正确	The custom China DNS address isn’t valid
+海外自定义 DNS 地址格式不正确	The custom Global DNS address isn’t valid
+线路只能是 自动线路 或 固定出口	The route must be Auto route or Fixed exit
+IP 策略无效	Invalid IP strategy
+防泄漏取值无效	Invalid Leak guard value
+屏蔽广告取值无效	Invalid Block ads value
+选择了自定义国内 DNS, 请填写地址	Custom China DNS is selected — enter an address
+选择了自定义海外 DNS, 请填写地址	Custom Global DNS is selected — enter an address
+
+# --- lib/dns.sh · lookup pipeline texts (JSON values)
+自定义 (*)	Custom (*)
+直连	Direct
+经固定出口	Via Fixed exit
+经自动线路	Via Auto route
+广告与追踪域名 (geosite-ads)	Ad and tracker domains (geosite-ads)
+拒绝解析	Rejected
+直接返回空结果, 相关连接也会被拒绝	Answered with nothing, and connections to these domains are refused
+国内网站 (geosite-cn)	Sites in China (geosite-cn)
+国内域名用国内 DNS 解析, 速度快、结果准确	Looked up with the China DNS straight from your own network: fast and accurate
+其它所有域名	All other domains
+海外域名通过代理解析, 避免本地 DNS 污染与泄漏	Overseas domains are looked up through the proxy, avoiding local DNS pollution and leaks
+防泄漏已关闭: 所有解析都用国内 DNS (可能被污染)	Leak guard is off: everything is looked up with the China DNS (answers may be polluted)
+
+# --- lib/fetch.sh · download routes (specific route variants; must stay before the generic patterns)
+尝试 [直连] *	Trying [Direct] *
+尝试 [本地代理(自动选线)] *	Trying [Local proxy (auto route)] *
+尝试 [备用线路 *] *	Trying [Backup route *] *
+下载完成 (线路: 直连), SHA-256 校验通过	Download finished (route: Direct), SHA-256 verified
+下载完成 (线路: 直连)	Download finished (route: Direct)
+下载完成 (线路: 本地代理(自动选线)), SHA-256 校验通过	Download finished (route: Local proxy (auto route)), SHA-256 verified
+下载完成 (线路: 本地代理(自动选线))	Download finished (route: Local proxy (auto route))
+下载完成 (线路: 备用线路 *), SHA-256 校验通过	Download finished (route: Backup route *), SHA-256 verified
+下载完成 (线路: 备用线路 *)	Download finished (route: Backup route *)
+* 已更新 (线路: 直连)	* updated (route: Direct)
+* 已更新 (线路: 本地代理(自动选线))	* updated (route: Local proxy (auto route))
+* 已更新 (线路: 备用线路 *)	* updated (route: Backup route *)
+
+# --- lib/fetch.sh · downloads and rule sets
+下载内容校验未通过 (可能是错误页面或被篡改), 已丢弃, 换下一条线路	The download failed verification (it may be an error page or have been tampered with); discarded, trying the next route
+查不到最新版本, 使用已测试版本 *	Couldn’t find the latest version; using the tested version *
+下载 sing-box * (*), 将校验 SHA-256	Downloading sing-box * (*), SHA-256 will be verified
+下载 sing-box * (*)*	Downloading sing-box * (*)*
+通过 Homebrew 安装 sing-box…	Installing sing-box through Homebrew…
+使用本地安装包 *	Using the local package *
+GitHub 下载链全部失败	Every GitHub download route failed
+* 已是最新	* is up to date
+* 下载失败, 继续使用旧版本	* download failed; keeping the old version
+* 下载失败 (暂时不使用该规则集)	* download failed (this rule set won’t be used for now)
+自定义链接	Custom link
+
+# --- lib/os-darwin.sh
+*: 系统代理已开启	*: System proxy turned on
+*: 系统代理已关闭	*: System proxy turned off
+
+# --- lib/servers.sh
+第 %s 行格式不符合要求, 已忽略\n	Line %s doesn’t meet the requirements and was ignored\n
+第 * 行格式不符合要求, 已忽略	Line * doesn’t meet the requirements and was ignored
+
+# --- lib/speed.sh
+固定出口	Fixed exit
+自动线路	Auto route
+查询不到任何出口 IP: 网络不通, 或这个 IP 被限制访问	Couldn’t look up any exit IP: the network is down, or this IP is restricted
+部分线路查询失败: 对应节点可能不可用或出口 IP 被限制	Some routes failed to look up: the node may be unavailable or its exit IP restricted
+测速任务正在使用线路, 请稍后重试	A speed test is using the routes — please try again shortly
+正在查询本机 IP	Looking up this computer’s IP
+已停止	Stopped
+测速或 IP 查询正在使用线路, 请稍后重试	A speed test or IP lookup is using the routes — please try again shortly
+本地直连	Local direct
+正在查询本机与各线路的出口 IP	Looking up exit IPs for this computer and each route
+正在测试本地直连	Testing the direct connection
+正在测试 *	Testing *
+正在测试下载速度: 本地直连	Testing download speed: local direct
+正在测试下载速度: *	Testing download speed: *
+测速完成	Speed test finished
+* · * 个节点	* · nodes: *
+几乎所有目标都没有响应: 网络不通, 或这个 IP 被限制访问	Almost no target responded: the network is down, or this IP is restricted
+部分目标拒绝或没有响应: 这个 IP 可能被部分网站限制	Some targets refused or didn’t respond: this IP may be restricted by some sites
+找不到该测速任务	Couldn’t find that speed test
+测速进程意外中断	The speed test stopped unexpectedly
+
+# --- lib/update.sh
+没有查到最新版本 (网络不可用?)	Couldn’t check for the latest version (is the network down?)
+
+# --- v2.1: sites / speed targets / DNS hosts / custom apps / cloud content
+IP 地址格式不正确 (支持 IPv4 和 IPv6)	The IP address is not valid (IPv4 and IPv6 are supported)
+下载内容包失败 (HTTP *)	Failed to download the content package (HTTP *)
+不是应用 (.app) 或可执行文件	Not an application (.app) or an executable file
+云端内容序号 (*) 比本机已有的 (*) 旧, 已忽略 (防回滚)	The cloud content number (*) is older than the one on this computer (*); ignored (rollback protection)
+代理服务器	Proxy server
+修改网站域名	Edit site domains
+修改自定义解析	Edit custom DNS records
+内容包大小不对	The content package has the wrong size
+内容包校验和不对	The content package checksum does not match
+内容包的序号与清单不一致	The content package number does not match the manifest
+内容包的版本序号不对	The content package version number is invalid
+内容包缺少 *	The content package is missing *
+内容包解压失败	Failed to extract the content package
+内容包里有不允许的文件	The content package contains files that are not allowed
+内容包里的 apps.conf 格式不对	apps.conf in the content package is malformed
+内容包里的 groups.conf 格式不对	groups.conf in the content package is malformed
+内容包里的 rulesets.conf 格式不对	rulesets.conf in the content package is malformed
+内容包里的 services.conf 格式不对	services.conf in the content package is malformed
+内容来源: * · 序号 * *	Content source: * · number * *
+内容清单格式不对	The content manifest is malformed
+内容清单签名校验失败, 已忽略	The content manifest signature check failed; ignored
+内容清单里的下载地址不合法	The download address in the content manifest is not valid
+内容里不能有换行	Line breaks are not allowed here
+分组无效	Invalid group
+删除自定义软件	Remove custom app
+只有规则判断需要时才会解析; 海外域名通过代理解析, 避免本地 DNS 污染与泄漏	Only resolved when a rule needs it; overseas names are resolved through the proxy to avoid local DNS pollution and leaks
+名称不能为空, 最多 40 个字符	The name cannot be empty and can be at most 40 characters
+名称里不能有 | < > 这些字符	The name cannot contain | < > characters
+名称里不能有控制字符	The name cannot contain control characters
+名称里有不支持的字符	The name contains unsupported characters
+命中的域名直接用你填的 IP, 不再询问任何 DNS; 访问时也会直接连到这个 IP	Matching names use the IP you entered without asking any DNS server; connections go straight to that IP too
+图标名无效	Invalid icon name
+域名格式不正确: 只能是字母 / 数字 / 连字符和点, 不含 http://、路径、空格和通配符 (中文域名请填 xn-- 开头的写法)	Invalid domain: only letters, digits, hyphens and dots; no http://, path, spaces or wildcards (for non-ASCII names use the xn-- form)
+域名格式不正确: 只能是小写字母/数字/连字符和点, 不含 http://、路径、空格和通配符 (中文域名请填 xn-- 开头的写法)	Invalid domain: only lowercase letters, digits, hyphens and dots; no http://, path, spaces or wildcards (for non-ASCII names use the xn-- form)
+域名直接交给代理服务器解析, 本机不会向任何 DNS 询问, 不会被污染或泄漏	The name is handed to the proxy server to resolve; this computer asks no DNS server, so nothing is polluted or leaked
+安装内容包失败	Failed to install the content package
+已经有这个域名了	This domain is already in the list
+应用里找不到可执行文件, 可能已损坏	No executable found inside the app; it may be damaged
+找不到这个内置测速目标	That built-in speed test target was not found
+找不到这个测速目标	That speed test target was not found
+找不到这个网站条目	That site entry was not found
+找不到这个自定义软件	That custom app was not found
+操作无效	Invalid action
+新旧域名一样, 没有修改	The old and new domains are the same; nothing changed
+新的域名已经有解析记录了	The new domain already has a DNS record
+新的域名格式不正确	The new domain is not valid
+更新云端内容	Update cloud content
+本地对照表	Local table
+条目编号无效	Invalid entry ID
+没有找到这个软件: 请检查名称, 或者直接输入它的完整路径	App not found: check the name, or enter its full path
+没有读取权限	No permission to read it
+没有这个域名	That domain is not in the list
+没有这条解析记录	That DNS record does not exist
+测试国内 DNS	Testing domestic DNS
+测试海外 DNS	Testing overseas DNS
+测速目标: *	Speed test target: *
+添加自定义软件	Add custom app
+清空自定义解析	Clear custom DNS records
+状态码格式不对: 用逗号分隔, 如 200,204,301	Invalid status codes: separate them with commas, e.g. 200,204,301
+目标编号无效	Invalid target ID
+直连的网站 (含你设为「直连」的应用与网站)	Direct sites (including apps and sites you set to Direct)
+直连的网站一律用国内 DNS 解析: 苹果、微软等在国内有 CDN 的域名会解析到离你最近的节点, 速度更快	Direct sites are always resolved with domestic DNS: names such as Apple's or Microsoft's that have CDNs in China resolve to the nearest node, so they load faster
+经代理	Via proxy
+经代理访问的网站	Sites reached through the proxy
+网址必须以 http:// 或 https:// 开头, 不能有空格和引号, 最长 300 个字符	The URL must start with http:// or https://, contain no spaces or quotes, and be at most 300 characters
+自定义的域名太多了 (最多 2000 条)	Too many custom domains (at most 2000)
+自定义解析 (* 条)	Custom DNS records (* entries)
+自定义解析太多了 (最多 * 条)	Too many custom DNS records (at most * entries)
+自己添加的测速目标太多了 (最多 100 个)	Too many custom speed test targets (at most 100)
+请输入绝对路径 (以 / 开头), 或者输入软件名称	Enter an absolute path (starting with /), or the app name
+请输入软件的路径或名称	Enter the app's path or name
+路径不存在	The path does not exist
+路径里有不支持的字符	The path contains unsupported characters
+软件校验失败	App check failed
+还没有登录: 云端内容需要先在仪表盘登录 enana 账号	Not signed in: sign in to your enana account in the dashboard first to get cloud content
+还没有登录云端	Not signed in to the cloud
+这不是有效的应用 (缺少 Info.plist)	Not a valid app (Info.plist is missing)
+这个域名已经删除了	This domain has already been removed
+这个域名已经有解析记录了, 请直接修改它	This domain already has a DNS record; edit that one instead
+这个域名没有被删除过	This domain was not removed
+这个条目自定义的域名太多了 (最多 300 条)	Too many custom domains for this entry (at most 300)
+这个软件已经在列表里了	This app is already in the list
+这份内容需要 enana * 或更高版本, 请先更新 enana	This content needs enana * or newer; update enana first
+连不上云端内容服务 (HTTP *)	Cannot reach the cloud content service (HTTP *)
+重置网站域名	Reset site domains
+阿里 DNS (DoT)	Alibaba DNS (DoT)
+223.5.5.5,加密的 TLS 直连,和 DoH 速度相近	223.5.5.5. Encrypted TLS, similar speed to DoH
+腾讯 DNSPod (DoT)	Tencent DNSPod (DoT)
+1.12.12.12,加密的 TLS 直连	1.12.12.12. Encrypted TLS
+百度 DNS (UDP)	Baidu DNS (UDP)
+180.76.76.76,传统 UDP,无加密	180.76.76.76. Plain UDP, unencrypted
+Cloudflare 安全版 (DoH)	Cloudflare Security (DoH)
+1.1.1.2,自带恶意软件域名拦截	1.1.1.2. Blocks malware domains
+94.140.14.14,自带广告与追踪域名拦截	94.140.14.14. Blocks ads and trackers
+208.67.222.222,思科旗下,自带钓鱼网站拦截	208.67.222.222. Cisco-owned; blocks phishing sites
+# --- v2.1: step-up / password change / sync / plan / export
+上传	Upload
+二次验证	Password re-check
+二次验证失败	Password re-check failed
+云端同步: 上传	Cloud sync: upload
+云端同步: 拉取 (*)	Cloud sync: pull (*)
+云端同步没有开启	Cloud sync is turned off
+云端同步设置	Cloud sync settings
+云端有更新的版本	The cloud has a newer version
+云端有更新的版本 (来自「*」): 请选择以云端为准还是以本机为准	The cloud has a newer version (from “*”): choose whether the cloud or this computer wins
+云端有更新的版本, 请选择以哪一份为准	The cloud has a newer version; choose which copy wins
+云端的配置无法读取	The cloud configuration could not be read
+云端的配置格式不对, 已放弃	The cloud configuration is malformed; abandoned
+云端还没有数据	The cloud has no data yet
+修改密码	Change password
+修改密码失败	Password change failed
+偏好设置太大 (最多 32 KB)	The preferences are too large (32 KB at most)
+偏好设置必须是一个 JSON 对象	The preferences must be a JSON object
+冲突	Conflict
+加密	Encrypt
+加密后的配置超过 1 MB, 无法同步	The encrypted configuration is over 1 MB and cannot be synced
+加密失败	Encryption failed
+官方线路的凭据不能查看	Credentials of the official route cannot be viewed
+密码不正确	Incorrect password
+导出配置备份	Export configuration backup
+已上传 (云端版本 *)	Uploaded (cloud version *)
+开启同步需要再输入一次登录密码 (加密密钥由它派生, 只保存在这台电脑上)	Enter your sign-in password once more to turn on sync (the encryption key is derived from it and stays on this computer)
+当前密码不正确	The current password is incorrect
+找不到这个服务器	That server was not found
+找不到这个订阅	That subscription was not found
+新密码至少 8 位, 并且不能和旧密码相同	The new password must be at least 8 characters and different from the old one
+无法生成同步密钥	Could not create the sync key
+旧密码不对	Old password is wrong
+查看服务器凭据	View server credentials
+查看订阅链接	View subscription link
+此操作需要再次输入登录密码	This action needs your sign-in password again
+没有可应用的云端配置	There is no cloud configuration to apply
+没有同步密钥: 请退出账号后重新登录一次	No sync key: sign out and sign in once more
+没有同步密钥: 请退出账号后重新登录一次 (密钥由登录密码派生)	No sync key: sign out and sign in once more (the key is derived from your sign-in password)
+生成快照	Build snapshot
+登录已失效	Your sign-in has expired
+登录已失效, 请重新登录	Your sign-in has expired; please sign in again
+请输入登录密码	Enter your sign-in password
+这份云端配置不是用当前密码加密的 (可能在别处改过密码): 请输入旧密码后重试	This cloud copy was not encrypted with your current password (it may have been changed elsewhere): enter the old password and retry
+连不上 enana.cc	Cannot reach enana.cc
+连不上 enana.cc, 修改密码必须在线 (离线登录时不能修改)。请检查网络后重试	Cannot reach enana.cc; changing the password requires being online (not possible after an offline sign-in). Check your network and retry
+连不上 enana.cc, 暂时无法同步	Cannot reach enana.cc; sync is unavailable for now
+配置太大, 无法同步	The configuration is too large to sync
+配置太大, 无法导出	The configuration is too large to export
+免费版	Free
+专业版	Pro
+# --- v2.1: one-click VPS provisioning client
+* (没有新增)	* (nothing new)
+SSH 端口不正确 (1-65535)	The SSH port is not valid (1-65535)
+SSH 连接失败 (退出码 *)	The SSH connection failed (exit code *)
+sudo 没有通过: sudo 密码不对, 或这个用户没有 sudo 权限	sudo failed: the sudo password is wrong, or this user has no sudo rights
+主机指纹格式不对	The host fingerprint format is not valid
+保存到本机	Save to this computer
+保存节点失败	Failed to save the nodes
+参数不合法	Invalid parameter
+安装依赖	Install dependencies
+安装服务端	Install the server
+密码 / 口令太长	The password / passphrase is too long
+密码 / 口令里不能有换行	The password / passphrase cannot contain line breaks
+开放端口并启动	Open the port and start
+找不到这台服务器的记录	No record of this server was found
+探测完成	Probe finished
+探测服务器	Probe server
+探测服务器主机指纹	Probe server host fingerprint
+整理结果	Collect results
+新增的节点从这台电脑连不上: 多半是云服务商的安全组 / 防火墙没有放行端口, 放行后再试一次	The new nodes cannot be reached from this computer: most likely the cloud provider's security group / firewall does not allow the port; open it and try again
+无法创建临时目录	Could not create a temporary directory
+更新自己的服务器的出口 IP	Update the exit IPs of your own server
+服务器地址不正确 (IP 或域名)	The server address is not valid (IP or domain)
+服务器的主机指纹与之前固定的不一致 (可能被中间人攻击, 或服务器重装过系统)	The server's host fingerprint does not match the pinned one (possible man-in-the-middle attack, or the server was reinstalled)
+检测系统与环境	Detect system and environment
+没有发现新的出口 IP	No new exit IPs found
+没有可以保存的节点	There are no nodes to save
+没有找到本次任务的凭据	The credentials for this task were not found
+添加自己的服务器	Add your own server
+生成配置与密钥	Generate configuration and keys
+用户名、密码或私钥不对 (连得上服务器, 但登录被拒绝)	Wrong username, password or private key (the server is reachable but refused the login)
+用户名不正确	The username is not valid
+登录方式不正确	The sign-in method is not valid
+私钥太大	The private key is too large
+私钥格式不对 (需要完整的 PEM / OpenSSH 私钥文本)	The private key format is wrong (the full PEM / OpenSSH private key text is required)
+私钥格式不对, 或私钥口令不对	The private key format is wrong, or the passphrase is wrong
+识别出口 IP	Identify exit IPs
+请确认主机指纹	Confirm the host fingerprint
+请输入 SSH 密码	Enter the SSH password
+这台服务器的系统不受支持	This server's operating system is not supported
+这台电脑上找不到 ssh 命令	The ssh command was not found on this computer
+连不上这台服务器 (地址 / 端口不对, 服务器没开机, 或防火墙挡住了 SSH 端口)	Cannot reach this server (wrong address / port, the server is off, or a firewall blocks the SSH port)
+连接服务器	Connect to the server
+部署完成了, 但从这台电脑连不上新节点: 多半是云服务商的安全组 / 防火墙没有放行端口 */tcp, 放行后点「重新验证」	Deployment finished, but the new nodes cannot be reached from this computer: most likely the cloud provider's security group / firewall does not allow port */tcp; open it and click “Verify again”
+部署脚本异常结束 (退出码 *)	The deployment script ended abnormally (exit code *)
+部署脚本没有返回可用的节点	The deployment script returned no usable nodes
+部署脚本由 enana 云端下发: 请先登录, 并等「云端内容」同步完成后再试	The deployment scripts come from the enana cloud: sign in first and wait for “cloud content” to sync, then try again
+部署超时 (超过 * 分钟), 已中止	Deployment timed out (over * minutes) and was aborted
+需要 root 权限 (当前用户不是 root, 也没有可用的 sudo)	Root privileges are required (this user is not root and has no usable sudo)
+需要 sudo 密码	The sudo password is required
+需要先确认并固定服务器的主机指纹	Confirm and pin the server's host fingerprint first
+验证连通	Verify connectivity
+# --- generic patterns (keep last: they are broader than everything above)
+尝试 [*] *	Trying [*] *
+下载完成 (线路: *)*	Download finished (route: *)*
+* 已更新 (线路: *)	* updated (route: *)
+* 完成, 配置已应用	* done; configuration applied
+* 完成 (配置无变化, 未重启)	* done (configuration unchanged, no restart)
+* 失败: 没有可应用的更改	* failed: no changes to apply
+* 秒	* s
+* 分钟	* min
+* 小时	* h
+* 天	* d
+
+# --- data/dns-presets.conf + essential rule sets (dashboard shows them; they stay with the main part)
+系统默认	System default
+使用系统设置里的 DNS,不额外加密	Uses the DNS from your system settings, with no extra encryption
+阿里 DNS (DoH)	AliDNS (DoH)
+223.5.5.5,国内最常用,稳定、延迟低	223.5.5.5. The most widely used in China: stable and low latency
+腾讯 DNSPod (DoH)	Tencent DNSPod (DoH)
+1.12.12.12,腾讯公共 DNS	1.12.12.12. Tencent’s public DNS
+传统 UDP,无加密,兼容性最好	Classic UDP with no encryption. The most compatible
+自定义	Custom
+1.1.1.1,速度快,隐私友好	1.1.1.1. Fast and privacy-friendly
+9.9.9.9,自带恶意域名拦截	9.9.9.9. Blocks known malicious domains
+国内网站	Domestic sites
+中国大陆网站域名 → 直连	Mainland China site domains → Direct
+海外网站	Overseas sites
+非中国大陆网站域名 → 兜底策略(默认自动线路)	Domains outside mainland China → fallback policy (Auto route by default)
+国内 IP 段	Domestic IP ranges
+中国大陆 IP → 直连(其余域名解析后按 IP 判断)	Mainland China IPs → Direct (other domains are checked by IP after DNS resolution)
+# --- 基线目录文案 (data/services.conf / groups.conf)
+Claude 网页与桌面应用	Claude web and desktop apps
+ChatGPT、Sora、OpenAI API	ChatGPT, Sora, OpenAI API
+Gemini、AI Studio、NotebookLM;含 Google 登录域名	Gemini, AI Studio, NotebookLM; includes Google sign-in domains
+AI · 固定出口	AI · Fixed exit

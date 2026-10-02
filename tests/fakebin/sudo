@@ -1,0 +1,21 @@
+#!/bin/bash
+# 测试用的假 sudo: 记录调用并直接执行 (不提权)。支持 -v / -n / -S / -p <提示>; -S 时从标准输入读一行密码, 与 $FAKE_SUDO_PW (没设就是 ctl 里的 sudopw=) 比较, 不对就像真的 sudo 一样失败。
+echo "sudo $*" >> "$FAKE_STATE/calls.log"
+[ "$1" = "-v" ] && exit 0
+S=0
+while [ $# -gt 0 ]; do
+  case $1 in
+    -n) shift ;;
+    -S) S=1; shift ;;
+    -p) shift 2 ;;
+    --) shift; break ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+if [ "$S" = 1 ]; then
+  IFS= read -r pw
+  want=${FAKE_SUDO_PW:-$(sed -n 's/^sudopw=//p' "${ENANA_MOCK_CTL:-/dev/null}" 2>/dev/null | head -1)}
+  if [ -n "$want" ] && [ "$pw" != "$want" ]; then echo "Sorry, try again." >&2; echo "sudo: 1 incorrect password attempt" >&2; exit 1; fi
+fi
+exec "$@"

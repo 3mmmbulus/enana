@@ -1,0 +1,143 @@
+/* enana · apps.css — 应用页 (类名前缀 apps-): 图标盒 / 应用行 / 分组标题 / 添加自定义软件弹窗
+ * 颜色只用主题变量; 路由颜色: 跟随规则 = --info (蓝灰), 固定出口 = --pin (蓝), 自动线路 = --auto (绿), 直连 = --direct (灰) */
+
+/* ===== 图标: 头像和图片共用同一个固定大小的盒子 (--ic), 图片加载完成才盖住头像 (透明边缘不会透出字母) ===== */
+.apps-ic{position:relative;flex:none;display:block;width:var(--ic,40px);height:var(--ic,40px)}
+.apps-av{position:absolute;inset:0;display:grid;place-items:center;border-radius:26%;font-weight:700;font-size:calc(var(--ic,40px)*.42);line-height:1;color:#fff;background:hsl(var(--hue,210) 52% 40%);user-select:none}
+.apps-ic>img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:0;transition:opacity .15s ease}
+.apps-ic.is-img>img{opacity:1}
+.apps-ic.is-img>.apps-av{visibility:hidden}
+
+/* ===== 页面: 新应用提示条 / 工具栏 ===== */
+.apps-bart{display:flex;align-items:center;flex-wrap:wrap}
+.apps-tb .sel{max-width:100%}
+.apps-tb-r{margin-left:auto;display:inline-flex;align-items:center;flex-wrap:wrap;gap:2px 14px;min-width:0}
+.apps-opts{display:inline-flex;align-items:center}
+
+/* ===== 列表 (分页条在盒子里面) ===== */
+.apps-box{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow)}
+.apps-gh{display:flex;align-items:center;gap:8px;margin:0;padding:7px 14px;font-size:var(--fs-12-5);font-weight:650;letter-spacing:.2px;color:var(--muted);background:var(--surface2);border-bottom:1px solid var(--line)}
+.apps-list>.apps-gh:not(:first-child){border-top:1px solid var(--line)}
+.apps-gh-n{display:inline-block;min-width:20px;padding:0 6px;border-radius:99px;border:1px solid var(--line);background:var(--surface);font-weight:500;font-size:var(--fs-11-5);line-height:18px;text-align:center;color:var(--muted)}
+.apps-gh.is-new{color:var(--pri);background:var(--pri-bg)}
+.apps-gh.is-new .apps-gh-n{color:var(--pri);border-color:var(--pri);background:transparent}
+
+.apps-row{display:grid;grid-template-columns:var(--ic) minmax(0,1fr) auto;align-items:center;gap:8px 12px;padding:10px 14px;border-bottom:1px solid var(--line);--ic:40px}
+.apps-row:last-child{border-bottom:0}
+.apps-row.is-new{background:var(--pri-bg)}
+.apps-row.is-off .apps-ic{filter:grayscale(.8);opacity:.7}
+.apps-main{min-width:0}
+.apps-t{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px}
+.apps-n{overflow-wrap:anywhere}
+.apps-p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-12)}
+.apps-p.is-wrap{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;font-family:var(--mono);font-size:var(--fs-11-5)}
+.apps-c{display:flex;align-items:center;gap:8px 10px;justify-content:flex-end;flex-wrap:wrap}
+/* 路由方式下拉: 左边一条路由颜色 (文字也写着是哪一种, 不只靠颜色) */
+.apps-sel{min-width:0;max-width:100%;border-left-width:4px}
+.apps-row[data-st=follow] .apps-sel{border-left-color:var(--info)}
+.apps-row[data-st=pin] .apps-sel{border-left-color:var(--pin)}
+.apps-row[data-st=auto] .apps-sel{border-left-color:var(--auto)}
+.apps-row[data-st=direct] .apps-sel{border-left-color:var(--direct)}
+.apps-wrap{overflow-wrap:anywhere;user-select:text}
+
+/* ===== 表格列头 (软件名 / 路径 / 状态 / 模式 / 操作) =====
+ * 列表盒子够宽 (≥ 760px, 用容器查询, 和侧栏是否展开无关) 时变成表格: 每行 = 图标+名称 | 路径 | 状态 | 模式 | 操作, 列头吸顶。
+ * 窄的时候 (以及不支持容器查询的浏览器) 保持原来的堆叠样式: 路径在名称下面, 控件在右侧 / 下方, 不显示列头。 */
+.apps-colh{display:none}
+.apps-st,.apps-act{display:inline-flex;align-items:center;gap:8px}
+.apps-stt{display:none}
+.apps-box{overflow:clip}                                          /* 不产生滚动容器, 列头的 sticky 才有效; 旧浏览器退回上面的 hidden */
+@supports (container-type:inline-size){
+  .apps-box{container-type:inline-size}
+}
+@container (min-width:760px){
+  .apps-colh,.apps-row{grid-template-columns:var(--ic,40px) minmax(170px,1.6fr) minmax(0,1.2fr) 112px 160px 96px;column-gap:12px}
+  .apps-colh{display:grid;position:sticky;top:0;z-index:2;align-items:center;padding:7px 14px;font-size:var(--fs-12-5);font-weight:650;color:var(--muted);background:var(--surface2);border-bottom:1px solid var(--line)}
+  .apps-colh>:first-child{grid-column:1/3}
+  .apps-main,.apps-c{display:contents}
+  .apps-p{font-family:var(--mono);font-size:var(--fs-11-5)}
+  .apps-p[hidden]{display:block}                                   /* 没有路径也要占住这一列, 后面的列才不会错位 */
+  .apps-stt{display:inline;font-size:var(--fs-12-5);color:var(--muted);white-space:nowrap}
+  .apps-row:not(.is-off) .apps-stt{color:var(--ok)}
+  .apps-sel{width:100%}
+}
+
+/* ===== 添加自定义软件 (弹窗) ===== */
+.apps-dlg .dlg-t{flex:0 1 auto}                                  /* 标题后面紧跟着「!」, 关闭按钮靠右 */
+.apps-step{margin:0 0 10px}
+.apps-lead{margin:0 0 12px}
+.apps-in{width:100%;font-family:var(--mono)}
+.apps-err{margin:10px 0 0}
+.apps-err-m{display:flex;align-items:flex-start;gap:8px}
+.apps-err-m .ci{flex:none;margin-top:3px;color:var(--err)}
+.apps-err-m b{min-width:0;overflow-wrap:anywhere;font-weight:600}
+.apps-err-p{margin:2px 0 0 24px;font-size:var(--fs-12);color:var(--muted);overflow-wrap:anywhere;user-select:text}
+.apps-err-h{margin:8px 0 2px;font-size:var(--fs-12-5);font-weight:650;color:var(--muted)}
+.apps-err ul,.apps-how ul{margin:4px 0 0;padding-left:20px}
+.apps-err li,.apps-how li{margin:3px 0}
+.apps-how{margin:14px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface2);font-size:var(--fs-13)}
+.apps-how h4{margin:0 0 2px;font-size:var(--fs-12-5);font-weight:650;color:var(--info)}
+.apps-nopick{margin:8px 0 0}
+
+/* 候选 (按名称查到多个) */
+.apps-pick{margin:0 0 14px}
+.apps-pick-t{margin:0 0 8px;font-weight:600}
+.apps-cands{display:grid;gap:6px}
+.apps-cand{display:grid;grid-template-columns:auto 32px minmax(0,1fr) auto;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line2);border-radius:10px;background:var(--surface);cursor:pointer}
+.apps-cand.is-on{border-color:var(--pri);background:var(--pri-bg);box-shadow:0 0 0 1px var(--pri)}
+.apps-cand input{margin:0;accent-color:var(--pri)}
+.apps-cand-b{display:flex;flex-direction:column;gap:2px;min-width:0}
+.apps-cand-t{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px}
+.apps-cand-p{overflow-wrap:anywhere;font-size:var(--fs-11-5);color:var(--muted)}
+.apps-cand-pick{display:none;align-items:center;gap:4px;font-size:var(--fs-12-5);font-weight:650;color:var(--pri);white-space:nowrap}
+.apps-cand.is-on .apps-cand-pick{display:inline-flex}
+
+/* 校验结果卡片 */
+.apps-card{padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface2)}
+.apps-card-h{display:flex;align-items:center;gap:12px}
+.apps-card-t{min-width:0}
+.apps-card-n{font-size:16px;font-weight:700;overflow-wrap:anywhere}
+.apps-card-b{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin-top:3px}
+.apps-kv{display:grid;gap:8px;margin:12px 0 0}
+.apps-kv-r{display:grid;grid-template-columns:minmax(5.5em,26%) minmax(0,1fr);gap:2px 12px;align-items:baseline}
+.apps-kv dt{color:var(--muted);font-size:var(--fs-12-5)}
+.apps-kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.apps-v{font-size:var(--fs-12-5);user-select:text}
+.apps-sig{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+.apps-sig-a{min-width:0;overflow-wrap:anywhere}
+.apps-warn{flex:1 1 100%;display:flex;align-items:flex-start;gap:8px;margin:2px 0 0;padding:8px 10px;border-radius:9px;background:var(--warn-bg);border-left:3px solid var(--warn);font-size:var(--fs-13)}
+.apps-warn .ci{flex:none;margin-top:3px;color:var(--warn)}
+.apps-exists{display:flex;align-items:flex-start;gap:8px;margin:10px 0 0}
+.apps-exists .ci{flex:none;margin-top:3px;color:var(--warn)}
+.apps-exists p{margin:2px 0 8px}
+
+/* 路由方式 (单选行, 带路由颜色) */
+.apps-pol-h{display:flex;align-items:center;margin:16px 0 8px;font-weight:650}
+.apps-pol{display:grid;gap:8px}
+.apps-opt{--c:var(--info);display:grid;grid-template-columns:auto auto minmax(0,1fr);align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line2);border-left:4px solid var(--c);border-radius:10px;background:var(--surface);cursor:pointer}
+.apps-opt[data-v=pin]{--c:var(--pin)}
+.apps-opt[data-v=auto]{--c:var(--auto)}
+.apps-opt[data-v=direct]{--c:var(--direct)}
+.apps-opt.is-on{border-color:var(--c);background:var(--surface2);box-shadow:0 0 0 1px var(--c)}
+.apps-opt input{margin:0;accent-color:var(--c)}
+.apps-opt .apps-opt-i{color:var(--c)}
+.apps-opt-b{display:flex;flex-direction:column;gap:1px;min-width:0}
+.apps-opt-d{font-size:var(--fs-12-5);color:var(--muted)}
+.apps-opt.unavail{cursor:not-allowed}
+.apps-job .task{margin-top:14px}
+
+/* ===== 窄屏 / 触屏 ===== */
+@media (max-width:759px){
+  .apps-row{grid-template-columns:var(--ic) minmax(0,1fr)}
+  .apps-c{grid-column:1/-1;justify-content:flex-start}
+  .apps-tb-r{flex:1 1 100%;margin-left:0}
+}
+@media (max-width:420px){
+  .apps-kv-r{grid-template-columns:minmax(0,1fr)}
+  .apps-cand{grid-template-columns:auto 32px minmax(0,1fr)}
+  .apps-cand-pick{grid-column:2/-1}
+}
+@media (pointer:coarse){
+  .apps-opt,.apps-cand{min-height:44px}
+  .apps-cand input,.apps-opt input{width:22px;height:22px}
+}

@@ -1,0 +1,174 @@
+/* enana · dns.css — DNS 页 (视图 id: dns, 类名前缀 .dns-)
+ * 只用主题变量, 深色主题自动跟随。小字号一律用 var(--fs-*) (手机 / 触屏上统一提高到 14px); 触屏上可点击的元素 >= 44px;
+ * 320px 宽度下没有横向滚动 (网格轨道用 minmax(0,1fr), 带文字的 flex 子项 min-width:0, 长字符串 overflow-wrap:anywhere)。 */
+
+/* ===== 页面开头: 适用范围说明 (一直可见, 不藏在提示里) ===== */
+.dns-scope{display:flex;align-items:flex-start;gap:10px;padding:10px 14px;border:1px solid var(--line);border-left:3px solid var(--pri);border-radius:var(--r);background:var(--pri-bg);color:var(--text);font-size:var(--fs-13)}
+.dns-scope .icon{flex:none;margin-top:2px;color:var(--pri)}
+.dns-scope b{display:block;margin-bottom:2px}
+.dns-scope p{margin:0}
+
+/* ===== 当前设置摘要 ===== */
+.dns-body>*+*{margin-top:12px}
+.dns-sum{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:8px}
+.dns-li{display:inline-flex;flex-wrap:wrap;align-items:center;gap:2px 6px;max-width:100%;padding:3px 12px;border:1px solid var(--line);border-radius:99px;background:var(--surface2);font-size:var(--fs-13);overflow-wrap:anywhere}
+.dns-k{flex:none;color:var(--muted);font-size:var(--fs-12)}
+.dns-v{font-weight:600;min-width:0}
+.dns-li.ok .dns-v{color:var(--ok)}
+.dns-li.warn{background:var(--warn-bg);border-color:transparent}
+.dns-li.warn .dns-v{color:var(--warn)}
+.dns-li.dim .dns-v{color:var(--muted);font-weight:500}
+.dns-warn{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+.dns-warn .icon{flex:none}
+.dns-warn>span{flex:1 1 220px;min-width:0}
+.dns-prog .task{margin-top:0}
+.dns-m.bad-t{color:var(--err)}
+.dns-m.warn-t{color:var(--warn)}                                      /* 说明 / 错误行: style.css 里 .fld-h 写在 .bad-t 后面, 同样的优先级会盖住红色, 这里单独保证 */
+
+/* ===== DNS 服务器测速: 按钮 + 「!」 + 「测于 hh:mm」 + 进度卡片 + 最快建议 + 延迟徽标 ===== */
+.dns-bn{margin-top:12px}
+.dns-bn-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+.dns-bn-row .help-i{margin-left:-4px}
+.dns-bn-st{min-width:0;overflow-wrap:anywhere}
+.dns-bn .dns-prog{margin-top:10px}
+.dns-sgs{display:grid;gap:8px}
+.dns-sgs:not(:empty){margin-top:10px}
+.dns-sg{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:7px 12px;border-radius:9px;background:var(--info-bg);border-left:3px solid var(--info);color:var(--text);font-size:var(--fs-13)}
+.dns-sg>.icon{flex:none;color:var(--info)}
+.dns-sg>span{flex:1 1 200px;min-width:0;overflow-wrap:anywhere}
+.dns-sg.ok{background:var(--ok-bg);border-left-color:var(--ok)}
+.dns-sg.ok>.icon{color:var(--ok)}
+.dns-sg.warn{background:var(--warn-bg);border-left-color:var(--warn)}
+.dns-sg.warn>.icon{color:var(--warn)}
+.dns-sg-l{font-weight:650;margin-right:4px}
+.dns-lat{flex:none}
+
+/* ===== 解析流程: 一张「从上往下检查, 第一个匹配的负责回答」的表; < 760px 变成一张张卡片 (.tbl.rt + data-l) ===== */
+.dns-pl-box{margin-top:6px}
+.dns-pl td,.dns-pl th{vertical-align:top}
+.dns-pl-r{--c:var(--info)}
+.dns-pl-r.v-direct{--c:var(--direct)}
+.dns-pl-r.v-pin{--c:var(--pin)}
+.dns-pl-r.v-auto{--c:var(--auto)}
+.dns-pl-r.is-ads{--c:var(--err)}
+.dns-st{display:grid;gap:4px;min-width:0;padding-left:10px;border-left:4px solid var(--c)}
+.dns-st-h{display:flex;align-items:center;gap:8px;min-width:0}
+.dns-st-n{flex:none;width:24px;height:24px;display:grid;place-items:center;border:2px solid var(--c);border-radius:50%;font-size:var(--fs-12);font-weight:650;font-variant-numeric:tabular-nums;line-height:1}
+.dns-st-ic{flex:none;display:grid;place-items:center;color:var(--c)}
+.dns-st-t{min-width:0;overflow-wrap:anywhere}
+.dns-st-d{margin:0;font-size:var(--fs-12-5);line-height:1.5;color:var(--muted)}
+.dns-st-s{font-weight:600;overflow-wrap:anywhere}
+.dns-via{display:inline-flex;align-items:center;gap:5px;padding:1px 10px 1px 8px;border:1px solid currentColor;border-radius:99px;font-size:var(--fs-12);line-height:1.55;color:var(--direct);overflow-wrap:anywhere}
+.dns-via.pin{color:var(--pin)}
+.dns-via.auto{color:var(--auto)}
+.dns-via.direct{color:var(--direct)}
+.dns-via.none{color:var(--muted);border-color:var(--line2)}
+@media (min-width:760px){
+  .dns-pl td:first-child{width:52%}
+}
+
+/* ===== 默认已开启的优化 ===== */
+.dns-opts{list-style:none;margin:6px 0 0;padding:0}
+.dns-opt{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:4px 12px;align-items:start;padding:12px 0;border-top:1px solid var(--line)}
+.dns-opt:first-child{border-top:0;padding-top:4px}
+.dns-opt-ic{width:36px;height:36px;display:grid;place-items:center;border-radius:50%;background:var(--ok-bg);color:var(--ok)}
+.dns-opt-b{min-width:0}
+.dns-opt-t{display:flex;flex-wrap:wrap;align-items:center}
+.dns-opt-t b{min-width:0;overflow-wrap:anywhere}
+.dns-opt-d{margin:2px 0 0;font-size:var(--fs-13);line-height:1.5;color:var(--muted)}
+.dns-opt>.badge{margin-top:2px}
+@media (max-width:520px){
+  .dns-opt{grid-template-columns:auto minmax(0,1fr)}
+  .dns-opt>.badge{grid-column:2;justify-self:start;margin-top:4px}
+}
+
+/* ===== 自定义解析 (hosts) ===== */
+.dns-hs-sub{margin:0 0 12px}
+.dns-hs-form{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr) auto;gap:8px 10px;align-items:start}
+.dns-hs-f{display:grid;gap:4px;min-width:0;align-content:start}
+.dns-hs-f .inp{width:100%}
+.dns-hs-m:empty{display:none}
+.dns-hs-b{display:flex;flex-direction:column;gap:4px}
+.dns-hs-b::before{content:"\00a0";content:"\00a0" / "";font-size:var(--fs-12-5)}                           /* 和输入框上面的标签一样高, 让按钮和输入框对齐 */
+.dns-hs-bb{display:flex;flex-wrap:wrap;gap:8px}
+.dns-hs-fm{grid-column:1/-1;margin:0}
+.dns-hs-tools{margin-top:12px}
+.dns-hs-tools .inp{width:100%;max-width:360px}
+.dns-hs-list{margin-top:12px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.dns-hs-list .empty-s{padding:18px 16px}
+.dns-hs-tbl .c-act{width:1%;white-space:nowrap}
+.dns-hs-d,.dns-hs-ip{overflow-wrap:anywhere}
+.dns-hs-edit td{padding:12px}
+.dns-hs-edit:hover{background:transparent}
+.dns-hs-tip{display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;margin:10px 0 0}
+.dns-link{display:inline-flex;align-items:center;gap:5px;padding:0;border:0;background:none;color:var(--pri);font:inherit;text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+@keyframes dns-flash{from{background:var(--pri-bg)}to{background:transparent}}
+.dns-hs-r.is-flash td{animation:dns-flash 2.4s ease-out}
+@media (max-width:640px){
+  .dns-hs-form{grid-template-columns:minmax(0,1fr)}
+  .dns-hs-b::before{display:none}
+  .dns-hs-bb .btn{flex:1 1 auto}
+}
+
+/* ===== 解析测试 ===== */
+.dns-test-row{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 0}
+.dns-test-row .inp{flex:1 1 220px}
+.dns-hist{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:10px}
+.dns-hist-l{display:flex;flex-wrap:wrap;gap:6px}
+.dns-hist button.chip:hover{color:var(--text);border-color:var(--muted);background:var(--surface)}
+.dns-hist button.chip[aria-disabled=true]{opacity:.55;cursor:not-allowed}
+.dns-res:not(:empty){margin-top:12px}
+.dns-res-h{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin-bottom:6px}
+.dns-res-h b{overflow-wrap:anywhere}
+.dns-ans{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:9px;background:var(--surface2)}
+.dns-ans li{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 6px 4px 12px}
+.dns-ans li+li{border-top:1px solid var(--line)}
+.dns-ip{min-width:0;overflow-wrap:anywhere}
+.dns-res .dns-ans+.hint{margin-top:10px}
+
+/* ===== 设置弹窗 ===== */
+.dns-form{display:grid;gap:12px}
+.dns-form-n{margin:0}
+.dns-fields{display:grid;gap:16px}
+.dns-bnbox{padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface2)}
+.dns-bnbox .dns-bn{margin-top:0}
+.dns-fld{display:grid;gap:5px;min-width:0}
+.dns-fld .sel,.dns-fld .inp{width:100%}
+.dns-fld>.seg{justify-self:start}
+.dns-fld-h{display:flex;align-items:center;min-width:0}
+.dns-custom{display:grid;gap:4px;margin-top:4px}
+.dns-grp{display:grid;gap:12px}
+.dns-grp,.dns-sep,.dns-sw{padding-top:14px;border-top:1px solid var(--line)}
+.dns-sw{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
+.dns-sw-b{display:grid;gap:3px;min-width:0}
+.dns-sw-t{display:flex;flex-wrap:wrap;align-items:center}
+.dns-on,.dns-off{font-size:var(--fs-12);color:var(--muted)}
+.dns-on.is-cur,.dns-off.is-cur{color:var(--text);font-weight:600}
+.dns-on.is-cur{color:var(--ok)}
+.dns-off.is-cur{color:var(--warn)}
+
+/* 服务器选择器: 一个按钮显示当前选择 (名称 + 延迟徽标 + 说明), 点开选择弹层 */
+.dns-pick{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;padding:8px 12px;border:1px solid var(--line2);border-radius:10px;background:var(--surface);color:var(--text);font:inherit;font-size:var(--fs-13-5);text-align:left;cursor:pointer}
+.dns-pick:hover{border-color:var(--muted);background:var(--surface2)}
+.dns-pick-main{flex:1 1 auto;min-width:0;display:grid;gap:2px}
+.dns-pick-top{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;min-width:0}
+.dns-pick-name{min-width:0;overflow-wrap:anywhere}
+.dns-pick-lat:empty{display:none}
+.dns-pick-desc{font-size:var(--fs-12);color:var(--muted);overflow-wrap:anywhere}
+.dns-pick-chev{flex:none;color:var(--muted)}
+
+/* 选择弹层里的列表 (listbox): 按协议分组, 每项 = 名称 + 说明 + 延迟徽标 */
+.dns-pk{display:grid;gap:10px}
+.dns-pk-hint{margin:0}
+.dns-lb{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+.dns-lb-h{padding:6px 12px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--surface2);color:var(--info);font-size:var(--fs-12);font-weight:650}
+.dns-lb-g:first-child>.dns-lb-h{border-top:0}
+.dns-pk-o{display:flex;align-items:center;gap:10px;min-height:48px;padding:8px 12px;border-bottom:1px solid var(--line);cursor:pointer}
+.dns-lb-g:last-child>.dns-pk-o:last-child{border-bottom:0}
+.dns-pk-o:hover{background:var(--surface2)}
+.dns-pk-o[aria-selected=true]{background:var(--pri-bg)}
+.dns-pk-o:focus-visible{outline:2px solid var(--pri);outline-offset:-2px}
+.dns-pk-ck{flex:none;width:18px;display:grid;place-items:center;color:var(--pri)}
+.dns-pk-b{flex:1 1 auto;min-width:0;display:grid;gap:1px}
+.dns-pk-n{min-width:0;overflow-wrap:anywhere}
+.dns-pk-d{font-size:var(--fs-12);color:var(--muted);overflow-wrap:anywhere}

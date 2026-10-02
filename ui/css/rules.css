@@ -1,0 +1,67 @@
+/* enana · rules.css — 规则库页 (类名前缀 .rl-; 只用主题变量, 深色主题自动适配) */
+
+/* ===== 页头 / 工具栏 ===== */
+.rl-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px}
+.rl-hp{display:inline-flex;align-items:center;max-width:100%;min-width:0}
+.rl-upd{margin-right:auto}
+.rl-chips{display:flex;flex-wrap:wrap;gap:6px}
+.rl-card{overflow:hidden}
+.rl-wrap{overflow-x:auto}
+
+/* ===== 表格 ===== */
+.rl-tbl{width:100%;border-collapse:collapse;font-size:var(--fs-13)}
+.rl-tbl th{text-align:left;font-weight:500;color:var(--muted);font-size:var(--fs-12);padding:9px 12px;background:var(--surface2);border-bottom:1px solid var(--line);white-space:nowrap}
+.rl-tbl td{padding:10px 12px;border-top:1px solid var(--line);vertical-align:top}
+.rl-tbl tbody tr:first-child td{border-top:0}
+.rl-tbl tbody tr:hover{background:var(--surface2)}
+.rl-row.is-pending{opacity:.75}
+.rl-c-sw{width:56px}
+.rl-c-sw .sw{margin-top:1px}
+.rl-c-act{width:48px;text-align:right}
+.rl-c-name{min-width:220px}
+.rl-c-tag{min-width:110px}
+.rl-name-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+.rl-name-row .help-i{margin-left:-4px}
+.rl-tbl th .help-i{margin-left:4px;vertical-align:middle}
+.rl-n{font-weight:600;overflow-wrap:anywhere}
+.rl-badges{display:inline-flex;flex-wrap:wrap;gap:4px}
+.rl-d{margin-top:2px}
+.rl-tag,.rl-repo{font-family:var(--mono);font-size:var(--fs-12);overflow-wrap:break-word}
+.rl-c-src{min-width:180px}
+.rl-c-st{min-width:190px}
+.rl-src{display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.rl-st{display:flex;align-items:flex-start;gap:6px}
+.rl-st .ci{flex:none;margin-top:2px}
+.rl-st-t{min-width:0}
+.rl-st.ok .rl-st-t>span{white-space:nowrap}
+.rl-st.ok .ci{color:var(--ok)}
+.rl-st.warn{color:var(--warn)}
+.rl-st.muted{color:var(--muted)}
+.rl-spin{animation:rl-spin .9s linear infinite}
+@keyframes rl-spin{to{transform:rotate(360deg)}}
+
+/* ===== 添加规则集链接 (弹窗) ===== */
+.rl-jobbox:empty{display:none}
+.rl-form>.fld{margin-top:10px}
+.rl-form>.fld-h{margin-top:4px}
+
+/* ===== 窄一点的窗口 (内容区放不下 5 列): 每行变成两行的网格; 手机上再变成卡片 ===== */
+@media (max-width:1260px){
+  .rl-tbl thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+  .rl-tbl thead .help-i{visibility:hidden}                       /* 表头被藏起来了: 里面的「!」不能留在键盘焦点里 (这个说明在「添加规则集链接」里也能打开) */
+  .rl-tbl,.rl-tbl tbody{display:block}
+  .rl-tbl tbody tr{display:grid;grid-template-columns:44px minmax(0,1fr) minmax(0,230px) 44px;grid-template-areas:"sw name st act" "sw tag src act";gap:4px 14px;padding:11px 14px;border-top:1px solid var(--line)}
+  .rl-tbl tbody tr:first-child{border-top:0}
+  .rl-tbl td{display:block;padding:0;border:0;min-width:0}
+  .rl-c-sw{grid-area:sw;width:auto}
+  .rl-c-name{grid-area:name}
+  .rl-c-act{grid-area:act;width:auto}
+  .rl-c-tag{grid-area:tag}
+  .rl-c-src{grid-area:src}
+  .rl-c-st{grid-area:st}
+}
+@media (max-width:760px){
+  .rl-tbl tbody tr{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"sw name act" "sw tag tag" "sw src src" "sw st st";gap:4px 12px;padding:11px 13px}
+  .rl-c-src .rl-src{flex-direction:row;flex-wrap:wrap;align-items:center}
+  .rl-c-src[data-l]:not([data-l=""])::before,.rl-c-st[data-l]:not([data-l=""])::before{content:attr(data-l);display:block;font-size:var(--fs-11);color:var(--muted);line-height:1.3}
+}

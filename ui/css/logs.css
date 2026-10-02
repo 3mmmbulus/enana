@@ -1,0 +1,165 @@
+/* enana · logs.css — 日志页 + 日志设置 (类名前缀 .log- / .lgd- 日志详情弹窗); 连接页 (.cn- / .conn-) 的样式也放在这里 (连接页没有自己的样式文件)。
+ * 只用主题变量, 深色主题自动适配; 小于 14px 的字号一律用 var(--fs-*) (窄屏 / 触屏统一抬到 14px) */
+
+/* ===== 通用: 控件和它的「!」说明不拆开换行 ===== */
+.cn-hp,.log-hp{display:inline-flex;align-items:center;max-width:100%;min-width:0}
+.log-tabs{display:flex;align-items:center;flex-wrap:wrap;gap:2px 4px}
+.log-tabs .subtabs{flex:0 1 auto}
+@media (max-width:480px){ .log-tabs .subtab{padding-left:8px;padding-right:8px} }       /* 窄屏: 三个标签 + 「!」放在一行 */
+.btn.soft-bad .sudo-l,.btn.soft-warn .sudo-l{color:currentColor;opacity:.85}
+
+/* ===== 工具栏 / 说明 ===== */
+.log-day{min-width:210px;max-width:100%}
+.log-panel>*+*{margin-top:10px}
+.log-notice{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;margin:0}
+.log-sum{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;margin:0 2px}
+.log-cap{margin:0 2px}
+.log-foot{margin:0}
+
+/* ===== 日志行 (三种列布局; 手机上变成堆叠卡片) ===== */
+.log-list{list-style:none;margin:0;padding:0}
+.log-list.is-loading{opacity:.55;transition:opacity .15s}
+.log-head,.log-row{display:grid;column-gap:12px;align-items:baseline;padding:7px 14px}
+.log-head{padding-top:8px;padding-bottom:8px;background:var(--surface2);border-bottom:1px solid var(--line);color:var(--muted);font-size:var(--fs-12)}
+.log-row{border-top:1px solid var(--line);font-size:var(--fs-13);line-height:1.5;cursor:pointer}
+.log-row:first-child{border-top:0}
+.log-row:hover{background:var(--surface2)}
+.log-row.is-err{box-shadow:inset 3px 0 0 var(--err-s)}
+.log-row.is-warn{box-shadow:inset 3px 0 0 var(--warn-s)}
+.log-c{min-width:0;overflow-wrap:anywhere}
+.log-t{font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--muted)}
+.log-d,.log-host,.log-node,.log-msg,.log-act.mono{font-family:var(--mono);font-size:var(--fs-12-5)}
+.log-act{font-weight:600}
+.log-act.mono{font-weight:400}
+.log-node{color:var(--muted)}
+.log-ops{grid-template-columns:70px 96px minmax(130px,230px) minmax(0,1fr) 92px}
+.log-access{grid-template-columns:70px minmax(0,1.5fr) minmax(90px,.8fr) 138px minmax(90px,1fr)}
+.log-proxy{grid-template-columns:70px 68px minmax(0,1fr)}
+.log-chip{font-family:var(--mono);font-size:var(--fs-11-5)}
+.log-pgw[hidden]{display:none}
+.log-pg .pager{border-top:1px solid var(--line)}
+/* 时间 = 打开详情的按钮 (看起来像普通文字; 悬停整行时加下划线) */
+.log-open{appearance:none;-webkit-appearance:none;display:inline-flex;align-items:center;max-width:100%;margin:0;padding:0;border:0;background:none;color:inherit;font:inherit;font-variant-numeric:tabular-nums;white-space:nowrap;text-align:left;cursor:pointer}
+.log-row:hover .log-open,.log-open:hover{color:var(--pri);text-decoration:underline}
+.log-open:focus-visible{outline:2px solid var(--pri);outline-offset:2px;border-radius:3px}
+
+/* ===== 日志设置 (设置页卡片 / 弹窗共用) ===== */
+.log-set-warn{margin:0 0 4px}
+.log-set-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;padding:12px 0;border-top:1px solid var(--line)}
+.log-set-row:first-of-type{border-top:0;padding-top:4px}
+.log-set-main{flex:1 1 280px;min-width:0}
+.log-set-t{display:block;font-size:14px}
+.log-set-hd{display:flex;align-items:center;flex-wrap:wrap;gap:0 2px}
+.log-use{display:block}
+.log-use-h{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px}
+.log-use-bar{display:flex;height:10px;border-radius:99px;overflow:hidden;background:var(--line);margin:8px 0 6px}
+.log-use-bar i{display:block;height:100%}
+.log-k-ops{background:var(--pri)}
+.log-k-access{background:var(--auto)}
+.log-k-proxy{background:var(--direct)}
+.log-use-leg{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:4px 18px;font-size:var(--fs-13)}
+.log-use-leg li{display:inline-flex;align-items:center;gap:6px}
+.log-use-leg .num{margin-left:2px}
+.log-dot{width:9px;height:9px;border-radius:50%;flex:none}
+.log-use-note{margin:6px 0 0}
+
+/* ===== 清除日志 (范围单选) ===== */
+.log-opts{display:grid;gap:8px;margin:10px 0}
+.log-opt{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);cursor:pointer}
+.log-opt:hover{border-color:var(--line2)}
+.log-opt.on{border-color:var(--err-s);background:var(--err-bg)}
+.log-opt.unavail{opacity:.55}
+.log-opt input{flex:none;margin:3px 0 0}
+.log-opt-b{display:flex;flex-direction:column;gap:2px;min-width:0}
+.log-opt-b b{font-weight:600;overflow-wrap:anywhere}
+.log-clear .hint{margin-top:10px}
+
+/* ===== 保留天数 ===== */
+.log-presets{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 12px}
+.log-days{width:120px}
+.log-ret .fld{margin-top:0}
+
+/* ===== 手机宽度: 行变成卡片 ===== */
+@media (max-width:760px){
+  .log-head{display:none}
+  .log-row{padding:9px 12px;row-gap:3px;column-gap:10px;align-items:center}
+  .log-c:empty,.log-c.is-na{display:none}
+  .log-t{grid-area:t}.log-who{grid-area:who}.log-act{grid-area:act}.log-d{grid-area:d}.log-res{grid-area:res;justify-self:end}
+  .log-host{grid-area:host}.log-app{grid-area:app}.log-route{grid-area:route;justify-self:end}.log-node{grid-area:node}
+  .log-lv{grid-area:lv;justify-self:end}.log-msg{grid-area:msg}
+  .log-ops{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"t who res" "act act act" "d d d"}
+  .log-access{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"host host host" "t app route" "node node node"}
+  .log-proxy{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"t . lv" "msg msg msg"}
+  .log-host{font-weight:600}
+  .log-day{flex:1 1 100%}
+}
+
+/* ===== 日志详情弹窗 ===== */
+.lgd{display:flex;flex-direction:column;gap:8px;min-width:0}
+.lgd-top{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px}
+.lgd-type{display:inline-flex;align-items:center;gap:6px}
+.lgd-nav{display:inline-flex;align-items:center;gap:4px;margin-left:auto}
+.lgd-pos{min-width:6em;text-align:center;color:var(--muted);font-variant-numeric:tabular-nums}
+.lgd-kv{margin:0;display:flex;flex-direction:column}
+.lgd-r{display:grid;grid-template-columns:minmax(76px,24%) minmax(0,1fr);gap:2px 14px;padding:9px 0;border-top:1px solid var(--line)}
+.lgd-r:first-child{border-top:0}
+.lgd-r dt{margin:0;color:var(--muted);font-size:var(--fs-12-5)}
+.lgd-r dd{margin:0;min-width:0;overflow-wrap:anywhere;font-size:var(--fs-13)}
+.lgd-text{font-size:var(--fs-12-5)}
+.lgd-code{margin-left:6px;font-size:var(--fs-11-5);font-family:var(--mono)}
+.lgd-raw{font-family:var(--mono)}
+.lgd-msg{display:block;white-space:pre-wrap;user-select:text;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface2);font-size:var(--fs-12-5);line-height:1.55}
+.lgd-kvt{width:100%;border-collapse:collapse;font-size:var(--fs-12-5)}
+.lgd-kvt th{width:1%;padding:5px 14px 5px 0;text-align:left;font-weight:500;color:var(--muted);vertical-align:top;white-space:nowrap}
+.lgd-kvt td{padding:5px 0;min-width:0;overflow-wrap:anywhere}
+.lgd-kvt tr+tr th,.lgd-kvt tr+tr td{border-top:1px solid var(--line)}
+
+/* ===== 连接页 ===== */
+.cn-bar{align-items:center}
+@media (min-width:760px){ .cn-bar>.cn-hp:last-child{margin-left:auto} }       /* 监控开关靠右 (放不下时单独一行, 也靠右) */
+.cn-sort{max-width:100%}
+.cn-row{cursor:pointer}
+.cn-row .acts{flex-wrap:nowrap}
+.conn-tbl th .help-i{margin-left:4px}
+/* 表格里的列要在 1280 宽的屏幕上放得下 (多了「详情」按钮): 单元格内边距收紧一点, 服务名太长时截断 (完整名称在 title 和详情弹窗的转发链里); < 760px 是卡片, 不受影响 */
+@media (min-width:760px){
+  .conn-tbl th,.conn-tbl td{padding-left:10px;padding-right:10px}
+  .conn-tbl th:first-child,.conn-tbl td.c-host{min-width:180px}
+  .conn-tbl td .chip{display:inline-block;max-width:170px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+}
+@media (min-width:760px) and (pointer:coarse){ .conn-tbl th:first-child,.conn-tbl td.c-host{min-width:210px} }      /* 触屏的字号是 14px: 主机名要多留一点 */
+@media (max-width:759px){ .conn-tbl thead .help-i{visibility:hidden} }                  /* 表头被藏起来了 (表格变成卡片): 里面的「!」不能留在键盘焦点里 (这个说明在页面标题旁边的「!」里也有) */
+@media (max-width:480px){
+  .cn-bar .seg .si{display:none}                                /* 窄屏: 线路筛选 + 它的「!」要在一行里放得下 (触屏上分段按钮的内边距本来就大) */
+  .cn-bar .seg label>span{padding-left:8px;padding-right:8px}
+}
+
+/* 连接详情弹窗 (一次一条连接; 数值每秒更新) */
+.cn-dt{display:flex;flex-direction:column;gap:8px;min-width:0}
+.cn-top{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px}
+.cn-nav{display:inline-flex;align-items:center;gap:4px;margin-left:auto}
+.cn-pos{min-width:5em;text-align:center;color:var(--muted);font-variant-numeric:tabular-nums}
+.cn-note{margin:0}
+.cn-kv{margin:0;display:flex;flex-direction:column}
+.cn-r{display:grid;grid-template-columns:minmax(84px,26%) minmax(0,1fr);gap:2px 14px;padding:9px 0;border-top:1px solid var(--line)}
+.cn-r:first-child{border-top:0}
+.cn-r dt{margin:0;color:var(--muted);font-size:var(--fs-12-5)}
+.cn-r dd{margin:0;min-width:0;overflow-wrap:anywhere;font-size:var(--fs-13)}
+.cn-v.mono{font-size:var(--fs-12-5)}
+.cn-host{font-weight:600;font-size:var(--fs-13-5)!important}
+.cn-chain{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px}
+.cn-ar{flex:none;color:var(--muted)}
+.cn-ch{max-width:100%;overflow-wrap:anywhere;white-space:normal}
+.cn-bv{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px}
+.cn-b{font-size:var(--fs-13-5);font-variant-numeric:tabular-nums}
+.cn-x{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+
+@media (max-width:480px){
+  .lgd-r,.cn-r{grid-template-columns:minmax(0,1fr)}
+  .lgd-nav,.cn-nav{margin-left:0}
+}
+
+/* 触屏: 每个可点的东西至少 44 x 44 (点整行也能打开详情) */
+@media (pointer:coarse){
+  .log-open{min-width:44px;min-height:44px}
+}

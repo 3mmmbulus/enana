@@ -1,0 +1,111 @@
+/* enana · sites.css — 网站页 (类名前缀: sx- 页面本身, sdm- 域名弹窗)
+ * 原有的 .site / .grp / .flow 等基础样式在 style.css; 这里只放新增和覆盖的部分。颜色只用主题变量 (深色模式自动跟随)。 */
+
+/* ===== 页面 ===== */
+.sx-how{display:flex;align-items:center;flex-wrap:wrap;gap:2px 8px}
+.sx-how .help-i{margin-left:0}
+/* 出口类型图例: 路由颜色只用在图标上, 文字用正文色 (保证对比度, 也不只靠颜色区分) */
+.sx-legend{display:flex;align-items:center;flex-wrap:wrap;gap:2px 16px}
+.sx-lg{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-13);font-weight:600;color:var(--text)}
+.sx-lg .ci{flex:none}
+.sx-lg-pin .ci{color:var(--pin)}
+.sx-lg-auto .ci{color:var(--auto)}
+.sx-lg-direct .ci{color:var(--direct)}
+.sx-lg .help-i{margin-left:0}
+/* 自定义网站卡片里的分页器: 去掉左右内边距 (卡片自己已有) */
+.sx-pgcard>.pager{padding:10px 0 0;margin-top:4px}
+/* 分组标题: 标题按钮 + 「!」 + 撑满整行的展开按钮 */
+.sx-gh{display:flex;align-items:center;gap:0 2px;min-width:0}
+.sx-gh .grp-h{width:auto;flex:0 1 auto;min-width:0;flex-wrap:wrap;gap:2px 10px}
+.sx-gh .help-i{margin-left:4px}
+.sx-gx{flex:1 1 auto;align-self:stretch;display:flex;align-items:center;justify-content:flex-end;min-height:28px;padding:0 2px;border:0;background:none;color:var(--muted);cursor:pointer}
+@media (pointer:coarse){.sx-gx{min-height:44px}}
+/* 窄屏: 「查看域名」按钮单独一行 (放在名称右边会把名称挤成很窄的一列) */
+@media (max-width:480px){
+  .site:not(.custom){grid-template-columns:minmax(0,1fr)}
+  .site:not(.custom)>.sx-view{justify-self:start;margin-left:-8px}
+}
+
+/* ===== 域名弹窗 ===== */
+.sdm{display:flex;flex-direction:column;gap:12px}
+.sdm-title{display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px 8px;min-width:0}
+.sdm-name{overflow-wrap:anywhere}
+/* 当前出口 chip: 路由颜色只给边框和图标, 文字保持正文色 */
+.sdm-p{color:var(--text);font-weight:600;font-size:var(--fs-12);background:transparent}
+.sdm-p .ci{flex:none}
+.sdm-p-pin{border-color:var(--pin)} .sdm-p-pin .ci{color:var(--pin)}
+.sdm-p-auto{border-color:var(--auto)} .sdm-p-auto .ci{color:var(--auto)}
+.sdm-p-direct{border-color:var(--direct)} .sdm-p-direct .ci{color:var(--direct)}
+
+.sdm-tools{display:flex;flex-direction:column;gap:10px}
+.sdm-q{width:100%}
+.sdm-add{display:flex;flex-direction:column;gap:4px}
+.sdm-add-r{display:flex;gap:8px;align-items:stretch}
+.sdm-add-r .inp{flex:1 1 auto;min-width:0}
+.sdm-add-r .btn{flex:none}
+.sdm-in{width:100%}
+/* 输入框下面的提示 (图标 + 文字): 绿 = 可以; 红 = 有问题; 蓝灰 = 说明 */
+.sdm-msg{display:flex;align-items:flex-start;flex-wrap:wrap;gap:2px 6px;font-size:var(--fs-12-5);line-height:1.45;color:var(--muted)}
+.sdm-msg:empty{display:none}
+.sdm-msg .ci{flex:none;margin-top:2px}
+.sdm-msg-t{min-width:0;overflow-wrap:anywhere}
+.sdm-msg.is-ok .sdm-msg-t,.sdm-msg.is-ok .ci{color:var(--ok)}
+.sdm-msg.is-bad .sdm-msg-t,.sdm-msg.is-bad .ci{color:var(--err)}
+.sdm-msg.is-info .sdm-msg-t,.sdm-msg.is-info .ci{color:var(--info)}
+.sdm-msg-n{flex:1 1 100%;color:var(--muted)}
+.sdm-hint{grid-column:1/-1;font-size:var(--fs-12);color:var(--muted)}
+
+.sdm-task:empty{display:none}
+.sdm-task .task{margin-top:0}
+.sdm-task .task>.btn{margin-top:8px}
+.sdm-note{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;margin:0}
+.sdm-note-t{flex:1 1 200px;min-width:0;overflow-wrap:anywhere}
+
+.sdm-lh{display:flex;align-items:center;flex-wrap:wrap;gap:2px 12px;padding-bottom:4px;border-bottom:1px solid var(--line)}
+.sdm-lh b{display:inline-flex;align-items:center}
+.sdm-lh>.muted{margin-left:auto}
+.sdm-list{list-style:none;margin:0;padding:0}
+.sdm-list[hidden]{display:none}
+.sdm-row{position:relative;isolation:isolate;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px 12px;padding:6px 0}
+.sdm-row+.sdm-row{border-top:1px solid var(--line)}
+.sdm-row.is-edit::before,.sdm-row.is-new::before{content:"";position:absolute;inset:2px -8px;z-index:-1;border-radius:8px;pointer-events:none}
+.sdm-main{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;min-width:0}
+.sdm-dom{font-size:var(--fs-13-5);overflow-wrap:anywhere;min-width:0}
+.sdm-act{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:4px}
+/* 被删除的系统域名: 划掉 + 琥珀「已删除」徽标 + 绿色「恢复」 */
+.sdm-row.is-removed .sdm-dom{text-decoration:line-through;color:var(--muted)}
+.sdm-link{display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border:0;border-radius:6px;background:none;color:var(--ok);font:inherit;font-size:var(--fs-13);font-weight:600;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.sdm-link:hover{background:var(--ok-bg)}
+.sdm-link .ci{flex:none}
+@media (pointer:coarse){.sdm-link{min-height:44px;padding:8px 10px}.sdm-row{min-height:44px}}
+/* 正在编辑的行 / 刚添加或修改的行 */
+.sdm-row.is-edit::before{background:var(--surface2);box-shadow:inset 3px 0 0 var(--pri)}
+.sdm-ed{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px 8px}
+.sdm-ed .sdm-msg{grid-column:1/-1}
+.sdm-row.is-new::before{animation:sdm-flash 2.4s ease-out forwards}
+@keyframes sdm-flash{0%,40%{background:var(--pri-bg)}100%{background:transparent}}
+
+/* 社区规则集 / IP 段: 只读 (虚线框 + 灰底, 看起来不是可编辑的) */
+.sdm-ro{padding:10px 12px;border:1px dashed var(--line2);border-radius:10px;background:var(--surface2)}
+.sdm-ro h4{display:flex;align-items:center;flex-wrap:wrap;gap:2px 6px;margin:0;font-size:var(--fs-13);color:var(--text)}
+.sdm-ro h4 .ci{color:var(--muted);flex:none}
+.sdm-ro h4 .help-i{margin-left:0}
+.sdm-ro p{margin:4px 0 0}
+.sdm-ro-l{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
+
+/* 底部操作栏: 左边「重置为系统默认」(红色幽灵按钮) + 「!」, 右边「关闭」 */
+.sdm-dlg .dlg-a{align-items:center}
+@media (min-width:760px){.sdm-dlg .dlg-b{min-height:min(560px,62dvh)}}
+.sdm-dlg .dlg-a .help-i{margin-left:0}
+.btn.sdm-reset{color:var(--err);border-color:var(--err-s);background:transparent}
+.btn.sdm-reset:hover{color:var(--err);border-color:var(--err-s);background:var(--err-bg)}
+.sdm-close{margin-left:auto}
+.sdm-dlg .pager{padding:10px 0 0;border-top:0}
+
+/* 手机: 一行一个域名, 域名单独占一行, 操作按钮在下面 */
+@media (max-width:560px){
+  .sdm-row,.sdm-ed{grid-template-columns:minmax(0,1fr)}
+  .sdm-act{justify-content:flex-start}
+  .sdm-close{margin-left:0}
+  .sdm-lh>.muted{margin-left:0;flex:1 1 100%}
+}

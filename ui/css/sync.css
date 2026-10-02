@@ -1,0 +1,124 @@
+/* enana · sync.css — 云端同步 (设置页卡片 + 弹窗), 类名前缀 .syn-
+ * 只用主题变量, 深色主题自动跟随; 流式布局 (320px–2560px), 没有横向滚动, 英文比中文长 40% 也不溢出;
+ * 触屏 (pointer:coarse) 下所有可点击元素 ≥ 44px。 */
+
+/* ===== 卡片: 各块之间的间距 ===== */
+.syn>*+*{margin-top:14px}
+/* 头部: 图标 · 标题 · 副标题 · 刷新; 窄屏上副标题 (含邮箱) 换到第二行, 刷新按钮仍留在标题行 */
+.syn>.card-h{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;grid-template-areas:"ic t s b";align-items:center;gap:2px 10px;margin-bottom:0}
+.syn>.card-h>.icon{grid-area:ic}
+.syn>.card-h>h2{grid-area:t}
+.syn-sub{grid-area:s;min-width:0;overflow-wrap:anywhere}
+.syn>.card-h>.syn-refresh{grid-area:b;margin-left:0}
+@media (max-width:640px){
+  .syn>.card-h{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"ic t b" "s s s"}
+}
+
+/* ===== 提示条 (离线 / 读取失败 / 辅助服务不可用) ===== */
+.syn-alert{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0}
+.syn-alert>.icon{flex:none;color:var(--warn)}
+.syn-alert-t{flex:1 1 220px;min-width:0;overflow-wrap:anywhere}
+
+/* ===== 同步什么 / 不同步什么 / 加密 (一直可见) ===== */
+.syn-what{display:grid;gap:8px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface2)}
+.syn-line{display:flex;align-items:flex-start;gap:9px;margin:0;line-height:1.55}
+.syn-line>.icon{margin-top:3px}
+.syn-line.ok>.icon{color:var(--ok)}
+.syn-line.no>.icon{color:var(--err)}
+.syn-line.sec>.icon{color:var(--pri)}
+.syn-line>span{min-width:0;overflow-wrap:anywhere}
+.syn-more>summary{display:flex;align-items:center;gap:6px;width:fit-content;max-width:100%;padding:2px 0;cursor:pointer;list-style:none;color:var(--muted);font-size:var(--fs-13,13px)}
+.syn-more>summary::-webkit-details-marker{display:none}
+.syn-more>summary:hover{color:var(--text)}
+.syn-chev{flex:none;transition:transform .15s}
+.syn-more[open] .syn-chev{transform:rotate(90deg)}
+.syn-more[open]>summary{color:var(--text)}
+.syn-more-l{display:grid;gap:7px;margin:6px 0 0;padding-left:22px;color:var(--muted);font-size:var(--fs-13,13px);line-height:1.55}
+.syn-more-l li{overflow-wrap:anywhere}
+
+/* ===== 两个开关 ===== */
+.syn-set{display:flex;align-items:center;justify-content:space-between;gap:12px 18px;padding:11px 0;border-top:1px solid var(--line)}
+.syn-set:first-child{border-top:0;padding-top:0}
+.syn-set-main{flex:1 1 auto;min-width:0}
+.syn-set-t{display:block;font-size:var(--fs-13-5,14px)}
+.syn-set-main>.muted{overflow-wrap:anywhere}
+
+/* ===== 状态: 连接 + 这台电脑 + 云端 ===== */
+.syn-status-h{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;margin-bottom:8px}
+.syn-status-h h3{margin:0;font-size:15px}
+.syn-conn{margin-left:auto}
+.syn-empty{padding:18px 12px}
+.syn-panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr));gap:12px}
+.syn-panel{min-width:0;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface2)}
+.syn-panel-h{display:flex;align-items:center;gap:7px;margin:0 0 8px;font-size:var(--fs-13,13px);font-weight:600;color:var(--muted)}
+.syn-kv{display:grid;grid-template-columns:minmax(76px,max-content) minmax(0,1fr);gap:7px 14px;margin:0}
+.syn-kvr{display:contents}
+.syn-kvr>dt{color:var(--muted);font-size:var(--fs-12-5,12.5px);line-height:1.7}
+.syn-kvr>dd{min-width:0;margin:0;overflow-wrap:anywhere}
+.syn-kvr .chip{white-space:normal;align-items:flex-start;border-radius:12px;line-height:1.4;padding:2px 10px}
+.syn-kvr .chip>.icon{margin-top:2px}
+.syn-status.is-stale .syn-panels{opacity:.55}
+.syn-note{display:flex;flex-direction:column;gap:2px;margin:0 0 4px}
+.syn-facts{padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface2)}
+
+/* ===== 按钮: 窄屏上下堆叠, 宽屏一行 ===== */
+.syn-btns{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}
+.syn-btns .syn-clear{margin-left:auto}
+@media (max-width:560px){
+  .syn-btns{flex-direction:column;align-items:stretch}
+  .syn-btns .btn{width:100%;white-space:normal}
+  .syn-btns .syn-clear{margin-left:0}
+}
+@media (max-width:380px){
+  .syn-kv{grid-template-columns:minmax(0,1fr);gap:0}
+  .syn-kvr>dt{margin-top:7px}
+  .syn-kvr:first-child>dt{margin-top:0}
+}
+
+/* ===== 弹窗 ===== */
+.syn-conf>*+*,.syn-res>*+*,.syn-offer>*+*,.syn-key>*+*,.syn-clearf>*+*{margin-top:12px}
+.syn-conf-m,.syn-res-m,.syn-offer-m,.syn-key-m,.syn-clear-m{margin:0}
+.syn-res .hint{margin:0}
+.syn-prog:focus{outline:none}
+.syn-prog .task{margin-top:0}
+
+/* 冲突: 两个大选项 */
+.syn-choices{display:grid;gap:10px}
+.syn-choice{display:flex;align-items:flex-start;gap:12px;width:100%;padding:12px 14px;border:1px solid var(--line2);border-radius:10px;background:var(--surface);color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.syn-choice:hover{border-color:var(--muted);background:var(--surface2)}
+.syn-choice.danger:hover{border-color:var(--err-s)}
+.syn-choice-ic{flex:none;margin-top:2px;color:var(--pri)}
+.syn-choice.danger .syn-choice-ic{color:var(--err)}
+.syn-choice-b{display:flex;flex-direction:column;gap:3px;min-width:0}
+.syn-choice-b b{font-weight:650;overflow-wrap:anywhere}
+
+/* 恢复方式 (单选卡片) */
+.syn-opts{display:grid;gap:8px}
+.syn-opt{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);cursor:pointer}
+.syn-opt:hover{border-color:var(--line2)}
+.syn-opt.on{border-color:var(--pri);background:var(--pri-bg)}
+.syn-opt input{flex:none;margin:3px 0 0}
+.syn-opt-b{display:flex;flex-direction:column;gap:2px;min-width:0}
+.syn-opt-b b{font-weight:600;overflow-wrap:anywhere}
+
+/* 旧密码 */
+.syn-pw{position:relative;display:block}
+.syn-pw .inp{width:100%;padding-right:44px}
+.syn-eye{position:absolute;right:3px;top:50%;transform:translateY(-50%)}
+.syn-key-err{margin:6px 0 0;font-size:var(--fs-13,13px)}
+
+/* 清除: 确认词 */
+.syn-word{font-weight:700;letter-spacing:.4px}
+.syn-word-inp{width:100%}
+
+/* ===== 触屏: 可点击元素 ≥ 44px ===== */
+@media (pointer:coarse){
+  .syn .btn,.syn-dlg .btn{min-height:44px}
+  .syn .btn.ibtn,.syn-dlg .btn.ibtn{min-width:44px}
+  .syn-more>summary{min-height:44px}
+  .syn-set{min-height:44px}
+  .syn-choice,.syn-opt{min-height:44px}
+  .syn-opt input{width:20px;height:20px}
+  .syn-dlg .inp{min-height:44px}
+  .syn .sw input{inset:-11px -5px;width:calc(100% + 10px);height:calc(100% + 22px)}       /* 开关的点击区域扩大到 ≥ 44px */
+}

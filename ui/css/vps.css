@@ -1,0 +1,150 @@
+/* enana · vps.css — 「添加自己的服务器」向导 + 「我的服务器」列表 (类名前缀 .vps-)
+ * 只用主题变量, 深色主题自动跟随。320px 到 2560px 都能用: 表单是 auto-fit 网格, 依赖表格在窄屏叠成卡片 (.rt),
+ * 触屏 (pointer:coarse) 上按钮至少 44px 高、输入框字号 16px (避免 iOS 聚焦时缩放页面)。 */
+
+/* ===== 向导面板: 表单 ===== */
+.vps{display:block;min-width:0}
+.vps>*+*{margin-top:12px}
+.vps>.vps-view,.vps>.sr{margin-top:0}
+.vps-intro{margin:0}
+.vps-form>*+*{margin-top:12px}
+.vps-fields{display:grid;gap:12px}
+.vps-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:10px 14px}
+.vps-fld{min-width:0}
+.vps-fld .inp,.vps-fld .sel,.vps-fld .ta{width:100%}
+.vps-fld .fld-h{overflow-wrap:anywhere}
+.vps-fld .fld-h.bad-t{color:var(--err)}
+.vps-fld .vps-sug{display:block;margin-top:2px}
+.vps .inp[aria-invalid=true],.vps .ta[aria-invalid=true]{border-color:var(--err)}
+.vps-key{margin:0;min-height:112px;word-break:break-all}
+.vps-key.is-masked{-webkit-text-security:disc}
+.vps-keyrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;margin-top:8px}
+.vps-keynote{min-width:0;overflow-wrap:anywhere}
+.vps .hint{display:flex;align-items:flex-start;gap:8px}
+.vps .hint .ci{flex:none;margin-top:2px;color:var(--muted)}
+.vps .hint.warn .ci{color:var(--warn)}
+.vps .hint.bad .ci{color:var(--err)}
+.vps .hint>span{min-width:0;overflow-wrap:anywhere}
+.vps-privacy{margin:0}
+
+/* ===== 标题 / 进度 / 错误 ===== */
+.vps-h{display:flex;align-items:center;gap:8px;margin:0;font-size:16px;line-height:1.35;overflow-wrap:anywhere}
+.vps-h:focus{outline:none}
+.vps-h .ci{flex:none;color:var(--muted)}
+.vps-h.bad-t .ci{color:var(--err)}
+.vps-h.vps-plain{font-size:15px}
+.vps-h4{display:flex;align-items:center;gap:6px;margin:0 0 6px;font-size:12.5px;font-weight:600;color:var(--muted)}
+.vps-h4 .ci{flex:none}
+.vps-stage>*+*{margin-top:10px}
+.vps-stage .task{margin-top:10px}
+.vps-target{margin:0;overflow-wrap:anywhere}
+.vps-err>*+*{margin-top:10px}
+.vps-err-m{margin:0;font-weight:600;overflow-wrap:anywhere}
+.vps-err .hint{margin-top:10px}
+.vps-steps{margin-top:6px}
+.vps-raw{margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* ===== 检测结果 ===== */
+.vps-res>*+*{margin-top:12px}
+.vps-ro{margin:4px 0 0}
+.vps-sup{border:1px solid var(--line);border-left-width:4px;border-radius:10px;padding:10px 12px;background:var(--surface2)}
+.vps-sup.is-ok{border-left-color:var(--ok)}
+.vps-sup.is-warn{border-left-color:var(--warn);background:var(--warn-bg)}
+.vps-sup.is-bad{border-left-color:var(--err);background:var(--err-bg)}
+.vps-sup-h{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+.vps-os{overflow-wrap:anywhere}
+.vps-sup-n{margin:6px 0 0;overflow-wrap:anywhere}
+.vps-fp{border:1px solid var(--line2);border-radius:10px;padding:10px 12px;background:var(--surface)}
+.vps-fp.is-changed{border-color:var(--err);background:var(--err-bg)}
+.vps-fp-row{display:flex;align-items:center;gap:8px;margin:6px 0}
+.vps-fp-code{flex:1 1 auto;min-width:0;padding:7px 10px;border-radius:8px;font-size:13px;line-height:1.5;word-break:break-all;overflow-wrap:anywhere}
+.vps-fp-help{margin:6px 0 0}
+.vps-fp-warn{margin:6px 0}
+.vps-confirm{display:flex;align-items:flex-start;gap:10px;width:100%;margin-top:10px;padding:10px 12px;border:1px solid var(--line2);border-radius:9px;background:var(--surface2);cursor:pointer;font-size:13.5px;line-height:1.45}
+.vps-confirm input{flex:none;width:18px;height:18px;margin:1px 0 0}
+.vps-confirm.is-strong{border-color:var(--err);background:var(--err-bg)}
+.vps-sudo{border-color:var(--warn);background:var(--warn-bg)}
+.vps-sudo p{margin:0 0 8px}
+.vps-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px}
+.vps-sec{min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--surface2)}
+.vps-sec .hint{margin:8px 0 0}
+.vps-kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 12px;margin:0;font-size:13px}
+.vps-kv dt{color:var(--muted)}
+.vps-kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.vps-chips{display:inline-flex;flex-wrap:wrap;gap:4px 6px;min-width:0}
+.vps-chips .chip{white-space:normal;overflow-wrap:anywhere}
+.vps-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;min-width:0}
+.vps-sec .vps-line{margin-top:8px}
+.vps-tbl{font-size:13px}
+.vps-dn{font-weight:600;overflow-wrap:anywhere}
+.vps-ips{list-style:none;margin:0 0 8px;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:6px 10px}
+.vps-ip{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;min-width:0;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow-wrap:anywhere}
+.vps-ip .ci{color:var(--muted)}
+.vps-sec>p.muted{margin:0}
+
+/* ===== 完成 ===== */
+.vps-done>*+*{margin-top:12px}
+.vps-done-m{margin:0}
+.vps-nodes{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.vps-node{display:grid;gap:4px;min-width:0;padding:8px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface2)}
+.vps-node-t{overflow-wrap:anywhere}
+.vps-node-m{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;min-width:0}
+.vps-node-m .chip{white-space:normal;overflow-wrap:anywhere}
+
+/* ===== 重新识别 (小弹窗) ===== */
+.vps-re-sum{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface2)}
+.vps-re-sum b{overflow-wrap:anywhere}
+.vps-re-sum .ci{color:var(--muted)}
+
+/* ===== 「我的服务器」列表 ===== */
+.vps-card .card-h .ci{color:var(--muted)}
+.vps-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:6px 12px;padding:12px 0}
+.vps-row-main{min-width:0;display:grid;gap:6px}
+.vps-row-t{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;min-width:0}
+.vps-name{overflow-wrap:anywhere}
+.vps-row .chip{white-space:normal;overflow-wrap:anywhere}
+.vps-lbl{flex:none}
+.vps-row .acts{flex-wrap:nowrap}
+@media (max-width:520px){
+  .vps-row{grid-template-columns:minmax(0,1fr)}
+  .vps-kv{grid-template-columns:minmax(0,1fr)}
+  .vps-kv dd{margin-bottom:4px}
+}
+
+/* ===== 触屏: 按钮 ≥ 44px, 输入框 16px ===== */
+@media (pointer:coarse){
+  .vps .inp,.vps .sel,.vps .ta{font-size:16px;min-height:44px}
+  .vps .ta{min-height:120px}
+  .vps .btn,.vps-card .btn{min-height:44px}
+  .vps .btn.ibtn,.vps-card .btn.ibtn{min-width:44px}
+  .vps .pw .inp{padding-right:52px}
+  .vps .pw-eye{min-width:44px;min-height:44px}
+  .vps .seg label>span{min-height:44px}
+  .vps-confirm{min-height:44px;align-items:center}
+  .vps-confirm input{width:22px;height:22px}
+  .vps-dlg .dlg-a .btn{min-height:44px}
+}
+@media (pointer:coarse){
+  dialog.dlg:has(.vps) .dlg-a .btn{min-height:44px}
+}
+/* 承载向导的大弹窗: 内容撑满弹窗宽度 (style.css 里图例用的 .lg{align-items:center} 会误伤 dialog.dlg.lg, 让内容缩成居中的窄条) */
+dialog.dlg:has(.vps){align-items:stretch}
+
+/* ===== 向导表单: 分组 / 对齐 / 隐私提示 ===== */
+.vps-fields{display:grid;gap:12px}
+.vps-fields>*+*{margin-top:0}
+.vps-grp{padding:12px 14px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.vps-grp>*+*{margin-top:10px}
+.vps-grp-h{display:flex;align-items:center;margin:0;color:var(--text);font-size:var(--fs-13-5)}
+.vps-grp-h b{font-weight:650}
+.vps-g-srv{grid-template-columns:minmax(0,3fr) minmax(88px,1fr) minmax(0,2fr)}
+.vps-g-cred{grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr))}
+.vps-g-node{grid-template-columns:minmax(0,2fr) minmax(0,1fr)}
+.vps .fld-lw{display:flex;align-items:center;min-height:22px}
+.vps .fld-lw .fld-l{margin:0}
+.vps-privacy{align-items:flex-start;padding:9px 12px;border-radius:10px;background:var(--ok-bg);border:1px solid transparent;color:var(--text)}
+.vps-privacy .ci{color:var(--ok)!important}
+.imp-tabsub{margin:8px 0 0;line-height:1.5}
+@media (max-width:700px){
+  .vps-g-srv,.vps-g-node{grid-template-columns:minmax(0,1fr)}
+}

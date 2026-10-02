@@ -1,0 +1,180 @@
+/* enana · 流量统计页 (v-traffic.js) — 类名都以 .trf- 开头; 只用主题变量 (深色主题自动适配); 字号用 --fs-* (窄屏 / 触屏统一抬到 14px) */
+
+/* ===== 工具栏: 范围标签 | 更新时间 + 刷新 (.trf-tools; .trf-bar 是图表里的柱子) ===== */
+.trf-tools{justify-content:space-between;gap:8px 12px}
+.trf-tools .subtabs{flex:0 1 auto}
+.trf-tools-r{display:flex;align-items:center;gap:6px 12px;margin-left:auto;min-width:0}
+.trf-upd{white-space:nowrap}
+.trf-hp{display:inline-flex;align-items:center;max-width:100%;min-width:0}
+
+/* ===== 状态: 加载占位 / 内容 ===== */
+.trf-panel{position:relative;min-width:0}
+.trf-skel,.trf-data{display:flex;flex-direction:column;gap:12px;min-width:0}
+.trf-skel-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.trf-sk{display:block;height:92px;border-radius:var(--r);background:linear-gradient(90deg,var(--surface2) 25%,var(--line) 50%,var(--surface2) 75%);background-size:300% 100%;animation:trf-shim 1.4s ease-in-out infinite}
+.trf-sk-chart{height:320px}
+@keyframes trf-shim{0%{background-position:100% 0}100%{background-position:0 0}}
+.trf-data{transition:opacity .15s}
+.trf-data.is-loading{opacity:.55}
+
+/* ===== 周期 / 提示 / 说明 ===== */
+.trf-meta{display:flex;flex-direction:column;gap:4px}
+.trf-period,.trf-since,.trf-note{display:flex;align-items:flex-start;gap:7px;margin:0}
+.trf-period{font-size:var(--fs-13-5)}
+.trf-period .ci,.trf-since .ci,.trf-note .ci{flex:none;margin-top:3px;color:var(--muted)}
+.trf-since span,.trf-note span,.trf-period span{min-width:0;overflow-wrap:anywhere}
+.trf-stale{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;margin:0}
+.trf-stale .ci{flex:none;color:var(--warn)}
+.trf-stale-t{flex:1 1 220px;min-width:0;overflow-wrap:anywhere}
+.trf-notes{display:flex;flex-direction:column;gap:6px}
+
+/* ===== 合计卡片 ===== */
+.trf-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.trf-stat{display:flex;flex-direction:column;gap:3px;min-width:0;padding:12px 14px;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);box-shadow:var(--shadow)}
+.trf-stat-h{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:var(--fs-13)}
+.trf-stat-ic{flex:none;display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--surface2);color:var(--muted)}
+.trf-stat.is-down .trf-stat-ic{background:var(--pri-bg);color:var(--pri)}
+.trf-stat-v{font-size:22px;font-weight:650;line-height:1.25;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.trf-stat-s{min-height:1.4em}
+
+/* ===== 卡片通用 ===== */
+.trf-card{position:relative;min-width:0}
+.trf-hd{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;margin-bottom:10px}
+.trf-hd-t{flex:1 1 220px;min-width:0;display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 12px}
+.trf-hd h3{margin:0;font-size:15px}
+.trf-hd-t>.help-i{margin-left:-8px}                     /* 标题旁边的「!」: 紧贴标题 (它不放进 h3 里, 免得区块的名称里多出一段「说明: …」) */
+.trf-note .help-i{margin:-2px 0 -2px -2px}
+.trf-card.flush .trf-hd{margin:0;padding:14px 16px 10px}
+
+/* ===== 柱状图 ===== */
+.trf-chart-body{display:flex;flex-direction:column;gap:10px;min-width:0}
+.trf-legend{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:4px 16px;font-size:var(--fs-13)}
+.trf-legend li{display:inline-flex;align-items:center;gap:7px}
+.trf-sw{display:inline-block;flex:none;width:12px;height:12px;border-radius:3px}
+.trf-c-direct{background:var(--direct)}
+.trf-c-pin{background:var(--pin)}
+.trf-c-auto{background:var(--auto)}
+.trf-c-down{background:var(--pri)}
+.trf-c-up{background:repeating-linear-gradient(135deg,var(--pri) 0 2px,var(--pri-bg) 2px 5px)}
+.trf-sw.trf-c-up{box-shadow:inset 0 0 0 1px var(--pri)}
+
+.trf-chart{--trf-h:200px;--trf-xh:26px;--trf-slot:9px;--trf-pad:18px;position:relative;display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:4px;padding-top:9px}
+.trf-y{position:relative;height:var(--trf-h);min-width:3.4em}
+.trf-yt{position:absolute;right:2px;transform:translateY(50%);font-size:var(--fs-11);line-height:1;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.trf-scroll{min-width:0;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;scrollbar-width:thin}
+.trf-inner{position:relative;box-sizing:border-box;min-width:calc(var(--n,1) * var(--trf-slot) + 2 * var(--trf-pad));padding:0 var(--trf-pad)}
+.trf-grid{position:absolute;left:0;right:0;top:0;height:var(--trf-h);pointer-events:none}
+.trf-gl{position:absolute;left:0;right:0;height:0;border-top:1px solid var(--line)}
+.trf-gl.is-base{border-top-color:var(--line2)}
+.trf-bars{position:relative;display:flex;height:calc(var(--trf-h) + var(--trf-xh))}
+
+/* 一根柱子 = 一个按钮 (整列都能点 / 悬停, 命中区域比柱子本身宽); 柱子在 .trf-col 里贴着底部, x 轴标签在下面 */
+.trf-bar{appearance:none;-webkit-appearance:none;position:relative;flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:stretch;margin:0;padding:0;border:0;border-radius:4px;background:none;color:inherit;font:inherit;cursor:pointer;overflow:visible}
+.trf-bar:hover{background:var(--surface2)}
+.trf-bar.is-sel{background:var(--pri-bg);box-shadow:inset 0 0 0 1.5px var(--pri)}
+.trf-bar:focus-visible{outline:2px solid var(--pri);outline-offset:-2px;z-index:1}
+.trf-col{flex:none;height:var(--trf-h);display:flex;align-items:flex-end;justify-content:center}
+.trf-bar.is-pre .trf-col{background:repeating-linear-gradient(135deg,transparent 0 5px,var(--line) 5px 6px)}
+.trf-stack{display:flex;flex-direction:column-reverse;width:min(72%,40px);min-width:3px;min-height:2px;overflow:hidden;border-radius:3px 3px 0 0;transition:height .25s ease}
+.trf-bar.is-zero .trf-stack{display:none}
+.trf-seg{display:block;flex:0 0 0%}
+.trf-seg+.trf-seg{box-shadow:0 1px 0 var(--surface)}
+.m-route .trf-seg.trf-c-down,.m-route .trf-seg.trf-c-up,.m-dir .trf-seg.trf-c-direct,.m-dir .trf-seg.trf-c-pin,.m-dir .trf-seg.trf-c-auto{display:none}
+.trf-xl{flex:none;height:var(--trf-xh);box-sizing:border-box;display:flex;align-items:flex-start;justify-content:center;padding-top:6px;font-size:var(--fs-11);line-height:1.2;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;visibility:hidden}
+.trf-bar.has-l .trf-xl{visibility:visible}
+.trf-hint{display:flex;align-items:center;gap:6px;margin:-2px 0 0}
+.trf-hint .ci{flex:none}
+
+/* 悬停 / 键盘焦点提示: 放在图表容器里 (柱子旁边, 不盖住柱子); 不接收鼠标 */
+.trf-tip{position:absolute;z-index:6;width:max-content;max-width:min(300px,100%);padding:8px 10px;border:1px solid var(--line2);border-radius:9px;background:var(--surface);color:var(--text);box-shadow:0 8px 24px rgba(0,0,0,.2);font-size:var(--fs-12-5);pointer-events:none}
+.trf-tip-t{margin-bottom:4px;font-weight:650;overflow-wrap:anywhere}
+
+/* ===== 选中柱子的详情 (点 / 轻触 / 方向键 / ‹ ›) ===== */
+.trf-detail{border:1px solid var(--line);border-radius:10px;background:var(--surface2);padding:10px 12px}
+.trf-d-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.trf-d-ttl{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:4px 8px;text-align:center}
+.trf-d-t{font-size:var(--fs-13-5);overflow-wrap:anywhere}
+.trf-d-note{margin:4px 0 2px;text-align:center}
+.trf-d-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 28px;margin-top:10px}
+.trf-d-cols h4{margin:0 0 2px;font-size:var(--fs-12-5);font-weight:600;color:var(--muted)}
+.trf-dl{display:flex;flex-direction:column;margin:0}
+.trf-r{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:2px 12px;padding:5px 0;border-top:1px solid var(--line)}
+.trf-r:first-child{border-top:0}
+.trf-r-k{display:inline-flex;align-items:center;gap:7px;min-width:0;margin:0;overflow-wrap:anywhere}
+.trf-r-v{display:flex;align-items:baseline;flex-wrap:wrap;justify-content:flex-end;gap:0 8px;margin:0;text-align:right;font-variant-numeric:tabular-nums}
+.trf-r-x{font-size:var(--fs-11-5);overflow-wrap:anywhere}
+.trf-r.is-zero .trf-r-v b{font-weight:400;color:var(--muted)}
+.trf-d-total .trf-r{padding-top:2px}
+.trf-d-total .trf-r-k{font-weight:600}
+.trf-d-total .trf-r-v b{font-size:18px}
+.trf-d-body.is-compact .trf-r{padding:2px 0;border-top:0}
+.trf-d-body.is-compact .trf-dl+.trf-dl{margin-top:4px;padding-top:4px;border-top:1px solid var(--line2)}
+
+/* ===== 线路占比 ===== */
+.trf-rts{display:flex;flex-direction:column}
+.trf-rt{display:grid;grid-template-columns:minmax(130px,180px) minmax(0,1fr) 56px 92px auto;grid-template-areas:"n b p t u";align-items:center;gap:4px 14px;padding:11px 0;border-top:1px solid var(--line)}
+.trf-rt:first-child{border-top:0;padding-top:2px}
+.trf-rt.is-direct{--c:var(--direct)}
+.trf-rt.is-pin{--c:var(--pin)}
+.trf-rt.is-auto{--c:var(--auto)}
+.trf-rt-n{grid-area:n;display:flex;align-items:center;gap:8px;min-width:0}
+.trf-rt-ic{flex:none;display:grid;place-items:center;color:var(--c)}
+.trf-rt-b{grid-area:b;height:10px;border-radius:99px;background:var(--line);overflow:hidden}
+.trf-rt-b>i{display:block;height:100%;border-radius:99px;background:var(--c)}
+.trf-rt-p{grid-area:p}
+.trf-rt-t{grid-area:t}
+.trf-rt-u{grid-area:u;display:flex;flex-wrap:wrap;gap:2px 14px;font-size:var(--fs-12-5);font-variant-numeric:tabular-nums}
+.trf-ud{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+
+/* ===== 常用节点 ===== */
+.trf-tbl .trf-rkc{width:52px}
+.trf-tbl td.trf-rk{color:var(--muted)}
+.trf-rk-in{display:none}
+.trf-sh{min-width:150px}
+.trf-share{display:flex;align-items:center;gap:8px}
+.trf-pbar{flex:1 1 60px;min-width:40px;height:8px;border-radius:99px;background:var(--line);overflow:hidden}
+.trf-pbar>i{display:block;height:100%;border-radius:99px;background:var(--pri)}
+.trf-pct{flex:none;min-width:3.4em}
+.trf-none{margin:0;padding:18px 16px;text-align:center}
+
+/* ===== 触屏: 每根柱子至少 44px 宽 (图表在自己的区域里横向滚动), 详情里的 ‹ › 是 .btn (已经 >= 44px) ===== */
+@media (pointer:coarse){
+  .trf-chart{--trf-slot:44px}
+}
+
+/* ===== 窄屏 ===== */
+@media (max-width:759px){
+  .trf-chart{--trf-h:170px}
+  .trf-tools .subtabs,.trf-tools .subtab{white-space:nowrap}
+  .trf-tools .trf-hp{width:100%}
+  .trf-tools .subtabs{display:flex;flex:1 1 auto;min-width:0}
+  .trf-tools .subtab{flex:1 1 auto;justify-content:center;padding-left:8px;padding-right:8px}
+  .trf-tools-r{width:100%;justify-content:space-between;margin-left:0}
+  .trf-tbl td.trf-rk,.trf-tbl th.trf-rkc{display:none}
+  .trf-rk-in{display:inline}
+  .trf-rt{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n t" "b b" "p u";padding:12px 0}
+  .trf-rt-p{text-align:left}
+  .trf-rt-u{justify-content:flex-end}
+  .trf-sh{min-width:0}
+}
+@media (max-width:560px){
+  .trf-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .trf-stat.is-total{grid-column:1/-1}
+  .trf-d-cols{grid-template-columns:minmax(0,1fr)}
+  .trf-skel-row{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .trf-skel-row .trf-sk:last-child{grid-column:1/-1}
+}
+@media (max-width:360px){
+  .trf-stat-v{font-size:20px}
+  .trf-stat{padding:10px 12px}
+  .trf-r-v{justify-content:flex-start;text-align:left}
+}
+/* 手机横屏 (高度很矮): 图表矮一点 */
+@media (max-height:480px) and (orientation:landscape){
+  .trf-chart{--trf-h:130px}
+  .trf-sk-chart{height:200px}
+}
+@media (prefers-reduced-motion:reduce){
+  .trf-sk{animation:none}
+  .trf-data,.trf-stack{transition:none}
+}

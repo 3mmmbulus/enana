@@ -1,0 +1,209 @@
+# macOS 适配层: 系统代理 / 后台服务 (launchd) / 快捷命令 / 系统识别。
+# 将来的 Linux / Windows 版本实现同名函数即可 (lib/os-linux.sh, lib/os-windows.ps1), 其余代码不用改。
+
+os_detect() { # 设置 OS MACOS MACOS_MAJOR ARCH CHIP BREW IS_ADMIN
+  OS=$(uname -s); MACOS=$(sw_vers -productVersion 2>/dev/null || echo 0); MACOS_MAJOR=${MACOS%%.*}
+  ARCH=amd64; [ "$(uname -m)" = arm64 ] && ARCH=arm64
+  [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ] && ARCH=arm64      # Rosetta 终端里也选原生版
+  CHIP=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "$ARCH")
+  BREW=$(command -v brew 2>/dev/null || true)
+  IS_ADMIN=0; id -Gn | tr ' ' '\n' | grep -qx admin && IS_ADMIN=1 || true
+}
+
+# ---------- launchd ----------
+os_service_info() { # 一次 launchctl 调用得到 SVC_LOADED SVC_RUNNING SVC_PID
+  local out; SVC_LOADED=0; SVC_RUNNING=0; SVC_PID=''
+  out=$(launchctl print "$GUI/$LABEL" 2>/dev/null) || return 0
+  SVC_LOADED=1
+  case $out in *"state = running"*) SVC_RUNNING=1 ;; esac
+  SVC_PID=$(printf '%s\n' "$out" | awk '/^[[:space:]]*pid = /{print $3; exit}')
+}
+os_service_loaded()  { launchctl print "$GUI/$LABEL" >/dev/null 2>&1; }
+os_service_running() { launchctl print "$GUI/$LABEL" 2>/dev/null | grep -q 'state = running'; }
+os_service_pid()     { launchctl print "$GUI/$LABEL" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}'; }
+os_service_restart() { launchctl kickstart -k "$GUI/$LABEL" >/dev/null 2>&1 || os_service_start; }
+os_service_start() {
+  local i; launchctl bootout "$GUI/$LABEL" 2>/dev/null || true; sleep 1
+  for i in 1 2 3; do launchctl bootstrap "$GUI" "$PLIST" 2>/dev/null && { launchctl kickstart "$GUI/$LABEL" >/dev/null 2>&1 || true; return 0; }; sleep 1; done
+  return 1
+}
+os_service_stop() { launchctl bootout "$GUI/$LABEL" 2>/dev/null || true; }
+
+_write_if_changed() { # 文件 内容  -> 0=已写入(内容有变化) 1=无变化
+  [ -f "$1" ] && [ "$(cat "$1")" = "$2" ] && return 1
+  mkdir -p "$(dirname "$1")"; printf '%s\n' "$2" > "$1"; return 0
+}
+os_write_plists() { # 写主服务 / 本地辅助服务(inetd) / 每日维护 三个 plist; 返回变化的数量
+  local n=0 xml_head='<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>'
+  _write_if_changed "$PLIST" "$xml_head
+<key>Label</key><string>$LABEL</string>
+<key>ProgramArguments</key><array><string>$H/sing-box</string><string>run</string><string>-c</string><string>$H/config.json</string><string>-D</string><string>$H</string></array>
+<key>RunAtLoad</key>$([ "${AUTOSTART:-1}" = 1 ] && echo '<true/>' || echo '<false/>')
+<key>KeepAlive</key>$([ "${AUTOSTART:-1}" = 1 ] && echo '<true/>' || echo '<false/>')
+<key>StandardOutPath</key><string>$H/sing-box.log</string>
+<key>StandardErrorPath</key><string>$H/sing-box.log</string>
+</dict></plist>" && n=$((n+1))
+  if [ "${SEL_helper:-1}" = 1 ]; then
+    _write_if_changed "$PLIST_API" "$xml_head
+<key>Label</key><string>$LABEL_API</string>
+<key>ProgramArguments</key><array><string>/bin/bash</string><string>$H/lib/api.sh</string></array>
+<key>inetdCompatibility</key><dict><key>Wait</key><false/></dict>
+<key>Sockets</key><dict><key>Listeners</key><dict><key>SockNodeName</key><string>127.0.0.1</string><key>SockServiceName</key><string>$API_PORT</string></dict></dict>
+<key>AbandonProcessGroup</key><true/>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin</string></dict>
+<key>StandardErrorPath</key><string>$H/api.log</string>
+</dict></plist>" && n=$((n+1))
+  fi
+  # 每天凌晨一次的维护任务 (总是安装): 日志按天切分/压缩/按保留期清理 · 检查更新 · (设置里允许时) 每 3 天更新规则集与订阅
+  _write_if_changed "$PLIST_UPD" "$xml_head
+<key>Label</key><string>$LABEL_UPD</string>
+<key>ProgramArguments</key><array><string>$H/enana</string><string>maintain</string><string>--quiet</string></array>
+<key>StartCalendarInterval</key><dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>30</integer></dict>
+<key>RunAtLoad</key><false/>
+<key>StandardOutPath</key><string>$H/update.log</string>
+<key>StandardErrorPath</key><string>$H/update.log</string>
+</dict></plist>" && n=$((n+1))
+  # 每分钟一次的定时任务: 流量统计采样 + 登录会话心跳 (被其它设备下线时本机自动退出登录并关闭代理)
+  _write_if_changed "$PLIST_TICK" "$xml_head
+<key>Label</key><string>$LABEL_TICK</string>
+<key>ProgramArguments</key><array><string>$H/enana</string><string>tick</string><string>--quiet</string></array>
+<key>StartInterval</key><integer>60</integer>
+<key>RunAtLoad</key><true/>
+<key>StandardOutPath</key><string>$H/tick.log</string>
+<key>StandardErrorPath</key><string>$H/tick.log</string>
+</dict></plist>" && n=$((n+1))
+  return $n
+}
+os_aux_load() { # 加载辅助 plist (已加载的先卸载再加载, 保证拿到新内容)
+  local l p
+  for l in "$LABEL_API:$PLIST_API" "$LABEL_UPD:$PLIST_UPD" "$LABEL_TICK:$PLIST_TICK"; do
+    p=${l#*:}; l=${l%%:*}; [ -f "$p" ] || continue
+    launchctl bootout "$GUI/$l" 2>/dev/null || true; launchctl bootstrap "$GUI" "$p" 2>/dev/null || true
+  done
+}
+os_aux_unload() { launchctl bootout "$GUI/$LABEL_API" 2>/dev/null || true; launchctl bootout "$GUI/$LABEL_UPD" 2>/dev/null || true; launchctl bootout "$GUI/$LABEL_TICK" 2>/dev/null || true; }
+
+# ---------- 系统代理 (所有已启用的网络服务) ----------
+os_sysproxy_services() { networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | grep -v '^\*' || true; }
+os_sysproxy_ok() { # 所有网络服务的 Web / Secure Web / SOCKS 代理都已指向本地端口
+  local s k out any=0
+  while IFS= read -r s; do
+    any=1
+    for k in webproxy securewebproxy socksfirewallproxy; do
+      out=$(networksetup -get$k "$s" 2>/dev/null) || return 1
+      printf '%s\n' "$out" | grep -q '^Enabled: Yes' || return 1
+      printf '%s\n' "$out" | grep -q "^Port: $PORT\$" || return 1
+      printf '%s\n' "$out" | grep -q '^Server: 127.0.0.1' || return 1
+    done
+  done < <(os_sysproxy_services)
+  [ "$any" = 1 ]
+}
+os_sysproxy_cached() { # networksetup 很慢: 结果缓存 20 秒 (设置/关闭系统代理后会清缓存)
+  local f="$H/.cache-sysproxy" ts val t; t=$(date +%s)
+  if [ -f "$f" ]; then read -r ts val < "$f"; if [ $(( t - ${ts:-0} )) -lt 20 ]; then [ "$val" = 1 ]; return; fi; fi
+  if os_sysproxy_ok; then printf '%s 1\n' "$t" > "$f"; return 0; fi
+  printf '%s 0\n' "$t" > "$f"; return 1
+}
+os_sysproxy_foreign() { # 打印正在使用其它代理设置的网络服务 (用于安装前提醒)
+  local s k out
+  while IFS= read -r s; do
+    for k in webproxy securewebproxy socksfirewallproxy; do
+      out=$(networksetup -get$k "$s" 2>/dev/null) || continue
+      if printf '%s\n' "$out" | grep -q '^Enabled: Yes' && ! printf '%s\n' "$out" | grep -q "^Port: $PORT\$"; then printf '%s\n' "$s"; break; fi
+    done
+  done < <(os_sysproxy_services)
+}
+os_sysproxy_mine() { # 任何网络服务的代理指向本地端口 -> 0
+  local s k out
+  while IFS= read -r s; do
+    for k in webproxy securewebproxy socksfirewallproxy; do
+      out=$(networksetup -get$k "$s" 2>/dev/null) || continue
+      printf '%s\n' "$out" | grep -q '^Enabled: Yes' && printf '%s\n' "$out" | grep -q "^Port: $PORT\$" && printf '%s\n' "$out" | grep -q '^Server: 127.0.0.1' && return 0
+    done
+  done < <(os_sysproxy_services)
+  return 1
+}
+os_sysproxy_backup() {
+  local s k
+  : > "$H/proxy-backup.txt"
+  while IFS= read -r s; do
+    for k in webproxy securewebproxy socksfirewallproxy; do printf '[%s %s]\n%s\n' "$s" "$k" "$(networksetup -get$k "$s" 2>/dev/null)" >> "$H/proxy-backup.txt"; done
+  done < <(os_sysproxy_services)
+}
+os_sysproxy_set() { # on|off  (需要管理员密码)
+  local s k v; [ "$1" = on ] && v=开启 || v=关闭
+  rm -f "$H/.cache-sysproxy"
+  sudo -v || return 1
+  while IFS= read -r s; do
+    if [ "$1" = on ]; then
+      sudo networksetup -setwebproxy "$s" 127.0.0.1 "$PORT"
+      sudo networksetup -setsecurewebproxy "$s" 127.0.0.1 "$PORT"
+      sudo networksetup -setsocksfirewallproxy "$s" 127.0.0.1 "$PORT"
+      sudo networksetup -setproxybypassdomains "$s" localhost 127.0.0.1 '*.local' 169.254/16 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+    else
+      for k in webproxy securewebproxy socksfirewallproxy; do sudo networksetup -set${k}state "$s" off; done
+    fi
+    ok "$s: 系统代理已$v"
+  done < <(os_sysproxy_services)
+}
+
+# ---------- 快捷命令 enana ----------
+SHORTCUT_NAME=enana
+SHORTCUT_DIR=${ENANA_SHORTCUT_DIR:-/usr/local/bin}
+shortcut_path() { # 打印已安装的快捷命令路径 (指向本程序的才算)
+  local p
+  for p in "$SHORTCUT_DIR/$SHORTCUT_NAME" "$HOME/.local/bin/$SHORTCUT_NAME"; do
+    [ -L "$p" ] && [ "$(readlink "$p")" = "$H/enana" ] && { printf '%s\n' "$p"; return 0; }
+  done
+  return 1
+}
+shortcut_install() {
+  local link=$SHORTCUT_DIR/$SHORTCUT_NAME rc marker='# enana 快捷命令'
+  if { mkdir -p "$SHORTCUT_DIR" 2>/dev/null && ln -sf "$H/enana" "$link" 2>/dev/null; }; then SHORTCUT=$link; return 0; fi
+  if [ "$IS_ADMIN" = 1 ] && sudo -v 2>/dev/null && sudo mkdir -p "$SHORTCUT_DIR" && sudo ln -sf "$H/enana" "$link"; then SHORTCUT=$link; return 0; fi
+  mkdir -p "$HOME/.local/bin" && ln -sf "$H/enana" "$HOME/.local/bin/$SHORTCUT_NAME" || return 1
+  SHORTCUT="$HOME/.local/bin/$SHORTCUT_NAME"
+  case ":$PATH:" in *":$HOME/.local/bin:"*) return 0 ;; esac
+  case ${SHELL:-} in */zsh) rc="$HOME/.zshrc" ;; *) rc="$HOME/.bash_profile" ;; esac
+  grep -qF "$marker" "$rc" 2>/dev/null || printf '\n%s\nexport PATH="$HOME/.local/bin:$PATH"\n' "$marker" >> "$rc"
+  SHORTCUT_RC=$rc
+}
+shortcut_remove() {
+  local p rc
+  for p in "$SHORTCUT_DIR/$SHORTCUT_NAME" "$HOME/.local/bin/$SHORTCUT_NAME"; do
+    if [ -L "$p" ] && [ "$(resolve_path "$p")" = "$H/enana" ]; then rm -f "$p" 2>/dev/null || sudo rm -f "$p"; fi
+  done
+  for rc in "$HOME/.zshrc" "$HOME/.bash_profile"; do
+    if [ -f "$rc" ] && grep -qF '# enana 快捷命令' "$rc"; then   # 只删除我们加的两行 (标记行 + 紧随其后的 export)
+      awk -v m='# enana 快捷命令' '$0==m {skip=1; next} skip && /^export PATH="\$HOME\/\.local\/bin:\$PATH"$/ {skip=0; next} {skip=0; print}' "$rc" > "$rc.tmp" && cat "$rc.tmp" > "$rc"; rm -f "$rc.tmp"
+    fi
+  done
+  return 0
+}
+
+os_open() { open "$1" >/dev/null 2>&1 || true; }
+
+os_date_minus_days() { date -v-"${1:-0}"d +%F; }      # N 天前的日期 (YYYY-MM-DD); macOS 的 BSD date
+
+# 品牌更名前的安装 (v1 / v2 早期: ~/.tokyo-proxy, launchd 标签 local.tokyo-proxy*, 命令 tproxy / ereldaili) -> 迁移到 ~/.enana
+os_legacy_cleanup() { # 卸载旧的 launchd 任务、旧快捷命令、旧 shell 配置里的标记行; 不动数据目录
+  local l f p d rc
+  for l in local.tokyo-proxy local.tokyo-proxy.api local.tokyo-proxy.update; do
+    launchctl bootout "$GUI/$l" 2>/dev/null || true
+    rm -f "$PLIST_DIR/$l.plist"
+  done
+  for f in tproxy ereldaili; do
+    for d in "$SHORTCUT_DIR" "$HOME/.local/bin"; do
+      p="$d/$f"
+      [ -L "$p" ] || continue
+      case "$(readlink "$p")" in *"/$LEGACY_HOME_NAME/"*|*"/.enana/"*) rm -f "$p" 2>/dev/null || sudo rm -f "$p" ;; esac
+    done
+  done
+  for rc in "$HOME/.zshrc" "$HOME/.bash_profile"; do
+    [ -f "$rc" ] && grep -qE '^# (tproxy|ereldaili|tokyo-proxy) 快捷命令$' "$rc" || continue
+    awk '/^# (tproxy|ereldaili|tokyo-proxy) 快捷命令$/ {skip=1; next} skip && /^export PATH="\$HOME\/\.local\/bin:\$PATH"$/ {skip=0; next} {skip=0; print}' "$rc" > "$rc.tmp" && cat "$rc.tmp" > "$rc"; rm -f "$rc.tmp"
+  done
+  return 0
+}

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>enana</title>
+<script src="boot.js"></script>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="css/sites.css">
+<link rel="stylesheet" href="css/apps.css">
+<link rel="stylesheet" href="css/settings.css">
+<link rel="stylesheet" href="css/servers.css">
+<link rel="stylesheet" href="css/speed.css">
+<link rel="stylesheet" href="css/traffic.css">
+<link rel="stylesheet" href="css/logs.css">
+<link rel="stylesheet" href="css/rules.css">
+<link rel="stylesheet" href="css/dns.css">
+<link rel="stylesheet" href="css/vps.css">
+<link rel="stylesheet" href="css/sync.css">
+</head>
+<body>
+<a class="skiplink" href="#main" data-i18n="a11y.skip"></a>
+<noscript><p style="padding:16px">enana needs JavaScript to be enabled.</p></noscript>
+
+<div class="shell">
+  <aside id="side" class="side">
+    <div class="side-top">
+      <div class="brand"><span class="logo" aria-hidden="true"></span><span class="wordmark">enana</span><span id="dot-brand" class="dot" role="img"></span></div>
+    </div>
+    <nav id="nav" class="nav" data-i18n-aria="nav.aria"></nav>
+    <div id="side-bot" class="side-bot">
+      <button id="upd-side" class="upd-ind ind-side" type="button"></button>
+    </div>
+  </aside>
+  <div id="scrim" class="scrim"></div>
+
+  <div class="main-col">
+    <header class="top">
+      <span id="burger-slot"></span>
+      <h1 id="page-title" class="top-ttl" tabindex="-1"></h1>
+      <span id="status-chip" class="chip st" role="status" aria-live="polite"><span id="dot" class="dot"></span><span id="status-text"></span></span>
+      <div class="top-ctl">
+        <span id="proxy-slot"></span>
+        <button id="acct-btn" class="acct" type="button"><span id="acct-av" class="acct-av" aria-hidden="true"></span><span id="acct-t" class="acct-t"></span><span id="acct-dot" class="acct-dot" hidden></span></button>
+      </div>
+    </header>
+    <div id="scroll" class="scroll">
+      <main id="main" class="page" tabindex="-1">
+        <div id="banners" aria-live="polite"></div>
+        <section id="v-overview" class="view" hidden></section>
+        <section id="v-apps" class="view" hidden></section>
+        <section id="v-sites" class="view" hidden></section>
+        <section id="v-rules" class="view" hidden></section>
+        <section id="v-dns" class="view" hidden></section>
+        <section id="v-servers" class="view" hidden></section>
+        <section id="v-conns" class="view" hidden></section>
+        <section id="v-traffic" class="view" hidden></section>
+        <section id="v-speed" class="view" hidden></section>
+        <section id="v-logs" class="view" hidden></section>
+        <section id="v-settings" class="view" hidden></section>
+      </main>
+      <footer id="foot" class="foot muted sm"></footer>
+    </div>
+  </div>
+</div>
+
+<div id="floaters"><div id="updcard"></div><div id="toasts" role="status" aria-live="polite"></div><div id="dock" data-i18n-aria="dock.aria"></div></div>
+
+<script src="i18n/i18n.js"></script>
+<script src="i18n/zh.js"></script>
+<script src="i18n/en.js"></script>
+<script src="importer.js"></script>
+<script src="icons.js"></script>
+<script src="core.js"></script>
+<script src="prefs.js"></script>
+<script src="ui.js"></script>
+<script src="auth.js"></script>
+<script src="actions.js"></script>
+<script src="data.js"></script>
+<script src="plan.js"></script>
+<script src="updates.js"></script>
+<script src="v-overview.js"></script>
+<script src="v-apps.js"></script>
+<script src="v-sites.js"></script>
+<script src="v-rules.js"></script>
+<script src="v-dns.js"></script>
+<script src="v-servers.js"></script>
+<script src="v-import.js"></script>
+<script src="v-conns.js"></script>
+<script src="v-vps.js"></script>
+<script src="v-sync.js"></script>
+<script src="v-traffic.js"></script>
+<script src="v-speed.js"></script>
+<script src="v-logs.js"></script>
+<script src="v-settings.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

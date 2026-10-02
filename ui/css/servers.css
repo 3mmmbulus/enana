@@ -1,0 +1,28 @@
+/* enana · servers.css — 服务器页: 名称按钮 / 详情弹窗 / 官方线路占位卡片 */
+.link-b{display:inline;padding:0;border:0;background:none;color:var(--text);font:inherit;font-weight:700;text-align:left;cursor:pointer;overflow-wrap:anywhere}
+.link-b:hover{color:var(--pri);text-decoration:underline}
+.link-b:focus-visible{outline:2px solid var(--pri);outline-offset:2px;border-radius:3px}
+.nddlg .nd>*+*{margin-top:10px}
+.nd-badges{margin-bottom:6px}
+.nd-sec{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.nd-sec-h{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+.nd-sec-h .ci{color:var(--warn)}
+.nd-secret{display:grid;gap:6px}
+.nd-f{display:grid;grid-template-columns:96px minmax(0,1fr) auto;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--line);border-radius:9px;background:var(--surface2)}
+.nd-fk{color:var(--muted);font-size:var(--fs-12-5)}
+.nd-fv{min-width:0;overflow-wrap:anywhere;word-break:break-all;user-select:all;font-family:var(--mono);font-size:var(--fs-13)}
+.nd-secret-f{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin-top:8px}
+.srv-off{border-style:dashed}
+.srv-off.is-soon{background:var(--surface2);opacity:.92}
+.srv-off .card-h .pro-ic{color:#c68a00}
+.srv-off-b{display:inline-flex}
+.srv-off .card-h .btn{margin-left:auto}
+@media (max-width:759px){
+  .nd-f{grid-template-columns:minmax(0,1fr) auto}
+  .nd-fk{grid-column:1/-1}
+}
+
+.tbl .c-role .sel{width:100%;max-width:190px}
+@media (pointer:coarse){
+  .link-b{display:inline-flex;align-items:center;min-height:44px}
+}

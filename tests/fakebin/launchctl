@@ -1,0 +1,18 @@
+#!/bin/bash
+# 测试用假 launchctl: 只在临时目录里启动/停止进程, 绝不触碰真实 launchd
+S=$FAKE_STATE; echo "launchctl $*" >> "$S/calls.log"
+alive() { [ -f "$S/pid-$1" ] && kill -0 "$(cat "$S/pid-$1")" 2>/dev/null; }
+start() {
+  case $1 in
+    com.enana.proxy) nohup "$ENANA_HOME/sing-box" run -c "$ENANA_HOME/config.json" -D "$ENANA_HOME" >> "$ENANA_HOME/sing-box.log" 2>&1 & echo $! > "$S/pid-$1" ;;
+    com.enana.proxy.api) API_ERR="$ENANA_HOME/api.log" nohup python3 "$TESTS_DIR/inetd.py" "$API_PORT" "$ENANA_HOME/lib/api.sh" >/dev/null 2>&1 & echo $! > "$S/pid-$1" ;;
+  esac
+}
+stop() { if [ -f "$S/pid-$1" ]; then kill "$(cat "$S/pid-$1")" 2>/dev/null; rm -f "$S/pid-$1"; sleep 0.3; fi; }
+case $1 in
+  print) l=$(basename "$2"); if alive "$l"; then echo "state = running"; echo "pid = $(cat "$S/pid-$l")"; exit 0; fi; [ -f "$S/loaded-$l" ] && { echo "state = waiting"; exit 0; }; exit 113 ;;
+  bootstrap) l=$(basename "$3" .plist); touch "$S/loaded-$l"; start "$l"; exit 0 ;;
+  bootout) l=$(basename "$2"); stop "$l"; rm -f "$S/loaded-$l"; exit 0 ;;
+  kickstart) shift; [ "$1" = -k ] && shift; l=$(basename "$1"); stop "$l"; start "$l"; exit 0 ;;
+esac
+exit 0
