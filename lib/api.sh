@@ -94,7 +94,7 @@ serve_static() {
 case $path in /|"$ADMIN_PATH"|"$ADMIN_PATH"/*) serve_static ;; esac
 
 # ---------- 以下是 JSON 接口: 到这里才加载其余模块 ----------
-for _f in i18n jobs servers apps sites fetch os-darwin auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os-darwin auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps; do . "$LIB/$_f.sh"; done
 i18n_init
 OP_WHO=dashboard; export OP_WHO
 BODY=$(mktemp "${TMPDIR:-/tmp}/enana-body.XXXXXX"); trap 'rm -f "$BODY" "$BODY".*' EXIT
@@ -154,18 +154,18 @@ ep_login() {
   local u p k; u=$(fp user); p=$(fp password); k=$(fp kick)
   case $k in ''|*[!A-Za-z0-9-]*) [ -z "$k" ] || fail "设备编号无效" ;; esac
   if auth_login "$u" "$p" "$k"; then
-    oplog dashboard "登录" "$(auth_mask_email "$AUTH_EMAIL") ($AUTH_VIA)" ok
+    oplog dashboard "登录" "$(kv user "$(auth_mask_email "$AUTH_EMAIL")" via "$AUTH_VIA")" ok
     [ "$AUTH_VIA" = online ] && { job_spawn content-sync "$RULE_STEPS" >/dev/null; job_spawn sync-login "$RULE_STEPS" >/dev/null; ( plan_refresh >/dev/null 2>&1 & ); }       # 登录后顺带拉取云端内容和套餐 (后台, 失败不影响登录)
     okj "\"token\":\"$(auth_secret)\",\"account\":\"$(jesc "$AUTH_EMAIL")\",\"via\":\"$AUTH_VIA\""
     return
   fi
-  [ "$AUTH_CODE" = E_BAD_CREDENTIALS ] && oplog dashboard "登录失败" "$(auth_mask_email "$(auth_lower "$u")")" error
+  [ "$AUTH_CODE" = E_BAD_CREDENTIALS ] && oplog dashboard "登录失败" "$(kv user "$(auth_mask_email "$(auth_lower "$u")")" code "$AUTH_CODE")" error
   auth_fail_reply
 }
 ep_register() {
   local u p; u=$(fp user); p=$(fp password)
   if auth_register "$u" "$p"; then
-    oplog dashboard "注册账号" "$(auth_mask_email "$AUTH_EMAIL")" ok
+    oplog dashboard "注册账号" "$(kv user "$(auth_mask_email "$AUTH_EMAIL")")" ok
     job_spawn content-sync "$RULE_STEPS" >/dev/null
     okj "\"registered\":true,\"token\":\"$(auth_secret)\",\"account\":\"$(jesc "$AUTH_EMAIL")\",\"via\":\"$AUTH_VIA\""
     return
@@ -173,13 +173,13 @@ ep_register() {
   auth_fail_reply
 }
 ep_logout() { # 退出账号: 自动关闭代理 + 令牌立刻失效 + 释放云端设备名额; 核心在后台重启一次换上新令牌 (期间已是全部直连)
-  oplog dashboard "退出账号" "$(auth_mask_email "$(auth_current_email)")" ok
+  oplog dashboard "退出账号" "$(kv user "$(auth_mask_email "$(auth_current_email)")")" ok
   auth_logout
   job_spawn auth-sync '同步令牌' >/dev/null
   okj
 }
 ep_proxy() { # 代理总开关 + 模式 (on=0|1, mode=auto|global; 至少给一个)
-  local on mode; on=$(fp on); mode=$(fp mode)
+  local on mode was_on was_mode; on=$(fp on); mode=$(fp mode); was_on=${PROXY_ENABLED:-0}; was_mode=${PROXY_MODE:-auto}
   [ -n "$on" ] || [ -n "$mode" ] || fail "参数无效"
   case $on in ''|0|1) ;; *) fail "参数无效" ;; esac
   case $mode in ''|auto|global) ;; *) fail "代理模式无效" ;; esac
@@ -188,7 +188,7 @@ ep_proxy() { # 代理总开关 + 模式 (on=0|1, mode=auto|global; 至少给一�
   fi
   [ -n "$mode" ] && proxy_set_mode "$mode"
   [ -n "$on" ] && proxy_set_enabled "$on"
-  oplog dashboard "$([ -n "$on" ] && { [ "$on" = 1 ] && echo 开启代理 || echo 关闭代理; } || echo 切换代理模式)" "${mode:+$mode}" ok
+  oplog dashboard "$([ -n "$on" ] && { [ "$on" = 1 ] && echo 开启代理 || echo 关闭代理; } || echo 切换代理模式)" "$(kv enabled "${PROXY_ENABLED:-0}" mode "${PROXY_MODE:-auto}" was_enabled "$was_on" was_mode "$was_mode")" ok
   okj "\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\""
 }
 ep_devices() { # 我的设备 (云端)
@@ -200,7 +200,7 @@ ep_devices_kick() {
   local uid; uid=$(fp uid)
   case $uid in ''|*[!A-Za-z0-9-]*) fail "设备编号无效" ;; esac
   session_kick "$uid" || fail "下线失败: 连不上云端, 或这台设备已不在线 / 不能下线自己" E_NETWORK
-  oplog dashboard "下线设备" "$uid" ok
+  oplog dashboard "下线设备" "$(kv device "$uid")" ok
   okj
 }
 ep_stats() {
@@ -210,9 +210,9 @@ ep_stats() {
 }
 ep_password() { # 在本机修改账号密码 (旧密码 + 新密码): 云端校验, 当前设备保持登录, 其它设备全部下线
   local old new; old=$(fp old); new=$(fp new)
-  if auth_change_password "$old" "$new"; then oplog dashboard "修改密码" "$(auth_mask_email "$(auth_current_email)")" ok; okj; return; fi
+  if auth_change_password "$old" "$new"; then oplog dashboard "修改密码" "$(kv user "$(auth_mask_email "$(auth_current_email)")")" ok; okj; return; fi
   case $AUTH_CODE in
-    E_BAD_CREDENTIALS) oplog dashboard "修改密码失败" "旧密码不对" error; fail "当前密码不正确" E_BAD_CREDENTIALS "\"wait\":$(auth_wait_seconds)" ;;
+    E_BAD_CREDENTIALS) oplog dashboard "修改密码失败" "$(kv code E_BAD_CREDENTIALS reason old_password_wrong)" error; fail "当前密码不正确" E_BAD_CREDENTIALS "\"wait\":$(auth_wait_seconds)" ;;
     E_WEAK_PASSWORD)   fail "新密码至少 8 位, 并且不能和旧密码相同" E_WEAK_PASSWORD ;;
     E_AUTH)            deny 401 E_AUTH "登录已失效, 请重新登录" ;;
     E_ACCOUNT_UNREACHABLE) fail "连不上 enana.cc, 修改密码必须在线 (离线登录时不能修改)。请检查网络后重试" E_ACCOUNT_UNREACHABLE ;;
@@ -220,10 +220,10 @@ ep_password() { # 在本机修改账号密码 (旧密码 + 新密码): 云端校
   esac
 }
 ep_auth_verify() { # 敏感操作前再次输入密码 -> 5 分钟有效的 sudo 令牌
-  if auth_step_up "$(fp password)"; then oplog dashboard "二次验证" "" ok; okj "\"sudo\":\"$SUDO_TOKEN\",\"ttl\":$SUDO_TTL"; return; fi
+  if auth_step_up "$(fp password)"; then oplog dashboard "二次验证" "$(kv endpoint "$path")" ok; okj "\"sudo\":\"$SUDO_TOKEN\",\"ttl\":$SUDO_TTL"; return; fi
   case $AUTH_CODE in
     E_LOCKED)          fail "尝试次数过多, 请 $AUTH_WAIT 秒后再试" E_LOCKED "\"wait\":$AUTH_WAIT" ;;
-    E_BAD_CREDENTIALS) oplog dashboard "二次验证失败" "" error; fail "密码不正确" E_BAD_CREDENTIALS "\"wait\":$(auth_wait_seconds)" ;;
+    E_BAD_CREDENTIALS) oplog dashboard "二次验证失败" "$(kv code E_BAD_CREDENTIALS)" error; fail "密码不正确" E_BAD_CREDENTIALS "\"wait\":$(auth_wait_seconds)" ;;
     E_AUTH)            deny 401 E_AUTH "需要登录" ;;
     *)                 fail "请输入登录密码" E_INVALID ;;
   esac
@@ -233,19 +233,19 @@ ep_servers_secret() { # 查看某个节点的密码 / UUID / 密钥 (需 sudo)
   [ -n "$tag" ] && srv_has_tag "$tag" || fail "找不到这个服务器" E_NOT_FOUND
   fields=$(srv_secret_fields "$tag"); rc=$?
   case $rc in 0) ;; 3) fail "官方线路的凭据不能查看" E_FORBIDDEN ;; *) fail "找不到这个服务器" E_NOT_FOUND ;; esac
-  oplog dashboard "查看服务器凭据" "$tag" ok
+  oplog dashboard "查看服务器凭据" "$(kv tag "$tag")" ok
   json "{\"ok\":true,\"tag\":\"$(jesc "$tag")\",\"fields\":${fields:-[]}}"
 }
 ep_sub_url() { # 查看订阅链接 (需 sudo)
   local name url; name=$(qp name)
   url=$(awk -F'|' -v n="$name" '$1 == n { print $2; exit }' "$H/subs.tsv" 2>/dev/null)
   [ -n "$url" ] || fail "找不到这个订阅" E_NOT_FOUND
-  oplog dashboard "查看订阅链接" "$name" ok
+  oplog dashboard "查看订阅链接" "$(kv sub "$name")" ok
   json "{\"ok\":true,\"name\":\"$(jesc "$name")\",\"url\":\"$(jesc "$url")\"}"
 }
 ep_export() { # 导出配置备份 (含凭据, 需 sudo)
   local body; body=$(snap_build all) || fail "配置太大, 无法导出" E_INVALID
-  oplog dashboard "导出配置备份" "" ok
+  oplog dashboard "导出配置备份" "$(kv scope all)" ok
   send 200 application/json "$body" "Content-Disposition: attachment; filename=\"enana-backup-$(date +%Y%m%d).json\"\r\n"
 }
 ep_sync_settings() { # enabled=0|1 auto=0|1 [password=…: 第一次开启时本机还没有同步密钥 → 用登录密码派生]
@@ -263,7 +263,7 @@ ep_sync_settings() { # enabled=0|1 auto=0|1 [password=…: 第一次开启时本
   [ -z "$en" ] || sync_set ENABLED "$en"
   [ -z "$au" ] || sync_set AUTO "$au"
   [ "$en" != 0 ] || sync_set AUTO 0                                                  # 关闭同步时自动同步也一起关
-  oplog dashboard "云端同步设置" "${en:+enabled=$en }${au:+auto=$au}" ok
+  oplog dashboard "云端同步设置" "$(kv enabled "$en" auto "$au")" ok
   okj
 }
 sync_open_reply() { # sync_open_remote 的返回码 -> 失败响应 (成功时什么也不做)
@@ -310,7 +310,7 @@ ep_sync_clear() { # 删除云端的同步数据 (需 sudo)
   code=$(session_call /dev/null DELETE /api/enana/v1/sync/snapshot)
   case $code in 200) ;; 401) deny 401 E_AUTH "登录已失效, 请重新登录" ;; *) fail "连不上 enana.cc, 暂时无法清除" E_ACCOUNT_UNREACHABLE ;; esac
   sync_set BASE_VERSION 0; sync_set SYNCED_HASH ''; sync_set CONFLICT 0; sync_remote_forget
-  oplog dashboard "云端同步: 清除云端数据" "" ok
+  oplog dashboard "云端同步: 清除云端数据" "$(kv scope cloud)" ok
   okj
 }
 # ---------- 添加自己的服务器 (SSH 一键部署; 凭据只经由 600 权限的临时文件交给后台任务, 见 lib/vps.sh) ----------
@@ -350,7 +350,7 @@ ep_vps_redetect() {
 ep_vps_forget() {
   local id; id=$(fp id); case $id in v-[0-9a-f]*) ;; *) fail "服务器编号无效" ;; esac
   vps_forget "$id" || fail "找不到这台服务器的记录" E_NOT_FOUND
-  oplog dashboard "忘记自己的服务器的记录" "$id" ok; okj
+  oplog dashboard "忘记自己的服务器的记录" "$(kv id "$id")" ok; okj
 }
 ep_prefs_set() { # 正文是 JSON 对象文本
   prefs_set "$BODY" || fail "$PREFS_ERR" E_INVALID
@@ -413,14 +413,60 @@ ep_apps_custom_delete() {
 }
 
 ep_override() {
-  local kind value state; kind=$(qp kind); value=$(qp value); state=$(qp state)
+  local kind value state target old oldt src
+  kind=$(qp kind); value=$(qp value); state=$(qp state); target=$(qp target)
   case $state in follow|direct|pin|auto) ;; *) fail "状态无效" ;; esac
   ovr_valid "$kind" "$value" || fail "名称格式不正确"
+  [ "$state" = pin ] || target=''
+  ovr_target_valid "$target" || fail "指定的固定出口不存在 (固定出口至少要有 2 个才能单独指定)"
+  old=$(ovr_get "$kind" "$value"); oldt=$(ovr_target "$kind" "$value"); [ -n "$old" ] || old=follow
+  src=''; [ "$kind" = site ] && autosite_registry_has "$value" && src=auto
   lock_take || fail "系统繁忙, 请重试" E_BUSY
-  if [ "$kind" = site ] && [ "$state" = follow ]; then ovr_delete site "$value"; else ovr_set "$kind" "$value" "$state" ack; fi
+  if [ "$kind" = site ] && [ "$state" = follow ]; then ovr_delete site "$value"; autosite_forget "$value" dismiss; else ovr_set "$kind" "$value" "$state" ack "$target"; fi
   ovr_sync; lock_drop
-  oplog dashboard "修改应用/网站策略" "$kind $value → $state" ok
+  oplog dashboard "修改应用/网站策略" "$(kv kind "$kind" name "$value" from "$old" to "$state" target_from "$oldt" target_to "$target" src "$src")" ok
   okj
+}
+
+ep_apps_adopt() { # 采用推荐设置: 不带 names = 所有「新应用」; 带 names (换行分隔) = 只处理这几个 (用户已经看过这一页, 新应用的标记已被确认)
+  local names n F=''; names=$(fp names)
+  if [ -n "$names" ]; then F=$(mktemp); printf '%s\n' "$names" > "$F"; fi
+  lock_take && { apps_adopt "$F"; lock_drop; }
+  [ -z "$F" ] || rm -f "$F"
+  oplog dashboard "采用推荐设置" "$(kv scope "${names:+selected}" count "$(printf '%s' "$names" | awk 'NF' | wc -l | tr -d ' ')")" ok
+  okj
+}
+
+ep_policy() { # 切换一个策略开关 (网站 / 默认出口 / 节点选择): 由辅助服务代为切换, 这样每一次切换都有操作记录 (原来 → 现在)
+  local tag name res from sitename=''
+  tag=$(fp tag); name=$(fp name)
+  case $tag in svc-[a-z0-9-]*|svc-rs-[a-z0-9-]*|Final|Global|PIN) ;; *) fail "策略名称不合法" ;; esac
+  [ -n "$name" ] && [ ${#name} -le 120 ] || fail "参数无效"
+  res=$(clash GET "/proxies/$tag" | perl -MJSON::PP -e 'local $/; my $j = eval { JSON::PP->new->decode(<STDIN>) } or exit 3; my $n = shift; my %a = map { $_ => 1 } @{ $j->{all} || [] }; print +($a{$n} ? "ok" : "no"), "\t", ($j->{now} // "")' "$name") || fail "代理核心没有运行, 无法切换" E_NOT_RUNNING
+  [ "${res%%$'\t'*}" = ok ] || fail "这个选项不存在 (可能节点已经被删除或改名)" E_NOT_FOUND
+  from=${res#*$'\t'}
+  [ "$from" = "$name" ] || { [ -z "$(clash PUT "/proxies/$tag" "{\"name\":\"$(jesc "$name")\"}")" ] || fail "切换失败, 请稍后重试" E_NOT_RUNNING; }
+  case $tag in svc-rs-*) ;; svc-*) sitename=$(awk -F'|' -v id="${tag#svc-}" '$1==id {print $2; exit}' "$(content_file services.conf)" 2>/dev/null) ;; esac
+  oplog dashboard "切换策略" "$(kv kind selector tag "$tag" site "$sitename" from "$from" to "$name")" ok
+  okj "\"from\":\"$(jesc "$from")\",\"to\":\"$(jesc "$name")\""
+}
+
+ep_audit() { # 仪表盘直接对代理核心做的、不经过辅助服务的操作 (目前只有「断开连接」), 事后来这里补一条操作记录
+  local ev scope n host; ev=$(fp ev); scope=$(fp scope); n=$(num "$(fp n)"); host=$(fp host)
+  case $ev in
+    kill)
+      case $scope in all|one|host) ;; *) scope=all ;; esac
+      printf '%s' "$host" | grep -Eq '^[A-Za-z0-9._:-]{0,120}$' || host=''
+      oplog dashboard "断开连接" "$(kv scope "$scope" count "${n:-0}" host "$host")" ok ;;
+    *) fail "参数无效" ;;
+  esac
+  okj
+}
+
+ep_sites_auto_clear() { # 撤销所有「自动识别」添加的网站
+  local n; n=$(autosite_remove_all)
+  oplog dashboard "自动识别: 全部撤销" "$(kv count "${n:-0}")" ok
+  okj "\"removed\":${n:-0}"
 }
 
 ep_servers_import() { # 先对副本「干跑」, 立即返回数量与逐行错误; 真正的写入在后台任务里 (持锁, 失败自动回滚)
@@ -478,7 +524,7 @@ ep_sub_save() { # name + body=url
   sub_url_ok "$url" || fail "订阅链接不合法"
   op_lock || fail "系统繁忙, 请重试" E_BUSY; sub_save "$name" "$url"; [ -z "$save" ] || sync_list_set sub "$name" "$save"; op_unlock
   [ "$save" = 1 ] && sync_after_save || true
-  oplog dashboard "保存订阅" "$name" ok
+  oplog dashboard "保存订阅" "$(kv sub "$name")" ok
   okj
 }
 ep_sub_delete() {
@@ -498,15 +544,35 @@ ep_settings_get() {
   json "{\"ok\":true,\"lang\":\"${LANG_UI:-zh}\",$(settings_json),\"ports\":{\"proxy\":$PORT,\"ui\":$UI_PORT,\"api\":$API_PORT,\"speed\":$SPEED_PORT},\"proxy\":{\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\"},\"account\":{\"email\":\"$(jesc "$(auth_current_email)")\"}}"
 }
 ep_settings_set() {
-  local lang days alog job='' changed=0
-  lang=$(fp lang); days=$(fp log_days); alog=$(fp access_log)
+  local lang hours days alog lcore lops asites job='' changed=0 oldh restart=''
+  lang=$(fp lang); hours=$(fp log_hours); alog=$(fp access_log); lcore=$(fp log_core); lops=$(fp log_ops); asites=$(fp auto_sites)
+  if [ -z "$hours" ]; then days=$(fp log_days); case $days in ''|*[!0-9]*) ;; *) hours=$((days * 24)) ;; esac; fi          # 旧版仪表盘按天提交
   if [ -n "$lang" ]; then case " $I18N_LANGS " in *" $lang "*) ;; *) fail "不支持的语言" ;; esac; fi
-  if [ -n "$days" ]; then case $days in *[!0-9]*) fail "保留天数必须是 1–365 的整数" ;; esac; [ "$days" -ge 1 ] && [ "$days" -le "$LOG_DAYS_MAX" ] || fail "保留天数必须是 1–365 的整数"; fi
-  if [ -n "$alog" ]; then case $alog in 0|1) ;; *) fail "参数无效" ;; esac; fi
+  if [ -n "$hours" ]; then case $hours in *[!0-9]*) fail "日志保留时长必须是 12 小时到 30 天" ;; esac; [ "$hours" -ge "$LOG_HOURS_MIN" ] && [ "$hours" -le "$LOG_HOURS_MAX" ] || fail "日志保留时长必须是 12 小时到 30 天"; fi
+  for _v in "$alog" "$lcore" "$lops"; do case $_v in ''|0|1) ;; *) fail "参数无效" ;; esac; done
+  if [ -n "$asites" ]; then
+    case $asites in 0|1) ;; *) fail "参数无效" ;; esac
+    [ "$asites" = 0 ] || [ "$(srv_count)" -gt 0 ] || fail "需要先添加服务器: 自动识别出打不开的网站后, 才有代理可以加" E_NO_SERVERS
+  fi
   [ -n "$lang" ] && { settings_set LANG_UI "$lang"; LANG_UI=$lang; changed=1; }
-  if [ -n "$days" ]; then settings_set LOG_DAYS "$days"; LOG_DAYS=$days; ( logs_purge >/dev/null 2>&1 & ); changed=1; oplog dashboard "修改设置" "日志保留 $days 天" ok; fi
-  if [ -n "$alog" ] && [ "$alog" != "${ACCESS_LOG:-1}" ]; then
-    job=$(job_spawn settings-apply '准备|下载规则集|生成配置|校验配置|应用并重启|等待就绪' "ACCESS_LOG=$alog"); changed=1
+  if [ -n "$hours" ]; then
+    oldh=$(logs_hours); settings_set LOG_HOURS "$hours"; sed -i '' '/^LOG_DAYS=/d' "$H/settings.env" 2>/dev/null || true; LOG_HOURS=$hours; ( logs_purge >/dev/null 2>&1 & ); changed=1
+    oplog dashboard "修改设置" "$(kv setting log_hours from "$oldh" to "$hours")" ok
+  fi
+  if [ -n "$lops" ] && [ "$lops" != "${LOG_OPS:-1}" ]; then                          # 关闭操作记录: 先写下「关闭」这一条, 再停; 开启: 先开再写
+    [ "$lops" = 0 ] && oplog_force dashboard "修改设置" "$(kv setting log_ops from 1 to 0)" ok
+    settings_set LOG_OPS "$lops"; LOG_OPS=$lops; changed=1
+    [ "$lops" = 1 ] && oplog_force dashboard "修改设置" "$(kv setting log_ops from 0 to 1)" ok
+  fi
+  if [ -n "$asites" ] && [ "$asites" != "${AUTO_SITES:-0}" ]; then
+    settings_set AUTO_SITES "$asites"; oplog dashboard "修改设置" "$(kv setting auto_sites from "${AUTO_SITES:-0}" to "$asites")" ok; AUTO_SITES=$asites; changed=1
+    [ "$asites" = 1 ] || rm -f "$H/.autosite.off" "$H/.autosite.ev"
+  fi
+  [ -n "$alog" ] && [ "$alog" != "${ACCESS_LOG:-1}" ] && restart="$restart ACCESS_LOG=$alog"
+  [ -n "$lcore" ] && [ "$lcore" != "${LOG_CORE:-1}" ] && restart="$restart LOG_CORE=$lcore"
+  if [ -n "$restart" ]; then
+    # shellcheck disable=SC2086
+    job=$(job_spawn settings-apply '准备|下载规则集|生成配置|校验配置|应用并重启|等待就绪' $restart); changed=1
   fi
   [ "$changed" = 1 ] || fail "没有要修改的设置"
   okj "${job:+\"job\":\"$job\"}"
@@ -517,7 +583,7 @@ ep_logs() {
   local type day q; type=$(qp type); day=$(qp day); q=$(qp q | tr -d '\000-\037' | cut -c1-100)
   case $type in ops|access|proxy) ;; *) fail "日志类型无效" ;; esac
   valid_day "$day" || fail "日期格式不正确"
-  json "$(logs_query "$type" "$day" "$q" "$(num "$(qp limit)")" "$(num "$(qp offset)")")"
+  json "$(logs_query "$type" "$day" "$q" "$(num "$(qp limit)")" "$(num "$(qp offset)")" "$(qp f)")"
 }
 ep_logs_export() {
   local type day; type=$(qp type); day=$(qp day); [ -n "$day" ] || day=$(date +%F)
@@ -526,12 +592,23 @@ ep_logs_export() {
   logs_export "$type" "$day" > "$BODY.exp" 2>/dev/null
   send_file 200 text/plain "$BODY.exp" "Content-Disposition: attachment; filename=\"enana-$type-$day.log\"\r\n"
 }
+ep_logs_bundle() { # 诊断导出: 一个自描述的文本文件 (格式见 docs/DIAGNOSTICS.md); hours=1..720|all  sections=ops,access,proxy,snapshot
+  local hours secs sec bad=0 out
+  hours=$(qp hours); secs=$(qp sections); [ -n "$hours" ] || hours=24; [ -n "$secs" ] || secs=ops,access,proxy,snapshot
+  case $hours in all) ;; ''|*[!0-9]*) fail "时间范围无效" ;; esac
+  for sec in $(printf '%s' "$secs" | tr ',' ' '); do case $sec in ops|access|proxy|snapshot) ;; *) bad=1 ;; esac; done
+  [ "$bad" = 0 ] && [ -n "$secs" ] || fail "要导出的内容无效"
+  out="$BODY.bundle"
+  logs_bundle "$hours" "$secs" > "$out" 2>/dev/null
+  oplog dashboard "导出诊断日志" "$(kv hours "$hours" sections "$secs" bytes "$(wc -c < "$out" | tr -d ' ')")" ok
+  send_file 200 text/plain "$out" "Content-Disposition: attachment; filename=\"enana-diagnostics-$(date +%Y%m%d-%H%M%S).txt\"\r\n"
+}
 ep_logs_clear() {
   local type before freed; type=$(fp type); before=$(fp before)
   case $type in ops|access|proxy|all) ;; *) fail "日志类型无效" ;; esac
   valid_day "$before" || fail "日期格式不正确"
   freed=$(logs_clear "$type" "$before")
-  oplog dashboard "清除日志" "$type${before:+ (早于 $before)}" ok
+  oplog dashboard "清除日志" "$(kv type "$type" before "$before" freed "${freed:-0}")" ok
   okj "\"freed\":${freed:-0}"
 }
 
@@ -627,7 +704,7 @@ ep_speed_start() {
 ep_speed_targets_save() {
   local id; id=$(fp id); case $id in *[!a-z0-9_-]*) fail "目标编号无效" ;; esac
   speed_target_save "$id" "$(fp name)" "$(fp group)" "$(fp url)" "$(fp expect)" "$(fp icon)" || fail "$SPEED_ERR" E_INVALID
-  oplog dashboard "$([ -n "$id" ] && echo 修改测速目标 || echo 添加测速目标)" "$SPEED_ID" ok; id=$SPEED_ID
+  oplog dashboard "$([ -n "$id" ] && echo 修改测速目标 || echo 添加测速目标)" "$(kv id "$SPEED_ID")" ok; id=$SPEED_ID
   okj "\"id\":\"$id\""
 }
 ep_speed_targets_op() { # delete|restore|reset
@@ -637,7 +714,7 @@ ep_speed_targets_op() { # delete|restore|reset
     restore) speed_target_restore "$id" || fail "$SPEED_ERR" E_NOT_FOUND ;;
     reset)   speed_targets_reset || fail "$SPEED_ERR" E_BUSY ;;
   esac
-  oplog dashboard "测速目标: $1" "${id:-全部}" ok; okj
+  oplog dashboard "测速目标: $1" "$(kv id "${id:-all}")" ok; okj
 }
 ep_speed_status() { local id; id=$(qp id); speed_id_ok "$id" || fail "测速任务编号无效" E_NOT_FOUND; json "$(speed_render "$id")"; }
 ep_speed_last() { local id; id=$(speed_last_id); if [ -n "$id" ] && [ -f "$(speed_dir)/$id.meta" ]; then json "$(speed_render "$id")"; else okj '"none":true'; fi; }
@@ -684,9 +761,12 @@ case "$method $path" in
   "POST /api/apps/inspect")    ep_apps_inspect ;;
   "POST /api/apps/custom")     ep_apps_custom ;;
   "POST /api/apps/custom/delete") ep_apps_custom_delete ;;
-  "POST /api/apps/adopt")      lock_take && { apps_adopt; lock_drop; }; oplog dashboard "采用推荐设置" "新应用" ok; okj ;;
+  "POST /api/apps/adopt")      ep_apps_adopt ;;
   "POST /api/apps/ack")        n=$(qp name); [ "$(qp all)" = 1 ] && n=all; [ -n "$n" ] || fail "缺少应用名"; lock_take && { apps_ack "$n"; lock_drop; }; okj ;;
   "POST /api/override")        ep_override ;;
+  "POST /api/policy")          ep_policy ;;
+  "POST /api/audit")           ep_audit ;;
+  "POST /api/sites/auto/clear") ep_sites_auto_clear ;;
   "POST /api/servers/import")  ep_servers_import ;;
   "POST /api/servers/delete")  ep_servers_change delete ;;
   "POST /api/servers/role")    ep_servers_change role ;;
@@ -710,6 +790,7 @@ case "$method $path" in
   "GET /api/log")              ep_log ;;
   "GET /api/logs")             ep_logs ;;
   "GET /api/logs/export")      ep_logs_export ;;
+  "GET /api/logs/bundle")      ep_logs_bundle ;;
   "POST /api/logs/clear")      ep_logs_clear ;;
   "GET /api/update/check")     ep_update_check ;;
   "POST /api/update/apply")    ep_update_apply ;;

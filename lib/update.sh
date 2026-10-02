@@ -1,7 +1,7 @@
 # 检查更新 (enana 本体 + sing-box 核心)。依赖 common.sh fetch.sh。
 #
 # 本体: 读仓库根目录的 VERSION (GitHub raw → jsDelivr 镜像 → …, 走下载链, 国内也能查)。更新说明来自 CHANGELOG.md:
-#       "## 2.1.0 (日期)" 下面的 "### 中文" / "### English" 两段。
+#       "## 2.1.1 (日期)" 下面的 "### 中文" / "### English" 两段。
 # 核心: GitHub releases/latest 的跳转地址得到最新版本号。
 # 结果缓存在 $H/update.json (6 小时内不重复请求, force 可强制), 每天由 `enana maintain` 刷新一次。
 # 更新本体: `enana self-update` (= 重新运行 get.sh 的升级流程, 安装器重复运行安全)。

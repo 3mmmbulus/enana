@@ -27,7 +27,7 @@
     root.appendChild(h('div', { class: 'intro set-intro' }, h('p', { class: 'muted' }, L('set.intro'), hl('settings.tabs'))));
     root.appendChild(h('div', { class: 'set-tabs' }, el.tabs.el));
     var built = {
-      general: [generalCard()], proxy: [proxyCard()],
+      general: [generalCard()], proxy: [proxyCard(), autoSitesCard()],
       sync: [gateBanner('sync'), TP.sync && TP.sync.settingsCard ? TP.sync.settingsCard() : missing('sync', 'refresh', L('set.sync.title'))],
       logs: [TP.logs && TP.logs.settingsCard ? TP.logs.settingsCard() : missing('logs', 'nav-logs', L('set.logs.title'))],
       updates: [updatesCard()], account: [accountCard(), devicesCard(), backupCard()], plan: [planCard()], about: [aboutCard()]
@@ -41,15 +41,15 @@
 
     TP.on('prefs', function (d) { if (d && (d.all || d.key === 'ui.settings.tab')) { var w = TP.prefs.get('ui.settings.tab', 'general'); if (panels[w] && w !== cur) pick(w, false); } });
     TP.on('update', function () { if (active()) renderUpdates(); });
-    TP.on('state', function () { if (active()) { renderAccount(); renderAbout(); renderProxy(); } });
+    TP.on('state', function () { if (active()) { renderAccount(); renderAbout(); renderProxy(); renderAutoSites(); } });
     TP.on('core', function () { if (active()) renderUpdates(); });
-    TP.on('helper', function () { if (active()) { renderAccount(); renderUpdates(); renderProxy(); } });
+    TP.on('helper', function () { if (active()) { renderAccount(); renderUpdates(); renderProxy(); renderAutoSites(); } });
     TP.on('clash', function () { if (active()) renderProxy(); });
     TP.on('proxy', function () { if (active()) renderProxy(); });
     TP.on('auth', function (ok) { if (ok) { renderAccount(); if (active()) { loadDevices(false); TP.plan.load(false); } } });
-    TP.on('settings', function () { if (active()) { renderAccount(); renderProxy(); renderUpdates(); } });
+    TP.on('settings', function () { if (active()) { renderAccount(); renderProxy(); renderUpdates(); renderAutoSites(); } });
     TP.on('plan', function () { renderPlan(); });
-    TP.on('lang', function () { renderAccount(); renderGeneral(); renderUpdates(); renderAbout(); renderProxy(); renderDevices(); renderPlan(); });
+    TP.on('lang', function () { renderAccount(); renderGeneral(); renderUpdates(); renderAbout(); renderProxy(); renderAutoSites(); renderDevices(); renderPlan(); });
     V.render();
   };
   V.show = function () {
@@ -58,7 +58,7 @@
     TP.loadSettings(); loadDevices(false); TP.plan.load(false);
     if (!S.update.loaded && !S.update.checking) TP.updates.check(false);
   };
-  V.render = function () { renderAccount(); renderGeneral(); renderProxy(); renderUpdates(); renderAbout(); renderPlan(); };
+  V.render = function () { renderAccount(); renderGeneral(); renderProxy(); renderAutoSites(); renderUpdates(); renderAbout(); renderPlan(); };
 
   function pick(id, user) {
     if (!panels[id]) id = 'general';
@@ -101,6 +101,55 @@
     return c;
   }
   function renderGeneral() { el.lang.set(I.lang); el.theme.set(TP.theme === 'light' || TP.theme === 'dark' ? TP.theme : 'system'); el.density.set(TP.prefs.get('ui.density', 'comfortable') === 'compact' ? 'compact' : 'comfortable'); }
+
+  /* ================= 自动识别无法访问的网站 (设置 → 代理) =================
+   * 开关 (默认关) -> POST /api/settings auto_sites=0|1; 自动添加的网站 = state.overrides 里 src === 'auto' 的网站 (网站页标「自动识别」);
+   * 「全部撤销」-> POST /api/sites/auto/clear (撤销并且以后不再自动添加这些)。后台每分钟读一次核心日志里「走直连却连不上」的记录来判断, 见 lib/autosites.sh。 */
+  function autoList() { return ((S.state && S.state.overrides) || []).filter(function (o) { return o && o.kind === 'site' && o.src === 'auto'; }); }
+  function asOn() { var p = S.prefs && S.prefs.settings; return !!(p && (p.auto_sites === true || p.auto_sites === 1)); }
+  function autoSitesCard() {
+    el.as = h('input', { type: 'checkbox', role: 'switch', 'aria-label': L('set.asite.aria') });
+    ui.switchAct(el.as, function () { return asOn(); }, function (want) { return setAutoSites(want); });
+    el.asCnt = h('span', { class: 'set-svc' });
+    el.asView = ui.btn(L('set.asite.view'), { sm: true, icon: 'globe' }); ui.act(el.asView, function () { TP.prefs.set('sites.tab', 'auto'); TP.go('sites'); });
+    el.asClr = ui.btn(L('set.asite.clear'), { sm: true, icon: 'delete', cls: 'soft-bad' }); ui.act(el.asClr, clearAutoSites);
+    var c = card('autosites', 'scan-search', L('set.asite.title'), L('set.asite.sub'), 'settings.autosites');
+    c.appendChild(h('div', { class: 'kv-row set-row' }, h('span', { class: 'kv-k' }, L('set.asite.label'), hl('settings.autosites')),
+      h('span', { class: 'kv-v' }, h('div', null, L('set.asite.desc')), h('div', { class: 'muted sm' }, L('set.asite.note'))), h('label', { class: 'sw' }, el.as, h('span', { class: 'sw-ui' }))));
+    c.appendChild(h('div', { class: 'kv-row set-row' }, h('span', { class: 'kv-k' }, L('set.asite.added')), h('span', { class: 'kv-v' }, el.asCnt), h('span', { class: 'set-acts' }, el.asView, el.asClr)));
+    return c;
+  }
+  function renderAutoSites() {
+    if (!el.as) return;
+    var why = TP.why.helper(), none = TP.servers().length === 0, n = autoList().length, on = asOn();
+    if (el.as.checked !== on) el.as.checked = on;
+    ui.avail(el.as, why || (!S.prefs ? t('logs.set.loadingWhy') : (!on && none ? t('set.asite.noServers') : '')), !why && !on && none ? { label: t('why.addServer'), fn: function () { TP.goAdd('manual'); } } : null);
+    setText(el.asCnt, n ? t('set.asite.count', { n: n, num: TP.fmt.num(n) }) : t('set.asite.none'));
+    ui.avail(el.asView, why || '');
+    ui.avail(el.asClr, why || (n ? '' : t('set.asite.noneWhy')));
+  }
+  async function setAutoSites(want) {
+    var why = TP.why.helper(), ok;
+    if (why) { ui.toast(why, 'warn'); return; }
+    if (want && TP.servers().length === 0) { ui.toast(t('set.asite.noServers'), 'warn', 5200, { action: { label: t('why.addServer'), fn: function () { TP.goAdd('manual'); } } }); return; }
+    ok = await ui.confirmDialog(want
+      ? { title: t('set.asite.onTitle'), message: t('set.asite.onMsg'), detail: [t('set.asite.onD1'), t('set.asite.onD2'), t('set.asite.onD3')], confirmText: t('set.asite.onGo'), kind: 'success' }
+      : { title: t('set.asite.offTitle'), message: t('set.asite.offMsg'), detail: [t('set.asite.offD1')], confirmText: t('set.asite.offGo'), kind: 'warning' });
+    if (!ok) return;
+    await TP.helper('POST', '/api/settings', { form: { auto_sites: want ? 1 : 0 } });
+    await TP.loadSettings();
+    ui.toast(t(want ? 'set.asite.onDone' : 'set.asite.offDone'), 'ok');
+    renderAutoSites();
+  }
+  async function clearAutoSites() {
+    var n = autoList().length, ok, r;
+    if (!n) { ui.toast(t('set.asite.noneWhy'), 'warn'); return; }
+    ok = await ui.confirmDialog({ title: t('set.asite.clearTitle'), message: t('set.asite.clearMsg', { n: n }), detail: [t('set.asite.clearD')], confirmText: t('set.asite.clearGo'), danger: true });
+    if (!ok) return;
+    r = await TP.helper('POST', '/api/sites/auto/clear');
+    ui.toast(t('set.asite.cleared', { n: (r && +r.removed) || n }), 'ok');
+    await TP.loadState(); renderAutoSites();
+  }
 
   /* ================= 代理: 总开关 / 模式 / 重启服务 ================= */
   function proxyCard() {

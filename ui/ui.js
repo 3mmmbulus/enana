@@ -336,22 +336,24 @@
     };
   };
 
-  /* ================= 页内标签 (操作记录 | 网站访问 | 代理日志 / 导入 | 手动添加) =================
-   * ui.tabs(label, [{id, label, icon}], onPick(id)) -> {el, set(id), cur(), btn(id), avail(id, reason, fix)}
-   * role=tablist, 方向键 / Home / End 切换; 切换面板由调用方负责 (用 btn(id).id 作为面板的 aria-labelledby) */
+  /* ================= 页内标签 (操作记录 | 网站访问 | 代理日志 / 导入 | 手动添加 / 网站页的左侧二级导航) =================
+   * ui.tabs(label, [{id, label, icon, count}], onPick, {vertical}) -> {el, set(id), cur(), btn(id), avail(id, reason, fix), count(id, n), text(id, label)}
+   * role=tablist, 方向键 / Home / End 切换 (横向: ← →; 竖向: ↑ ↓); 切换面板由调用方负责 (用 btn(id).id 作为面板的 aria-labelledby)。
+   * 竖向 (vertical) 是同一套标签样式摆成一列 (选中 = 实心主色, 悬停 = 浅色), 窄屏自动变成可横向滚动的一行 —— 整个界面只有这一种标签长相。count = 标签右边的小数字。 */
   var tabUid = 0;
-  ui.tabs = function (label, items, onPick) {
-    var uid = 'tb' + (++tabUid), cur = '', btns = {};
-    var el = h('div', { class: 'subtabs', role: 'tablist', 'aria-label': label });
+  ui.tabs = function (label, items, onPick, o) {
+    o = o || {};
+    var uid = 'tb' + (++tabUid), cur = '', btns = {}, cnts = {}, labs = {}, vert = !!o.vertical;
+    var el = h('div', { class: 'subtabs' + (vert ? ' is-v' : ''), role: 'tablist', 'aria-label': label, 'aria-orientation': vert ? 'vertical' : 'horizontal' });
     items.forEach(function (it) {
-      var b = h('button', { class: 'subtab', type: 'button', role: 'tab', id: uid + '-' + it.id, 'aria-selected': 'false', tabindex: '-1' },
-        it.icon ? ui.icon(it.icon, 16, 'ci') : null, h('span', { class: 'subtab-l' }, it.label));
+      var lab = h('span', { class: 'subtab-l' }, it.label), cn = h('span', { class: 'subtab-n', hidden: it.count == null }, it.count == null ? '' : String(it.count));
+      var b = h('button', { class: 'subtab', type: 'button', role: 'tab', id: uid + '-' + it.id, 'aria-selected': 'false', tabindex: '-1' }, it.icon ? ui.icon(it.icon, 16, 'ci') : null, lab, cn);
       b.addEventListener('click', function () { if (b._un) { ui.unavailable(b); return; } if (cur !== it.id) onPick(it.id); });
-      btns[it.id] = b; el.appendChild(b);
+      btns[it.id] = b; cnts[it.id] = cn; labs[it.id] = lab; el.appendChild(b);
     });
     el.addEventListener('keydown', function (e) {
-      var ids = items.map(function (x) { return x.id; }), i = ids.indexOf(cur), j;
-      if (e.key === 'ArrowRight') j = (i + 1) % ids.length; else if (e.key === 'ArrowLeft') j = (i + ids.length - 1) % ids.length;
+      var ids = items.map(function (x) { return x.id; }), i = ids.indexOf(cur), j, next = vert ? 'ArrowDown' : 'ArrowRight', prev = vert ? 'ArrowUp' : 'ArrowLeft';
+      if (e.key === next) j = (i + 1) % ids.length; else if (e.key === prev) j = (i + ids.length - 1) % ids.length;
       else if (e.key === 'Home') j = 0; else if (e.key === 'End') j = ids.length - 1; else return;
       e.preventDefault(); btns[ids[j]].focus(); if (!btns[ids[j]]._un) onPick(ids[j]);
     });
@@ -363,6 +365,8 @@
         cur = id;
         Object.keys(btns).forEach(function (k) { var on = k === id; btns[k].setAttribute('aria-selected', on ? 'true' : 'false'); btns[k].tabIndex = on ? 0 : -1; btns[k].classList.toggle('on', on); });
       },
+      count: function (id, n) { var c = cnts[id]; if (!c) return; c.hidden = n == null; if (n != null && c.textContent !== String(n)) c.textContent = String(n); },
+      text: function (id, text) { var l = labs[id]; if (l && l.textContent !== text) l.textContent = text; },
       avail: function (id, reason, fix) { ui.avail(btns[id], reason, fix); }
     };
   };

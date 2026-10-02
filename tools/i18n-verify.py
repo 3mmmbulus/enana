@@ -25,7 +25,8 @@ SKIP_EXACT = {
     '* (保留 * 里的数据)', '*, 并删除 * (含你的服务器 / 订阅配置)',   # install.sh uninstall: pieces of one confirm message
     '其他', '备用线路 %s|%s://%s:%s|%s%s%s',     # awk-internal: apps group id (UI maps it) / dl-route label (see patterns)
 }
-SKIP_SUB = ['BEGIN {', 'function esc(', 'function str(', '($0 ~ /中文/)', '(tproxy|ereldaili|tokyo-proxy) 快捷命令']
+SKIP_SUB = ['BEGIN {', 'function esc(', 'function str(', '($0 ~ /中文/)', '(tproxy|ereldaili|tokyo-proxy) 快捷命令',
+            'if (core != 1', '--- file ', '#about=', '#privacy=', '#route-reasons=']        # logs.sh: awk 脚本 / 诊断导出文件里的说明行 (文件内容, 不是界面提示, 只用中文)
 # bare (unquoted) words that ARE real msgids
 BARE_OK = {'无响应', '请选择', '推荐', '开启代理', '关闭代理', '切换代理模式'}
 # default-word fragments (${v:-中文}) that are passed to _t as a whole; the other defaults are parts of bigger messages

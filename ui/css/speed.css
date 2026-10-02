@@ -59,6 +59,22 @@
 .spd-sw-t{display:flex;flex-direction:column;gap:1px;min-width:0}
 .spd-block{min-width:0}
 .spd-chips{display:flex;flex-wrap:wrap;gap:6px;max-height:210px;overflow:auto;padding:2px}
+/* 节点表格: 选择框 | 名称 | 角色 | 类型 | 延迟; 行高紧凑, 超过 320px 在框里滚动 (表头吸顶) */
+.spd-nodes{display:flex;flex-direction:column;gap:8px;min-width:0}
+.spd-nq{max-width:280px}
+.spd-ntw{max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.spd-ntbl{width:100%;border-collapse:collapse;font-size:var(--fs-13)}
+.spd-ntbl th{position:sticky;top:0;z-index:1;padding:7px 10px;text-align:left;font-weight:650;font-size:var(--fs-12);color:var(--muted);background:var(--surface2);border-bottom:1px solid var(--line);white-space:nowrap}
+.spd-ntbl td{padding:6px 10px;border-top:1px solid var(--line);vertical-align:middle}
+.spd-ntbl tbody tr:first-child td{border-top:0}
+.spd-ntbl .c-ck{width:36px;padding-right:0}
+.spd-ntbl .c-ck input{margin:0;accent-color:var(--pri);width:16px;height:16px;vertical-align:middle}
+.spd-ntbl .num{text-align:right;width:1%;white-space:nowrap;font-variant-numeric:tabular-nums}
+.spd-nrow{cursor:pointer}
+.spd-nrow:hover td{background:var(--surface2)}
+.spd-nrow.is-on td{background:var(--pri-bg)}
+.spd-nempty{margin:2px 4px}
+@media (max-width:560px){ .spd-ntype{display:none} }
 /* 节点 / 目标 都是「圆角胶囊 + 勾选圈」的开关按钮 */
 .spd-node,.spd-tc{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-height:34px;padding:4px 11px 4px 8px;border:1px solid var(--line2);border-radius:99px;background:var(--surface);color:var(--text);font:inherit;font-size:var(--fs-13);line-height:1.3;text-align:left;cursor:pointer}
 .spd-node:hover,.spd-tc:hover{border-color:var(--muted)}

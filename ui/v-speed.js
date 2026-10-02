@@ -27,7 +27,7 @@
   };
   var KNOWN_ERR = { timeout: 1, dns: 1, reset: 1, refused: 1, tls: 1, error: 1 };   // 单元格 err / IP 查询 reason 里有译文的代码
   var PHASES = { ip: 1, direct: 1, nodes: 1, speed: 1 };
-  var ROLES = { pin: 1, auto: 1 };
+  var ROLES = { pin: 1, auto: 1 }, nodeQ = '';
   var CELL_ST = { ok: 1, slow: 1, limited: 1, fail: 1, skip: 1, pending: 1 };       // 不认识的状态都按「还没测到」显示
   var ST_BADGE = { ok: ['ok', 'success'], slow: ['warn', 'clock'], limited: ['warn', 'warning'], fail: ['bad', 'error'], pending: ['neutral', 'clock'], skip: ['neutral', 'minus'] };   // 状态 -> [徽标颜色, 图标]
   var FLT = ['all', 'builtin', 'custom', 'modified', 'hidden'];                      // 管理弹窗的筛选
@@ -350,7 +350,16 @@
     ui.act(el.nodeDef, function () { setPref(PK.nodes, undefined); loadSel(); renderTest(); });         // 不再保存选择 -> 回到 plan 推荐的节点
     el.nodeAll = ui.btn(L('speed.sel.all'), { sm: true, kind: 'ghost', icon: 'check' }); ui.act(el.nodeAll, function () { setNodes('all'); });
     el.nodeNone = ui.btn(L('speed.sel.none'), { sm: true, kind: 'ghost', icon: 'x' }); ui.act(el.nodeNone, function () { setNodes('none'); });
-    el.nodeList = h('div', { class: 'spd-chips', role: 'group', 'aria-label': L('speed.nodes.aria') });
+    /* 节点: 表格 (选择框 | 名称 | 角色 | 类型 | 延迟), 点整行也能选; 节点多时有搜索框 */
+    el.nodeAllCb = h('input', { type: 'checkbox', 'aria-label': L('speed.nodes.allAria') });
+    el.nodeAllCb.addEventListener('change', TP.safe(function () { setNodes(el.nodeAllCb.checked ? 'all' : 'none'); }));
+    el.nodeBody = h('tbody');
+    el.nodeQ = h('input', { class: 'inp sm spd-nq', type: 'search', placeholder: L('speed.nodes.search'), 'aria-label': L('speed.nodes.search'), autocomplete: 'off', hidden: true, on: { input: function () { nodeQ = el.nodeQ.value.trim().toLowerCase(); renderTest(); } } });
+    el.nodeEmpty = h('p', { class: 'muted sm spd-nempty', hidden: true }, L('speed.nodes.empty'));
+    el.nodeList = h('div', { class: 'spd-nodes', role: 'group', 'aria-label': L('speed.nodes.aria') }, el.nodeQ,
+      h('div', { class: 'spd-ntw' }, h('table', { class: 'tbl spd-ntbl' },
+        h('thead', null, h('tr', null, h('th', { class: 'c-ck' }, el.nodeAllCb), h('th', null, L('speed.nodes.col.name')), h('th', null, L('speed.nodes.col.role')), h('th', { class: 'spd-ntype' }, L('speed.nodes.col.type')), h('th', { class: 'num' }, L('speed.nodes.col.delay')))),
+        el.nodeBody)), el.nodeEmpty);
     el.nodeNote = h('div', { class: 'spd-note' });
     el.form = h('div', { class: 'spd-form' },
       h('div', { class: 'spd-row' }, h('span', { class: 'spd-lab' }, L('speed.mode.label'), ui.help('speed.mode')), el.mode.el),
@@ -492,22 +501,25 @@
   }
 
   function makeNode() {
-    var b = h('button', { class: 'spd-node', type: 'button', 'aria-pressed': 'false' });
-    b._ck = h('span', { class: 'spd-ck' }, ui.icon('check', 11, 'spd-ci'));
-    b._name = h('span', { class: 'spd-nn' }); b._role = h('span', { class: 'spd-role' }); b._delay = h('span', { class: 'spd-nd muted' });
-    b.appendChild(b._ck); b.appendChild(b._name); b.appendChild(b._role); b.appendChild(b._delay);
-    b.addEventListener('click', TP.safe(function () { toggleNode(b._tag); }));
-    return b;
+    var ck = h('input', { type: 'checkbox' }), tr = h('tr', { class: 'spd-nrow' });
+    tr._ck = ck; tr._name = h('span', { class: 'spd-nn' }); tr._role = h('span', { class: 'spd-role' }); tr._type = h('td', { class: 'spd-ntype muted sm' }); tr._delay = h('td', { class: 'num spd-nd' });
+    tr.appendChild(h('td', { class: 'c-ck' }, ck)); tr.appendChild(h('td', null, tr._name)); tr.appendChild(h('td', null, tr._role)); tr.appendChild(tr._type); tr.appendChild(tr._delay);
+    ck.addEventListener('change', TP.safe(function () { toggleNode(tr._tag); }));
+    tr.addEventListener('click', TP.safe(function (ev) { if (ev.target !== ck) toggleNode(tr._tag); }));            // 点整行 = 选 / 取消
+    return tr;
   }
-  function updateNode(b, n) {
-    var on = sel.nodes.indexOf(n.tag) >= 0, d = +n.delay > 0 ? +n.delay : 0;
-    b._tag = n.tag;
-    setText(b._name, String(n.tag));
-    b.setAttribute('aria-pressed', on ? 'true' : 'false');
-    TP.setCls(b._role, 'spd-role ' + (own(ROLES, n.role) ? n.role : ''));
-    b._role.hidden = !own(ROLES, n.role); setText(b._role, own(ROLES, n.role) ? TP.name.role(n.role) : '');
-    setText(b._delay, d ? ms(d) : DASH);
-    b.title = d ? t('speed.nodes.delayTip', { ms: ms(d) }) : t('speed.nodes.noDelay');
+  function updateNode(tr, n) {
+    var on = sel.nodes.indexOf(n.tag) >= 0, d = +n.delay > 0 ? +n.delay : 0, sv = S.svMap && S.svMap[n.tag];
+    tr._tag = n.tag;
+    setText(tr._name, String(n.tag));
+    if (tr._ck.checked !== on) tr._ck.checked = on;
+    tr._ck.setAttribute('aria-label', String(n.tag));
+    tr.setAttribute('aria-selected', on ? 'true' : 'false'); tr.classList.toggle('is-on', on);
+    TP.setCls(tr._role, 'spd-role ' + (own(ROLES, n.role) ? n.role : ''));
+    tr._role.hidden = !own(ROLES, n.role); setText(tr._role, own(ROLES, n.role) ? TP.name.role(n.role) : '');
+    setText(tr._type, sv && sv.type ? String(sv.type) : DASH);
+    setText(tr._delay, d ? ms(d) : DASH);
+    tr.title = d ? t('speed.nodes.delayTip', { ms: ms(d) }) : t('speed.nodes.noDelay');
   }
   /* 节点「全选 / 全不选」: 一次最多测 MAX_NODES 个, 节点更多时只选前 MAX_NODES 个并说明 */
   function setNodes(how) {
@@ -520,7 +532,7 @@
     var i = sel.nodes.indexOf(tag);
     if (i >= 0) sel.nodes.splice(i, 1);
     else {
-      if (sel.nodes.length >= MAX_NODES) { ui.toast(t('speed.nodes.max', { n: MAX_NODES }), 'warn'); return; }
+      if (sel.nodes.length >= MAX_NODES) { ui.toast(t('speed.nodes.max', { n: MAX_NODES }), 'warn'); renderTest(); return; }          // renderTest: 把刚被点上的勾选框恢复回去
       sel.nodes.push(tag);
     }
     setPref(PK.nodes, sel.nodes.slice()); renderTest();
@@ -614,7 +626,12 @@
     el.nodeList.hidden = !showChips; el.nodeNote.hidden = showChips; el.nodeDef.hidden = !showChips; el.nodeAll.hidden = !showChips; el.nodeNone.hidden = !showChips;
     el.nodeAll.setAttribute('aria-label', t('speed.nodes.allAria')); el.nodeNone.setAttribute('aria-label', t('speed.nodes.noneAria'));
     setText(el.nodeCount, showChips ? t('speed.nodes.count', { n: sel.nodes.length, max: MAX_NODES }) : '');
-    if (showChips) ui.syncList(el.nodeList, arr(p.nodes).filter(Boolean), function (n) { return n.tag; }, makeNode, updateNode);
+    if (showChips) {
+      var all = arr(p.nodes).filter(Boolean), shown = nodeQ ? all.filter(function (n) { return String(n.tag).toLowerCase().indexOf(nodeQ) >= 0; }) : all, nsel = shown.filter(function (n) { return sel.nodes.indexOf(n.tag) >= 0; }).length;
+      el.nodeQ.hidden = all.length <= 8; el.nodeEmpty.hidden = shown.length > 0;
+      ui.syncList(el.nodeBody, shown, function (n) { return n.tag; }, makeNode, updateNode);
+      el.nodeAllCb.checked = shown.length > 0 && nsel === shown.length; el.nodeAllCb.indeterminate = nsel > 0 && nsel < shown.length;
+    }
     else ui.memo(el.nodeNote, nOk ? 'direct' : 'none', function () {
       if (nOk) return h('span', { class: 'muted' }, t('speed.nodes.directNote'));
       var b = ui.btn(t('why.addServer'), { kind: 'primary', sm: true, icon: 'plus' });

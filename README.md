@@ -48,13 +48,13 @@ curl -fsSL https://install.enana.cc | bash
 | 页面 | 功能 |
 |---|---|
 | 概览 | 本机 IP / 出口 IP(含是否被限制的提示)、实时速度与延迟、环境状态、代理总开关与模式 |
-| 应用 | 自动识别已安装的应用并显示真实图标;每个应用可设:跟随规则 / 直连 / 固定出口 / 自动线路。新装应用默认「关」;支持添加自定义软件(先校验再确认) |
-| 网站 | Claude / ChatGPT / Gemini / TikTok / YouTube …… 每项一个开关;域名在弹窗里一行一个,可添加 / 修改 / 删除,并一键恢复系统默认 |
+| 应用 | 自动识别已安装的应用(含系统自带的「终端」等)并显示真实图标;每个应用可设:跟随规则 / 直连 / 固定出口(有 2 个以上固定出口时可指定其中一个,或在其中自动选)/ 自动线路。新装应用默认「关」,浏览器默认「开」;支持添加自定义软件(先校验再确认) |
+| 网站 | Claude / ChatGPT / Gemini / TikTok / YouTube …… 每项一个开关(固定出口可指定);顶部标签区分「全部 / 我添加的 / 自动识别」,左侧是分组导航;域名在弹窗里一行一个,可添加 / 修改 / 删除,并一键恢复系统默认;可选开启「自动识别打不开的网站并加入代理」(默认关闭) |
 | 服务器 | 添加或批量导入服务器 —— 订阅链接、分享链接(trojan / hysteria2 / tuic / vless / vmess / ss / http / socks)、Clash / sing-box 配置自动识别;**用 SSH 一键部署你自己的服务器**(见下) |
 | 规则库 / DNS | 社区规则集开关与自定义;DNS 预设(DoH / DoT / UDP)、自定义解析(hosts)、DNS 测速、泄漏防护、屏蔽广告 |
 | 测速 | 本地直连与多个节点对 100 个内置目标测延迟和下载速度;目标可增删改并一键还原;结果标出「受限 / 失败」 |
 | 流量 | 今日 / 3 天 / 7 天 / 1 个月 / 3 个月的用量,按 直连 / 固定出口 / 自动线路 / 节点 分类;只存在本机,超过 3 个月自动清除 |
-| 连接与日志 | 实时连接列表(应用、走向、命中的规则);操作记录 / 访问记录 / 代理日志,保留 1–365 天可设,可搜索导出 |
+| 连接与日志 | 实时连接列表(应用、走向、命中的规则);三类日志各有独立开关:操作记录(谁 / 什么时候 / 从什么改成什么)、网站访问(每条连接的应用、出口、**为什么直连**、失败原因,代理关闭时也记录)、代理日志;保留 12 小时 – 30 天(默认 3 天);筛选 / 概览 / 搜索 / 实时;**一个「导出」按钮**,勾选内容后生成一份自描述的诊断文件([格式](docs/DIAGNOSTICS.md)) |
 | 设置 | 语言(中 / 英)、代理、云端同步、日志、更新、账号与设备、套餐 |
 
 ### 三条线路
@@ -86,6 +86,7 @@ enana on | off       开启 / 关闭代理 (开启需要已登录)
 enana update         更新规则集与订阅   enana upgrade     升级 sing-box (先校验现有配置)
 enana self-update    升级 enana 本体    enana logout      退出账号 (自动关闭代理)
 enana doctor         诊断信息(不含密码,反馈问题时贴出来)
+enana diag [小时]     导出诊断文件(操作记录 + 网站访问 + 代理日志 + 当前状态,同仪表盘「导出」)
 enana env            终端代理变量:eval "$(enana env)"   (命令行工具不读系统代理)
 enana uninstall      卸载 (--keep-data 保留数据)
 ```
@@ -101,7 +102,8 @@ enana uninstall      卸载 (--keep-data 保留数据)
 ## 开发
 
 ```bash
-bash tests/run.sh                  # 约 590 条冒烟测试: 在隔离目录里完整跑一遍 (需要一个 sing-box 二进制: SINGBOX=/路径/sing-box)
+bash tests/run.sh                  # 约 700 条测试: 在隔离目录里完整跑一遍 (需要一个 sing-box 二进制: SINGBOX=/路径/sing-box)
+bash tests/units.sh                # 几秒钟的单元测试: 日志解析 / 自动识别 / 保留期 / 应用扫描 / 规则集拆分 / 诊断导出 (不需要 sing-box; run.sh 末尾也会跑)
 python3 tools/i18n-verify.py       # 检查英文译文覆盖了所有会显示给用户的中文提示
 bash tests/get-test.sh [发布目录]    # 一行安装命令 (get.sh) 的整条链路: 首次安装 / 篡改拦截 / 两线路交叉校验 / 升级 / wget / 端口占用自动换 / 快捷命令; 全部用本机模拟的下载服务
 ```
@@ -113,6 +115,7 @@ bash tests/get-test.sh [发布目录]    # 一行安装命令 (get.sh) 的整条
 | [docs/API.md](docs/API.md) | 仪表盘 ↔ 本地辅助服务的接口契约(前后端的唯一约定) |
 | [docs/CLOUD_API.md](docs/CLOUD_API.md) | 本地客户端 ↔ enana 云端的接口,以及客户端会向云端发送什么 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 三部分架构、云端内容、配置快照与同步、账号与设备 |
+| [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md) | 诊断导出文件的格式、各分区与列的含义、直连原因表、排查套路 (`tools/diag-summary.py` 可自动解读) |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 路线图 |
 | [CHANGELOG.md](CHANGELOG.md) | 更新日志 |
 | [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | 第三方声明 |
@@ -130,6 +133,7 @@ curl -fsSL https://install.enana.cc | bash
 - Sign in with an enana account (at most 2 devices per platform). The proxy is **off by default**; turn it on in the dashboard, choose Auto (rule-based) or Global mode. Signing out turns it off.
 - Server addresses, passwords, subscription links and SSH credentials **never leave your computer**; optional cloud sync is end-to-end encrypted (the key is derived from your password locally), and SSH passwords / private keys are never stored or synced.
 - Sensitive actions re-ask for your password. Configuration changes are validated and rolled back automatically if they fail.
+- Logs: operations / site access / proxy log each have their own switch (12 hours – 30 days retention); every connection shows the app, the exit and *why* it went direct. One export button (or `enana diag`) produces a self-describing diagnostics file — see [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md).
 - This repository is the local client. The curated content (service catalog, rule-library list, server provisioning scripts) is delivered from the enana cloud after sign-in as signed bundles.
 
 See `docs/` for the API contracts and architecture; run `bash tests/run.sh` for the test suite.

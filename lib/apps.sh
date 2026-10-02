@@ -1,10 +1,15 @@
 # 应用识别 + 用户覆盖层。
-# 覆盖层 = 用户对「某个应用 / 某个网站」的显式设置, 保存在 $H/overrides.tsv:  类型|名称|状态|标记
-#   类型 app|site;  状态 follow(跟随规则=开) direct(直连=关) pin(全走固定出口) auto(全走自动线路);  标记 new|ack
-# 三种非 follow 状态分别写成三个 sing-box 本地规则集 (rules/ovr-direct|pin|auto.json), sing-box 监视文件变化,
-# 因此切换应用/网站无需重启、不会断开现有连接。
+# 覆盖层 = 用户对「某个应用 / 某个网站」的显式设置, 保存在 $H/overrides.tsv:  类型|名称|状态|标记|出口
+#   类型 app|site;  状态 follow(跟随规则=开) direct(直连=关) pin(全走固定出口) auto(全走自动线路);
+#   标记 new(扫描新发现, 还没处理) ack(用户设置过 / 已知晓) def(首次扫描按推荐设置的默认值, 云端推荐更新后可以刷新);
+#   出口 只对 pin 有意义: 空 = 默认固定出口 · PINAUTO = 在固定出口里自动选一个 · 其它 = 指定走这一个固定出口 (固定出口有 2 个以上时才能选)
+# 设置分别写成 sing-box 本地规则集 (rules/ovr-<名字>.json): direct(网站直连) appdirect(应用直连) pin(默认固定出口) pinauto(固定出口里自动选) pin-<序号>(指定的固定出口) auto(自动线路),
+# sing-box 监视文件变化, 因此切换应用/网站无需重启、不会断开现有连接。
 #
-# 应用规则: 新装应用默认「关」(direct, 标记 new)。首次识别时, 已知应用(data/apps.conf)采用推荐设置。
+# 应用规则: 新装应用默认「关」(direct, 标记 new), 但浏览器例外 (默认跟随规则: 否则新装的浏览器会让所有网站都打不开)。首次识别时, 已知应用 (data/apps.conf) 采用推荐设置。
+# 自动识别无法访问的网站 (设置里打开) 添加的网站另外记在 $H/autosites.tsv:  域名|添加时间|原因|失败次数|应用   (网站页据此标出「自动识别」)
+
+APPS_SCAN_V=2                         # 扫描范围的版本: 升级后范围变大时, 新发现的老应用不算「新应用」(不弹提示)
 
 ovr_file() { printf '%s\n' "$H/overrides.tsv"; }
 
@@ -18,11 +23,20 @@ ovr_valid() { # kind value
   esac
 }
 
-ovr_set() { # kind value state [flag]  (upsert, 原子写)
-  local k=$1 v=$2 s=$3 f=${4:-ack}
+ovr_pins() { srv_list 2>/dev/null | awk -F'\t' '$5=="pin" && n < 16 { print $1; n++ }'; }      # 可以单独指定的固定出口 (按配置里的顺序, 最多 16 个; 和 config.sh 里的规则集序号一致)
+ovr_target_valid() { # 出口: 空 / PINAUTO / 现有的某个固定出口 (固定出口不到 2 个时只能是空)
+  local t=$1
+  [ -z "$t" ] && return 0
+  [ "$(ovr_pins | wc -l | tr -d ' ')" -ge 2 ] || return 1
+  [ "$t" = PINAUTO ] || ovr_pins | grep -qxF -- "$t"
+}
+
+ovr_set() { # kind value state [flag] [target]  (upsert, 原子写)
+  local k=$1 v=$2 s=$3 f=${4:-ack} t=${5:-}
+  [ "$s" = pin ] || t=''
   touch "$H/overrides.tsv"
-  LC_ALL=C awk -F'|' -v OFS='|' -v k="$k" -v v="$v" -v s="$s" -v f="$f" '
-    $1==k && $2==v { $3=s; $4=f; found=1 } { print } END { if (!found) print k, v, s, f }' "$H/overrides.tsv" > "$H/overrides.tsv.new" \
+  LC_ALL=C awk -F'|' -v OFS='|' -v k="$k" -v v="$v" -v s="$s" -v f="$f" -v t="$t" '
+    $1==k && $2==v { $3=s; $4=f; $5=t; found=1 } { print } END { if (!found) print k, v, s, f, t }' "$H/overrides.tsv" > "$H/overrides.tsv.new" \
     && mv "$H/overrides.tsv.new" "$H/overrides.tsv"
 }
 ovr_delete() { # kind value
@@ -30,6 +44,7 @@ ovr_delete() { # kind value
   LC_ALL=C awk -F'|' -v k="$1" -v v="$2" '!($1==k && $2==v)' "$H/overrides.tsv" > "$H/overrides.tsv.new" && mv "$H/overrides.tsv.new" "$H/overrides.tsv"
 }
 ovr_get() { awk -F'|' -v k="$1" -v v="$2" '$1==k && $2==v {print $3; exit}' "$H/overrides.tsv" 2>/dev/null; }
+ovr_target() { awk -F'|' -v k="$1" -v v="$2" '$1==k && $2==v {print $5; exit}' "$H/overrides.tsv" 2>/dev/null; }
 
 json_list() { # stdin 每行一个字符串 -> "a","b"  (调用方保证内容不含引号/反斜杠)
   sed 's/.*/"&"/' | paste -sd, -
@@ -40,74 +55,160 @@ app_regex_json() { # 应用名 -> JSON 字符串内容: (?i)/名称\\.app/  (点
   printf '(?i)/%s\\.app/' "$n" | sed 's/\\/\\\\/g'
 }
 
-ovr_sync() { # 由 overrides.tsv 生成三个规则集文件 (原地覆盖写, 让 sing-box 的文件监视生效)
-  local st sites apps bins rules body f bset
-  mkdir -p "$H/rules"
+# 由 overrides.tsv 生成各个规则集文件 (原地覆盖写, 让 sing-box 的文件监视生效; 内容没变就不写)
+ovr_sync() {
+  local T bset f body name
+  mkdir -p "$H/rules"; T=$(mktemp -d); touch "$H/overrides.tsv"
   bset="|$(awk -F'|' '$2=="bin" {printf "%s|", $1}' "$H/custom-apps.tsv" 2>/dev/null)"        # 自定义的命令行工具 (按可执行文件名匹配, 不是 .app 路径)
-  for st in direct pin auto; do
-    sites=$(awk -F'|' -v s="$st" '$1=="site" && $3==s {print $2}' "$H/overrides.tsv" 2>/dev/null | json_list)
-    apps=''; bins=''
-    while IFS= read -r a; do
-      [ -n "$a" ] || continue
-      case $bset in *"|$a|"*) bins="$bins${bins:+,}\"$a\"" ;; *) apps="$apps${apps:+,}\"$(app_regex_json "$a")\"" ;; esac
-    done < <(awk -F'|' -v s="$st" '$1=="app" && $3==s {print $2}' "$H/overrides.tsv" 2>/dev/null)
-    rules=''
-    [ -n "$sites" ] && rules="{\"domain_suffix\":[$sites]}"
-    [ -n "$apps" ] && rules="$rules${rules:+,}{\"process_path_regex\":[$apps]}"
-    [ -n "$bins" ] && rules="$rules${rules:+,}{\"process_name\":[$bins]}"
-    [ -n "$rules" ] || rules='{"domain":["enana-placeholder.invalid"]}'   # 空规则集占位 (不会匹配任何域名)
-    body="{\"version\":3,\"rules\":[$rules]}"
-    f="$H/rules/ovr-$st.json"
-    if [ ! -f "$f" ] || [ "$(cat "$f")" != "$body" ]; then printf '%s\n' "$body" > "$f.tmp" && cat "$f.tmp" > "$f" && rm -f "$f.tmp"; fi
+  ovr_pins > "$T.pins"
+  LC_ALL=C awk -F'|' -v dir="$T" -v bset="$bset" -v pf="$T.pins" '
+    function js(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
+    function rx(n,   t) { t = n; gsub(/[][\\.*^$+?(){}|\/]/, "\\\\&", t); return "(?i)/" t "\\.app/" }          # 应用名里的正则符号转义, 再整体当 JSON 字符串写
+    function key(st, kind, tg) {
+      if (st == "direct") return (kind == "site") ? "direct" : "appdirect"
+      if (st == "auto") return "auto"
+      if (np < 2) return "pin"
+      if (tg == "PINAUTO") return "pinauto"
+      if (tg in pidx) return "pin-" pidx[tg]
+      return "pin"                                                                                           # 指定的出口已经不存在: 退回默认固定出口
+    }
+    BEGIN { np = 0; while ((getline l < pf) > 0) if (l != "") { P[++np] = l; pidx[l] = np }
+            nk = split("direct appdirect pin pinauto auto", K, " "); for (i = 1; i <= np; i++) K[++nk] = "pin-" i
+            for (i = 1; i <= nk; i++) known[K[i]] = 1 }
+    ($1 == "site" || $1 == "app") && $3 != "follow" && $3 != "" {
+      k = key($3, $1, $5)
+      if ($1 == "site") S[k] = S[k] (S[k] == "" ? "" : ",") "\"" js($2) "\""
+      else if (index(bset, "|" $2 "|") > 0) B[k] = B[k] (B[k] == "" ? "" : ",") "\"" js($2) "\""
+      else A[k] = A[k] (A[k] == "" ? "" : ",") "\"" js(rx($2)) "\""
+    }
+    END {
+      for (i = 1; i <= nk; i++) {
+        k = K[i]; r = ""
+        if (S[k] != "") r = "{\"domain_suffix\":[" S[k] "]}"
+        if (A[k] != "") r = r (r == "" ? "" : ",") "{\"process_path_regex\":[" A[k] "]}"
+        if (B[k] != "") r = r (r == "" ? "" : ",") "{\"process_name\":[" B[k] "]}"
+        if (r == "") r = "{\"domain\":[\"enana-placeholder.invalid\"]}"                                      # 空规则集占位 (不会匹配任何域名)
+        print "{\"version\":3,\"rules\":[" r "]}" > (dir "/" k ".json")
+      }
+    }' "$H/overrides.tsv" 2>/dev/null
+  # 没有 overrides.tsv 时 awk 不会产出文件: 补齐占位, 保证每个规则集文件都存在
+  for name in direct appdirect pin pinauto auto; do [ -f "$T/$name.json" ] || printf '%s\n' '{"version":3,"rules":[{"domain":["enana-placeholder.invalid"]}]}' > "$T/$name.json"; done
+  for f in "$T"/*.json; do
+    name=$(basename "$f"); body=$(cat "$f")
+    if [ ! -f "$H/rules/ovr-$name" ] || [ "$(cat "$H/rules/ovr-$name")" != "$body" ]; then printf '%s\n' "$body" > "$H/rules/ovr-$name.tmp" && cat "$H/rules/ovr-$name.tmp" > "$H/rules/ovr-$name" && rm -f "$H/rules/ovr-$name.tmp"; fi
   done
+  rm -rf "$T" "$T.pins"
 }
 
 # ---------- 应用扫描 ----------
+APPS_ROOTS_PRIO="/Applications /System/Applications /System/Cryptexes/App/System/Applications /System/Library/CoreServices/Applications"          # 重名时靠前的优先
+_apps_find() { # 每行: 名称<TAB>路径 (按目录优先级); 不进入 .app 里面, 所以应用内嵌的辅助程序 (Helper.app 等) 不会出现。ENANA_APPS_ROOTS (空格分隔) 可替换扫描目录 (测试用)
+  local r
+  for r in ${ENANA_APPS_ROOTS:-$APPS_ROOTS_PRIO "$HOME/Applications"}; do
+    [ -d "$r" ] || continue
+    find "$r" -maxdepth 4 -name '*.app' -prune 2>/dev/null || true
+  done | LC_ALL=C awk -F/ '{ n = $NF; sub(/\.app$/, "", n); if (n != "" && substr(n,1,1) != ".") print n "\t" $0 }'
+}
+_apps_mdfind() { # Spotlight 能找到、但不在上面这些目录里的应用 (装在别处的); 结果缓存 10 分钟, 最多等 10 秒 (Spotlight 在重建索引时可能很慢)
+  local c="$H/.apps.md" t p i=0
+  [ "${ENANA_NO_MDFIND:-}" = 1 ] && return 0
+  if [ ! -s "$c" ] || [ -n "$(find "$c" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
+    t=$(mktemp); mdfind "kMDItemContentTypeTree == 'com.apple.application-bundle'" > "$t" 2>/dev/null & p=$!
+    while kill -0 "$p" 2>/dev/null && [ "$i" -lt 40 ]; do sleep 0.25; i=$((i + 1)); done
+    kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true
+    LC_ALL=C grep -E '\.app$' "$t" | LC_ALL=C grep -Ev '\.app/|/DerivedData/|/Library/Developer/|/Library/Caches/|/node_modules/|/\.Trash/' \
+      | LC_ALL=C grep -E "^(/Applications/|/System/Applications/|/System/Cryptexes/App/System/Applications/|/opt/homebrew/|/usr/local/|$HOME/Applications/)" > "$c.new"; mv "$c.new" "$c"; rm -f "$t"
+  fi
+  LC_ALL=C awk -F/ '{ n = $NF; sub(/\.app$/, "", n); if (n != "" && substr(n,1,1) != ".") print n "\t" $0 }' "$c"
+}
 apps_installed() { # 每行: 名称<TAB>路径  (自动识别的 + 用户手动添加的自定义软件)
   {
-    { find /Applications "$HOME/Applications" -maxdepth 2 -name '*.app' -prune 2>/dev/null || true; } \
-      | LC_ALL=C awk -F/ '{ n = $NF; sub(/\.app$/, "", n); if (n != "" && substr(n,1,1) != ".") print n "\t" $0 }'
+    { _apps_find; _apps_mdfind; } | LC_ALL=C awk -F'\t' '!seen[$1]++'                                    # 先 find (有优先级顺序), 再 Spotlight 补充; 同名只留第一个
     [ -s "$H/custom-apps.tsv" ] && awk -F'|' '{ print $1 "\t" $3 }' "$H/custom-apps.tsv"
   } | LC_ALL=C sort -u -t"$(printf '\t')" -k1,1
 }
 
-apps_scan() { # 新应用写入 overrides.tsv: 首次扫描=已知用推荐/其余直连(标记 ack); 之后=一律直连(标记 new). 打印新增数量
-  local first=0 before after
+app_is_browser() { # <.app 路径>  声明自己能打开 http / https 链接的应用 = 浏览器
+  local plist="$1/Contents/Info.plist"
+  [ -f "$plist" ] && plutil -extract CFBundleURLTypes json -o - "$plist" 2>/dev/null | LC_ALL=C grep -Eq '"https?"'
+}
+
+apps_conf_rec() { # <应用名>  -> 推荐状态 (没有就空); 规则见 apps.conf: 不分大小写, 支持结尾 *
+  LC_ALL=C awk -v n="$1" -v conf="$(content_file apps.conf)" 'BEGIN {
+    ln = tolower(n)
+    while ((getline line < conf) > 0) { if (line ~ /^[ \t]*(#|$)/) continue; split(line, a, "|"); p = tolower(a[1])
+      if (substr(p, length(p), 1) == "*") { pre = substr(p, 1, length(p) - 1); if (substr(ln, 1, length(pre)) == pre) { print a[2]; exit } }
+      else if (ln == p) { print a[2]; exit } } }'
+}
+
+_apps_fix_browsers() { # 2.1.0 把「新装的浏览器」默认设成了直连 (标记 new = 你还没处理过), 浏览器里的网站因此全都不走代理: 这样的浏览器改回跟随规则 (标记不变, 仍会提示你)。你自己设置过的 (标记 ack) 不动
+  local names name path n=0 list=''
+  names=$(awk -F'|' '$1 == "app" && $3 == "direct" && $4 == "new" {print $2}' "$H/overrides.tsv")
+  [ -n "$names" ] || return 0
+  while IFS= read -r name; do
+    path=$(awk -F'\t' -v n="$name" '$1 == n {print $2; exit}' "$H/.apps.now")
+    [ -n "$path" ] && app_is_browser "$path" || continue
+    ovr_set app "$name" follow new ''; n=$((n + 1)); list="$list${list:+,}$name"
+  done <<< "$names"
+  [ "$n" = 0 ] || oplog "${OP_WHO:-auto}" "修复浏览器的默认设置" "$(kv count "$n" names "$list" from direct to follow why "browser defaulted to off by 2.1.0")" ok
+}
+
+apps_scan() { # 新应用写入 overrides.tsv: 首次扫描 (或扫描范围扩大后的第一次) = 已知用推荐 / 浏览器跟随 / 其余直连 (标记 def, 不弹「新应用」); 之后 = 浏览器跟随 / 其余直连 (标记 new). 打印新增数量
+  local first=0 seen_v=0 before after path name flag state rec
   [ -f "$H/apps.seen" ] || first=1
+  [ "$first" = 1 ] || { IFS= read -r seen_v < "$H/apps.seen" || true; case $seen_v in ''|*[!0-9]*) seen_v=1 ;; esac; [ "$seen_v" -ge "$APPS_SCAN_V" ] || first=1; }
   touch "$H/overrides.tsv"
   apps_installed > "$H/.apps.now"
+  _apps_fix_browsers
   before=$(wc -l < "$H/overrides.tsv" | tr -d ' ')
-  LC_ALL=C awk -F'\t' -v first="$first" -v conf="$(content_file apps.conf)" -v ovr="$H/overrides.tsv" '
-    BEGIN {
-      while ((getline line < conf) > 0) { if (line ~ /^[ \t]*(#|$)/) continue; split(line, a, "|"); pat[++np] = tolower(a[1]); rec[np] = a[2] }
-      while ((getline line < ovr) > 0) { split(line, b, "|"); if (b[1] == "app") known[b[2]] = 1 }
-    }
-    {
-      name = $1
-      if (name in known || name ~ /[|"\\\/]/ || length(name) > 80) next
-      ln = tolower(name); r = ""
-      for (i = 1; i <= np; i++) {
-        p = pat[i]
-        if (substr(p, length(p), 1) == "*") { pre = substr(p, 1, length(p) - 1); if (substr(ln, 1, length(pre)) == pre) { r = rec[i]; break } }
-        else if (ln == p) { r = rec[i]; break }
-      }
-      if (first) print "app|" name "|" (r == "" ? "direct" : r) "|ack"
-      else print "app|" name "|direct|new"
-    }' "$H/.apps.now" >> "$H/overrides.tsv"
+  # 只有还没有记录的应用才处理; 浏览器要读 Info.plist, 所以逐个判断 (新应用不多)
+  : > "$H/.apps.add"
+  while IFS=$'\t' read -r name path; do
+    [ -n "$name" ] || continue
+    case $name in *[\|\"\\/]*) continue ;; esac; [ ${#name} -le 80 ] || continue
+    awk -F'|' -v n="$name" '$1=="app" && $2==n {f=1} END{exit f?0:1}' "$H/overrides.tsv" && continue
+    rec=$(apps_conf_rec "$name"); state=direct
+    if [ -n "$rec" ]; then [ "$first" = 1 ] && state=$rec || state=direct
+    elif app_is_browser "$path"; then state=follow; fi
+    if [ "$first" = 1 ]; then flag=def; else flag=new; fi
+    printf 'app|%s|%s|%s|\n' "$name" "$state" "$flag" >> "$H/.apps.add"
+  done < "$H/.apps.now"
+  cat "$H/.apps.add" >> "$H/overrides.tsv"
   after=$(wc -l < "$H/overrides.tsv" | tr -d ' ')
-  : > "$H/apps.seen"
+  printf '%s\n' "$APPS_SCAN_V" > "$H/apps.seen"
+  apps_rerecommend
   ovr_sync
+  if [ "$first" = 0 ] && [ $((after - before)) -gt 0 ]; then
+    oplog "${OP_WHO:-auto}" "发现新应用" "$(kv count $((after - before)) names "$(awk -F'|' '$4=="new" {print $2}' "$H/.apps.add" | head -8 | paste -sd, -)" default "$(awk -F'|' '$4=="new" {print $3}' "$H/.apps.add" | sort | uniq -c | awk '{printf "%s%s×%s", (n++ ? "," : ""), $2, $1}')")" ok
+  elif [ "$first" = 1 ] && [ $((after - before)) -gt 0 ]; then
+    oplog "${OP_WHO:-auto}" "识别已安装的应用" "$(kv count $((after - before)) scan_v "$APPS_SCAN_V" browsers "$(awk -F'|' '$3=="follow" && $4=="def" {n++} END{print n+0}' "$H/.apps.add")")" ok
+  fi
+  rm -f "$H/.apps.add"
   echo $((after - before))
+}
+
+apps_rerecommend() { # 云端下发了新的应用推荐 (或首次扫描时还没拿到): 把「首次扫描给的默认值 (def) 且仍是直连」的应用刷新成推荐值
+  [ -s "$H/overrides.tsv" ] || return 0
+  LC_ALL=C awk -F'|' -v OFS='|' -v conf="$(content_file apps.conf)" '
+    BEGIN { while ((getline line < conf) > 0) { if (line ~ /^[ \t]*(#|$)/) continue; split(line, a, "|"); pat[++np] = tolower(a[1]); rec[np] = a[2] } }
+    $1 == "app" && $4 == "def" && $3 == "direct" {
+      ln = tolower($2); r = ""
+      for (i = 1; i <= np; i++) { p = pat[i]
+        if (substr(p, length(p), 1) == "*") { pre = substr(p, 1, length(p) - 1); if (substr(ln, 1, length(pre)) == pre) { r = rec[i]; break } }
+        else if (ln == p) { r = rec[i]; break } }
+      if (r != "" && r != "direct") $3 = r
+    } { print }' "$H/overrides.tsv" > "$H/overrides.tsv.new" && mv "$H/overrides.tsv.new" "$H/overrides.tsv"
 }
 
 apps_json() { # 已安装应用 + 当前状态 + 推荐 (JSON 数组)
   [ -s "$H/.apps.now" ] || apps_installed > "$H/.apps.now"
-  LC_ALL=C awk -F'\t' -v conf="$(content_file apps.conf)" -v ovr="$H/overrides.tsv" -v cust="$H/custom-apps.tsv" -v icx="$H/ui/appicons/index.tsv" '
+  LC_ALL=C awk -F'\t' -v conf="$(content_file apps.conf)" -v ovr="$H/overrides.tsv" -v cust="$H/custom-apps.tsv" -v icx="$H/ui/appicons/index.tsv" -v pins="$(ovr_pins | paste -sd'|' -)" '
     BEGIN {
       while ((getline line < conf) > 0) { if (line ~ /^[ \t]*(#|$)/) continue; split(line, a, "|"); pat[++np] = tolower(a[1]); rec[np] = a[2]; grp[np] = a[3] }
-      while ((getline line < ovr) > 0) { split(line, b, "|"); if (b[1] == "app") { st[b[2]] = b[3]; fl[b[2]] = b[4] } }
+      while ((getline line < ovr) > 0) { split(line, b, "|"); if (b[1] == "app") { st[b[2]] = b[3]; fl[b[2]] = b[4]; tg[b[2]] = b[5] } }
       while ((getline line < cust) > 0) { split(line, c, "|"); cu[c[1]] = c[2] }
       while ((getline line < icx) > 0) { split(line, d, "\t"); ic[d[1]] = d[2] }
+      n_p = split(pins, PP, "|"); for (i = 1; i <= n_p; i++) pv[PP[i]] = 1
       printf "["
     }
     {
@@ -119,25 +220,27 @@ apps_json() { # 已安装应用 + 当前状态 + 推荐 (JSON 数组)
         if (substr(p, length(p), 1) == "*") { pre = substr(p, 1, length(p) - 1); if (substr(ln, 1, length(pre)) == pre) { r = rec[i]; g = grp[i]; break } }
         else if (ln == p) { r = rec[i]; g = grp[i]; break }
       }
-      s = (name in st) ? st[name] : "direct"; f = (name in fl) ? fl[name] : "ack"
+      s = (name in st) ? st[name] : "direct"; f = (name in fl) ? fl[name] : "ack"; t = (name in tg) ? tg[name] : ""
       if (name in cu) g = (g == "其他" ? "自定义" : g)
-      printf "%s{\"name\":\"%s\",\"state\":\"%s\",\"flag\":\"%s\",\"known\":%s,\"rec\":\"%s\",\"group\":\"%s\",\"path\":\"%s\",\"custom\":%s,\"kind\":\"%s\",\"icon\":\"%s\"}", (n++ ? "," : ""), name, s, f, (r == "" ? "false" : "true"), r, g, path, ((name in cu) ? "true" : "false"), ((name in cu) ? cu[name] : "app"), ((name in ic) ? ic[name] : "")
+      tv = (t == "" || t == "PINAUTO" || (t in pv)) ? "true" : "false"
+      printf "%s{\"name\":\"%s\",\"state\":\"%s\",\"flag\":\"%s\",\"target\":\"%s\",\"target_ok\":%s,\"known\":%s,\"rec\":\"%s\",\"group\":\"%s\",\"path\":\"%s\",\"custom\":%s,\"kind\":\"%s\",\"icon\":\"%s\"}", (n++ ? "," : ""), name, s, f, t, tv, (r == "" ? "false" : "true"), r, g, path, ((name in cu) ? "true" : "false"), ((name in cu) ? cu[name] : "app"), ((name in ic) ? ic[name] : "")
     }
     END { printf "]" }' "$H/.apps.now"
 }
 
 apps_new_count() { awk -F'|' '$1=="app" && $4=="new" {n++} END{print n+0}' "$H/overrides.tsv" 2>/dev/null; }
 
-apps_adopt() { # 把所有 flag=new 且有推荐值的应用设为推荐状态
+apps_adopt() { # [名称文件]  把 flag=new 的应用 (或只把名称文件里 (每行一个) 的应用) 设为推荐状态; 没有推荐值的不动
   [ -s "$H/overrides.tsv" ] || return 0
-  LC_ALL=C awk -F'|' -v OFS='|' -v conf="$(content_file apps.conf)" '
-    BEGIN { while ((getline line < conf) > 0) { if (line ~ /^[ \t]*(#|$)/) continue; split(line, a, "|"); pat[++np] = tolower(a[1]); rec[np] = a[2] } }
-    $1 == "app" && $4 == "new" {
+  LC_ALL=C awk -F'|' -v OFS='|' -v conf="$(content_file apps.conf)" -v nf="${1:-}" '
+    BEGIN { while ((getline line < conf) > 0) { if (line ~ /^[ \t]*(#|$)/) continue; split(line, a, "|"); pat[++np] = tolower(a[1]); rec[np] = a[2] }
+            if (nf != "") { sel = 1; while ((getline line < nf) > 0) if (line != "") want[line] = 1 } }
+    $1 == "app" && ((!sel && $4 == "new") || ($2 in want)) {
       ln = tolower($2); r = ""
       for (i = 1; i <= np; i++) { p = pat[i]
         if (substr(p, length(p), 1) == "*") { pre = substr(p, 1, length(p) - 1); if (substr(ln, 1, length(pre)) == pre) { r = rec[i]; break } }
         else if (ln == p) { r = rec[i]; break } }
-      if (r != "") { $3 = r; $4 = "ack" }
+      if (r != "") { $3 = r; $4 = "ack"; $5 = "" }
     } { print }' "$H/overrides.tsv" > "$H/overrides.tsv.new" && mv "$H/overrides.tsv.new" "$H/overrides.tsv"
   ovr_sync
 }
@@ -146,9 +249,14 @@ apps_ack() { # 名称 | all
   LC_ALL=C awk -F'|' -v OFS='|' -v n="$1" '$1=="app" && $4=="new" && (n=="all" || $2==n) { $4="ack" } { print }' "$H/overrides.tsv" > "$H/overrides.tsv.new" && mv "$H/overrides.tsv.new" "$H/overrides.tsv"
 }
 
-overrides_json() { # 仅网站覆盖 (应用走 apps_json)
+overrides_json() { # 仅网站覆盖 (应用走 apps_json); 带出口 (target, target_ok = 指定的固定出口还在) 和来源 (src: user 你添加的 / auto 自动识别添加的)
   [ -s "$H/overrides.tsv" ] || { printf '[]'; return 0; }
-  awk -F'|' 'BEGIN{printf "["} $1=="site" {printf "%s{\"kind\":\"site\",\"value\":\"%s\",\"state\":\"%s\"}", (n++?",":""), $2, $3} END{printf "]"}' "$H/overrides.tsv"
+  awk -F'|' -v auto="$H/autosites.tsv" -v pins="$(ovr_pins | paste -sd'|' -)" '
+    BEGIN { while ((getline line < auto) > 0) { split(line, a, "|"); at[a[1]] = a[2]; why[a[1]] = a[3]; fails[a[1]] = a[4]; app[a[1]] = a[5] }
+            n_p = split(pins, PP, "|"); for (i = 1; i <= n_p; i++) pv[PP[i]] = 1; printf "[" }
+    $1=="site" { src = ($2 in at) ? "auto" : "user"; tv = ($5 == "" || $5 == "PINAUTO" || ($5 in pv)) ? "true" : "false"
+      printf "%s{\"kind\":\"site\",\"value\":\"%s\",\"state\":\"%s\",\"target\":\"%s\",\"target_ok\":%s,\"src\":\"%s\",\"at\":%d,\"why\":\"%s\",\"fails\":%d,\"app\":\"%s\"}", (n++?",":""), $2, $3, $5, tv, src, at[$2] + 0, why[$2], fails[$2] + 0, app[$2] }
+    END { printf "]" }' "$H/overrides.tsv"
 }
 
 # ---------- 应用图标 (后台提取, 前端 <img> 直接引用 appicons/<名>.png; 取不到时前端用字母头像) ----------
@@ -227,7 +335,7 @@ apps_inspect() { # <输入: 绝对路径 或 软件名称> -> 候选数组 JSON 
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     f=$(apps_inspect_path "$p"); out="$out${out:+,}$f"; n=$((n+1)); [ "$n" -ge 8 ] && break
-  done < <( { find /Applications "$HOME/Applications" /System/Applications /Applications/Utilities -maxdepth 2 -iname "*$in*.app" -prune 2>/dev/null
+  done < <( { find ${ENANA_APPS_ROOTS:-$APPS_ROOTS_PRIO "$HOME/Applications"} -maxdepth 4 -iname "*$in*.app" -prune 2>/dev/null
               find /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" -maxdepth 1 -iname "$in" 2>/dev/null; } | head -n 8 )
   [ -n "$out" ] || { printf '{"valid":false,"path":"","reason":"%s"}' "$(_ja "$(_t "没有找到这个软件: 请检查名称, 或者直接输入它的完整路径")")"; return; }
   printf '%s' "$out"

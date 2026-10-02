@@ -131,7 +131,7 @@
     }
     TP.on('lang', relabel);
     TP.on('lang', function () { if (TP.tab) paintTitle(); });
-    TP.on('apps', renderBadges); TP.on('update', renderBadges);
+    TP.on('apps', renderBadges); TP.on('badges', renderBadges); TP.on('update', renderBadges);
 
     /* 折叠按钮 (只在宽屏出现) / 汉堡 (只在窄屏出现) / 遮罩 */
     hd.collapse = ui.btn(L('nav.collapse'), { kind: 'ghost', icon: 'collapse', cls: 'side-btn nav-collapse' });

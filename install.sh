@@ -3,7 +3,7 @@
 #
 #   bash install.sh            安装 / 升级 / 修复 (交互式: 识别系统 → 推荐 → 键盘选择); 重复运行安全, 已就绪的部分会跳过
 #   enana                  安装后在任何终端输入它, 打开控制台 (状态 / 一键重启 / 解除账号绑定 / 卸载 …)
-#   enana <命令>           status start stop restart on off update upgrade self-update doctor logs open env logout lang uninstall help
+#   enana <命令>           status start stop restart on off update upgrade self-update doctor diag logs open env logout lang uninstall help
 #
 # 终端只负责「安装环境」。服务器、订阅、应用与网站设置全部在仪表盘 (后台) 里完成: http://127.0.0.1:<端口>/enana/admin/ (安装完成后会打印; enana open 也能打开)
 # 仪表盘的登录账号是你在 https://enana.cc 注册的账号 (本机不生成任何密码)。本仓库不含任何服务器地址/密码。
@@ -16,7 +16,7 @@ while [ -L "$_p" ]; do _l=$(readlink "$_p"); case $_l in /*) _p=$_l ;; *) _p=$(d
 _d=$(cd "$(dirname "$_p")" && pwd -P)
 . "$_d/lib/common.sh"
 init_paths "$_p"
-for _f in i18n jobs servers apps sites fetch os-darwin auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps menu detect console; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os-darwin auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps menu detect console; do . "$LIB/$_f.sh"; done
 load_settings
 
 FORCE=''; KEEP=''; QUIET=${QUIET:-}; UPGRADE=''; CMD=''; ARG1=''; ARG2=''
@@ -174,8 +174,14 @@ st_config() {
   migrate_v1_domains
   sb_ver
   [ "$SB_MAJOR" -gt 1 ] || [ "$SB_MINOR" -ge 12 ] || warn "sing-box $(core_version) 偏旧, 建议 enana upgrade"
-  apply_config; local rc=$?
-  [ "$rc" = 0 ] || die "生成的配置没有通过 sing-box 校验" "$(head -c 400 "$H/check.log" 2>/dev/null | tr '\n' ' ') — 请把这段信息反馈出来"
+  if lock_take; then apps_scan >/dev/null 2>&1 || true; lock_drop; fi     # 识别已安装的应用 (升级时顺便修好 2.1.0 留下的「浏览器被设成直连」); 这之后才装的应用才算「新应用」
+  local rc
+  if op_lock; then apply_config; rc=$?; op_unlock; else apply_config; rc=$?; fi      # 和仪表盘里的配置任务排队: 两边同时改 config.json 会让社区规则集被临时停用
+  case $rc in
+    0) ;;
+    3) die "新配置没能让代理核心启动, 已回滚到原来的配置" "日志: $H/sing-box.log   $(tail -n 3 "$H/sing-box.log" 2>/dev/null | tr '\n' ' ')" ;;
+    *) die "生成的配置没有通过 sing-box 校验" "$(head -c 400 "$H/check.log" 2>/dev/null | tr '\n' ' ') — 请把这段信息反馈出来" ;;
+  esac
   ok "配置已生成并通过 sing-box 校验 (服务器 $(srv_count) 台 · 目录 $(catalog_list | wc -l | tr -d ' ') 项)"
 }
 
@@ -302,6 +308,24 @@ cmd_off() { proxy_set_enabled 0; if os_sysproxy_mine; then os_sysproxy_set off |
 cmd_open() { os_open "$UI_URL"; echo "$UI_URL"; }
 cmd_env() { echo "export http_proxy=http://127.0.0.1:$PORT https_proxy=http://127.0.0.1:$PORT all_proxy=socks5://127.0.0.1:$PORT no_proxy=localhost,127.0.0.1,::1"; }
 cmd_logs() { tail -n "${ARG1:-100}" "$H/sing-box.log" 2>/dev/null || _t "(暂无日志)"; }
+cmd_diag() { # 诊断导出 (和仪表盘「日志 → 导出」同一份文件, 格式见 docs/DIAGNOSTICS.md): enana diag [小时数|all]; 终端里保存成文件, 接管道时直接输出
+  local hours=${ARG1:-24} out
+  case $hours in all) ;; ''|*[!0-9]*) die "时间范围无效" "用法: enana diag [小时数 1-$LOG_HOURS_MAX | all]" ;; esac
+  if [ -t 1 ]; then
+    local d; out=''
+    for d in "$HOME/Downloads" "$H"; do      # 下载文件夹没有写入权限 (系统隐私设置) 时, 退回安装目录
+      [ -d "$d" ] || continue
+      out="$d/enana-diagnostics-$(date +%Y%m%d-%H%M%S).txt"
+      { logs_bundle "$hours" ops,access,proxy,snapshot > "$out"; } 2>/dev/null && [ -s "$out" ] && break
+      rm -f "$out"; out=''
+    done
+    [ -n "$out" ] || die "导出失败" "运行 enana doctor 查看原因"
+    oplog terminal "导出诊断日志" "$(kv hours "$hours" sections ops,access,proxy,snapshot bytes "$(wc -c < "$out" | tr -d ' ')")" ok
+    ok "已导出: $out ($(wc -c < "$out" | tr -d ' ') 字节, 不含密码; 含访问过的域名和应用名, 请只发给你信任的人)"
+  else
+    logs_bundle "$hours" ops,access,proxy,snapshot
+  fi
+}
 
 cmd_update() {
   info "更新规则集…"; rules_update || warn "规则集下载失败, 保留旧版本"
@@ -314,12 +338,14 @@ cmd_content() { # 拉取并应用云端内容 (登录后下发的服务目录 / 
   TXN_FORCE=${FORCE:+1}; op_txn "更新云端内容" txn_content
   info "内容来源: $(cloud_status_json | sed -n 's/.*"source":"\([a-z]*\)".*/\1/p') · 序号 $(cloud_seq) $(cloud_version)"
 }
-cmd_tick() { # 每分钟一次 (launchd): 流量统计采样; 每 ~2 分钟一次登录会话心跳
+cmd_tick() { # 每分钟一次 (launchd): 流量统计采样; 每 ~2 分钟一次登录会话心跳; 自动识别打不开的网站; 每小时一次日志切分 + 清理
   local last=0
   stats_collect
   [ -f "$H/.hb.last" ] && IFS= read -r last < "$H/.hb.last"
   if [ $(( $(now) - ${last:-0} )) -ge 110 ]; then now > "$H/.hb.last"; session_heartbeat; fi
   sync_auto_tick || true                       # 自动同步 (打开了才工作; 每 10 分钟检查一次)
+  autosite_tick || true                        # 自动识别无法访问的网站 (设置里打开了才工作); 必须排在日志切分之前
+  logs_tick || true                            # 日志: 每小时切分 / 压缩 / 按保留期 (最短 12 小时) 清理
   return 0
 }
 
@@ -406,6 +432,7 @@ $(_t "  enana logout         退出账号: 关闭代理, 清除本机登录信�
 $(_t "  enana lang [zh|en]   切换界面语言 (终端与仪表盘)")
 $(_t "  enana doctor         诊断信息 (不含密码, 反馈问题时贴出来)")
 $(_t "  enana logs [行数]     查看日志")
+$(_t "  enana diag [小时数]   导出诊断文件 (操作记录 + 网站访问 + 代理日志 + 当前状态, 默认最近 24 小时; 接管道直接输出)")
 $(_t "  enana open           打开仪表盘")
 $(_t "  enana env            打印终端代理变量 (命令行工具不读系统代理): eval \"\$(enana env)\"")
 $(_t "  enana uninstall      卸载 (--keep-data 保留数据目录)")
@@ -435,12 +462,14 @@ case ${CMD:-auto} in
   lang)      cmd_lang ;;
   doctor)    cmd_doctor ;;
   logs)      cmd_logs ;;
+  diag|diagnostics) cmd_diag ;;
   open)      cmd_open ;;
   env)       cmd_env ;;
   uninstall) cmd_uninstall ;;
   version|--version) echo "enana $VERSION" ;;
   help|-h|--help) cmd_help ;;
   _job)      shift; job_dispatch "$@" ;;
-  apply)     apply_config && ok "配置已应用" || die "配置无效" "$(head -c 300 "$H/check.log" 2>/dev/null)" ;;
+  apply)     if op_lock; then apply_config; _rc=$?; op_unlock; else apply_config; _rc=$?; fi
+             [ "$_rc" = 0 ] && ok "配置已应用" || die "配置无效" "$(head -c 300 "$H/check.log" 2>/dev/null)" ;;
   *)         cmd_help; exit 1 ;;
 esac

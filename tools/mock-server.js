@@ -552,7 +552,7 @@ function reset(mode) {
   const first = mode === 'first-run', t = sec(), secret = M.secret || randHex(16), account = M.account || null, keepAcc = account && !ACCOUNTS[account] && M.dir && M.dir[account] ? M.dir[account] : null;
   Object.keys(M).forEach((k) => { delete M[k]; });
   Object.assign(M, { secret, firstRun: first, os: 'darwin', helperDown: false, helperWin: null, clashDown: false, clashWins: [], central: 'up', failNext: [], failJob: false, jobs: {}, jobSeq: 0,
-    mode: 'Rule', connTarget: 45, conns: [], delayHist: {}, fails: [], regs: [], lockUntil: 0, locksec: 300, langSet: null, logDays: 30, accessLog: true, net: 'normal', netChecked: t - 60, stats: 'normal',
+    mode: 'Rule', connTarget: 45, conns: [], delayHist: {}, fails: [], regs: [], lockUntil: 0, locksec: 300, langSet: null, logHours: 72, logOps: true, accessLog: true, logCore: true, autoSites: false, autoSimAt: 0, autoSimIdx: 0, dismissed: [], net: 'normal', netChecked: t - 60, stats: 'normal',
     upd: { cur: BASE_APP, coreCur: BASE_CORE, on: true, fail: false, checked: t - 2 * 3600 }, speed: { running: null, last: null, seq: 0, byId: {} }, custom: [], pendingNames: {}, pendingApps: [], apps: [], appsScanned: 0,
     prefs: { obj: {}, version: 0, updated: 0 }, sudo: Object.create(null), sudoTtl: 300, plan: 'soon', siteMods: {}, tgt: { custom: [], over: {}, hidden: {} }, hosts: [], subUrls: Object.create(null), inspected: Object.create(null), icons: 'progressive', vpsOpen: false });
   M.dir = clone(ACCOUNTS);                                                // 模拟的 enana.cc 账号库 (注册会往里加); 重置会让种子账号的密码回到 demo1234 / other1234
@@ -562,7 +562,8 @@ function reset(mode) {
   M.subs = first ? [] : [{ name: 'demo-sub', host: 'sub.example.com', updated: t - 5 * 3600, count: 20, interval: 12, usage: { used: 32.5e9, total: 200e9, expire: t + 45 * 86400 } }];
   if (!first && flag('stale-sub')) M.subs[0].updated = t - 30 * 3600;
   if (!first) M.subUrls['demo-sub'] = 'https://sub.example.com/sub/demo?token=example-token-0001';          // 订阅链接 (带占位令牌): 只有 GET /api/sub/url (需 sudo) 会返回它
-  M.overrides = first ? [] : [{ kind: 'site', value: 'example.org', state: 'direct' }, { kind: 'site', value: 'intranet.example.com', state: 'pin' }];
+  M.overrides = first ? [] : [{ kind: 'site', value: 'example.org', state: 'direct', target: '', src: 'user', at: 0 }, { kind: 'site', value: 'intranet.example.com', state: 'pin', target: '', src: 'user', at: 0 },
+    { kind: 'site', value: 'blocked.example.net', state: 'auto', target: '', src: 'auto', at: t - 1500, why: 'timeout', fails: 4, app: 'Google Chrome' }];
   M.pin = first ? '' : SEED_PIN[0]; M.global = 'AUTO'; M.final = 'Global';
   M.svc = {}; CAT.entries.forEach((e) => { M.svc[e.id] = POL[e.default] || 'direct'; });
   if (!first) { M.svc.chatgpt = 'Global'; M.svc.spotify = 'Global'; }      // 让「⚠ 不是固定出口」提示出现
@@ -606,7 +607,7 @@ function iconNameFor(slug) {                                               // �
   if (!name || BROKEN_ICON.indexOf(name) >= 0 || NO_ICON.indexOf(name) >= 0) return '';
   return a && !M.inspected[slug] && !appIconOk(a) ? '' : name;               // 应用列表里的应用要到时间才有; 检查过 (inspect) 的候选是即时提取的
 }
-const appsPayload = () => ({ ok: true, apps: M.apps.map((a) => ({ name: a.name, state: a.state, flag: a.flag, known: a.known, rec: a.rec, group: a.group, custom: !!a.custom, kind: a.kind || 'app', path: a.custom ? a.path : appPath(a.name), icon: appIconOk(a) ? iconUrl(a.name) : '' })),
+const appsPayload = () => ({ ok: true, apps: M.apps.map((a) => ({ name: a.name, state: a.state, flag: a.flag, target: a.target || '', target_ok: targetOk(a.target || ''), known: a.known, rec: a.rec, group: a.group, custom: !!a.custom, kind: a.kind || 'app', path: a.custom ? a.path : appPath(a.name), icon: appIconOk(a) ? iconUrl(a.name) : '' })),
   new_count: M.apps.filter((a) => a.flag === 'new').length, scanned_at: M.appsScanned });
 const nodesOf = (list) => list.filter((s) => s.role === 'pin' || s.role === 'auto');          // 只有 pin / auto 会写进核心配置
 const applyNow = () => { M.applied = clone(M.servers); };
@@ -645,10 +646,23 @@ const TRAFFIC = [['Claude', 'api.claude.example.com', 'pin', 6], ['Claude', 'cla
   ['Safari', 'www.example.org', 'direct', 3], ['Safari', 'intranet.example.com', 'direct', 1], ['', 'time.example.org', 'direct', 2], ['', 'update.example.net', 'direct', 2], ['', 'ocsp.example.com', 'direct', 2],
   ['Docker Desktop', 'dl.mirror.example.net', 'other', 1]];
 const TRAFFIC_W = []; TRAFFIC.forEach((t) => { for (let i = 0; i < t[3]; i++) TRAFFIC_W.push(t); });
+const APP_DIRECT = { WeChat: 1, NeteaseMusic: 1, 'WPS Office': 1, QQ: 1, Steam: 1 };
+function directReason(t) {                                               // 直连的原因 (和真实后端的出口名 direct-xxx 一一对应)
+  if (t[1] === 'intranet.example.com') return 'lan';
+  if (APP_DIRECT[t[0]]) return 'app';
+  if (/(^|\.)example\.org$/.test(t[1]) && t[1] === 'www.example.org') return 'site';
+  if (/cn-site|\.cn\.example|^res\.wx|^music\.cn|^office\.cn|^im\.qq|steam/.test(t[1]) || t[1] === 'blocked.example.net') return 'cn';
+  return 'policy';
+}
+const procOf = (app) => (app ? '/Applications/' + app + '.app/Contents/MacOS/' + app : '/usr/libexec/trustd');
 function accessRow(r, ms) {
-  const t = pick(r, TRAFFIC_W); let node = 'direct';
+  const t = pick(r, TRAFFIC_W); let node = 'direct', reason = '';
   if (t[2] === 'pin') node = r() < 0.75 ? SEED_PIN[0] : SEED_PIN[1]; else if (t[2] === 'auto') node = pick(r, SEED_AUTO); else if (t[2] === 'other') node = pick(r, SEED_DL);
-  return { ts: tsOf(ms), host: t[1], port: r() < 0.82 ? 443 : pick(r, [80, 8443, 993, 5222]), app: t[0], route: t[2], node };
+  else if (t[2] === 'direct') { reason = directReason(t); node = reason === 'policy' ? 'direct' : 'direct-' + reason; }
+  const row = { ts: tsOf(ms), id: String(Math.floor(r() * 4e9)), net: 'tcp', host: t[1], port: r() < 0.82 ? 443 : pick(r, [80, 8443, 993, 5222]), app: t[0], user: 'user', path: procOf(t[0]), route: t[2] === 'other' ? 'auto' : t[2], node, reason, err: '', errmsg: '', dur: '', ips: '' };
+  const fail = t[2] === 'direct' ? (reason === 'cn' || reason === 'policy') && (r() < 0.05 || t[1] === 'blocked.example.net') : r() < 0.015;
+  if (fail) { row.err = t[2] === 'direct' ? 'timeout' : 'reset'; row.dur = t[2] === 'direct' ? '5.0s' : '120ms'; row.errmsg = t[2] === 'direct' ? 'dial tcp 31.13.92.37:443: i/o timeout' : 'read tcp 127.0.0.1: connection reset by peer'; if (t[2] === 'direct') row.ips = '31.13.92.37 104.244.42.197'; }
+  return row;
 }
 function proxyRow(r, ms, minLevel) {
   const roll = r(); let level = roll < 0.015 ? 'ERROR' : roll < 0.075 ? 'WARN' : 'INFO';
@@ -675,7 +689,7 @@ const OPS_MENU = [
   [1, (r) => ['rules.custom.add', kv({ name: 'my-list', policy: pick(r, POLS) })]], [1, () => ['rules.custom.delete', kv({ tag: 'my-list' })]],
   [3, (r) => ['dns.set', kv({ cn: pick(r, ['alidns', 'dnspod', '114']), global: pick(r, ['cloudflare', 'google', 'quad9']), via: pick(r, ['Global', 'PIN']), leak_guard: 1, ads_block: pick(r, [0, 1]) })]],
   [4, (r) => ['dns.test', kv({ name: pick(r, ['example.com', 'www.example.org', 'api.claude.example.com']), ms: 8 + Math.floor(r() * 60) })]],
-  [4, (r) => ['settings.set', pick(r, [kv({ log_days: pick(r, [14, 30, 60]) }), kv({ lang: pick(r, ['zh', 'en']) }), kv({ access_log: 1 })])]], [5, () => ['net.refresh', '']],
+  [4, (r) => ['settings.set', pick(r, [kv({ setting: 'log_hours', from: 72, to: pick(r, [24, 72, 168]) }), kv({ lang: pick(r, ['zh', 'en']) }), kv({ access_log: 1 })])]], [5, () => ['net.refresh', '']],
   [2, () => ['proxy.off', '']], [2, () => ['proxy.on', '']],
   [2, (r) => (r() < 0.25 ? ['vps.probe', kv({ host: '203.0.113.60', port: 22, mode: 'password', code: 'E_SSH_UNREACHABLE' }), 'error'] : ['vps.probe', kv({ host: '203.0.113.' + pick(r, [10, 20, 30]), port: 22, mode: pick(r, ['password', 'key']) })])],
   [1, (r) => ['vps.provision', kv({ host: '203.0.113.10', name: 'my-vps', role: pick(r, ['pin', 'auto']), nodes: 1 })]], [1, () => ['vps.redetect', kv({ id: 'vps_1a2b3c4d', host: '203.0.113.31' })]], [1, () => ['vps.forget', kv({ id: 'vps_1a2b3c4d', host: '203.0.113.31' })]],
@@ -687,6 +701,10 @@ const OPS_MENU = [
   [3, (r) => ['sites.domain', kv({ id: pick(r, ['claude', 'telegram', 'github', 'google', 'netflix']), action: pick(r, ['add', 'remove', 'update', 'restore']), domain: pick(r, ['docs.example.com', 'my-site.example.org', 'cdn.example.net']) })]],
   [1, (r) => ['sites.reset', kv({ id: pick(r, ['claude', 'telegram', 'github']) })]], [1, (r) => ['apps.custom.add', kv({ name: pick(r, ['Cursor', 'mytool', 'Bear']), kind: pick(r, ['app', 'bin']), state: pick(r, ['follow', 'pin', 'auto', 'direct']) })]],
   [1, (r) => ['apps.custom.delete', kv({ name: pick(r, ['Cursor', 'mytool', 'Bear']) })]], [2, (r) => ['speed.target', kv({ action: pick(r, ['add', 'edit', 'delete', 'restore']), id: pick(r, ['u-3fa9c1', 'u-b07e55', 'npm', 'bing', 'pypi']) })]],
+  [3, (r) => ['policy.switch', kv({ kind: 'selector', tag: 'svc-' + pick(r, ['claude', 'chatgpt', 'github']), site: pick(r, ['Claude', 'ChatGPT', 'GitHub']), from: pick(r, ['PIN', 'Global']), to: pick(r, ['Global', 'PIN', 'direct', SEED_PIN[0]]) })]],
+  [1, (r) => ['conns.kill', kv({ scope: pick(r, ['all', 'host', 'one']), count: 1 + Math.floor(r() * 9) })]], [1, () => ['logs.bundle', kv({ hours: 24, sections: 'ops,access,proxy,snapshot', bytes: 48210 })]],
+  [1, () => ['autosite.add', kv({ domain: 'video-cdn.example.net', state: 'auto', fails: 4, attempts: 4, err: 'timeout', app: 'Google Chrome', was: 'direct-cn', verify: 'http=200 310ms' })]],
+  [1, () => ['apps.found', kv({ count: 2, names: 'Zed,Arc', default: 'follow×1,direct×1' })]],
   [1, () => ['speed.targets.reset', '']], [2, (r) => ['dns.hosts', kv({ action: pick(r, ['add', 'update', 'remove']), domain: pick(r, ['nas.example.com', 'router.example.net', 'dev.example.org']) })]],
   [1, (r) => ['dns.hosts.reset', kv({ count: 1 + Math.floor(r() * 5) })]], [2, () => ['dns.bench', '']]];
 const OPS_W = []; OPS_MENU.forEach((m, i) => { for (let k = 0; k < m[0]; k++) OPS_W.push(i); });
@@ -731,11 +749,24 @@ function genLogs() {
 const DIRTY = { 'servers.import': 1, 'servers.delete': 1, 'servers.role': 1, 'sub.save': 1, 'sub.delete': 1, 'sub.refresh': 1, 'override.set': 1, 'override.delete': 1, 'apps.adopt': 1, 'apps.ack': 1, 'dns.set': 1, 'rules.toggle': 1,
   'rules.custom.add': 1, 'rules.custom.delete': 1, 'settings.set': 1, 'vps.provision': 1, 'vps.forget': 1, 'vps.redetect': 1, 'sites.domain': 1, 'sites.reset': 1, 'apps.custom.add': 1, 'apps.custom.delete': 1, 'dns.hosts': 1, 'dns.hosts.reset': 1 };
 function oplog(who, action, detail, result) {
+  if (!M.logOps) return;
+  oplogForce(who, action, detail, result);
+}
+function oplogForce(who, action, detail, result) {
   const d = dayOf(now()); (M.L.ops[d] = M.L.ops[d] || []).push({ ts: tsOf(now()), who, action, detail: detail || '', result: result || 'ok' }); M.L.ver++;
   if (DIRTY[action] && result !== 'error' && M.sync) M.sync.local.dirty = true;
 }
 /* 实时日志: 开着「记录网站访问」时每次产生 1 条访问 + 1 条代理日志; 关掉后只有偶尔的警告 / 错误 */
+const AUTO_CAND = ['video-cdn.example.net', 'api.newsite.example.org', 'static.blocked.example.com'];
+function autoSim() {                                                     // 演示: 打开「自动识别」后, 每隔一会儿 (按 --fast 缩短) 自动加进一个打不开的网站
+  if (!M.autoSites || !M.proxyOn || !M.servers.length || M.autoSimIdx >= AUTO_CAND.length || now() - M.autoSimAt < D(25000)) return;
+  const dom = AUTO_CAND[M.autoSimIdx++]; M.autoSimAt = now();
+  if (M.overrides.some((o) => o.kind === 'site' && o.value === dom) || M.dismissed.indexOf(dom) >= 0) return;
+  M.overrides.push({ kind: 'site', value: dom, state: M.servers.some((x) => x.role === 'auto') ? 'auto' : 'pin', target: '', src: 'auto', at: sec(), why: 'timeout', fails: 3 + (M.autoSimIdx % 3), app: 'Google Chrome' });
+  oplog('auto', 'autosite.add', kv({ domain: dom, state: 'auto', fails: 4, attempts: 4, err: 'timeout', app: 'Google Chrome', was: 'direct-cn', verify: 'http=200 ' + (180 + M.autoSimIdx * 40) + 'ms' }));
+}
 function liveTick(n) {
+  autoSim();
   const d = dayOf(now()), L = M.L, r = Math.random;
   if (n === 1 && (L.access[d] || []).length > 4000) return;                // 后台自动产生的实时行有上限
   for (let i = 0; i < n; i++) {
@@ -744,24 +775,39 @@ function liveTick(n) {
   }
   L.ver++;
 }
-const inRetention = (day) => day >= dayOf(addDays(startOfDay(now()), -(M.logDays - 1)));
+const cutTs = () => tsOf(now() - M.logHours * 3600e3);                                    // 保留期的起点 (本机时间 YYYY-MM-DD HH:MM:SS); 精确到小时
+const inRetention = (day) => day >= cutTs().slice(0, 10);
+const keepRow = (r) => r.ts >= cutTs();
 function logDays() {
   const set = {};
-  ['ops', 'access', 'proxy'].forEach((t) => Object.keys(M.L[t]).forEach((d) => { if (M.L[t][d].length && inRetention(d)) set[d] = 1; }));
+  ['ops', 'access', 'proxy'].forEach((t) => Object.keys(M.L[t]).forEach((d) => { if (inRetention(d) && M.L[t][d].some(keepRow)) set[d] = 1; }));
   return Object.keys(set).sort().reverse();
 }
-const rowText = { ops: (r) => [r.ts, r.who, r.action, r.detail, r.result].join(' '), access: (r) => [r.ts, r.host, r.port, r.app, r.route, r.node].join(' '), proxy: (r) => [r.ts, r.level, r.msg].join(' ') };
-function logQuery(type, day, q, limit, offset) {
-  const rows = inRetention(day) ? (M.L[type][day] || []) : [], nd = q.toLowerCase(), hit = nd ? rows.filter((r) => rowText[type](r).toLowerCase().indexOf(nd) >= 0) : rows, out = [];
+const rowText = { ops: (r) => [r.ts, r.who, r.action, r.detail, r.result].join(' '), access: (r) => [r.ts, r.host, r.port, r.app, r.route, r.node, r.reason, r.err, r.ips].join(' '), proxy: (r) => [r.ts, r.level, r.msg].join(' ') };
+function logQuery(type, day, q, limit, offset, f) {
+  const rows = inRetention(day) ? (M.L[type][day] || []).filter(keepRow) : [], nd = q.toLowerCase(), base = nd ? rows.filter((r) => rowText[type](r).toLowerCase().indexOf(nd) >= 0) : rows, out = [];
+  let hit = base, summary;
+  if (type === 'access') {
+    const reasons = {}, fails = {}; let direct = 0, proxy = 0, pinN = 0, autoN = 0, error = 0;
+    base.forEach((r) => { if (r.route === 'direct') { direct++; if (r.reason) reasons[r.reason] = (reasons[r.reason] || 0) + 1; } else proxy++; if (r.route === 'pin') pinN++; if (r.route === 'auto') autoN++; if (r.err) { error++; const k = r.host; fails[k] = fails[k] || { host: k, n: 0, err: r.err, app: r.app, node: r.node }; fails[k].n++; } });
+    summary = { all: base.length, direct, proxy, pin: pinN, auto: autoN, error, reasons, top_fail: Object.keys(fails).map((k) => fails[k]).sort((a, b) => b.n - a.n).slice(0, 5) };
+    if (f === 'direct') hit = base.filter((r) => r.route === 'direct'); else if (f === 'proxy') hit = base.filter((r) => r.route !== 'direct'); else if (f === 'error') hit = base.filter((r) => r.err);
+  } else if (type === 'ops') {
+    summary = { all: base.length, error: base.filter((r) => r.result === 'error').length };
+    if (f === 'error') hit = base.filter((r) => r.result === 'error'); else if (f === 'dashboard' || f === 'terminal' || f === 'auto') hit = base.filter((r) => r.who === f);
+  } else {
+    const e = base.filter((r) => r.level === 'ERROR').length, w = base.filter((r) => r.level === 'WARN').length; summary = { all: base.length, warn: w, error: e };
+    if (f === 'error') hit = base.filter((r) => r.level === 'ERROR'); else if (f === 'warn') hit = base.filter((r) => r.level === 'ERROR' || r.level === 'WARN');
+  }
   for (let i = hit.length - 1 - offset; i >= 0 && out.length < limit; i--) out.push(hit[i]);
-  return { total: hit.length, rows: out };
+  return { total: hit.length, rows: out, summary };
 }
 const lineBytes = { ops: (r) => r.ts.length + r.who.length + r.action.length + r.detail.length + r.result.length + 5, proxy: (r) => r.ts.length + r.level.length + r.msg.length + 8, access: (r) => 360 + r.host.length + r.node.length + r.app.length };
 /* 访问记录是从代理日志里归并出来的 (真实后端同样如此): access 与 proxy 的占用相同, 清除其中任何一个都会同时清掉两者 */
 function logUsage() {
   let o = 0, p = 0;
-  Object.keys(M.L.ops).forEach((d) => { if (inRetention(d)) M.L.ops[d].forEach((r) => { o += lineBytes.ops(r); }); });
-  ['proxy', 'access'].forEach((t) => Object.keys(M.L[t]).forEach((d) => { if (inRetention(d)) M.L[t][d].forEach((r) => { p += lineBytes[t](r); }); }));
+  Object.keys(M.L.ops).forEach((d) => { if (inRetention(d)) M.L.ops[d].filter(keepRow).forEach((r) => { o += lineBytes.ops(r); }); });
+  ['proxy', 'access'].forEach((t) => Object.keys(M.L[t]).forEach((d) => { if (inRetention(d)) M.L[t][d].filter(keepRow).forEach((r) => { p += lineBytes[t](r); }); }));
   return { ops: o, access: p, proxy: p, total: o + p };
 }
 function logClear(type, before) {
@@ -770,7 +816,7 @@ function logClear(type, before) {
   M.L.ver++; return freed;
 }
 function logExport(type, day) {
-  const rows = inRetention(day) ? (M.L[type][day] || []) : [], f = { ops: (r) => [r.ts, r.who, r.action, r.detail, r.result].join('\t'), access: (r) => [r.ts, r.host, r.port, r.app, r.route, r.node].join('\t'), proxy: (r) => r.ts + ' ' + r.level + ' ' + r.msg };
+  const rows = inRetention(day) ? (M.L[type][day] || []).filter(keepRow) : [], f = { ops: (r) => [r.ts, r.who, r.action, r.detail, r.result].join('\t'), access: (r) => [r.ts, r.host, r.port, r.app, r.route, r.node].join('\t'), proxy: (r) => r.ts + ' ' + r.level + ' ' + r.msg };
   return rows.map(f[type]).join('\n') + (rows.length ? '\n' : '');
 }
 
@@ -1016,18 +1062,24 @@ route('GET', '/api/plan', (c) => {
 });
 
 /* ---- 状态 / 设置 ---- */
-route('GET', '/api/state', (c) => ({ ok: true, version: M.upd.cur, prefs_version: M.prefs.version, core: M.upd.coreCur, platform: platform(), ports: ports(), env: envOut(), servers: M.servers, subs: M.subs, overrides: M.overrides,
+const ovOut = () => M.overrides.map((o) => Object.assign({ target: '', src: 'user', at: 0, why: '', fails: 0, app: '' }, o, { target_ok: targetOk(o.target || '') }));
+route('GET', '/api/state', (c) => ({ ok: true, version: M.upd.cur, prefs_version: M.prefs.version, core: M.upd.coreCur, platform: platform(), ports: ports(), env: envOut(), servers: M.servers, subs: M.subs, overrides: ovOut(),
   first_run: M.servers.filter((s) => !s.official).length === 0, update: { available: appAvail(), latest: latestApp(), checked: M.upd.checked }, lang: M.langSet || c.hdrLang || 'zh', proxy: { enabled: M.proxyOn, mode: M.proxyMode }, account: { email: M.account || '' } }));
-route('GET', '/api/settings', (c) => ({ ok: true, lang: M.langSet || c.hdrLang || 'zh', settings: { log_days: M.logDays, log_days_max: 365, access_log: M.accessLog, auto_update: M.autoUpdate }, usage: logUsage(), ports: ports(), account: { email: M.account || '' } }));
+route('GET', '/api/settings', (c) => ({ ok: true, lang: M.langSet || c.hdrLang || 'zh', settings: { log_hours: M.logHours, log_hours_min: 12, log_hours_max: 720, log_ops: M.logOps, access_log: M.accessLog, log_core: M.logCore, auto_sites: M.autoSites, auto_update: M.autoUpdate }, usage: logUsage(), ports: ports(), account: { email: M.account || '' } }));
 route('POST', '/api/settings', (c) => {
-  const lang = c.p('lang'), ld = c.p('log_days'), al = c.p('access_log'), au = c.p('auto_update'), detail = {}; let job = null;
+  let lh = c.p('log_hours'); const lang = c.p('lang'), ld = c.p('log_days'), al = c.p('access_log'), au = c.p('auto_update'), lo = c.p('log_ops'), lc = c.p('log_core'), as = c.p('auto_sites'), detail = {}; let job = null;
+  if (lh === '' && /^\d{1,3}$/.test(ld) && +ld >= 1) lh = String(+ld * 24);                          // 旧版仪表盘按天提交
   if (lang !== '' && lang !== 'zh' && lang !== 'en') throw E('E_INVALID', 'e.badLang');
-  if (ld !== '' && !(/^\d{1,3}$/.test(ld) && +ld >= 1 && +ld <= 365)) throw E('E_INVALID', 'e.badLogDays');
-  if ((al !== '' && al !== '0' && al !== '1') || (au !== '' && au !== '0' && au !== '1')) throw E('E_INVALID', 'e.badBool');
+  if (lh !== '' && !(/^\d{2,3}$/.test(lh) && +lh >= 12 && +lh <= 720)) throw E('E_INVALID', 'e.badLogDays');
+  if ([al, au, lo, lc, as].some((v) => v !== '' && v !== '0' && v !== '1')) throw E('E_INVALID', 'e.badBool');
+  if (as === '1' && !M.servers.length) throw E('E_NO_SERVERS', 'e.autoNoServers');
   if (lang) { M.langSet = lang; detail.lang = lang; }
   if (au !== '') { M.autoUpdate = au === '1'; detail.auto_update = au; }                        // 「代理 → 自动更新」开关 (API.md 里没有, 提议新增)
-  if (ld) { M.logDays = +ld; detail.log_days = +ld; }
-  if (al !== '') { detail.access_log = al; if ((al === '1') !== M.accessLog) { M.accessLog = al === '1'; job = newJob('settings-apply', APPLY, 3600, { done: applyNow, msg: 'jd.settings' }); } }   // 改 access_log 要重新生成配置
+  if (lh) { detail.setting = 'log_hours'; detail.from = M.logHours; detail.to = +lh; M.logHours = +lh; }
+  if (lo !== '' && (lo === '1') !== M.logOps) { oplogForce('dashboard', 'settings.set', kv({ setting: 'log_ops', from: M.logOps ? 1 : 0, to: lo })); M.logOps = lo === '1'; }
+  if (as !== '' && (as === '1') !== M.autoSites) { M.autoSites = as === '1'; M.autoSimAt = now(); oplog('dashboard', 'settings.set', kv({ setting: 'auto_sites', from: as === '1' ? 0 : 1, to: as })); }
+  if (al !== '' && (al === '1') !== M.accessLog) { M.accessLog = al === '1'; oplog('dashboard', 'settings.set', kv({ setting: 'access_log', from: al === '1' ? 0 : 1, to: al })); job = newJob('settings-apply', APPLY, 3600, { done: applyNow, msg: 'jd.settings' }); }   // 改 access_log 要重新生成配置
+  if (lc !== '' && (lc === '1') !== M.logCore) { M.logCore = lc === '1'; oplog('dashboard', 'settings.set', kv({ setting: 'log_core', from: lc === '1' ? 0 : 1, to: lc })); job = job || newJob('settings-apply', APPLY, 3600, { done: applyNow, msg: 'jd.settings' }); }
   if (Object.keys(detail).length) oplog('dashboard', 'settings.set', kv(detail));
   return job ? { ok: true, job } : { ok: true };
 });
@@ -1035,8 +1087,9 @@ route('POST', '/api/settings', (c) => {
 /* ---- 应用 / 覆盖 ---- */
 route('GET', '/api/apps', () => appsPayload());
 route('POST', '/api/apps/scan', async () => { await sleep(300); const n = scanApps(); oplog('dashboard', 'apps.scan', kv({ new: n })); return appsPayload(); });
-route('POST', '/api/apps/adopt', () => {
-  let n = 0; M.apps.forEach((a) => { if (a.flag === 'new' && a.rec) { a.state = a.rec; a.flag = 'ack'; n++; } });
+route('POST', '/api/apps/adopt', (c) => {
+  const names = c.p('names') ? c.p('names').split('\n').filter(Boolean) : null; let n = 0;
+  M.apps.forEach((a) => { if (((!names && a.flag === 'new') || (names && names.indexOf(a.name) >= 0)) && a.rec) { a.state = a.rec; a.flag = 'ack'; a.target = ''; n++; } });
   oplog('dashboard', 'apps.adopt', kv({ count: n })); return { ok: true };
 });
 route('POST', '/api/apps/ack', (c) => {
@@ -1044,22 +1097,50 @@ route('POST', '/api/apps/ack', (c) => {
   M.apps.forEach((a) => { if (all || a.name === name) a.flag = 'ack'; });
   oplog('dashboard', 'apps.ack', all ? kv({ all: 1 }) : kv({ name })); return { ok: true };
 });
+const pinTags = () => M.applied.filter((x) => x.role === 'pin').map((x) => x.tag).slice(0, 16);
+const targetOk = (tg) => !tg || (pinTags().length >= 2 && (tg === 'PINAUTO' || pinTags().indexOf(tg) >= 0));
 route('POST', '/api/override', (c) => {
-  const kind = c.p('kind'), value = c.p('value'), state = c.p('state');
+  const kind = c.p('kind'), value = c.p('value'), state = c.p('state'); let target = c.p('target');
   if (['follow', 'direct', 'pin', 'auto'].indexOf(state) < 0) throw E('E_INVALID', 'e.badState');
+  if (state !== 'pin') target = '';
+  if (!targetOk(target)) throw E('E_INVALID', 'e.badTarget');
   if (kind === 'app') {
     if (!value || value.length > 80 || /[|"\\\/\x00-\x1f]/.test(value)) throw E('E_INVALID', 'e.badName');
     const a = M.apps.filter((x) => x.name === value)[0]; if (!a) throw E('E_NOT_FOUND', 'e.noApp');
-    a.state = state; oplog('dashboard', 'override.set', kv({ kind, value, state })); return { ok: true };
+    oplog('dashboard', 'override.set', kv({ kind, name: value, from: a.state, to: state, target_from: a.target || '', target_to: target }));
+    a.state = state; a.target = target; return { ok: true };
   }
   if (kind === 'site') {
     if (!value || value.length > 80 || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(value)) throw E('E_INVALID', 'e.badName');
+    const old = M.overrides.filter((o) => o.kind === 'site' && o.value === value)[0], src = old && old.src === 'auto' ? 'auto' : '';
     M.overrides = M.overrides.filter((o) => !(o.kind === 'site' && o.value === value));
-    if (state !== 'follow') { M.overrides.push({ kind: 'site', value, state }); oplog('dashboard', 'override.set', kv({ kind, value, state })); }
-    else oplog('dashboard', 'override.delete', kv({ kind, value }));
+    if (state !== 'follow') { M.overrides.push(Object.assign({ kind: 'site', value, state, target, src: old ? old.src : 'user', at: old ? old.at : 0 }, old && old.src === 'auto' ? { why: old.why, fails: old.fails, app: old.app } : {})); oplog('dashboard', 'override.set', kv({ kind, name: value, from: old ? old.state : 'follow', to: state, target_from: old ? old.target : '', target_to: target, src })); }
+    else { if (M.dismissed.indexOf(value) < 0) M.dismissed.push(value); oplog('dashboard', 'override.delete', kv({ kind, name: value, from: old ? old.state : 'follow', to: 'follow', src })); }
     return { ok: true };
   }
   throw E('E_INVALID', 'e.badKind');
+});
+/* 切换一个策略开关: 由辅助服务代为切换 (每次切换都有操作记录); 和 Clash 的 PUT /proxies/<tag> 同一个效果 */
+route('POST', '/api/policy', (c) => {
+  const tag = c.p('tag'), name = c.p('name');
+  if (!/^(svc-[a-z0-9-]+|Final|Global|PIN)$/.test(tag) || !name || name.length > 120) throw E('E_INVALID', 'e.badName');
+  const P = buildProxies(), g = P[tag];
+  if (!g || !g.all || g.all.indexOf(name) < 0) throw E('E_NOT_FOUND', 'e.noOption');
+  const from = g.now; if (from !== name) applySelector(tag, name);
+  const e = svcList().filter((x) => x.tag === tag)[0];
+  oplog('dashboard', 'policy.switch', kv({ kind: 'selector', tag, site: e ? (e.name || '') : '', from, to: name }));
+  return { ok: true, from, to: name };
+});
+route('POST', '/api/audit', (c) => {
+  const ev = c.p('ev'); if (ev !== 'kill') throw E('E_INVALID', 'e.badKind');
+  const scope = ['all', 'one', 'host'].indexOf(c.p('scope')) >= 0 ? c.p('scope') : 'all', host = /^[A-Za-z0-9._:-]{0,120}$/.test(c.p('host')) ? c.p('host') : '';
+  oplog('dashboard', 'conns.kill', kv({ scope, count: +c.p('n') || 0, host })); return { ok: true };
+});
+route('POST', '/api/sites/auto/clear', () => {
+  const autos = M.overrides.filter((o) => o.kind === 'site' && o.src === 'auto');
+  autos.forEach((o) => { if (M.dismissed.indexOf(o.value) < 0) M.dismissed.push(o.value); });
+  M.overrides = M.overrides.filter((o) => !(o.kind === 'site' && o.src === 'auto'));
+  oplog('dashboard', 'autosite.clear', kv({ count: autos.length })); return { ok: true, removed: autos.length };
 });
 
 /* ---- 自定义软件: 先校验 (POST /api/apps/inspect, 不会执行任何程序), 再添加 (POST /api/apps/custom) / 删除 (POST /api/apps/custom/delete); 行为对照 lib/apps.sh ----
@@ -1453,8 +1534,35 @@ const logArgs = (c) => {
   return { type, day };
 };
 route('GET', '/api/logs', (c) => {
-  const a = logArgs(c), r = logQuery(a.type, a.day, c.p('q'), Math.min(Math.max(num(c.p('limit'), 500), 1), 2000), Math.max(num(c.p('offset'), 0), 0));
-  return { ok: true, total: r.total, days: logDays(), rows: r.rows };
+  const a = logArgs(c), f = c.p('f'), r = logQuery(a.type, a.day, c.p('q'), Math.min(Math.max(num(c.p('limit'), 500), 1), 2000), Math.max(num(c.p('offset'), 0), 0), ['', 'error', 'warn', 'direct', 'proxy', 'dashboard', 'terminal', 'auto'].indexOf(f) >= 0 ? f : '');
+  return { ok: true, days: logDays(), total: r.total, rows: r.rows, summary: r.summary };
+});
+/* 诊断导出: 和真实后端 (lib/logs.sh logs_bundle) 同一个格式 —— 自描述的文本, @@SECTION 分区, 见 docs/DIAGNOSTICS.md */
+route('GET', '/api/logs/bundle', (c) => {
+  const hours = c.p('hours') || '24', secs = (c.p('sections') || 'ops,access,proxy,snapshot').split(',');
+  if (hours !== 'all' && !/^\d{1,3}$/.test(hours)) throw E('E_INVALID', 'e.logDay');
+  if (secs.some((x) => ['ops', 'access', 'proxy', 'snapshot'].indexOf(x) < 0)) throw E('E_INVALID', 'e.logType');
+  const since = hours === 'all' ? '' : tsOf(now() - Math.min(+hours, 720) * 3600e3), days = logDays().slice().reverse().filter((d) => !since || d >= since.slice(0, 10)), out = [];
+  const sec = (name, fmt, lines) => { out.push('@@SECTION ' + name + ' format=' + fmt + ' rows=' + lines.length); lines.forEach((l) => out.push(l)); };
+  const rowsOf = (t) => { const a = []; days.forEach((d) => (M.L[t][d] || []).filter(keepRow).forEach((r) => { if (!since || r.ts >= since) a.push(r); })); return a; };
+  out.push('#ENANA-DIAGNOSTICS format=1', '#generated=' + tsOf(now()) + ' tz=+0800 app=enana version=' + M.upd.cur, '#range since="' + (since || 'beginning') + '" hours=' + hours + ' days=' + days.join(','),
+    '#sections=meta' + (secs.indexOf('snapshot') >= 0 ? ',env,config,policy,servers,apps,probes,live' : '') + secs.filter((x) => x !== 'snapshot').map((x) => ',' + x).join(''), '#privacy=不含任何密码 / 令牌 / 服务器凭据; 服务器地址和系统用户名已打码 (演示数据)。');
+  sec('meta', 'kv', ['app=enana', 'version=' + M.upd.cur, 'core=' + M.upd.coreCur, 'os=macOS 15.0', 'arch=arm64', 'proxy.enabled=' + (M.proxyOn ? 1 : 0), 'proxy.mode=' + M.proxyMode, 'settings.log_hours=' + M.logHours, 'settings.auto_sites=' + (M.autoSites ? 1 : 0), 'servers.total=' + M.servers.length]);
+  if (secs.indexOf('snapshot') >= 0) {
+    sec('env', 'kv', ['sysproxy.points_to_enana=' + (M.env.sysproxy ? 'yes' : 'no'), 'config.check=ok']);
+    sec('config', 'text', ['(演示数据: 真实后端在这里给出脱敏后的路由规则 / 出站 / DNS)']);
+    sec('policy', 'text', M.overrides.map((o) => 'site|' + o.value + '|' + o.state + '|' + (o.src || 'user')));
+    sec('servers', 'tsv', ['tag\ttype\thost\tport\trole\tsub'].concat(M.servers.map((x) => [x.tag, x.type, 's***.example.com', x.port, x.role, x.sub || ''].join('\t'))));
+    sec('apps', 'tsv', ['name\tstate\tflag\ttarget\tknown\trec\tgroup\tpath'].concat(M.apps.map((a) => [a.name, a.state, a.flag, a.target || '', a.known ? 'yes' : 'no', a.rec || '', a.group || '', '/Applications/' + a.name + '.app'].join('\t'))));
+    sec('probes', 'tsv', ['probe\tvia\turl\thttp\tconnect_ms\ttotal_ms\tremote_ip\tnote', 'google_204\tproxy\thttp://www.gstatic.com/generate_204\t204\t12\t210\t203.0.113.7\tok']);
+    sec('live', 'tsv', ['start\tnet\thost\tport\tapp\tchain\trule\tup\tdown']);
+  }
+  if (secs.indexOf('ops') >= 0) sec('ops', 'tsv', ['ts\twho\taction\tdetail\tresult'].concat(rowsOf('ops').map((r) => [r.ts, r.who, r.action, r.detail, r.result].join('\t'))));
+  if (secs.indexOf('access') >= 0) sec('access', 'tsv', ['ts\tid\tnet\thost\tport\tapp\tuser\troute\tnode\treason\tresult\terr\tdur\tips\terrmsg\tpath'].concat(rowsOf('access').map((r) => [r.ts, r.id, r.net, r.host, r.port, r.app, '<user>', r.route, r.node, r.reason, r.err ? 'error' : 'ok', r.err, r.dur, r.ips, r.errmsg, r.path].join('\t'))));
+  if (secs.indexOf('proxy') >= 0) sec('proxy', 'raw', rowsOf('proxy').map((r) => '+0800 ' + r.ts + ' ' + r.level + ' ' + r.msg));
+  out.push('@@END');
+  oplog('dashboard', 'logs.bundle', kv({ hours, sections: secs.join(','), bytes: out.join('\n').length }));
+  return new Raw(out.join('\n') + '\n', 'text/plain; charset=utf-8', { 'Content-Disposition': 'attachment; filename="enana-diagnostics.txt"' });
 });
 route('GET', '/api/logs/export', (c) => { const a = logArgs(c); return new Raw(logExport(a.type, a.day)); });
 route('POST', '/api/logs/clear', (c) => {
@@ -2022,8 +2130,15 @@ function buildProxies() {
   }
   const pol = ['PIN', 'Global', 'direct'].filter((t) => P[t]);
   P.Final = { name: 'Final', type: 'Selector', now: pol.indexOf(M.final) >= 0 ? M.final : 'direct', all: ['Global', 'PIN', 'direct'].filter((t) => P[t]), history: [] };
-  svcList().forEach((e) => { P[e.tag] = { name: e.tag, type: 'Selector', now: pol.indexOf(M.svc[e.id]) >= 0 ? M.svc[e.id] : 'direct', all: pol.slice(), history: [] }; });
+  const pinx = pins.length >= 2 ? ['PINAUTO'].concat(pins.slice(0, 16).map((x) => x.tag)) : [];
+  if (pinx.length) P.PINAUTO = { name: 'PINAUTO', type: 'URLTest', now: pins[0].tag, all: pins.slice(0, 16).map((x) => x.tag), history: [] };
+  svcList().forEach((e) => { const opts = pol.concat(pinx); P[e.tag] = { name: e.tag, type: 'Selector', now: opts.indexOf(M.svc[e.id]) >= 0 ? M.svc[e.id] : 'direct', all: opts, history: [] }; });
   return P;
+}
+function applySelector(tag, name) {
+  if (tag === 'PIN') M.pin = name; else if (tag === 'Global') M.global = name; else if (tag === 'Final') M.final = name;
+  else { const e = svcList().filter((x) => x.tag === tag)[0]; if (!e) return false; M.svc[e.id] = name; }
+  return true;
 }
 function leafOf(P, tag) { let n = 0; while (P[tag] && P[tag].all && P[tag].now && n++ < 8) tag = P[tag].now; return tag; }
 /* [域名, 应用, 服务 id, 重流量 (1-3), 强制直连] —— 全是 example.* 的占位域名 */
@@ -2042,17 +2157,24 @@ const procPath = (app) => {
     : '/Applications/' + app + '.app/Contents/MacOS/' + app;
 };
 function pickRoute(site) {
-  if (!M.proxyOn) return { chains: ['direct'], pol: 'direct', svc: '' };                 // 代理总开关关闭: 全部直连
+  if (!M.proxyOn) return { chains: ['direct-mode'], pol: 'direct', svc: '' };            // 代理总开关关闭: 全部直连 (出口名 direct-mode)
   const host = site[0], app = site[1], svc = M.svc[site[2]] !== undefined ? site[2] : '', P = buildProxies();
-  let pol = svc ? M.svc[svc] : M.final; if (site[4]) pol = 'direct';
+  let pol = svc ? M.svc[svc] : M.final, why = site[4] ? 'direct-cn' : (svc ? 'direct' : 'direct'), tg = '';
+  if (host === 'intranet.example.com') why = 'direct-lan';
+  if (site[4]) pol = 'direct';
   if (M.proxyMode === 'global' && host !== 'intranet.example.com') { if (pol === 'direct' && !svc) pol = P.Global ? 'Global' : (P.PIN ? 'PIN' : 'direct'); }      // 全局代理: 忽略「国内直连 / 最终直连」, 其余仍按你的设置 (固定出口服务 / 应用 / 网站的明确选择)
-  const ov = M.overrides.filter((o) => o.kind === 'site' && (host === o.value || host.endsWith('.' + o.value)))[0]; if (ov) pol = POL[ov.state];
+  if (pol !== 'PIN' && pol !== 'Global' && pol !== 'direct') { tg = pol; pol = 'PIN'; }                                  // 网站开关选了「指定的固定出口 / 固定出口里自动选」
+  const ov = M.overrides.filter((o) => o.kind === 'site' && (host === o.value || host.endsWith('.' + o.value)))[0]; if (ov) { pol = POL[ov.state]; tg = ov.state === 'pin' ? (ov.target || '') : ''; why = 'direct-site'; }
   const ap = M.apps.filter((a) => a.name === app)[0];
-  if (ap && ap.state === 'direct') pol = 'direct'; else if (ap && (ap.state === 'pin' || ap.state === 'auto')) pol = POL[ap.state];
+  if (ap && ap.state === 'direct') { pol = 'direct'; why = 'direct-app'; } else if (ap && (ap.state === 'pin' || ap.state === 'auto')) { pol = POL[ap.state]; tg = ap.state === 'pin' ? (ap.target || '') : ''; }
   const grp = svc ? 'svc-' + svc : 'Final';
-  if (pol === 'PIN' && P.PIN) return { chains: [P.PIN.now, 'PIN', grp], pol, svc };
+  if (pol === 'PIN' && P.PIN) {
+    if (tg === 'PINAUTO' && P.PINAUTO) return { chains: [P.PINAUTO.now, 'PINAUTO', grp], pol, svc };
+    if (tg && P[tg] && !P[tg].all) return { chains: [tg, grp], pol, svc };
+    return { chains: [P.PIN.now, 'PIN', grp], pol, svc };
+  }
   if (pol === 'Global' && P.Global) { const lf = leafOf(P, 'Global'); return { chains: P.Global.now === 'AUTO' ? [lf, 'AUTO', 'Global', grp] : [lf, 'Global', grp], pol, svc }; }
-  return { chains: svc && !site[4] ? ['direct', grp] : ['direct'], pol: 'direct', svc };
+  return { chains: svc && !site[4] && why === 'direct' ? ['direct', grp] : [why === 'direct' && !svc && !site[4] ? 'direct' : why], pol: 'direct', svc };
 }
 function spawnConn(forced) {                                              // forced: 指定站点 (自测用, 不靠随机抽样)
   const cu = M.apps.filter((a) => a.custom), ca = cu.length && Math.random() < 0.1 ? cu[Math.floor(Math.random() * cu.length)] : null;       // 添加了自定义软件之后, 连接里偶尔会出现它 (按它自己的策略走)
@@ -2091,8 +2213,7 @@ async function clashApi(req, res, u, body) {
   if (seg[0] === 'proxies' && seg.length === 2 && req.method === 'PUT') {
     let j = {}; try { j = JSON.parse(body); } catch (e) { /* 忽略 */ }
     const g = P[seg[1]]; if (!g || !g.all || !j || g.all.indexOf(j.name) < 0) return J({ message: 'Selector not found' }, 400);
-    if (seg[1] === 'PIN') M.pin = j.name; else if (seg[1] === 'Global') M.global = j.name; else if (seg[1] === 'Final') M.final = j.name;
-    else { const e = svcList().filter((x) => x.tag === seg[1])[0]; if (!e) return J({ message: 'Selector not found' }, 400); M.svc[e.id] = j.name; }
+    if (!applySelector(seg[1], j.name)) return J({ message: 'Selector not found' }, 400);
     return nocontent();
   }
   if (seg[0] === 'proxies' && seg[2] === 'delay') {
@@ -2339,7 +2460,7 @@ const makeHelper = () => http.createServer(guard(async (req, res) => {
 const listenOn = (srv, port) => new Promise((ok, bad) => { const onErr = (e) => bad(e); srv.once('error', onErr); srv.listen(port, HOST, () => { srv.removeListener('error', onErr); ok(port); }); });
 
 /* ===================== 11. 自测: node tools/mock-server.js --selftest (在 18090-18099 里找空闲端口, 时间加速, 失败则退出码非 0) ===================== */
-const OPS_CODES = ['login', 'login.fail', 'logout', 'proxy.on', 'proxy.off', 'proxy.mode', 'override.set', 'override.delete', 'apps.scan', 'apps.adopt', 'apps.ack', 'servers.import', 'servers.delete', 'servers.role', 'sub.save', 'sub.delete',
+const OPS_CODES = ['policy.switch', 'conns.kill', 'logs.bundle', 'autosite.add', 'autosite.clear', 'apps.found', 'login', 'login.fail', 'logout', 'proxy.on', 'proxy.off', 'proxy.mode', 'override.set', 'override.delete', 'apps.scan', 'apps.adopt', 'apps.ack', 'servers.import', 'servers.delete', 'servers.role', 'sub.save', 'sub.delete',
   'sub.refresh', 'rules.update', 'rules.toggle', 'rules.custom.add', 'rules.custom.delete', 'dns.set', 'dns.test', 'settings.set', 'logs.clear', 'update.apply', 'restart', 'install', 'upgrade', 'uninstall', 'start', 'stop',
   'net.refresh', 'speedtest.start', 'speedtest.stop', 'vps.probe', 'vps.provision', 'vps.forget', 'vps.redetect', 'sync.settings', 'sync.push', 'sync.pull', 'sync.clear', 'devices.kick',
   'auth.verify', 'secret.view', 'backup.export', 'password.change', 'sites.domain', 'sites.reset', 'apps.custom.add', 'apps.custom.delete', 'speed.target', 'speed.targets.reset', 'dns.hosts', 'dns.hosts.reset', 'dns.bench'];
@@ -2419,7 +2540,7 @@ async function selftest() {
   r = await api('POST', '/api/proxy', { form: { on: '2' } }); ck('proxy: invalid value -> E_INVALID', jx(r).code === 'E_INVALID');
   r = await api('GET', '/api/state'); ck('state: proxy OFF at start, account email, update summary, lang, ports.speed', jx(r).proxy && jx(r).proxy.enabled === false && jx(r).account.email === D1 && jx(r).update.available === true
     && jx(r).update.latest === '2.2.0' && typeof jx(r).lang === 'string' && jx(r).ports.speed === 7892 && jx(r).version === '2.1.0' && jx(r).core === '1.14.2' && jx(r).servers.length === 27 && jx(r).first_run === false, r.text.slice(0, 160));
-  r = await clash('GET', '/connections'); ck('proxy OFF: every connection is direct', r.status === 200 && jx(r).connections.length > 0 && jx(r).connections.every((c) => c.chains.length === 1 && c.chains[0] === 'direct'));
+  r = await clash('GET', '/connections'); ck('proxy OFF: every connection is direct', r.status === 200 && jx(r).connections.length > 0 && jx(r).connections.every((c) => c.chains.length === 1 && c.chains[0] === 'direct-mode'));        // 总开关关闭: 出口名 direct-mode (说明为什么直连)
   r = await api('POST', '/api/proxy', { form: { on: '1' } }); ck('proxy on -> {ok, enabled:true}', jx(r).ok === true && jx(r).enabled === true, r.text);
   r = await clash('GET', '/connections'); ck('proxy ON: connections use proxy chains again', jx(r).connections.some((c) => c.chains.length > 1));
   r = await api('GET', '/api/state'); ck('state.proxy.enabled follows the switch', jx(r).proxy.enabled === true);
@@ -2523,17 +2644,21 @@ async function selftest() {
   r = await api('POST', '/api/override', { body: 'x'.repeat(4 * 1024 * 1024 + 100) }); ck('request body over 4 MB -> 413', r.status === 413, r.status + ' ' + (r.error || ''));
 
   /* ---- 设置 / 日志 ---- */
-  r = await api('GET', '/api/settings'); ck('settings shape (account.email, usage access==proxy, ports)', jx(r).settings.log_days === 30 && jx(r).settings.log_days_max === 365 && jx(r).settings.access_log === true && jx(r).settings.auto_update === true && jx(r).usage.access === jx(r).usage.proxy
+  r = await api('GET', '/api/settings'); ck('settings shape (account.email, usage access==proxy, ports)', jx(r).settings.log_hours === 72 && jx(r).settings.log_hours_min === 12 && jx(r).settings.log_hours_max === 720 && jx(r).settings.log_ops === true && jx(r).settings.log_core === true && jx(r).settings.auto_sites === false && jx(r).settings.access_log === true && jx(r).settings.auto_update === true && jx(r).usage.access === jx(r).usage.proxy
     && jx(r).usage.total === jx(r).usage.ops + jx(r).usage.proxy && jx(r).account.email === D1 && jx(r).ports.api === PORT && !('bound' in jx(r).account));
   r = await api('POST', '/api/settings', { form: { auto_update: '2' } }); ck('settings: auto_update must be 0|1 -> E_INVALID', jx(r).code === 'E_INVALID');
   r = await api('POST', '/api/settings', { form: { auto_update: '0' } }); r2 = await api('GET', '/api/settings');
   ck('settings: auto_update=0 sticks (no job) and is logged as settings.set', jx(r).ok === true && !('job' in jx(r)) && jx(r2).settings.auto_update === false && jx(await logs({ type: 'ops', q: 'auto_update=0' })).total >= 1);
   await api('POST', '/api/settings', { form: { auto_update: '1' } });
-  r = await api('POST', '/api/settings', { form: { log_days: '0' } }); ck('settings: log_days 0 -> E_INVALID', jx(r).code === 'E_INVALID');
-  r = await api('POST', '/api/settings', { form: { log_days: '366' } }); ck('settings: log_days 366 -> E_INVALID', jx(r).code === 'E_INVALID');
-  r = await api('POST', '/api/settings', { form: { log_days: '7', lang: 'en' } }); const dd = await logs({ type: 'ops' }); r2 = await api('GET', '/api/settings', { lang: 'zh' });
-  ck('settings: log_days=7 limits the days; lang=en sticks', jx(r).ok === true && !('job' in jx(r)) && jx(dd).days.length === 7 && jx(r2).lang === 'en');
-  await api('POST', '/api/settings', { form: { log_days: '30', lang: 'zh' } });
+  r = await api('POST', '/api/settings', { form: { log_hours: '11' } }); ck('settings: log_hours 11 (< 12 hours) -> E_INVALID', jx(r).code === 'E_INVALID');
+  r = await api('POST', '/api/settings', { form: { log_hours: '721' } }); ck('settings: log_hours 721 (> 30 days) -> E_INVALID', jx(r).code === 'E_INVALID');
+  r = await api('POST', '/api/settings', { form: { log_hours: 'abc' } }); ck('settings: log_hours not a number -> E_INVALID', jx(r).code === 'E_INVALID');
+  r = await api('POST', '/api/settings', { form: { log_hours: '24', lang: 'en' } }); const dd = await logs({ type: 'ops' }); r2 = await api('GET', '/api/settings', { lang: 'zh' });
+  ck('settings: log_hours=24 limits the days (today + yesterday); lang=en sticks', jx(r).ok === true && !('job' in jx(r)) && jx(dd).days.length <= 2 && jx(r2).lang === 'en' && jx(r2).settings.log_hours === 24);
+  r = await api('POST', '/api/settings', { form: { log_hours: '12' } }); const d12 = await logs({ type: 'access', limit: '2000' });
+  ck('settings: log_hours=12 is the minimum and cuts rows older than 12 hours (hour granularity)', jx(r).ok === true && jx(d12).rows.every((x) => x.ts >= tsOf(now() - 12 * 3600e3 - 5000)));
+  r = await api('POST', '/api/settings', { form: { log_days: '2' } }); r2 = await api('GET', '/api/settings'); ck('settings: the legacy log_days=2 is still accepted and converted to 48 hours', jx(r).ok === true && jx(r2).settings.log_hours === 48);
+  await api('POST', '/api/settings', { form: { log_hours: '720', lang: 'zh' } });                           // 后面的历史检查要看 14 天
   r = await logs({ type: 'access' }); const a0 = jx(r).total;
   r = await api('POST', '/api/settings', { form: { access_log: '0' } }); jb = await run(r); await ctl('tick=3'); r = await logs({ type: 'access' }); const a1 = jx(r).total;
   ck('access_log=0 returns a job and stops new access rows', jb.state === 'done' && a1 === a0, [a0, a1]);
@@ -2550,6 +2675,61 @@ async function selftest() {
   r = await logs({ type: 'access', limit: '3' }); const ac = jx(r).rows[0]; ck('logs: access rows (host/port/app/route/node), 200-1500 rows per day', 'host' in ac && typeof ac.port === 'number' && 'app' in ac && ['direct', 'pin', 'auto', 'other'].indexOf(ac.route) >= 0 && 'node' in ac && jx(r).total >= 200 && /example\.(com|org|net)$/.test(ac.host));
   r = await logs({ type: 'proxy', limit: '3' }); ck('logs: proxy rows (ts/level/msg)', jx(r).rows.length === 3 && ['INFO', 'WARN', 'ERROR'].indexOf(jx(r).rows[0].level) >= 0 && typeof jx(r).rows[0].msg === 'string');
   r = await logs({ type: 'bogus' }); ck('logs: invalid type -> E_INVALID', jx(r).code === 'E_INVALID');
+  /* ---- 日志 (2.1.1): 访问记录的新字段 / 筛选 / 汇总; 诊断导出; 三个日志开关; 策略切换 / 审计 / 指定固定出口 / 自动识别 ---- */
+  {
+    const clashJ = async (m, pth) => jx(await clash(m, pth));
+    const acc = jx(await logs({ type: 'access', day: dayOf(now()), limit: '400' }));
+    ck('logs/access rows: id net host port app user path route node reason err errmsg dur ips; summary {all direct proxy pin auto error reasons top_fail}', acc.rows.length > 0 && acc.rows.every((x) => ['id', 'net', 'host', 'port', 'app', 'user', 'path', 'route', 'node', 'reason', 'err', 'errmsg', 'dur', 'ips'].every((k) => k in x))
+      && acc.summary && ['all', 'direct', 'proxy', 'pin', 'auto', 'error'].every((k) => typeof acc.summary[k] === 'number') && acc.summary.direct + acc.summary.proxy === acc.summary.all && typeof acc.summary.reasons === 'object' && Array.isArray(acc.summary.top_fail));
+    ck('logs/access: a direct row names why (reason mode|lan|site|app|cn|policy) and its exit is direct-<reason> (plain direct = policy); proxied rows have no reason', acc.rows.every((x) => x.route === 'direct' ? (['mode', 'lan', 'site', 'app', 'cn', 'policy'].indexOf(x.reason) >= 0 && x.node === (x.reason === 'policy' ? 'direct' : 'direct-' + x.reason)) : (!x.reason && x.node !== 'direct')));
+    const fe = jx(await logs({ type: 'access', day: dayOf(now()), limit: '400', f: 'error' })), fd = jx(await logs({ type: 'access', day: dayOf(now()), limit: '400', f: 'direct' })), fp = jx(await logs({ type: 'access', day: dayOf(now()), limit: '400', f: 'proxy' }));
+    ck('logs/access filters: f=error -> only failed rows (err set); f=direct -> only direct; f=proxy -> none direct; the summary does not change with the filter', fe.rows.every((x) => x.err) && fe.total === acc.summary.error && fd.rows.every((x) => x.route === 'direct') && fd.total === acc.summary.direct && fp.rows.every((x) => x.route !== 'direct') && fp.total === acc.summary.proxy && fe.summary.all === acc.summary.all);
+    const po = jx(await logs({ type: 'proxy', day: dayOf(now()), limit: '2000' })), pw = jx(await logs({ type: 'proxy', day: dayOf(now()), limit: '2000', f: 'warn' })), oe = jx(await logs({ type: 'ops', day: dayOf(now()), limit: '2000', f: 'error' }));
+    ck('logs filters: proxy f=warn -> WARN + ERROR rows, summary {all warn error}; ops f=error -> only failed operations, summary {all error}', pw.rows.every((x) => x.level === 'WARN' || x.level === 'ERROR') && pw.total === po.summary.warn + po.summary.error && ['all', 'warn', 'error'].every((k) => typeof po.summary[k] === 'number') && oe.rows.every((x) => x.result === 'error') && oe.total === oe.summary.error);
+    r = await api('GET', '/api/logs/bundle', { q: { hours: '24', sections: 'ops,access,proxy,snapshot' } }); const bl = (r.text || '').split('\n');
+    ck('logs/bundle: a self-describing text file — #ENANA-DIAGNOSTICS format=1 header, @@SECTION name format= rows= blocks (meta env config policy servers apps probes live ops access proxy), @@END', r.status === 200 && /^text\/plain/.test(r.headers['content-type']) && bl[0] === '#ENANA-DIAGNOSTICS format=1' && /^#range since="/.test(bl[2])
+      && ['meta', 'env', 'config', 'policy', 'servers', 'apps', 'probes', 'live', 'ops', 'access', 'proxy'].every((n) => bl.some((l) => new RegExp('^@@SECTION ' + n + ' format=(kv|tsv|text|raw) rows=\\d+$').test(l))) && bl.filter(Boolean).pop() === '@@END');
+    ck('logs/bundle: the access section is a TSV with a header (ts id net host ...) and every row has 16 columns; hours + sections are validated', (() => { const i = bl.findIndex((l) => l.indexOf('@@SECTION access') === 0), hdr = (bl[i + 1] || '').split('\t'); return hdr[0] === 'ts' && hdr.length === 16 && bl.slice(i + 2).filter((l) => l && l.indexOf('@@') !== 0 && l.indexOf('+0800') !== 0).slice(0, 20).every((l) => l.split('\t').length === 16); })()
+      && jx(await api('GET', '/api/logs/bundle', { q: { hours: 'x' } })).code === 'E_INVALID' && jx(await api('GET', '/api/logs/bundle', { q: { sections: 'ops,nope' } })).code === 'E_INVALID');
+    r = await api('GET', '/api/logs/bundle', { q: { hours: '12', sections: 'ops' } }); const b2 = r.text.split('\n');
+    ck('logs/bundle: only the chosen sections (ops) + meta are present; the export itself is recorded (logs.bundle)', b2.some((l) => l.indexOf('@@SECTION ops') === 0) && !b2.some((l) => l.indexOf('@@SECTION access') === 0) && !b2.some((l) => l.indexOf('@@SECTION env') === 0) && b2.some((l) => l.indexOf('@@SECTION meta') === 0)
+      && jx(await logs({ type: 'ops', day: dayOf(now()), limit: '5' })).rows.some((x) => x.action === 'logs.bundle'));
+    // 三个日志开关
+    r = await api('POST', '/api/settings', { form: { log_ops: '0' } }); const n0 = jx(await logs({ type: 'ops', day: dayOf(now()), limit: '1' })).total; await api('POST', '/api/override', { q: { kind: 'site', value: 'quiet.example.com', state: 'direct' } });
+    const n1 = jx(await logs({ type: 'ops', day: dayOf(now()), limit: '1' })).total; await api('POST', '/api/override', { q: { kind: 'site', value: 'quiet.example.com', state: 'follow' } });
+    ck('settings: log_ops=0 stops operation records (the switch itself is recorded first); log_ops=1 resumes', jx(r).ok === true && n1 === n0 && jx(await api('GET', '/api/settings')).settings.log_ops === false);
+    await api('POST', '/api/settings', { form: { log_ops: '1' } }); const n2 = jx(await logs({ type: 'ops', day: dayOf(now()), limit: '1' })).total; await api('POST', '/api/override', { q: { kind: 'site', value: 'quiet.example.com', state: 'direct' } });
+    ck('settings: log_ops=1 resumes recording', jx(await logs({ type: 'ops', day: dayOf(now()), limit: '1' })).total > n2); await api('POST', '/api/override', { q: { kind: 'site', value: 'quiet.example.com', state: 'follow' } });
+    r = await api('POST', '/api/settings', { form: { log_core: '0' } }); ck('settings: log_core=0 returns a job (core restart) and shows in /api/settings', jx(r).ok === true && !!jx(r).job && jx(await api('GET', '/api/settings')).settings.log_core === false); await nap(4500);
+    await api('POST', '/api/settings', { form: { log_core: '1' } }); await nap(4500);
+    // 策略切换 (辅助服务代为切换并记录) / 审计 / 指定固定出口
+    const px = (await clashJ('GET', '/proxies')).proxies, svcTag = Object.keys(px).filter((k) => /^svc-/.test(k))[0], pinTags = px.PIN ? px.PIN.all : [];
+    ck('clash proxies: with >= 2 fixed exits each site switch also offers PINAUTO + every fixed exit (and PINAUTO is a group over the fixed exits)', pinTags.length >= 2 && px[svcTag].all.indexOf('PINAUTO') >= 0 && pinTags.every((t) => px[svcTag].all.indexOf(t) >= 0) && px.PINAUTO && px.PINAUTO.all.join() === pinTags.join());
+    r = await api('POST', '/api/policy', { form: { tag: svcTag, name: pinTags[1] } }); const px2 = (await clashJ('GET', '/proxies')).proxies;
+    ck('policy: POST /api/policy switches a site selector to ONE fixed exit; answers {from, to}; the switch is recorded (policy.switch, kind=selector tag from to)', jx(r).ok === true && jx(r).to === pinTags[1] && px2[svcTag].now === pinTags[1] && jx(await logs({ type: 'ops', day: dayOf(now()), limit: '5' })).rows.some((x) => x.action === 'policy.switch' && x.detail.indexOf('tag=' + svcTag) >= 0 && x.detail.indexOf('to=') >= 0));
+    r = await api('POST', '/api/policy', { form: { tag: svcTag, name: 'No Such Node' } }); r2 = await api('POST', '/api/policy', { form: { tag: 'evil tag', name: 'PIN' } });
+    ck('policy: an option that does not exist -> E_NOT_FOUND; a malformed tag -> E_INVALID', jx(r).code === 'E_NOT_FOUND' && jx(r2).code === 'E_INVALID');
+    r = await api('POST', '/api/policy', { form: { tag: svcTag, name: 'PINAUTO' } }); ck('policy: PINAUTO (auto-pick among the fixed exits) can be chosen too', jx(r).ok === true && (await clashJ('GET', '/proxies')).proxies[svcTag].now === 'PINAUTO');
+    await api('POST', '/api/policy', { form: { tag: svcTag, name: 'PIN' } });
+    r = await api('POST', '/api/audit', { form: { ev: 'kill', scope: 'host', n: '3', host: 'www.example.org' } }); r2 = await api('POST', '/api/audit', { form: { ev: 'nope' } });
+    ck('audit: POST /api/audit ev=kill is recorded (conns.kill scope count host); other events -> E_INVALID', jx(r).ok === true && jx(r2).code === 'E_INVALID' && jx(await logs({ type: 'ops', day: dayOf(now()), limit: '5' })).rows.some((x) => x.action === 'conns.kill' && /scope=host count=3 host=www.example.org/.test(x.detail)));
+    const appN = jx(await api('GET', '/api/apps')).apps.filter((a) => !a.custom)[0].name;
+    r = await api('POST', '/api/override', { q: { kind: 'app', value: appN, state: 'pin', target: pinTags[1] } }); const aT = jx(await api('GET', '/api/apps')).apps.filter((a) => a.name === appN)[0];
+    ck('override: an app on "pin" can be pinned to one fixed exit (target) — apps carry target + target_ok; the record has from/to/target_to', jx(r).ok === true && aT.state === 'pin' && aT.target === pinTags[1] && aT.target_ok === true && jx(await logs({ type: 'ops', day: dayOf(now()), limit: '3' })).rows.some((x) => x.action === 'override.set' && x.detail.indexOf('to=pin') >= 0 && x.detail.indexOf('target_to=') >= 0));
+    r = await api('POST', '/api/override', { q: { kind: 'app', value: appN, state: 'pin', target: 'PINAUTO' } }); r2 = await api('POST', '/api/override', { q: { kind: 'app', value: appN, state: 'pin', target: 'No Such Server' } });
+    ck('override: target PINAUTO is accepted; an unknown fixed exit -> E_INVALID', jx(r).ok === true && jx(r2).code === 'E_INVALID');
+    r = await api('POST', '/api/override', { q: { kind: 'app', value: appN, state: 'direct', target: pinTags[1] } }); ck('override: the target is dropped when the state is not "pin"', jx(r).ok === true && jx(await api('GET', '/api/apps')).apps.filter((a) => a.name === appN)[0].target === '');
+    await api('POST', '/api/override', { q: { kind: 'app', value: appN, state: 'follow' } });
+    r = await api('POST', '/api/override', { q: { kind: 'site', value: 'pinned.example.com', state: 'pin', target: pinTags[0] } }); const sv = jx(await api('GET', '/api/state')).overrides.filter((o) => o.value === 'pinned.example.com')[0];
+    ck('state.overrides carry target, target_ok, src (user|auto), at, why, fails, app; a user site has src "user"', jx(r).ok === true && sv && sv.target === pinTags[0] && sv.target_ok === true && sv.src === 'user' && ['at', 'why', 'fails', 'app'].every((k) => k in sv));
+    await api('POST', '/api/override', { q: { kind: 'site', value: 'pinned.example.com', state: 'follow' } });
+    // 自动识别
+    const st0 = jx(await api('GET', '/api/state')).overrides, au0 = st0.filter((o) => o.src === 'auto');
+    ck('auto-detect: the seed has one auto-added site (src auto, why, fails, app, at)', au0.length === 1 && au0[0].value === 'blocked.example.net' && au0[0].why === 'timeout' && au0[0].fails > 0 && au0[0].app === 'Google Chrome' && au0[0].at > 0);
+    r = await api('POST', '/api/settings', { form: { auto_sites: '2' } }); ck('settings: auto_sites must be 0|1', jx(r).code === 'E_INVALID');
+    r = await api('POST', '/api/sites/auto/clear'); const st1 = jx(await api('GET', '/api/state')).overrides;
+    ck('sites/auto/clear: undoes every auto-added site (answers {removed}), user sites are untouched; recorded (autosite.clear count)', jx(r).ok === true && jx(r).removed === 1 && !st1.some((o) => o.src === 'auto') && st1.some((o) => o.value === 'example.org') && jx(await logs({ type: 'ops', day: dayOf(now()), limit: '3' })).rows.some((x) => x.action === 'autosite.clear' && x.detail === 'count=1'));
+  }
   r = await api('GET', '/api/logs/export', { q: { type: 'ops', day: dayOf(now()) } }); const full = jx(await logs({ type: 'ops', day: dayOf(now()), limit: '2000' }));
   ck('logs/export: text/plain lines, one per row', r.status === 200 && /^text\/plain; charset=utf-8/.test(r.headers['content-type']) && r.text.split('\n').filter(Boolean).length === full.total && r.text.split('\n')[0].split('\t').length === 5);
   const y = dayOf(addDays(now(), -3)); r = await api('POST', '/api/logs/clear', { form: { type: 'ops', before: dayOf(now()) } }); const afterOps = jx(await logs({ type: 'ops', day: y })), cleared = await logs({ type: 'ops', day: dayOf(now()) });
@@ -3152,7 +3332,7 @@ async function selftest() {
   }
   /* 操作记录: 这次自测里真实产生的动作码 (ts >= 自测开始时间) 都要出现, 并且全部在文档约定的集合里 (reset 会重建日志, 所以先检查) */
   const live = jx(await logs({ type: 'ops', day: dayOf(now()), limit: '2000' })).rows.filter((x) => x.ts >= tStart), liveCodes = {}; live.forEach((x) => { liveCodes[x.action] = 1; });
-  const want = OPS_CODES.filter((c) => ['install', 'upgrade', 'uninstall', 'start', 'stop'].indexOf(c) < 0);
+  const want = OPS_CODES.filter((c) => ['install', 'upgrade', 'uninstall', 'start', 'stop', 'autosite.add', 'apps.found'].indexOf(c) < 0);          // autosite.add / apps.found 是后台自动记的 (who = auto), 不由某个接口触发
   ck('ops log: every state-changing endpoint wrote its stable action code, nothing outside the documented set', want.every((c) => liveCodes[c]) && Object.keys(liveCodes).every((c) => OPS_CODES.indexOf(c) >= 0), want.filter((c) => !liveCodes[c]).concat(Object.keys(liveCodes).filter((c) => OPS_CODES.indexOf(c) < 0)));
   ck('ops log: details are logfmt (tags with spaces are quoted), result ok|error, who dashboard', live.some((x) => x.action === 'servers.role' && /^tag="Selftest [AB]" role=\w+$/.test(x.detail)) && live.every((x) => ['ok', 'error'].indexOf(x.result) >= 0 && x.who === 'dashboard') && live.some((x) => x.result === 'error'));
   /* ---- reset=1: 启动时的应用图标陆续出现 / 种子密码恢复 / 套餐与偏好回到初始 (放在操作记录检查之后: reset 会重建日志) ---- */

@@ -2,6 +2,8 @@
  * · 每个应用的覆盖开关 (跟随规则 / 直连 / 固定出口 / 自动线路) + 新应用提示条; 所有状态变化都先经过 confirmDialog, 不可用的控件用 aria-disabled + 提示原因
  * · 真实应用图标: GET /api/apps 的 icon (相对路径 "appicons/X.png" 或 ""); 没有图标 / 加载失败时用字母头像; 后台提取图标期间轮询新图标
  * · 添加自定义软件: 两步弹窗 (输入路径或名称 -> POST /api/apps/inspect -> 确认结果并选路由方式 -> 最后确认 -> POST /api/apps/custom -> 任务); 自定义软件可删除
+ * · 新应用: 打开「应用」页就算已知晓 —— 导航上的数字立刻消失 (后端的新标记同时确认掉), 但这一次访问里这些应用仍然高亮, 方便处理; 下次进来就不再是新的了
+ * · 固定出口有 2 个以上时, 状态是「固定出口」的应用可以再选: 默认固定出口 / 在固定出口里自动选 / 指定某一个固定出口 (POST /api/override 的 target)
  * · 列表分页 (ui.pager) + 分组标题; 分类筛选 / 搜索记在 TP.prefs (apps.group / apps.q) */
 (function () {
   'use strict';
@@ -12,6 +14,9 @@
   var POL = ['follow', 'pin', 'auto', 'direct'], POL_IC = { follow: 'list-checks', pin: 'pin', auto: 'auto', direct: 'direct' };
   var IC = { since: {}, timer: 0, userScan: false };                       // 图标轮询: since[应用名] = 第一次发现它还没有图标的时间
   var badIc = {};                                                          // 加载失败的图标地址: 本次页面会话里不再重试
+  var VN = {};                                                             // 这一次访问里「新」的应用 (名称 -> true): 进来时已经是新的 + 页面开着期间新发现的; 离开再进来就清空
+  var ackTimer = 0;
+  function isNew(a) { return a.flag === 'new' || !!VN[a.name]; }
 
   function list() { return (S.apps && S.apps.apps) || []; }
   function active() { return TP.tab === 'apps'; }
@@ -21,7 +26,7 @@
   function groupName(g) { var k = 'apps.group.' + g; return I.has(k) ? t(k) : g; }
   function groupOf(a) { return a.group || t('apps.groupOtherRaw'); }
   function groupRank(g) { if (g === t('apps.groupCustomRaw')) return -1; var o = t('apps.groupOrder').split(','), i = o.indexOf(g); return i < 0 ? o.length : i; }       // 后端给自定义软件的分组排在最前 (新应用之后)
-  function gkey(a) { return a.flag === 'new' ? NEWG : groupOf(a); }
+  function gkey(a) { return isNew(a) ? NEWG : groupOf(a); }
   function isWin() { var p = S.state && S.state.platform; return !!p && p.os === 'windows'; }
   function addFix() { return { label: t('why.addServer'), fn: function () { TP.goAdd('manual'); } }; }
   /* 固定出口 / 自动线路 要有对应的服务器才有意义 (核心没连上时不判断, 免得误报) */
@@ -60,6 +65,8 @@
     box._img = img; box.appendChild(img);
     img.setAttribute('src', src);                                           // 监听器先挂好再设置地址
   }
+
+  TP.appIc = { mk: mkIc, paint: paintIc };                                 // 其它页面 (日志 / 网站) 也要显示应用图标: 复用同一个图标盒子
 
   /* ---------- 轮询新图标: 图标在扫描后由辅助服务在后台提取, 几秒内陆续出现 ----------
    * 只在「应用」页可见时, 每 3 秒读一次 GET /api/apps, 直到没有「刚出现 (60 秒内) 还没有图标」的应用; 只更新受影响行的图片 / 头像。 */
@@ -138,7 +145,7 @@
     root.appendChild(el.box);
     root.appendChild(el.empty.el);
 
-    TP.on('apps', function () { noteIcons(); renderBar(); if (active()) { V.render(); kickIcons(); } });
+    TP.on('apps', function () { noteIcons(); if (active()) seeNew(); renderBar(); if (active()) { V.render(); kickIcons(); } });
     TP.on('helper', function () { renderBar(); if (active()) V.render(); });
     TP.on('lang', function () { renderBar(); el._gsig = null; V.render(); });
     TP.on('scanning', function (on) {
@@ -160,7 +167,24 @@
     document.addEventListener('visibilitychange', function () { if (!document.hidden) kickIcons(); });
     renderBar(); renderTools();
   };
-  V.show = function () { V.render(); kickIcons(); };
+  V.show = function () {
+    VN = {};
+    seeNew();
+    V.render(); kickIcons();
+  };
+  /* 页面开着时出现的新应用 (进来时就有的 / 之后扫描到的) 都算已经看到了: 记进 VN (本次访问里继续高亮), 导航上的数字消失, 后台把新标记确认掉 (防抖, 一次请求) */
+  function seeNew() {
+    var any = false;
+    list().forEach(function (a) { if (a.flag === 'new' && !VN[a.name]) { VN[a.name] = true; any = true; } });
+    if (!any && !(S.apps && +S.apps.new_count > 0)) return;
+    if (S.apps) S.apps.new_count = 0;
+    TP.emit('badges');
+    clearTimeout(ackTimer);
+    ackTimer = setTimeout(function () {
+      if (TP.noHelper() || TP.why.helper()) return;
+      TP.helper('POST', '/api/apps/ack', { q: { all: 1 } }).catch(function () { /* 失败了就下次进来再确认 */ });
+    }, 400);
+  }
 
   function renderTools() {
     var why = TP.why.helper();
@@ -171,7 +195,7 @@
 
   /* ---------- 新应用提示条 ---------- */
   function renderBar() {
-    var news = list().filter(function (a) { return a.flag === 'new'; }), n = news.length, recN = news.filter(function (a) { return a.rec; }).length, why = TP.why.helper();
+    var news = list().filter(isNew), n = news.length, recN = news.filter(function (a) { return a.rec; }).length, why = TP.why.helper();
     setText(el.barT, t(n ? 'apps.new.title' : 'apps.new.none', { n: n })); setText(el.barD, t(n ? 'apps.new.text' : 'apps.new.noneSub'));
     el.bar.classList.toggle('has-new', n > 0);
     if (!n) { ui.setBtn(el.adopt, t('apps.noNew')); ui.avail(el.adopt, t('apps.noNewReason')); ui.setBtn(el.keep, t('apps.noNew')); ui.avail(el.keep, t('apps.noNewReason')); return; }
@@ -179,19 +203,21 @@
     ui.setBtn(el.keep, t('apps.keepOff')); ui.avail(el.keep, why);
   }
   async function adopt() {
-    var news = list().filter(function (a) { return a.flag === 'new'; }), rec = news.filter(function (a) { return a.rec; }), rest = news.length - rec.length;
+    var news = list().filter(isNew), rec = news.filter(function (a) { return a.rec; }), rest = news.length - rec.length;
     var lines = rec.slice(0, 6).map(function (a) { return t('apps.adopt.line', { name: a.name, state: TP.name.app(a.rec) }); });
     if (rec.length > 6) lines.push(t('apps.adopt.more', { n: rec.length - 6 }));
     if (rest > 0) lines.push(t('apps.adopt.rest', { n: rest }));
     var ok = await ui.confirmDialog({ title: t('apps.adopt.title'), message: t('apps.adopt.msg', { n: rec.length }), detail: lines, confirmText: t('apps.adopt.go') });
     if (!ok) return;
-    await TP.helper('POST', '/api/apps/adopt'); ui.toast(t('apps.adopt.done'), 'ok'); await TP.loadApps(false);
+    await TP.helper('POST', '/api/apps/adopt', { form: { names: rec.map(function (a) { return a.name; }).join('\n') } });          // 只处理这几个: 进页面时新标记已经确认掉了
+    rec.forEach(function (a) { delete VN[a.name]; });
+    ui.toast(t('apps.adopt.done'), 'ok'); await TP.loadApps(false);
   }
   async function keepAll() {
-    var n = list().filter(function (a) { return a.flag === 'new'; }).length;
+    var n = list().filter(isNew).length;
     var ok = await ui.confirmDialog({ title: t('apps.ack.title'), message: t('apps.ack.msg', { n: n }), detail: t('apps.ack.detail'), confirmText: t('apps.ack.go') });
     if (!ok) return;
-    await TP.helper('POST', '/api/apps/ack', { q: { all: 1 } }); ui.toast(t('apps.ack.done'), 'ok'); await TP.loadApps(false);
+    await TP.helper('POST', '/api/apps/ack', { q: { all: 1 } }); VN = {}; ui.toast(t('apps.ack.done'), 'ok'); await TP.loadApps(false);
   }
 
   /* ================= 列表 ================= */
@@ -215,7 +241,7 @@
       return (!flt.g || groupOf(a) === flt.g) && (!qq || a.name.toLowerCase().indexOf(qq) >= 0);
     }).sort(function (a, b) {
       var ga = groupOf(a), gb = groupOf(b);
-      return (b.flag === 'new') - (a.flag === 'new') || groupRank(ga) - groupRank(gb) || ga.localeCompare(gb) || a.name.localeCompare(b.name);
+      return isNew(b) - isNew(a) || groupRank(ga) - groupRank(gb) || ga.localeCompare(gb) || a.name.localeCompare(b.name);
     });
     // 分页: 总数没变时不要重画分页条 (重画会丢掉键盘焦点)
     var total = shown.length, rg;
@@ -269,35 +295,41 @@
     r.sw = h('input', { type: 'checkbox', role: 'switch' });
     r.stT = h('span', { class: 'apps-stt' });                              // 「状态」列的文字 (已开启 / 已关闭); 窄屏的堆叠样式里不显示
     r.sel = h('select', { class: 'sel sm apps-sel' }, TP.opt('follow', t('name.app.follow')), TP.opt('pin', t('apps.opt.pin')), TP.opt('auto', t('apps.opt.auto')), TP.opt('direct', t('apps.opt.direct')));
+    r.tg = h('select', { class: 'sel sm apps-tg', hidden: true });                       // 固定出口有 2 个以上、状态是「固定出口」时: 指定走哪一个
+    r.tgGone = h('span', { class: 'chip warn', hidden: true }, L('apps.tg.gone'));
+    r.tHelp = hl('apps.terminal'); r.tHelp.hidden = true;
     r.ack = ui.btn(L('apps.keepOffOne'), { sm: true, kind: 'ghost' }); r.ack.hidden = true;
     r.del = ui.btn(L('common.delete'), { sm: true, cls: 'soft-bad', icon: 'delete' }); r.del.hidden = true;
     var row = h('div', { class: 'apps-row', role: 'group' },
       r.ic,
-      h('div', { class: 'apps-main' }, h('div', { class: 'apps-t' }, r.name, r.badge, r.cus, r.cusHelp, r.kind, r.rec, r.grp), r.path),
-      h('div', { class: 'apps-c' }, h('div', { class: 'apps-st' }, h('label', { class: 'sw' }, r.sw, h('span', { class: 'sw-ui' })), r.stT), r.sel, h('div', { class: 'apps-act' }, r.ack, r.del)));
+      h('div', { class: 'apps-main' }, h('div', { class: 'apps-t' }, r.name, r.badge, r.cus, r.cusHelp, r.kind, r.tHelp, r.rec, r.grp), r.path),
+      h('div', { class: 'apps-c' }, h('div', { class: 'apps-st' }, h('label', { class: 'sw' }, r.sw, h('span', { class: 'sw-ui' })), r.stT), h('div', { class: 'apps-md' }, r.sel, r.tg, r.tgGone), h('div', { class: 'apps-act' }, r.ack, r.del)));
     row._r = r;
     ui.switchAct(r.sw, function () { return (row._a.state || 'follow') !== 'direct'; }, function (want) { return askState(row, want ? 'follow' : 'direct'); });
     ui.selectAct(r.sel, function () { return row._a.state || 'follow'; }, function (want) { return askState(row, want); });
+    ui.selectAct(r.tg, function () { return tgOf(row._a); }, function (want) { return askTarget(row, want); });
     ui.act(r.rec, function () { return askState(row, row._a.rec); });
     ui.act(r.ack, function () { return ack(row); });
     ui.act(r.del, function () { return delCustom(row); });
     return row;
   }
   function update(row, a, why) {
-    var r = row._r, st = a.state || 'follow', on = st !== 'direct', isNew = a.flag === 'new', cus = !!a.custom;
+    var r = row._r, st = a.state || 'follow', on = st !== 'direct', nw = isNew(a), cus = !!a.custom;
     row._a = a;
     paintIc(r.ic, a.name, a.icon);
     var optLabels = { follow: t('name.app.follow'), pin: t('apps.opt.pin'), auto: t('apps.opt.auto'), direct: t('apps.opt.direct') };
     Array.prototype.forEach.call(r.sel.options, function (o) { var s = optLabels[o.value]; if (o.textContent !== s) o.textContent = s; });
     setText(r.name, a.name); setAttr(row, 'aria-label', a.name);
-    r.badge.hidden = !isNew; r.ack.hidden = !isNew;
-    r.grp.hidden = !isNew; if (isNew) setText(r.grp, groupName(groupOf(a)));
+    r.badge.hidden = !nw; r.ack.hidden = !nw;
+    r.grp.hidden = !nw; if (nw) setText(r.grp, groupName(groupOf(a)));
     r.cus.hidden = !cus; r.cusHelp.hidden = !cus; r.del.hidden = !cus; r.kind.hidden = a.kind !== 'bin';
     setText(r.path, a.path || ''); r.path.hidden = !a.path; r.path.classList.toggle('is-wrap', cus);   // 自定义软件的路径整行显示出来 (不靠提示框)
     if (cus || !a.path) r.path.removeAttribute('title'); else r.path.title = a.path;
     if (r.sw.checked !== on) r.sw.checked = on;
     setText(r.stT, t(on ? 'apps.st.on' : 'apps.st.off'));
     if (r.sel.value !== st) r.sel.value = st;
+    paintTarget(r, a, st, why);
+    r.tHelp.hidden = !isTerm(a);
     setAttr(row, 'data-st', st);
     ui.avail(r.sw, why); ui.avail(r.sel, why); ui.avail(r.ack, why); ui.avail(r.rec, why); ui.avail(r.del, why);
     setAttr(r.sw, 'aria-label', t('apps.row.sw', { name: a.name, state: TP.name.app(st) }));
@@ -306,23 +338,54 @@
     var showRec = a.rec && a.rec !== st;
     r.rec.hidden = !showRec;
     if (showRec) { setText(r.rec, t('apps.rec', { state: TP.name.app(a.rec) })); if (!r.rec._un) r.rec.title = t('apps.recTitle'); }
-    row.classList.toggle('is-new', isNew); row.classList.toggle('is-off', !on);
+    row.classList.toggle('is-new', nw); row.classList.toggle('is-off', !on);
   }
 
-  function recount() { if (S.apps) S.apps.new_count = list().filter(function (a) { return a.flag === 'new'; }).length; }
+  /* ---------- 固定出口: 默认 / 在固定出口里自动选 / 指定某一个 ---------- */
+  var TERM_RE = /^(terminal|iterm2?|warp|ghostty|kitty|alacritty|wezterm|hyper|tabby|termius)$/i;
+  function isTerm(a) { return a.group === t('apps.groupTermRaw') || TERM_RE.test(a.name || ''); }       // 后端给的分组原名是中文
+  function tgOf(a) { return a.target_ok === false || !a.target ? 'PIN' : a.target; }                     // select 的值: PIN = 默认固定出口
+  function tgSig(a) { return TP.pinServers().join('|') + '#' + I.lang; }
+  function paintTarget(r, a, st, why) {
+    var show = st === 'pin' && TP.canPickPin();
+    r.tg.hidden = !show; r.tgGone.hidden = !(show && a.target && a.target_ok === false);
+    if (!show) return;
+    if (r.tg._sig !== tgSig(a)) {
+      r.tg._sig = tgSig(a); TP.clear(r.tg);
+      r.tg.appendChild(TP.opt('PIN', t('apps.tg.default'))); r.tg.appendChild(TP.opt('PINAUTO', t('apps.tg.auto')));
+      TP.pinServers().forEach(function (tag) { r.tg.appendChild(TP.opt(tag, tag)); });
+    }
+    if (r.tg.value !== tgOf(a)) r.tg.value = tgOf(a);
+    ui.avail(r.tg, why);
+    setAttr(r.tg, 'aria-label', t('apps.tg.aria', { name: a.name }));
+  }
+  function tgName(v) { return v === 'PIN' || !v ? t('apps.tg.default') : v === 'PINAUTO' ? t('apps.tg.auto') : v; }
+  async function askTarget(row, to) {
+    var a = row._a, prev = tgOf(a);
+    if (!to || to === prev) return;
+    var ok = await ui.confirmDialog({ title: t('apps.tg.title'), message: t('apps.tg.msg', { name: a.name, from: tgName(prev), to: tgName(to) }), detail: [t(to === 'PIN' ? 'apps.tg.dDefault' : to === 'PINAUTO' ? 'apps.tg.dAuto' : 'apps.tg.dOne', { tag: to })], confirmText: t('apps.tg.go'), rememberKey: 'appstate' });
+    if (!ok) return;
+    var old = { t: a.target, ok: a.target_ok };
+    a.target = to === 'PIN' ? '' : to; a.target_ok = true; V.render();
+    try { await TP.override('app', a.name, 'pin', a.target); }
+    catch (e) { a.target = old.t; a.target_ok = old.ok; V.render(); throw e; }
+    ui.toast(t('apps.tg.done', { name: a.name, to: tgName(to) }), 'ok', 2400);
+  }
+
+  function recount() { if (S.apps) S.apps.new_count = list().filter(function (a) { return a.flag === 'new'; }).length; }       // 页面开着时都已确认掉, 这里只是和后端的数字保持一致
   async function askState(row, to) {
-    var a = row._a, prev = a.state || 'follow', wasNew = a.flag === 'new';
+    var a = row._a, prev = a.state || 'follow', wasNew = isNew(a);
     if (!to || to === prev) return;
     var pw = polWhy(to);                                                // 没有对应的服务器: 说明原因并给出「添加服务器」
     if (pw) { ui.toast(pw, 'warn', 5200, { action: addFix() }); return; }
     var tx = TP.txt.app(a.name, prev, to);
     var ok = await ui.confirmDialog({ title: t('apps.change.title'), message: tx.message, detail: tx.detail, confirmText: t('apps.change.go'), rememberKey: 'appstate' });
     if (!ok) return;
-    a.state = to; V.render();                                          // 立即显示新状态; 失败时恢复
+    a.state = to; if (to !== 'pin') a.target = ''; V.render();         // 立即显示新状态; 失败时恢复 (离开「固定出口」时后端会清掉指定的出口)
     try { await TP.override('app', a.name, to); }
     catch (e) { a.state = prev; V.render(); throw e; }
     if (wasNew) {                       // 用户已经处理过这个新应用: 确认它, 让「新」标记消失
-      a.flag = 'ack'; recount();
+      a.flag = 'ack'; delete VN[a.name]; recount();
       TP.helper('POST', '/api/apps/ack', { q: { name: a.name } }).catch(function () { });
       TP.emit('apps');
     }
@@ -333,7 +396,7 @@
     var ok = await ui.confirmDialog({ title: t('apps.ack1.title'), message: t('apps.ack1.msg', { name: a.name }), detail: t('apps.ack1.detail'), confirmText: t('apps.ack1.go'), rememberKey: 'appstate' });
     if (!ok) return;
     await TP.helper('POST', '/api/apps/ack', { q: { name: a.name } });
-    a.flag = 'ack'; recount(); TP.emit('apps');
+    a.flag = 'ack'; delete VN[a.name]; recount(); TP.emit('apps');
   }
 
   /* ================= 删除自定义软件 (只删这条自定义记录和它的策略) ================= */

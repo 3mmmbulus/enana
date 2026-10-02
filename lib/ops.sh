@@ -4,7 +4,7 @@
 # 因此连续快速的操作不会互相覆盖备份, 坏配置绝不会留在磁盘上。每次操作都会写一条「操作记录」(不含任何密码/令牌)。
 
 APPLY_STEPS='生成配置|校验配置|应用并重启|等待就绪'
-TXN_FILES="servers.jsonl subs.tsv dns.conf rules.state custom-rulesets.tsv settings.env overrides.tsv custom-apps.tsv site-domains.tsv hosts.tsv speedtest-custom.tsv prefs.json vps.jsonl"
+TXN_FILES="servers.jsonl subs.tsv dns.conf rules.state custom-rulesets.tsv settings.env overrides.tsv autosites.tsv custom-apps.tsv site-domains.tsv hosts.tsv speedtest-custom.tsv prefs.json vps.jsonl"
 TXN_ERR=''; TXN_RESULT=''
 
 op_wait_turn() { # 轮到我了吗? 等所有「更早创建且还在运行」的排队任务结束 (任务进程已死/卡住超过 5 分钟的忽略)
@@ -52,10 +52,41 @@ _txn_end() { # ok|fail 消息 [步骤序号]   后台任务里写进度, 命令�
   elif [ "$1" = ok ]; then ok "$2"; else warn "$2"; fi
 }
 
+# 操作记录里的「详情」: 按操作类型写成 key=value (见 lib/logs.sh 的 kv), 人和程序都能读; 在变更之前调用, 所以能带上「原来的值」
+_txn_detail() { # <变更函数> <参数…>
+  local fn=$1 kvp k v out=''; shift
+  case $fn in
+    txn_import)        kv sub "${1:-}" mode "${2:-merge}" save "${TXN_SAVE:-}" ;;
+    txn_delete)        kv tag "$1" role "$(srv_list | awk -F'\t' -v t="$1" '$1==t {print $5; exit}')" ;;
+    txn_role)          kv tag "$1" from "$(srv_list | awk -F'\t' -v t="$1" '$1==t {print $5; exit}')" to "$2" ;;
+    txn_subdel)        kv sub "$1" ;;
+    txn_rules_toggle)  kv rule "$1" enabled "$2" ;;
+    txn_rules_add)     kv name "$1" policy "$3" ;;
+    txn_rules_delete)  kv rule "$1" ;;
+    txn_dns_set)       for kvp in "$@"; do out="$out${out:+ }$(kv "${kvp%%=*}" "${kvp#*=}")"; done; printf '%s' "$out" ;;
+    txn_dns_hosts)     kv action "$1" domain "$2" ip "${3:-}" new "${4:-}" ;;
+    txn_settings)
+      for kvp in "$@"; do
+        k=${kvp%%=*}; v=${kvp#*=}
+        case $k in LOG_HOURS) o=$(logs_hours) ;; ACCESS_LOG) o=${ACCESS_LOG:-1} ;; LOG_CORE) o=${LOG_CORE:-1} ;; AUTO_SITES) o=${AUTO_SITES:-0} ;; AUTO_UPDATE) o=${AUTO_UPDATE:-1} ;; LANG_UI) o=${LANG_UI:-zh} ;; *) o='' ;; esac
+        out="$out${out:+ }$(kv setting "$k" from "$o" to "$v")"
+      done; printf '%s' "$out" ;;
+    txn_site_domain)   kv id "$1" action "$2" domain "$3" new "${4:-}" ;;
+    txn_site_reset)    kv id "$1" ;;
+    txn_app_custom_add) kv path "$1" state "$2" ;;
+    txn_app_custom_delete) kv name "$1" ;;
+    txn_content)       kv force "${TXN_FORCE:-}" seq_before "$(cloud_seq)" ;;
+    txn_sync_apply)    kv mode "$1" ;;
+    txn_vps_save)      kv host "$1" ;;
+    txn_none)          printf '' ;;
+    *)                 printf '%s' "$*" ;;
+  esac
+}
+
 # op_txn <描述> <变更函数> [参数…]   变更函数失败时可把原因放进 TXN_ERR
 op_txn() {
   local desc=$1 fn=$2 rc line detail; shift 2
-  detail="$*"; TXN_ERR=''
+  detail=$(_txn_detail "$fn" "$@"); TXN_ERR=''
   op_lock || { _txn_end fail "另一个配置任务正在运行, 请稍后重试"; return 1; }
   txn_backup
   if ! "$fn" "$@"; then
@@ -117,13 +148,15 @@ txn_dns_set() { # KEY=VALUE…
 }
 txn_dns_hosts() { dns_hosts_edit "$@" || { TXN_ERR=${DNS_ERR:-操作失败}; return 1; }; }        # <add|update|remove> 域名 IP [新域名]
 txn_dns_hosts_reset() { dns_hosts_reset; }
-txn_settings() { # KEY=VALUE… (LOG_DAYS ACCESS_LOG LANG_UI AUTO_UPDATE)
+txn_settings() { # KEY=VALUE… (LOG_HOURS ACCESS_LOG AUTO_SITES LANG_UI AUTO_UPDATE)
   local kv k v
   for kv in "$@"; do
     k=${kv%%=*}; v=${kv#*=}
     case $k in
-      LOG_DAYS)    settings_set LOG_DAYS "$(logs_days_clamp "$v")" ;;
+      LOG_HOURS)   settings_set LOG_HOURS "$(logs_hours_clamp "$v")"; sed -i '' '/^LOG_DAYS=/d' "$H/settings.env" 2>/dev/null || true ;;
+      AUTO_SITES)  case $v in 0|1) settings_set AUTO_SITES "$v" ;; *) TXN_ERR="参数无效"; return 1 ;; esac ;;
       ACCESS_LOG)  case $v in 0|1) settings_set ACCESS_LOG "$v" ;; *) TXN_ERR="参数无效"; return 1 ;; esac ;;
+      LOG_CORE)    case $v in 0|1) settings_set LOG_CORE "$v" ;; *) TXN_ERR="参数无效"; return 1 ;; esac ;;
       AUTO_UPDATE) case $v in 0|1) settings_set AUTO_UPDATE "$v" ;; *) TXN_ERR="参数无效"; return 1 ;; esac ;;
       LANG_UI)     case " $I18N_LANGS " in *" $v "*) settings_set LANG_UI "$v" ;; *) TXN_ERR="不支持的语言"; return 1 ;; esac ;;
       *) TXN_ERR="参数无效"; return 1 ;;
@@ -152,7 +185,7 @@ op_update_rules() { # 规则集 (本地规则集文件变化后 sing-box 自动�
   QUIET=1
   if rules_update; then
     job_step 2 90 "应用规则集"
-    apply_config >/dev/null 2>&1 || true
+    if op_lock; then apply_config >/dev/null 2>&1 || true; op_unlock; else apply_config >/dev/null 2>&1 || true; fi       # 和其它配置任务排队
     oplog "${OP_WHO:-terminal}" "更新规则集" "$RULES_CHANGED 个有变化, $RULES_FAILED 个失败" ok
     job_ok "规则集已更新 ($RULES_CHANGED 个有变化, $RULES_FAILED 个失败)" "{\"changed\":$RULES_CHANGED,\"failed\":$RULES_FAILED}"
   else oplog "${OP_WHO:-terminal}" "更新规则集" "全部下载失败" error; job_fail "所有规则集下载失败, 已保留旧规则" 1; return 1; fi

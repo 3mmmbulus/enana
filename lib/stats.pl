@@ -41,7 +41,7 @@ if ($cmd eq 'collect') {
     for my $c (@{ $j->{connections} || [] }) {
         my $id = $c->{id} or next; my $up = $c->{upload} || 0; my $down = $c->{download} || 0;
         my $chain = $c->{chains} || []; my $node = $chain->[0] // 'direct';
-        my $class = $node eq 'direct' ? 'direct' : (($role{$node} // '') eq 'pin' ? 'pin' : 'auto');
+        my $class = $node =~ /^direct(?:-[a-z]+)?$/ ? 'direct' : (($role{$node} // '') eq 'pin' ? 'pin' : 'auto');      # direct-mode / direct-lan / direct-site / direct-app / direct-cn 也是直连
         my $p = $state->{conns}{$id} || [0, 0];
         my $du = $up - $p->[0]; $du = $up if $du < 0; my $dd = $down - $p->[1]; $dd = $down if $dd < 0;
         $cur{$id} = [$up + 0, $down + 0];

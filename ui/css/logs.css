@@ -29,11 +29,14 @@
 .log-c{min-width:0;overflow-wrap:anywhere}
 .log-t{font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--muted)}
 .log-d,.log-host,.log-node,.log-msg,.log-act.mono{font-family:var(--mono);font-size:var(--fs-12-5)}
+.log-d .log-kvi{font-family:var(--font);line-height:1.6}
+.log-kl{color:var(--muted)}
+.log-kvi .lgd-code{display:none}
 .log-act{font-weight:600}
 .log-act.mono{font-weight:400}
 .log-node{color:var(--muted)}
 .log-ops{grid-template-columns:70px 96px minmax(130px,230px) minmax(0,1fr) 92px}
-.log-access{grid-template-columns:70px minmax(0,1.5fr) minmax(90px,.8fr) 138px minmax(90px,1fr)}
+.log-access{grid-template-columns:70px minmax(0,1.6fr) minmax(110px,.9fr) 118px minmax(120px,1.2fr)}
 .log-proxy{grid-template-columns:70px 68px minmax(0,1fr)}
 .log-chip{font-family:var(--mono);font-size:var(--fs-11-5)}
 .log-pgw[hidden]{display:none}
@@ -79,6 +82,39 @@
 .log-days{width:120px}
 .log-ret .fld{margin-top:0}
 
+/* ===== 访问记录: 网站 + 失败类型 / 应用图标 / 出口 + 直连原因 ===== */
+.log-host{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 8px}
+.log-hn{min-width:0;overflow-wrap:anywhere}
+.log-ec{flex:none;font-family:var(--font);font-size:var(--fs-11-5)}
+.log-app{display:flex;align-items:center;gap:7px;min-width:0}
+.log-an{min-width:0;overflow-wrap:anywhere}
+.log-dtapp{display:inline-flex;align-items:center;gap:8px}
+.log-row.is-err .log-hn{color:var(--err)}
+.log-node{font-family:var(--font);font-size:var(--fs-12-5)}
+.log-node.is-na{color:var(--muted)}
+
+/* ===== 筛选 / 实时 / 汇总 ===== */
+.log-filt{margin:8px 0 0}
+.log-filt .seg{flex-wrap:wrap}
+.log-live{display:inline-flex;align-items:center;gap:7px;cursor:pointer;font-size:var(--fs-13);color:var(--muted)}
+.log-live-t{white-space:nowrap}
+.log-sumx{display:flex;flex-direction:column;gap:6px;margin:0 2px}
+.log-sx{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;line-height:1.7}
+.log-sx b{color:var(--text);font-weight:600}
+.log-tf{appearance:none;-webkit-appearance:none;display:inline-flex;align-items:baseline;gap:2px;max-width:100%;margin:0;padding:1px 9px;border:1px solid var(--line2);border-radius:99px;background:var(--surface);color:var(--text);font:inherit;font-size:var(--fs-12-5);cursor:pointer;overflow-wrap:anywhere;text-align:left}
+.log-tf:hover{border-color:var(--pri);color:var(--pri)}
+.log-tf i{font-style:normal;color:var(--err);font-variant-numeric:tabular-nums}
+.hint.info{display:flex;align-items:flex-start;gap:8px;border-left-color:var(--info);background:var(--surface2)}
+.hint.info .ci{flex:none;margin-top:2px;color:var(--info)}
+
+/* ===== 导出对话框 / 保留时长 ===== */
+.log-opts.pri .log-opt.on{border-color:var(--pri);background:var(--pri-bg)}
+.log-opt-ic{flex:none;display:grid;place-items:center;width:22px;margin-top:1px;color:var(--pri)}
+.log-exp .fld-l{margin:14px 0 0;font-weight:650}
+.log-exp-note{margin:12px 0 0}
+.log-ret-in{display:flex;gap:8px;align-items:center}
+.log-unit{min-width:5.5em}
+
 /* ===== 手机宽度: 行变成卡片 ===== */
 @media (max-width:760px){
   .log-head{display:none}
@@ -92,6 +128,7 @@
   .log-proxy{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"t . lv" "msg msg msg"}
   .log-host{font-weight:600}
   .log-day{flex:1 1 100%}
+  .log-filt .seg{width:100%}
 }
 
 /* ===== 日志详情弹窗 ===== */

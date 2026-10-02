@@ -14,11 +14,15 @@ use warnings;
 use JSON::PP;
 use Encode ();
 
-my @FILES = qw(servers.jsonl subs.tsv dns.conf overrides.tsv rules.state custom-rulesets.tsv custom-apps.tsv site-domains.tsv hosts.tsv speedtest-custom.tsv prefs.json vps.jsonl);
+my @FILES = qw(servers.jsonl subs.tsv dns.conf overrides.tsv autosites.tsv rules.state custom-rulesets.tsv custom-apps.tsv site-domains.tsv hosts.tsv speedtest-custom.tsv prefs.json vps.jsonl);
 my %SETTING_OK = (
     LANG_UI     => sub { $_[0] =~ /^[a-z]{2}(-[A-Za-z]{2,4})?$/ },
-    LOG_DAYS    => sub { $_[0] =~ /^\d{1,3}$/ && $_[0] >= 1 && $_[0] <= 365 },
+    LOG_DAYS    => sub { $_[0] =~ /^\d{1,3}$/ && $_[0] >= 1 && $_[0] <= 365 },   # 旧版本的设置 (天); 新版本改用 LOG_HOURS, 读取时自动换算
+    LOG_HOURS   => sub { $_[0] =~ /^\d{2,3}$/ && $_[0] >= 12 && $_[0] <= 720 },
+    AUTO_SITES  => sub { $_[0] =~ /^[01]$/ },
     ACCESS_LOG  => sub { $_[0] =~ /^[01]$/ },
+    LOG_OPS     => sub { $_[0] =~ /^[01]$/ },
+    LOG_CORE    => sub { $_[0] =~ /^[01]$/ },
     AUTO_UPDATE => sub { $_[0] =~ /^[01]$/ },
 );
 my %RESERVED = map { $_ => 1 } qw(direct AUTO PIN Global Final SPEEDTEST);

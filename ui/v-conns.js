@@ -289,6 +289,7 @@
       });
       if (!ok) return false;
       await Promise.all(list.map(function (id) { return TP.clash('DELETE', '/connections/' + enc(id)); }));
+      TP.audit('kill', { scope: n > 1 ? 'host' : 'one', n: n, host: host });
       var now = Date.now(); list.forEach(function (id) { endedAt[id] = now; killed[id] = true; });                  // 已经断开的不再因为核心还没清掉它而「复活」
       ui.toast(t('conns.dt.killed', { n: n }), 'ok'); paint();
       if (TP.pollers.conns) setTimeout(TP.pollers.conns.kick, 300);
@@ -361,7 +362,7 @@
         { label: t('conns.rr.killOnly'), icon: 'disconnect', cls: 'soft-warn', keep: true, onClick: async function (api) {
           var okk = await ui.confirmDialog({ title: t('conns.dt.killAllTitle'), message: t('conns.rr.killOnlyMsg', { host: g.host, n: g.n }), detail: t('conns.dt.killD1'), confirmText: t('conns.rr.killOnly'), kind: 'warning', confirmIcon: 'disconnect' });
           if (!okk) return false;
-          await killIds(g.ids); ui.toast(t('conns.rr.killed', { n: g.n }), 'ok'); api.close('kill'); return false;
+          await killIds(g.ids, g.host); ui.toast(t('conns.rr.killed', { n: g.n }), 'ok'); api.close('kill'); return false;
         } },
         { label: t('common.ok'), kind: 'primary', icon: 'check', keep: true, unavail: why ? { reason: why } : null, onClick: async function (api) {
           var value = target === 'site' ? host.host : g.app, what = target === 'site' ? value : t('conns.rr.appName', { app: value });
@@ -372,7 +373,7 @@
           });
           if (!okc) return false;
           await TP.override(target, value, state);
-          if (kill.checked) await killIds(g.ids);
+          if (kill.checked) await killIds(g.ids, g.host);
           api.close('ok');
           ui.toast(t('conns.rr.done', { what: what, state: TP.name.app(state) }), 'ok');
           if (target === 'site') TP.loadState(); else TP.loadApps(false);
@@ -381,7 +382,7 @@
       ]
     });
   }
-  function killIds(ids) {
-    return Promise.all(ids.map(function (id) { return TP.clash('DELETE', '/connections/' + enc(id)).catch(function () { }); }));
+  function killIds(ids, host) {
+    return Promise.all(ids.map(function (id) { return TP.clash('DELETE', '/connections/' + enc(id)).catch(function () { }); })).then(function (r) { TP.audit('kill', { scope: 'host', n: ids.length, host: host }); return r; });
   }
 })();

@@ -794,3 +794,19 @@ Claude 网页与桌面应用	Claude web and desktop apps
 ChatGPT、Sora、OpenAI API	ChatGPT, Sora, OpenAI API
 Gemini、AI Studio、NotebookLM;含 Google 登录域名	Gemini, AI Studio, NotebookLM; includes Google sign-in domains
 AI · 固定出口	AI · Fixed exit
+# --- 2.1.1: 操作记录的动作名
+发现新应用	New apps found
+识别已安装的应用	Detected installed apps
+自动识别: 添加网站到代理	Auto-detect: site added to the proxy
+自动识别: 放弃网站	Auto-detect: gave up on a site
+自动识别: 全部撤销	Auto-detect: undid all
+切换策略	Switched a policy
+断开连接	Disconnected connections
+导出诊断日志	Exported diagnostics
+时间范围无效	Invalid time range
+用法: enana diag [小时数 1-* | all]	Usage: enana diag [hours 1-* | all]
+导出失败	Export failed
+已导出: * (* 字节, 不含密码; 含访问过的域名和应用名, 请只发给你信任的人)	Exported: * (* bytes; no passwords included, but it lists the domains and apps that were used — only share it with someone you trust)
+  enana diag [小时数]   导出诊断文件 (操作记录 + 网站访问 + 代理日志 + 当前状态, 默认最近 24 小时; 接管道直接输出)	  enana diag [hours]   Export a diagnostics file (operations + site access + proxy log + current state; last 24 h by default; prints to stdout when piped)
+修复浏览器的默认设置	Fixed the default setting of browsers
+新配置没能让代理核心启动, 已回滚到原来的配置	The new configuration could not start the proxy core, so the previous one was restored

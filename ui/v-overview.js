@@ -41,10 +41,13 @@
     el.stBar = ui.bar(); el.stBar.set(0);
     el.stBarBox = h('div', { hidden: true }, el.stBar.el);
     el.stOut = h('div', { class: 'st-out' }, h('span', { class: 'muted' }, L('ov.st.hint')));
+    el.stHist = h('div', { class: 'st-hist' });
+    el.stClr = ui.btn(L('ov.st.hist.clear'), { sm: true, kind: 'ghost', icon: 'delete' }); ui.act(el.stClr, clearHist);
     var stCard = h('section', { class: 'card' },
       h('div', { class: 'card-h' }, h('h3', null, L('ov.st.title'), ui.help('overview.dltest'))),
       h('p', { class: 'muted sm' }, L('ov.st.desc')),
-      el.stOut, el.stBarBox, h('div', { class: 'row' }, el.stBtn));
+      el.stOut, el.stBarBox, h('div', { class: 'row' }, el.stBtn), el.stHist);
+    TP.on('lang', renderHist); renderHist();
 
     el.env = h('div');
     el.rulesBtn = TP.bindRulesBtn(ui.btn(L('act.rules.update'), { sm: true, icon: 'download-cloud' }));
@@ -296,6 +299,34 @@
   }
 
   /* ================= 下载测速 ================= */
+  /* 最近 3 次测速记录: 只存在这台电脑的浏览器里 (本地存储, 不跨设备同步), 最多 3 条, 新的挤掉最旧的; 失败 / 中途停止的不记 */
+  var HIST_KEY = 'ov.dl.hist', HIST_MAX = 3;                        // i18n-ignore (本地存储键)
+  function readHist() {
+    var a = TP.ls.get(HIST_KEY, []);
+    return (Array.isArray(a) ? a : []).filter(function (r) { return r && +r.at > 0 && +r.bps > 0; }).slice(0, HIST_MAX);
+  }
+  function pushHist(rec) { TP.ls.set(HIST_KEY, [rec].concat(readHist()).slice(0, HIST_MAX)); renderHist(); }
+  async function clearHist() {
+    var ok = await ui.confirmDialog({ title: t('ov.st.hist.clearTitle'), message: t('ov.st.hist.clearMsg'), confirmText: t('ov.st.hist.clearGo'), danger: true });
+    if (!ok) return;
+    TP.ls.set(HIST_KEY, []); renderHist();
+  }
+  function renderHist() {
+    var a = readHist(), box = el.stHist;
+    if (!box) return;
+    TP.clear(box);
+    if (!a.length) { box.hidden = true; return; }
+    box.hidden = false;
+    box.appendChild(h('div', { class: 'st-hist-h' }, h('b', null, t('ov.st.hist.title', { n: a.length })), el.stClr));
+    box.appendChild(h('ul', { class: 'st-hist-l' }, a.map(function (r, i) {
+      var prev = a[i + 1], diff = prev && prev.bps > 0 ? Math.round((r.bps / prev.bps - 1) * 100) : null;
+      return h('li', null,
+        h('b', { class: 'st-hist-v' }, fmt.mbps(r.bps)),
+        diff != null && Math.abs(diff) >= 1 ? h('span', { class: 'chip ' + (diff > 0 ? 'ok' : 'bad'), title: t('ov.st.hist.vsPrev') }, (diff > 0 ? '+' : '') + diff + '%') : null,
+        h('span', { class: 'muted sm st-hist-m' }, fmt.dateTime(r.at) + ' · ' + t('ov.st.avg', { sec: fmt.num(r.sec, { minimumFractionDigits: 1, maximumFractionDigits: 1 }), size: fmt.bytes(r.bytes) })),
+        h('span', { class: 'badge' }, t(r.on ? (r.mode === 'global' ? 'ov.st.hist.onGlobal' : 'ov.st.hist.onAuto') : 'ov.st.hist.off')));
+    })));
+  }
   var stCtl = null;
   async function speedTest() {
     if (stCtl) { stCtl.abort(); return; }
@@ -327,6 +358,7 @@
       el.stBar.set(100, 'ok');
       TP.clear(el.stOut);
       el.stOut.appendChild(h('span', null, h('b', { class: 'big' }, fmt.mbps(got / sec)), h('span', { class: 'muted sm' }, '  ' + t('ov.st.avg', { sec: fmt.num(sec, { minimumFractionDigits: 1, maximumFractionDigits: 1 }), size: fmt.bytes(got) }))));
+      pushHist({ at: Date.now(), bps: got / sec, sec: sec, bytes: got, on: !!(S.state && S.state.proxy && S.state.proxy.enabled), mode: S.state && S.state.proxy && S.state.proxy.mode === 'global' ? 'global' : 'auto' });
       ui.toast(t('ov.st.doneToast', { speed: fmt.mbps(got / sec) }), 'ok', 3000);
     } catch (e) {
       stopped = e && e.name === 'AbortError';

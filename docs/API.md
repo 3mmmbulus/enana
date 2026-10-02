@@ -1,4 +1,4 @@
-# enana 本地辅助服务接口 (v2.1)
+# enana 本地辅助服务接口 (v2.1.1)
 
 仪表盘 (浏览器) 与本地辅助服务 `lib/api.sh` 之间的契约。仪表盘页面由辅助服务自己在 `http://127.0.0.1:9091/enana/admin/` 提供 (端口被占用时安装器会换成别的空闲端口), 接口与页面同源 (不需要 CORS 预检)。
 代理核心的 Clash API 监听 `http://127.0.0.1:9090` (`/proxies`、`/connections` …), 只允许仪表盘的来源跨域访问并要求令牌; 它的地址由 `env.json` 的 `clashBase` 给出。
@@ -101,26 +101,46 @@
 
 ### `GET /api/settings`
 ```json
-{"ok":true,"lang":"zh","settings":{"log_days":30,"log_days_max":365,"access_log":true},
+{"ok":true,"lang":"zh","settings":{"log_hours":72,"log_hours_min":12,"log_hours_max":720,"log_ops":true,"access_log":true,"log_core":true,"auto_sites":false},
  "usage":{"ops":1234,"access":56789,"proxy":56789,"total":58023},
  "ports":{"proxy":7890,"ui":9090,"api":9091,"speed":7892},"account":{"email":"name@example.com"}}
 ```
 ### `POST /api/settings` 表单 (字段都可选)
-`lang=zh|en` · `log_days=1..365` · `access_log=0|1` → `{"ok":true}`; 改 `access_log` 需要重新生成配置, 返回 `{"ok":true,"job":"…"}`。
+`lang=zh|en` · `log_hours=12..720` (日志保留时长 ★ 2.1.1: 最短 12 小时, 最长 30 天, 默认 72 = 3 天; 旧版仪表盘提交的 `log_days=1..30` 仍然接受并换算成小时) · `log_ops=0|1` (操作记录, 立即生效) · `access_log=0|1` (网站访问) · `log_core=0|1` (代理核心日志) · `auto_sites=0|1` (自动识别无法访问的网站, 开启时必须已有服务器, 否则 `E_NO_SERVERS`) → `{"ok":true}`; 改 `access_log` / `log_core` 需要重新生成配置 (重启核心), 返回 `{"ok":true,"job":"…"}`。
+三种日志各自的开关: 关闭只影响「之后」的记录, 已有的仍按保留时长清理。`access_log=0` → 核心只记警告和错误 (level warn); `access_log=0` 且 `log_core=0` → 核心完全不写日志 (`log.disabled`); `log_core=0` 但 `access_log=1` → 核心照常写 (连接记录要用), 只是把和连接无关的核心事件在切分时丢掉、读取时不显示。关闭操作记录时, 「关闭」这一条本身会先写下来。
 
 ## 状态 / 应用 / 覆盖 / 服务器 / 订阅 (与 v2 相同, 新增字段见 ★)
 
 `GET /enana/admin/…` (无需 `X-Enana` 头; 只读, 白名单扩展名, 只给 GET / HEAD): 仪表盘静态文件由辅助服务直接提供 (`/enana/admin/` = index.html, `/enana/admin/<页面>` 也给 index.html, 页面名 = overview apps sites rules dns servers conns traffic speed logs settings login register; 不带斜杠的 `/enana/admin` 与 `/` 跳转到 `/enana/admin/`)。核心控制接口 (Clash API) 在 `ports.ui` 上, 只允许这个来源跨域访问, 地址写在 `env.json` 的 `clashBase`, 接口同源 (`apiBase` 为空)。
 
+**应用 / 覆盖的新字段 ★ 2.1.1**:
+- `apps[]` 每项多了 `target` (状态是 pin 时: 空 = 默认固定出口, `PINAUTO` = 在固定出口里自动选, 其它 = 指定走这一个固定出口) 和 `target_ok` (指定的固定出口还在吗); `flag` 多了一种值 `def` (首次扫描按推荐给的默认值: 云端推荐更新后会自动刷新, 不算「新应用」)。
+- `POST /api/override` 的 `target` 只对 `state=pin` 有意义 (其它状态忽略); 固定出口不到 2 个时只能留空; 取值必须是空 / `PINAUTO` / 现有的某个固定出口, 否则 `E_INVALID`。固定出口最多 16 个可以单独指定 (按配置里的顺序)。
+- `state.overrides[]` (网站覆盖) 每项: `{kind:"site",value,state,target,target_ok,src:"user|auto",at,why,fails,app}` —— `src=auto` 是「自动识别」添加的 (`at` 添加时间 unix 秒, `why` 失败类型 timeout|reset|refused|eof, `fails` 失败次数, `app` 触发的应用)。
+- `POST /api/override` 把自动识别添加的网站设成「跟随规则」= 删除它, 并且以后不再自动添加这个网站。
+- 新应用 (`flag=new`): 浏览器 (声明能打开 http / https 链接的应用) 默认「跟随规则」, 其它新应用默认「关」(直连); 仪表盘打开「应用」页就算已知晓, 会 `POST /api/apps/ack?all=1` 把新标记确认掉, 导航上的数字随之消失。
+- 应用扫描范围: `/Applications` (含子目录)、`/System/Applications` (含 Utilities, 终端等系统应用)、`/System/Cryptexes/App/System/Applications` (Safari)、`/System/Library/CoreServices/Applications`、`~/Applications`, 再加 Spotlight 能找到的其它位置 (只收录 /Applications、/System/Applications、`~/Applications`、/opt/homebrew、/usr/local 下的顶层 .app, 不含应用内嵌的辅助程序)。
+
 `GET /api/state` → `{ok,version,prefs_version★,core,platform:{os,osver,arch},ports:{proxy,ui,api,speed★},env:{core,rules,service,sysproxy,shortcut (快捷命令的安装位置, 没装是 null),shortcut_cmd★ (在终端里直接可运行、打开控制台的完整命令: 装了快捷命令 = `enana`, 没装 = 脚本的完整路径),rules_updated,rules_missing[]},servers[],subs[],overrides[],first_run,`
 `update★:{available,latest,checked},lang★,proxy★:{enabled,mode:"auto|global"},account★:{email}}`
 
-`GET /api/apps` · `POST /api/apps/scan` · `POST /api/apps/adopt` · `POST /api/apps/ack?name=|all=1` · `POST /api/override?kind=&value=&state=` ·
+`GET /api/apps` · `POST /api/apps/scan` · `POST /api/apps/adopt` (表单 `names` 可选: 换行分隔的应用名, 只处理这几个; 不带 = 所有 flag=new 的应用) · `POST /api/apps/ack?name=|all=1` · `POST /api/override?kind=&value=&state=[&target=]` ·
 `POST /api/servers/import?sub=&mode=merge|replace&save=0|1` (正文=JSONL; **save★**: 1 = 「保存到云端」, 这些节点 (和订阅) 进入云端同步清单, 第一次用时自动打开云端同步; 0 = 只留在本机; 不带 = 不改动, 例如订阅自动刷新) · `POST /api/servers/delete?tag=` · `POST /api/servers/role?tag=&role=pin|auto|off|dl` ·
 `POST /api/cert?name=` · `POST /api/sub/fetch` · `POST /api/sub/save?name=&save=0|1` · `POST /api/sub/delete?name=` · `POST /api/restart` — 形状不变。
 
 ### `GET /api/job?id=`
 `{"ok":true,"id","name","state":"running|done|error","pct":0-100,"msg":"…","steps":[{"label":"…","state":"todo|run|done|error"}],"result":{}}`; `msg`/`label` 按 `X-Enana-Lang` 翻译。
+
+## 策略切换 / 审计 / 自动识别 ★ (v2.1.1 新增)
+
+### `POST /api/policy` 表单 `tag` `name`
+由辅助服务代为切换一个策略开关 (网站 `svc-<id>` / 自定义规则集 `svc-rs-<id>` / 默认出口 `Final` / 自动线路 `Global` / 固定出口 `PIN`), 并写进操作记录 (原来 → 现在)。`name` 必须是这个选择器现有的选项 (`PIN` `Global` `direct`; 固定出口有 2 个以上时还有 `PINAUTO` 和每个固定出口的名字), 否则 `E_NOT_FOUND`; 核心没运行 → `E_NOT_RUNNING`。→ `{"ok":true,"from":"PIN","to":"Tokyo-Fix"}`。仪表盘不再直接对核心 `PUT /proxies/<tag>`。
+### `POST /api/audit` 表单 `ev=kill` `scope=all|one|host` `n=数量` `host=域名` (可选)
+仪表盘直接对核心做的「断开连接」事后补一条操作记录 (`断开连接`); 其它 `ev` → `E_INVALID`。
+### `POST /api/sites/auto/clear` → `{"ok":true,"removed":N}`
+撤销所有「自动识别」添加的网站 (并且以后不再自动添加它们); 你自己添加的不受影响。
+### 自动识别无法访问的网站 (设置 `auto_sites=1`)
+后台每分钟 (`enana tick`) 读一次核心日志的新增部分: 出口名为 `direct` 或 `direct-cn` 的连接失败 (超时 / 被重置 / 被拒绝 / EOF); 同一个网站 (一般取最后两段, `co.uk` 之类三段, 共享托管域名取完整主机名) 15 分钟内失败 ≥ 3 次且 ≥ 60% 的尝试失败, 就加入「网站」覆盖 (有自动线路用自动线路, 否则固定出口), 先用代理实际访问一次验证: 通了保留 (写进 `autosites.tsv`), 不通就撤销并 24 小时内不再试。不参与: 你明确设置的网站 / 应用直连 (出口 `direct-site` / `direct-app`)、局域网、目录里已有的服务、你已经有覆盖的网站、你删除过的、代理总开关关闭 / 全局模式、整个网络都在失败时 (断网)。每小时最多 5 个、一共最多 200 个; 每次添加 / 放弃都写进操作记录 (来源 `auto`)。
 
 ## 更新
 
@@ -151,13 +171,15 @@
 
 ## 日志
 
-- `GET /api/logs?type=ops|access|proxy&day=YYYY-MM-DD&q=关键字&limit=500&offset=0` → `{"ok":true,"total":N,"days":["2026-10-02",…],"rows":[…]}` (新→旧)
-  - `ops` 行: `{ts,who:"dashboard|terminal",action,detail,result:"ok|error"}`
-  - `access` 行: `{ts,host,port,app,route:"direct|pin|auto|other",node}`
-  - `proxy` 行: `{ts,level,msg}`
-- `GET /api/logs/export?type=&day=` → `text/plain`
-- `POST /api/logs/clear` 表单 `type=ops|access|proxy|all` `before=YYYY-MM-DD` (可选, 不填=全部) → `{"ok":true,"freed":字节数}`
-- 保留天数默认 30, 设置里可调 1–365, 每天自动清理; `access_log=0` 时核心只记警告/错误。
+- `GET /api/logs?type=ops|access|proxy&day=YYYY-MM-DD&q=关键字&limit=500&offset=0&f=筛选` → `{"ok":true,"days":["2026-10-02",…],"total":N,"rows":[…],"summary":{…}}` (新→旧; `total` 是筛选之后的条数)
+  - 筛选 `f`: `ops`: `error` (失败) · `dashboard` · `terminal` · `auto` (按来源); `access`: `direct` · `proxy` · `error` (失败); `proxy`: `warn` (警告和错误) · `error`。
+  - `ops` 行: `{ts,who:"dashboard|terminal|auto",action,detail,result:"ok|error"}`; `detail` 一律是 `key=value` (值里有空格时加引号, 例如 `kind=app name="Google Chrome" from=follow to=pin target_to=Tokyo-2`); 汇总 `{all,error}`
+  - `access` 行 ★ 2.1.1: `{ts,id,net:"tcp|udp",host,port,app,user,path,route:"direct|pin|auto|other|none",node,reason,err,errmsg,dur,ips}` —— `node` 是实际出口名; 直连时 `node` 是 `direct-mode` (代理总开关关闭) / `direct-lan` (本机和局域网) / `direct-site` (你把该网站设为直连) / `direct-app` (你把该应用设为直连 (关)) / `direct-cn` (国内规则) / `direct` (策略选了直连), `reason` 是对应的 `mode|lan|site|app|cn|policy`; 连接失败时 `err` = `timeout|refused|reset|unreachable|dns|tls|eof|rejected|other`, `errmsg` 是核心给的原因, `dur` 是失败时已经过的时间, `ips` 是解析到的地址 (域名被污染时能直接看到); `route:"none"` = 没有转发 (没到选出口那一步就失败了)。汇总 `{all,direct,proxy,pin,auto,error,reasons:{cn:17,…},top_fail:[{host,n,err,app,node}]}` (搜索之后、筛选之前的数字)
+  - `proxy` 行: `{ts,level,msg}`; 汇总 `{all,warn,error}`
+- `GET /api/logs/bundle?hours=1..720|all&sections=ops,access,proxy,snapshot` → `text/plain` (诊断导出: 一个自描述的文件, 格式见 docs/DIAGNOSTICS.md; `snapshot` = 环境 / 脱敏后的配置与策略 / 服务器 / 应用 / 实时自检 / 当前连接的命中规则, 含一次最多约 8 秒的网络自检)。仪表盘「日志 → 导出」就是它; 终端: `enana diag [小时数]`。
+- `GET /api/logs/export?type=&day=` → `text/plain` (旧接口: 单类日志, 仪表盘不再使用)
+- `POST /api/logs/clear` 表单 `type=ops|access|proxy|all` `before=YYYY-MM-DD` (可选, 不填=全部) → `{"ok":true,"freed":字节数}` (需 sudo)
+- 保留时长默认 72 小时 (3 天), 设置里可调 12 小时 – 30 天, 每小时自动清理一次 (整天过期的文件直接删, 截止时间所在那一天里更早的行逐行裁掉); 三种日志各有开关 (见「设置」)。
 
 ## 规则库 / DNS
 

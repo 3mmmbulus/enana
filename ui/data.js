@@ -101,9 +101,18 @@
   };
 
   /* 设置覆盖 (应用 / 网站); 网站 state=follow 表示删除该行 */
-  TP.override = async function (kind, value, state) {
-    return TP.helper('POST', '/api/override', { q: { kind: kind, value: value, state: state } });
+  /* target (只对 pin 有意义): 空 = 默认固定出口 · 'PINAUTO' = 在固定出口里自动选一个 · 其它 = 指定走这一个固定出口 (固定出口有 2 个以上时才能选) */
+  TP.override = async function (kind, value, state, target) {
+    var q = { kind: kind, value: value, state: state };
+    if (state === 'pin' && target) q.target = target;
+    return TP.helper('POST', '/api/override', { q: q });
   };
+  /* 可以单独指定的固定出口: 配置里前 16 个 role=pin 的服务器 (和 lib/config.sh 的规则集序号一致); 不到 2 个就没有「指定」这回事 */
+  TP.pinServers = function () { return TP.servers().filter(function (s) { return s.role === 'pin'; }).slice(0, 16).map(function (s) { return s.tag; }); };
+  TP.canPickPin = function () { return TP.pinServers().length >= 2; };
+  /* 一个出口选择 (selector 当前选中的名字 / 覆盖的 target) 是不是「某个具体的固定出口」: 返回 'PINAUTO' | 服务器名 | '' */
+  TP.pinTargetOf = function (v) { return v === 'PINAUTO' || TP.pinServers().indexOf(v) >= 0 ? v : ''; };
+
 
   /* ---------- Clash 数据 ---------- */
   TP.loadProxies = async function () {
@@ -135,12 +144,16 @@
     return !!(g && g.now && g.now !== 'AUTO' && g.all && g.all.indexOf('AUTO') >= 0);
   };
 
+  /* 切换一个策略开关 (网站 / 默认出口 / 节点选择): 由辅助服务代为切换并写进操作记录 (原来 → 现在), 不再由浏览器直接改核心 */
   TP.setPolicy = async function (tag, name) {
-    await TP.clash('PUT', '/proxies/' + enc(tag), { name: name });
+    var r = await TP.helper('POST', '/api/policy', { form: { tag: tag, name: name } });
     if (S.proxies[tag]) S.proxies[tag].now = name;
     TP.emit('proxies');
     setTimeout(TP.loadProxies, 400);
+    return r;
   };
+  /* 浏览器直接对核心做的操作 (断开连接) 事后补一条操作记录; 记录失败不影响操作本身 */
+  TP.audit = function (ev, o) { return TP.helper('POST', '/api/audit', { form: Object.assign({ ev: ev }, o || {}) }).catch(function () { }); };
 
   TP.testDelay = async function (tag) {
     var url = (TP.cfg.probe && TP.cfg.probe.delayUrl) || 'http://www.gstatic.com/generate_204', ms = -1;
@@ -163,11 +176,11 @@
   /* chains[0] = 叶子出站, 最后一个 = 策略组 (svc-<id> / Final ...) */
   TP.routeOf = function (c) {
     var ch = c.chains || [], leaf = ch[0] || '', grp = ch.length ? ch[ch.length - 1] : '', cls, sv;
-    if (!ch.length || leaf === 'direct') cls = 'direct';
+    if (!ch.length || /^direct(-[a-z]+)?$/.test(leaf)) cls = 'direct';             // direct-mode / -lan / -site / -app / -cn 都是直连 (后缀是直连的原因, 见 lib/config.sh)
     else if (ch.indexOf('PIN') >= 0) cls = 'pin';
     else if (ch.indexOf('Global') >= 0 || ch.indexOf('AUTO') >= 0) cls = 'auto';
     else { sv = S.svMap[leaf]; cls = sv && sv.role === 'pin' ? 'pin' : 'auto'; }
-    return { cls: cls, node: cls === 'direct' ? '' : leaf, svc: /^svc-/.test(grp) ? grp : '' };
+    return { cls: cls, node: cls === 'direct' ? '' : leaf, svc: /^svc-/.test(grp) ? grp : '', why: cls === 'direct' ? leaf : '' };      // why = 直连的原因 (出口名)
   };
   /* /Applications/Claude.app/Contents/MacOS/Claude -> Claude (取最外层 .app); C:\Program Files\X\x.exe -> x */
   TP.appName = function (p) {
@@ -178,24 +191,30 @@
   };
   TP.svcName = function (tag) { var e = S.svcByTag[tag]; return e ? (window.I18N.pick(e, 'name') || e.name) : tag.replace(/^svc-/, ''); };
 
-  var prev = null;
+  /* 速度 = 最近约 3 秒的平均: 核心按数据块累计字节, 逐秒相减会出现「这一秒 0、下一秒翻倍」的抖动 (慢速下载时尤其明显) */
+  var SPEED_WIN = 2500, ZERO = function () { return { pin: { d: 0, u: 0 }, auto: { d: 0, u: 0 }, direct: { d: 0, u: 0 } }; };
+  var prev = null;                                                  // {t, h}: h[连接 id] = 最近几次采样 [[时间, 上传, 下载], …]
   TP.resetConnBaseline = function () { prev = null; };
   function processConns(r) {
     var list = (r && r.connections) || [], t = performance.now(), dt = prev ? (t - prev.t) / 1000 : 0;
     var base = !prev || dt > 6 || dt < 0.2;                        // 第一次采样只作基线; 间隔过长也重置
-    var sp = { pin: { d: 0, u: 0 }, auto: { d: 0, u: 0 }, direct: { d: 0, u: 0 } }, map = {}, rows = new Array(list.length), i, c, rt, up, dn, sd, su, o;
+    var sp = ZERO(), hs = {}, rows = new Array(list.length), i, c, rt, up, dn, sd, su, a, o, w;
     for (i = 0; i < list.length; i++) {
       c = list[i]; rt = TP.routeOf(c); up = +c.upload || 0; dn = +c.download || 0; sd = 0; su = 0;
+      a = !base && prev.h[c.id] ? prev.h[c.id] : [];
       if (!base) {
-        o = prev.map[c.id];
-        sd = (o ? dn - o[1] : dn) / dt; su = (o ? up - o[0] : up) / dt;   // 新连接: 计入窗口内产生的全部流量
+        o = a[0];                                                  // 窗口里最老的一次采样; 新连接没有 (它是上次采样之后才出现的): 窗口就是这一次的间隔
+        w = o ? (t - o[0]) / 1000 : dt;
+        sd = (o ? dn - o[2] : dn) / w; su = (o ? up - o[1] : up) / w;
         if (sd < 0) sd = 0; if (su < 0) su = 0;
         sp[rt.cls].d += sd; sp[rt.cls].u += su;
       }
-      map[c.id] = [up, dn];
+      a = a.slice(); a.push([t, up, dn]);
+      while (a.length > 2 && t - a[0][0] > SPEED_WIN) a.shift();
+      hs[c.id] = a;
       rows[i] = { c: c, rt: rt, up: up, dn: dn, sd: sd, su: su };
     }
-    prev = { t: t, map: map };
+    prev = { t: t, h: hs };
     S.conns = rows; S.connTotals = { down: +(r && r.downloadTotal) || 0, up: +(r && r.uploadTotal) || 0 };
     if (!base) {
       S.speed = sp; S.speedAt = Date.now();
@@ -203,9 +222,17 @@
     }
     TP.emit('conns');
   }
+  /* 核心连不上 (停了 / 正在重启): 旧的连接和速度已经不存在, 不能继续显示 (不然表格和数字会一直停在最后一次读到的样子, 像是实时的); 速度曲线落回 0 */
+  function dropConns() {
+    prev = null;
+    ['pin', 'auto', 'direct'].forEach(function (k) { var a = S.hist[k]; if (a.length) { a.push(0); if (a.length > HIST) a.shift(); } });
+    S.conns = []; S.connTotals = null; S.speed = ZERO(); S.speedAt = 0;
+    TP.emit('conns');
+  }
   TP.loadConns = async function () {
     if (!S.monitor) return;
-    try { processConns(await TP.clash('GET', '/connections')); } catch (e) { /* 状态点已记录 */ }
+    try { processConns(await TP.clash('GET', '/connections', null, { timeout: 3000 })); }
+    catch (e) { if (S.clash !== 'ok' && (S.conns.length || S.speedAt || S.connTotals)) dropConns(); }       // 偶尔一次超时 (状态还是正常) 保留上一份数据; 状态不正常了才清掉
   };
   TP.setMonitor = function (on) {
     S.monitor = !!on; TP.ls.set('monitor', S.monitor);

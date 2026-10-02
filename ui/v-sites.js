@@ -1,12 +1,15 @@
-/* enana · v-sites.js — 网站页: 目录 (schema 3) 里的每一项一个三段开关 (固定出口 | 自动线路 | 直连) + 搜索/分组筛选 + 折叠分组 + 自定义网站
+/* enana · v-sites.js — 网站页
+ * 布局: 顶部标签 = 网站的来源 (系统目录 | 我添加的 | 自动识别, 和全站同一套标签样式), 标签下面左边是二级导航 (系统目录: 分组 + 默认出口; 另外两个: 按路由筛选), 右边是内容。
+ *   · 系统目录 (schema 3): 目录里的每一项一个三段开关 (固定出口 | 自动线路 | 直连); 固定出口有 2 个以上时, 选了「固定出口」的那一项还能再选: 默认 / 在固定出口里自动选 / 指定某一个。
+ *   · 我添加的 / 自动识别: 网站覆盖 (kind=site), 每个网站一个下拉 (跟随规则 | 固定出口 | 自动线路 | 直连) + 固定出口的指定 + 删除; 自动识别的带「自动识别」标记、原因、时间 (设置 → 代理 里打开该功能)。
  * 每次改策略都先经过 confirmDialog; 当前没有固定出口 / 自动线路时, 对应选项显示为「暂不可用」, 点击会说明原因并提供「添加服务器」。
  * 每一项的域名列表用弹窗查看 / 添加 / 修改 / 删除 / 恢复, 并可一键重置为系统默认 (GET|POST /api/sites/domains, POST /api/sites/domains/reset; 写操作是后台任务)。
- * 页面里没有行内展开: 说明用「!」(ui.help), 长列表用 ui.pager, 折叠的分组记在 prefs (sites.collapsed)。 */
+ * 页面里没有行内展开: 说明用「!」(ui.help), 长列表用 ui.pager, 折叠的分组记在 prefs (sites.collapsed); 选中的标签 / 导航记在 prefs (sites.tab / sites.nav.<标签>)。 */
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, setText = TP.setText, I = window.I18N, t = I.t, L = I.L;
   var V = TP.V.sites = { id: 'sites' };
-  var el = {}, boxes = {}, flt = { q: '', g: '' }, chips = {}, pgC = null, pgD = null, dm = null, uid = 0;
+  var el = {}, boxes = {}, flt = { q: '' }, pgC = null, pgD = null, dm = null, uid = 0, tabsCtl = null, navCtl = null, tab = 'catalog', nav = '';
   var OPTS = [
     { v: 'PIN', label: L('name.policy.PIN'), icon: 'pin' },
     { v: 'Global', label: L('name.policy.Global'), icon: 'auto' },
@@ -16,8 +19,11 @@
   var GICON = { ai: 'ai', account: 'user', exchange: 'badge-check', social: 'message-square-warning', video: 'play', search: 'search', news: 'book-open', dev: 'terminal', shop: 'plug', tools: 'sliders-horizontal', direct: 'direct' };
   var ROUTE = { pin: 'pin', PIN: 'pin', auto: 'auto', Global: 'auto', direct: 'direct', Direct: 'direct' };     // 后端的策略名 / Clash 选择器名 -> 路由类别
   var PREF_COLLAPSED = 'sites.collapsed';       // i18n-ignore
+  var PREF_TAB = 'sites.tab';                   // i18n-ignore
   var PG_CUSTOM = 'sites.custom';               // i18n-ignore
   var PG_DOMAINS = 'sites.domains';             // i18n-ignore
+  var TABS = ['catalog', 'mine', 'auto'], FINAL = '@final';     // i18n-ignore (标签 id / 导航里「默认出口」的 id)
+  var SITE_ST = ['follow', 'direct', 'pin', 'auto'];
 
   function active() { return TP.tab === 'sites'; }
   function catalog() { return S.catalog || { groups: {}, groups_en: {}, order: [], entries: [], failed: false }; }
@@ -25,71 +31,150 @@
   function addFix() { return { label: t('why.addServer'), fn: function () { TP.goAdd('manual'); } }; }
   function help(name) { return ui.help('sites.' + name); }                           // 「!」说明: 词典键 help.sites.<name>.*
   function isTouch() { try { return !!(window.matchMedia && window.matchMedia('(pointer:coarse)').matches); } catch (e) { return false; } }
+  function pickTab(v) { return TABS.indexOf(v) >= 0 ? v : 'catalog'; }
+  function navKey() { return 'sites.nav.' + tab; }                                    // i18n-ignore (偏好键)
+  function allSites() { return ((S.state && S.state.overrides) || []).filter(function (o) { return o && o.kind === 'site'; }); }
+  function sitesOf(tb) { return allSites().filter(function (o) { return tb === 'auto' ? o.src === 'auto' : o.src !== 'auto'; }); }
+  function autoOn() { var p = S.prefs && S.prefs.settings; return !!(p && (p.auto_sites === true || p.auto_sites === 1)); }
+  function polClass(st) { return st === 'pin' || st === 'auto' || st === 'direct' ? st : ''; }                    // 覆盖的状态 -> 路由类别 (跟随规则没有)
+  /* 选择器当前选中的名字 -> 三段开关里的哪一段: PIN / Global / direct; 指定了某一个固定出口 (或「固定出口里自动选」) 也算 PIN */
+  function segOf(now) { return now === 'PIN' || now === 'Global' || now === 'direct' ? now : (TP.pinTargetOf(now) ? 'PIN' : (now || '')); }
+  function tgName(v) { return v === 'PIN' || !v ? t('apps.tg.default') : v === 'PINAUTO' ? t('apps.tg.auto') : v; }
 
   /* 折叠的分组: prefs 里存「被折叠的分组 id 数组」; 还没存过时, 前两个分组展开、其余折叠 (和以前一样) */
   function collapsedList() { var c = TP.prefs.get(PREF_COLLAPSED, null); return Array.isArray(c) ? c : catalog().order.slice(2); }
-  function isOpen(g) { return !!(flt.q || flt.g) || collapsedList().indexOf(g) < 0; }
+  function isOpen(g) { return !!flt.q || nav === g || collapsedList().indexOf(g) < 0; }
   function toggleGroup(g) {
     var c = collapsedList().slice(), i = c.indexOf(g);
     if (i >= 0) c.splice(i, 1); else c.push(g);
     TP.prefs.set(PREF_COLLAPSED, c);                                                // 触发 'prefs' 事件 -> 重新渲染
   }
+  function readPrefs() { tab = pickTab(TP.prefs.get(PREF_TAB, 'catalog')); nav = String(TP.prefs.get(navKey(), '') || ''); }
+  function setTab(v, save) {
+    v = pickTab(v); if (v === tab && !save) return;
+    tab = v; nav = String(TP.prefs.get(navKey(), '') || '');
+    if (save !== false) TP.prefs.set(PREF_TAB, tab === 'catalog' ? undefined : tab);
+    tabsCtl.set(tab); if (pgC) pgC.setPage(1);
+    V.render();
+  }
+  function setNav(v) {
+    nav = String(v || ''); TP.prefs.set(navKey(), nav || undefined);
+    if (pgC) pgC.setPage(1);
+    V.render();
+  }
+  /* 其它页面 (设置 → 自动识别 的「查看」) 要直接跳到某个标签 */
+  TP.sitesTab = function (id) { TP.prefs.set(PREF_TAB, pickTab(id) === 'catalog' ? undefined : pickTab(id)); TP.go('sites'); };
 
   /* ================= 构建 ================= */
   V.init = function (root) {
+    readPrefs();
     /* 规则如何生效: 一行标题 + 「!」, 4 步流程在说明弹窗里 */
     var how = h('div', { class: 'sx-how' }, h('b', null, L('sites.how.title')), h('span', { class: 'muted sm' }, L('sites.how.sub')), help('how'));
 
-    /* 工具栏 + 筛选条 */
-    el.q = h('input', { class: 'inp', type: 'search', placeholder: L('sites.search'), 'aria-label': L('sites.search'), autocomplete: 'off', on: { input: function () { flt.q = el.q.value.trim().toLowerCase(); V.render(); } } });
+    /* 顶部标签 (来源) + 搜索 + 添加 */
+    tabsCtl = ui.tabs(L('sites.tab.aria'), TABS.map(function (k) { return { id: k, label: L('sites.tab.' + k), icon: k === 'catalog' ? 'library' : k === 'mine' ? 'user' : 'scan-search', count: 0 }; }), function (id) { setTab(id, true); });
+    tabsCtl.set(tab);
+    el.q = h('input', { class: 'inp', type: 'search', placeholder: L('sites.search'), 'aria-label': L('sites.search'), autocomplete: 'off', on: { input: function () { flt.q = el.q.value.trim().toLowerCase(); if (pgC) pgC.setPage(1); V.render(); } } });
     el.addBtn = ui.btn(L('sites.add'), { kind: 'primary', icon: 'plus' });
     ui.act(el.addBtn, function () { return openAddSite(); });
     el.count = h('span', { class: 'muted sm' });
-    el.chips = h('div', { class: 'chips', role: 'group', 'aria-label': L('sites.groups') });
 
     /* 出口类型图例: 三种策略各一个「!」 */
     function lg(v, icon, nameKey) { return h('span', { class: 'sx-lg sx-lg-' + v }, ui.icon(icon, 15, 'ci'), h('span', null, L(nameKey)), help(v)); }
     el.legend = h('div', { class: 'sx-legend', role: 'group', 'aria-label': L('sites.legend') },
       h('span', { class: 'muted sm' }, L('sites.legend')), lg('pin', 'pin', 'name.policy.PIN'), lg('auto', 'auto', 'name.policy.Global'), lg('direct', 'direct', 'name.policy.direct'));
 
-    /* 自定义网站 (你的覆盖) */
+    /* 左侧二级导航 (按标签重建) */
+    el.nav = h('nav', { class: 'sx-nav', 'aria-label': L('sites.nav.aria') });
+
+    /* 右侧: 系统目录 (分组卡片 + 默认出口) */
+    el.groups = h('div', { class: 'grps' });
+    el.final = h('div', { class: 'rows' });
+    el.finalCard = h('section', { class: 'card' }, h('div', { class: 'card-h' }, h('h3', null, L('sites.final.title'), help('final')), h('span', { class: 'muted sm' }, L('sites.final.sub'))), el.final);
+    el.paneCatalog = h('div', { class: 'sx-pane' }, el.groups, el.finalCard);
+
+    /* 右侧: 我添加的 / 自动识别 (网站覆盖列表) */
+    el.autoBar = h('div', { class: 'hint sx-autobar', role: 'status', hidden: true });
     el.cList = h('div', { class: 'rows' });
     el.cEmpty = ui.emptyBox();
     el.cCnt = h('span', { class: 'muted sm' });
     pgC = ui.pager(PG_CUSTOM, { def: 10 });
     pgC.onChange(renderCustom);
-    var customCard = h('section', { class: 'card sx-pgcard' },
-      h('div', { class: 'card-h' }, h('h3', null, L('sites.custom.title'), help('custom')), el.cCnt, h('span', { class: 'muted sm' }, L('sites.custom.sub'))),
-      el.cList, el.cEmpty.el, pgC.el);
+    el.cardTitle = h('h3'); el.cardSub = h('span', { class: 'muted sm' });
+    el.customCard = h('section', { class: 'card sx-pgcard' }, h('div', { class: 'card-h' }, el.cardTitle, el.cCnt, el.cardSub), el.cList, el.cEmpty.el, pgC.el);
+    el.paneCustom = h('div', { class: 'sx-pane' }, el.autoBar, el.customCard);
 
-    /* 默认出口 */
-    el.final = h('div', { class: 'rows' });
-    var finalCard = h('section', { class: 'card' }, h('div', { class: 'card-h' }, h('h3', null, L('sites.final.title'), help('final')), h('span', { class: 'muted sm' }, L('sites.final.sub'))), el.final);
-
-    el.groups = h('div', { class: 'grps' });
     el.empty = ui.emptyBox();
+    el.main = h('div', { class: 'sx-main' }, el.paneCatalog, el.paneCustom, el.empty.el);
+    el.layout = h('div', { class: 'sx-layout' }, el.nav, el.main);
 
     root.appendChild(h('div', { class: 'intro' }, h('p', { class: 'muted' }, L('sites.intro'), help('page'))));
     root.appendChild(TP.proxyNote());
     root.appendChild(how);
-    root.appendChild(h('div', { class: 'toolbar' }, el.q, el.addBtn, el.count));
-    root.appendChild(el.chips);
+    root.appendChild(h('div', { class: 'sx-top' }, h('div', { class: 'sx-tabs' }, tabsCtl.el, help('tabs')), h('div', { class: 'toolbar sx-tb' }, el.q, el.addBtn, el.count)));
     root.appendChild(el.legend);
-    root.appendChild(customCard);
-    root.appendChild(finalCard);
-    root.appendChild(el.groups);
-    root.appendChild(el.empty.el);
+    root.appendChild(el.layout);
 
     TP.on('catalog', function () { buildGroups(); if (active()) V.render(); });
-    TP.on('proxies', function () { if (active()) renderRows(); });
-    TP.on('state', function () { if (active()) renderCustom(); });
+    TP.on('proxies', function () { if (active()) { renderRows(); renderCustomPins(); } });
+    TP.on('state', function () { if (active()) { renderTabs(); renderNav(); renderCustom(); renderRows(); } });
+    TP.on('settings', function () { if (active()) renderAutoBar(); });
     TP.on('helper', function () { if (active()) V.render(); if (dm) dm.paint(); });
     TP.on('lang', function () { V.render(); if (dm) dm.paint(); });
-    TP.on('prefs', function (d) { if (active() && d && (d.all || d.key === PREF_COLLAPSED)) renderRows(); });
+    TP.on('prefs', function (d) {
+      if (!active() || !d) return;
+      if (d.all || d.key === PREF_TAB) { var nt = pickTab(TP.prefs.get(PREF_TAB, 'catalog')); if (nt !== tab) { setTab(nt, false); return; } }
+      if (d.all || d.key === navKey()) { var nn = String(TP.prefs.get(navKey(), '') || ''); if (nn !== nav) { nav = nn; V.render(); return; } }
+      if (d.all || d.key === PREF_COLLAPSED) renderRows();
+    });
     buildFinal(); buildGroups(); V.render();
   };
-  V.show = function () { V.render(); };
-  V.render = function () { renderChips(); renderRows(); renderCustom(); };
+  V.show = function () { readPrefs(); tabsCtl.set(tab); V.render(); if (!S.prefs) TP.loadSettings(); };
+  V.render = function () { renderTabs(); renderNav(); renderPane(); };
+
+  function renderTabs() {
+    var cat = catalog();
+    tabsCtl.count('catalog', cat.entries.length); tabsCtl.count('mine', sitesOf('mine').length); tabsCtl.count('auto', sitesOf('auto').length);
+    TABS.forEach(function (k) { tabsCtl.text(k, t('sites.tab.' + k)); });
+  }
+
+  /* ---------- 左侧二级导航: 系统目录 = 分组 + 默认出口; 其它标签 = 按路由筛选 ---------- */
+  function navItems() {
+    var cat = catalog(), out = [], q = flt.q;
+    if (tab === 'catalog') {
+      out.push({ id: '', label: t('sites.all'), icon: 'list-checks', count: q ? cat.entries.filter(matches).length : cat.entries.length });
+      cat.order.forEach(function (g) {
+        var n = cat.entries.filter(function (e) { return e.group === g && (!q || matches(e)); }).length;
+        if (!n && g !== nav) return;                                                    // 没有条目的分组不放进导航
+        out.push({ id: g, label: TP.groupName(g), icon: GICON[g] || 'globe', count: n });
+      });
+      out.push({ id: FINAL, label: t('sites.nav.final'), icon: 'waypoints', count: null });
+    } else {
+      var list = sitesOf(tab);
+      out.push({ id: '', label: t('sites.all'), icon: 'list-checks', count: list.length });
+      ['pin', 'auto', 'direct'].forEach(function (k) { out.push({ id: k, label: TP.name.route(k), icon: k, count: list.filter(function (o) { return polClass(o.state) === k; }).length }); });
+    }
+    return out;
+  }
+  function renderNav() {
+    var items = navItems(), sig = tab + '|' + I.lang + '|' + items.map(function (x) { return x.id; }).join(',');
+    if (!items.some(function (x) { return x.id === nav; })) nav = '';
+    if (el.nav._sig !== sig) {
+      el.nav._sig = sig; TP.clear(el.nav);
+      navCtl = ui.tabs(L('sites.nav.aria'), items, function (id) { setNav(id); }, { vertical: true });
+      el.nav.appendChild(navCtl.el);
+    }
+    items.forEach(function (x) { navCtl.count(x.id, x.count); });
+    navCtl.set(nav);
+  }
+
+  function renderPane() {
+    var cat = tab === 'catalog';
+    el.paneCatalog.hidden = !cat; el.paneCustom.hidden = cat;
+    if (cat) renderRows();
+    else { el.empty.hide(); renderCustom(); renderAutoBar(); }
+    el.q.placeholder = t(cat ? 'sites.search' : 'sites.search.custom'); el.q.setAttribute('aria-label', el.q.placeholder);
+  }
 
   /* ---------- 分组 ---------- */
   function buildGroups() {
@@ -116,40 +201,27 @@
     }
     return e._blob;
   }
-  function matches(e) { return (!flt.g || e.group === flt.g) && (!flt.q || entryBlob(e).indexOf(flt.q) >= 0); }
-
-  function renderChips() {
-    var cat = catalog(), items = [{ g: '', n: cat.entries.length }].concat(cat.order.map(function (g) { return { g: g, n: cat.entries.filter(function (e) { return e.group === g; }).length }; }));
-    var sig = I.lang + '|' + items.map(function (x) { return x.g + x.n; }).join(',');
-    if (el.chips._sig !== sig) {
-      el.chips._sig = sig; TP.clear(el.chips); chips = {};
-      items.forEach(function (x) {
-        var b = h('button', { class: 'fchip', type: 'button', 'aria-pressed': 'false' }, x.g ? ui.icon(GICON[x.g] || 'globe', 14, 'ci') : null, h('span', null, x.g ? TP.groupName(x.g) : t('sites.all')), h('span', { class: 'fchip-n' }, String(x.n)));
-        b.addEventListener('click', function () { flt.g = flt.g === x.g ? '' : x.g; V.render(); });
-        chips[x.g] = b; el.chips.appendChild(b);
-      });
-    }
-    Object.keys(chips).forEach(function (g) { chips[g].setAttribute('aria-pressed', (flt.g === g) ? 'true' : 'false'); });
-    el.chips.hidden = !cat.entries.length;
-  }
+  function matches(e) { return !flt.q || entryBlob(e).indexOf(flt.q) >= 0; }
 
   function renderRows() {
-    var cat = catalog(), shown = 0, total = cat.entries.length;
+    if (tab !== 'catalog') return;
+    var cat = catalog(), shown = 0, total = cat.entries.length, fin = nav === FINAL;
+    el.groups.hidden = fin; el.finalCard.hidden = !fin;
     Object.keys(boxes).forEach(function (g) {
-      var sec = boxes[g], all = cat.entries.filter(function (e) { return e.group === g; }), items = all.filter(matches), open = isOpen(g);
+      var sec = boxes[g], all = cat.entries.filter(function (e) { return e.group === g; }), items = all.filter(matches), open = isOpen(g), only = !!nav && !fin && nav !== g;
       setText(sec._name, TP.groupName(g));
-      setText(sec._cnt, flt.q || flt.g ? t('sites.group.countOf', { n: items.length, total: all.length }) : t('sites.group.count', { n: all.length }));
-      sec.hidden = !items.length;
+      setText(sec._cnt, flt.q ? t('sites.group.countOf', { n: items.length, total: all.length }) : t('sites.group.count', { n: all.length }));
+      sec.hidden = fin || only || !items.length;
       sec._head.setAttribute('aria-expanded', open ? 'true' : 'false'); sec.classList.toggle('is-open', open);
       sec._rows.hidden = !open;
-      if (open) ui.syncList(sec._rows, items, function (e) { return e.id; }, makeEntry, function (row, e) { updateEntry(row, e); });
-      shown += items.length;
+      if (open && !sec.hidden) ui.syncList(sec._rows, items, function (e) { return e.id; }, makeEntry, function (row, e) { updateEntry(row, e); });
+      if (!sec.hidden) shown += items.length;
     });
     if (el.final._fin) updateEntry(el.final._fin, el.final._fin._e);
-    setText(el.count, total ? (flt.q || flt.g ? t('sites.countOf', { n: shown, total: total }) : t('sites.count', { n: total })) : '');
+    setText(el.count, total ? (flt.q ? t('sites.countOf', { n: shown, total: total }) : t('sites.count', { n: total })) : '');
     if (cat.failed) el.empty.show({ icon: 'warning', text: t('sites.empty.failed'), hint: t('sites.empty.failedHint', { cmd: 'enana' }) });
     else if (!total) el.empty.show({ icon: 'refresh', text: t('sites.empty.loading') });
-    else if (!shown) el.empty.show({ icon: 'search', text: t('sites.empty.noMatch'), hint: t('sites.empty.noMatchHint') });
+    else if (!fin && !shown) el.empty.show({ icon: 'search', text: t('sites.empty.noMatch'), hint: t('sites.empty.noMatchHint') });
     else el.empty.hide();
   }
 
@@ -166,14 +238,23 @@
     r.miss = h('span', { class: 'muted sm', hidden: true }, L('sites.pending'));
     r.seg = ui.seg(t('sites.seg.aria', { name: '' }), OPTS, TP.safe(function (v) { return pick(row, v); }));
     r.seg.mark(DEF[e.default]);
+    r.tg = h('select', { class: 'sel sm sx-tg', hidden: true });                       // 固定出口有 2 个以上、这一项走「固定出口」时: 指定走哪一个
     row = h('div', { class: 'site', role: 'group' },
       h('div', { class: 'site-main' }, h('div', { class: 'site-t' }, r.name, r.cnt, r.mod, r.rs), r.desc, r.miss, r.warn),
-      r.view, r.seg.el);
+      r.view, h('div', { class: 'sx-ctl' }, r.seg.el, r.tg));
     row._r = r; row._e = e;
     ui.act(r.view, function () { openDomains(row._e); });
+    ui.selectAct(r.tg, function () { return TP.pinTargetOf(((S.proxies[row._e.tag || ('svc-' + row._e.id)] || {}).now)) || 'PIN'; }, function (want) { return pickTarget(row, want); });
     return row;
   }
   function rsShort(tag) { return String(tag).replace(/^geosite-/, '').replace(/^geoip-/, ''); }
+  function fillTargets(sel) {
+    var sig = TP.pinServers().join('|') + '#' + I.lang;
+    if (sel._sig === sig) return;
+    sel._sig = sig; TP.clear(sel);
+    sel.appendChild(TP.opt('PIN', t('apps.tg.default'))); sel.appendChild(TP.opt('PINAUTO', t('apps.tg.auto')));
+    TP.pinServers().forEach(function (tag) { sel.appendChild(TP.opt(tag, tag)); });
+  }
   function updateEntry(row, e) {
     var r = row._r, p = S.proxies[e.tag || ('svc-' + e.id)], now = p && p.now, ds = (e.domains || []).length, name = eName(e), isFinal = e.id === 'final';
     row._e = e;
@@ -191,7 +272,10 @@
         if (rss.length > 3) r.rs.appendChild(h('span', { class: 'badge', title: rss.slice(3).join(', ') }, '+' + (rss.length - 3)));
       }
     }
-    r.seg.set(now || '');
+    var cls = segOf(now), canPick = !!p && cls === 'PIN' && TP.canPickPin();
+    r.seg.set(cls || '');
+    r.tg.hidden = !canPick;
+    if (canPick) { fillTargets(r.tg); var tv = TP.pinTargetOf(now) || 'PIN'; if (r.tg.value !== tv) r.tg.value = tv; r.tg.setAttribute('aria-label', t('apps.tg.aria', { name: name })); ui.avail(r.tg, S.clash === 'down' ? TP.why.clash() : ''); }
     r.seg.el.setAttribute('aria-label', t('sites.seg.aria', { name: name })); row.setAttribute('aria-label', name);
     var ready = !!p, all = (p && p.all) || [];
     ['PIN', 'Global', 'direct'].forEach(function (v) {
@@ -203,22 +287,35 @@
       r.seg.avail(v, why, fix);
     });
     r.miss.hidden = ready;
-    r.warn.hidden = !(TP.riskGroup(e.group) && now && now !== 'PIN');
+    r.warn.hidden = !(TP.riskGroup(e.group) && cls && cls !== 'PIN');
     row.classList.toggle('is-pending', !ready);
   }
   async function pick(row, v) {
     var e = row._e, tag = e.tag || ('svc-' + e.id), p = S.proxies[tag], name = eName(e);
     if (!p) { ui.toast(t('sites.notReady'), 'warn'); return; }
     var prev = p.now;
-    row._r.seg.set(prev || '');
-    if (prev === v) return;
-    var tx = TP.txt.policy(name, prev, v, e.group), risk = TP.riskGroup(e.group) && v !== 'PIN';
+    row._r.seg.set(segOf(prev) || '');
+    if (segOf(prev) === v) return;
+    var tx = TP.txt.policy(name, segOf(prev), v, e.group), risk = TP.riskGroup(e.group) && v !== 'PIN';
     var ok = await ui.confirmDialog({ title: t('sites.change.title'), message: tx.message, detail: tx.detail, confirmText: t('sites.change.go'), danger: risk, rememberKey: 'policy' });
     if (!ok) return;
     p.now = v; updateEntry(row, e);
     try { await TP.setPolicy(tag, v); }
     catch (err) { p.now = prev; updateEntry(row, e); throw err; }
     ui.toast(t('sites.changed', { name: name, state: TP.name.policy(v) }), 'ok', 2400);
+  }
+  /* 这一项走「固定出口」时, 再指定: 默认 / 在固定出口里自动选 / 某一个固定出口 (选择器的选项名: PIN / PINAUTO / 服务器名) */
+  async function pickTarget(row, to) {
+    var e = row._e, tag = e.tag || ('svc-' + e.id), p = S.proxies[tag], name = eName(e);
+    if (!p || !to) return;
+    var prev = p.now, pv = TP.pinTargetOf(prev) || 'PIN';
+    if (to === pv) return;
+    var ok = await ui.confirmDialog({ title: t('apps.tg.title'), message: t('apps.tg.msg', { name: name, from: tgName(pv), to: tgName(to) }), detail: [t(to === 'PIN' ? 'apps.tg.dDefault' : to === 'PINAUTO' ? 'apps.tg.dAuto' : 'apps.tg.dOne', { tag: to })], confirmText: t('apps.tg.go'), rememberKey: 'policy' });
+    if (!ok) { updateEntry(row, e); return; }
+    p.now = to; updateEntry(row, e);
+    try { await TP.setPolicy(tag, to); }
+    catch (err) { p.now = prev; updateEntry(row, e); throw err; }
+    ui.toast(t('apps.tg.done', { name: name, to: tgName(to) }), 'ok', 2400);
   }
 
   /* 其他海外网站 = Final 选择器 (Global / PIN / direct) */
@@ -229,8 +326,7 @@
     updateEntry(row, e);
   }
 
-  /* ================= 自定义网站 (覆盖层: kind=site) ================= */
-  var SITE_ST = ['direct', 'pin', 'auto'];
+  /* ================= 我添加的 / 自动识别 (覆盖层: kind=site) ================= */
   function parseHost(s) {
     s = String(s || '').trim();
     if (!s) return { err: t('sites.err.empty') };
@@ -246,7 +342,7 @@
 
   function openAddSite(prefill) {
     var inp = h('input', { class: 'inp', type: 'text', placeholder: t('sites.add.ph'), 'aria-label': t('sites.add.field'), autocomplete: 'off', spellcheck: 'false', value: prefill || '' });
-    var sel = h('select', { class: 'sel', 'aria-label': t('sites.add.state') }, SITE_ST.map(function (v) { return TP.opt(v, TP.name.app(v)); }));
+    var sel = h('select', { class: 'sel', 'aria-label': t('sites.add.state') }, ['direct', 'pin', 'auto'].map(function (v) { return TP.opt(v, TP.name.app(v)); }));
     sel.value = TP.hasPinPool() ? 'pin' : 'direct';
     var msg = h('div', { class: 'fld-h', 'aria-live': 'polite' });
     function live(force) {
@@ -268,6 +364,7 @@
           var why = TP.why.helper(); if (why) { ui.toast(why, 'warn'); return false; }
           await TP.override('site', r.host, sel.value);
           ui.toast(t('sites.add.done', { host: r.host, state: TP.name.app(sel.value) }), 'ok');
+          TP.prefs.set(PREF_TAB, 'mine'); setTab('mine', false);                                  // 加完直接看到它 (在「我添加的」里)
           TP.loadState();
         } }
       ]
@@ -277,37 +374,107 @@
   }
   V.openAdd = openAddSite;
 
+  /* 「自动识别」标签上面的说明条: 没开启 -> 去设置里开启; 开启了 -> 说明依据 + 设置 / 全部撤销 */
+  function renderAutoBar() {
+    var bar = el.autoBar, on = autoOn(), n = sitesOf('auto').length, b1, b2;
+    bar.hidden = tab !== 'auto';
+    if (tab !== 'auto') return;
+    TP.clear(bar);
+    bar.className = 'hint sx-autobar' + (on ? ' info' : ' warn');
+    bar.appendChild(ui.icon(on ? 'scan-search' : 'info', 16, 'ci'));
+    bar.appendChild(h('span', { class: 'sx-autobar-t' }, h('b', null, t(on ? 'sites.auto.on.title' : 'sites.auto.off.title')), ' ', t(on ? 'sites.auto.on.text' : 'sites.auto.off.text')));
+    b1 = ui.btn(t(on ? 'sites.auto.settings' : 'sites.auto.enable'), { sm: true, icon: 'settings' }); ui.act(b1, function () { TP.settingsTab('proxy'); });
+    bar.appendChild(b1);
+    if (n) { b2 = ui.btn(t('set.asite.clear'), { sm: true, icon: 'delete', cls: 'soft-bad' }); ui.act(b2, clearAuto); bar.appendChild(b2); }
+  }
+  async function clearAuto() {
+    var n = sitesOf('auto').length, ok, r;
+    if (!n) return;
+    ok = await ui.confirmDialog({ title: t('set.asite.clearTitle'), message: t('set.asite.clearMsg', { n: n }), detail: [t('set.asite.clearD')], confirmText: t('set.asite.clearGo'), danger: true });
+    if (!ok) return;
+    r = await TP.helper('POST', '/api/sites/auto/clear');
+    ui.toast(t('set.asite.cleared', { n: (r && +r.removed) || n }), 'ok'); await TP.loadState();
+  }
+
+  function ago(sec) {
+    var d = Math.max(0, Math.round((Date.now() / 1000 - sec)));
+    if (d < 90) return t('sites.auto.ago.now');
+    if (d < 5400) return t('sites.auto.ago.min', { n: Math.round(d / 60) });
+    if (d < 129600) return t('sites.auto.ago.hour', { n: Math.round(d / 3600) });
+    return t('sites.auto.ago.day', { n: Math.round(d / 86400) });
+  }
+  function autoMeta(o) {
+    var parts = [];
+    if (o.why) parts.push((I.has('logs.err.' + o.why) ? t('logs.err.' + o.why) : o.why) + (o.fails ? ' ×' + o.fails : ''));
+    if (o.app) parts.push(o.app);
+    if (o.at) parts.push(ago(+o.at));
+    return parts.join(' · ');
+  }
+
   function renderCustom() {
-    var noH = TP.noHelper(), why = TP.why.helper(), all = ((S.state && S.state.overrides) || []).filter(function (o) { return o.kind === 'site'; });
+    if (tab === 'catalog') return;
+    var noH = TP.noHelper(), why = TP.why.helper(), isAuto = tab === 'auto', all = sitesOf(tab).filter(function (o) { return !flt.q || o.value.indexOf(flt.q) >= 0; });
+    if (nav) all = all.filter(function (o) { return polClass(o.state) === nav; });
     var pr = pgC.update(all.length), items = all.slice(pr.start, pr.end);
+    setText(el.cardTitle, t(isAuto ? 'sites.auto.title' : 'sites.custom.title')); setText(el.cardSub, t(isAuto ? 'sites.auto.sub' : 'sites.custom.sub'));
     ui.syncList(el.cList, items, function (o) { return o.value; }, makeCustom, function (row, o) {
       row._o = o; setText(row._host, o.value);
-      if (row._sel.value !== o.state) row._sel.value = o.state;
+      var autoRow = o.src === 'auto', meta = autoRow ? autoMeta(o) : '';
+      row._src.hidden = !autoRow; row._meta.hidden = !meta; setText(row._meta, meta);
+      if (autoRow) row._src.title = t('sites.src.autoTip');
       Array.prototype.forEach.call(row._sel.options, function (op) { var s = TP.name.app(op.value); if (op.textContent !== s) op.textContent = s; });
+      if (row._sel.value !== o.state) row._sel.value = o.state;
+      paintCustomPin(row, o);
       ui.avail(row._sel, why); ui.avail(row._del, why);
       row._sel.setAttribute('aria-label', t('sites.custom.stateAria', { host: o.value }));
       row._del.setAttribute('aria-label', t('sites.custom.delAria', { host: o.value })); row._del.title = t('sites.custom.delAria', { host: o.value }); row._del._tip = row._del.title;
     });
     setText(el.cCnt, all.length ? t('sites.custom.count', { n: all.length }) : '');
-    if (!all.length) el.cEmpty.show({ icon: 'nav-sites', text: t(noH ? 'sites.custom.noHelper' : 'sites.custom.empty'), hint: noH ? '' : t('sites.custom.emptyHint'), action: noH ? null : { label: t('sites.add'), icon: 'plus', fn: function () { return openAddSite(); } } });
-    else el.cEmpty.hide();
+    if (!all.length) {
+      var filtered = !!(flt.q || nav);
+      el.cEmpty.show(filtered ? { icon: 'search', text: t('sites.empty.noMatch'), hint: t('sites.empty.noMatchHint') }
+        : isAuto ? { icon: 'scan-search', text: t('sites.auto.empty'), hint: t(autoOn() ? 'sites.auto.emptyHintOn' : 'sites.auto.emptyHint') }
+        : { icon: 'nav-sites', text: t(noH ? 'sites.custom.noHelper' : 'sites.custom.empty'), hint: noH ? '' : t('sites.custom.emptyHint'), action: noH ? null : { label: t('sites.add'), icon: 'plus', fn: function () { return openAddSite(); } } });
+    } else el.cEmpty.hide();
+    setText(el.count, all.length ? t('sites.custom.count', { n: all.length }) : '');
   }
+  function paintCustomPin(row, o) {
+    var show = o.state === 'pin' && TP.canPickPin(), tv = !o.target || o.target_ok === false ? 'PIN' : o.target;
+    row._tg.hidden = !show;
+    if (!show) return;
+    fillTargets(row._tg); if (row._tg.value !== tv) row._tg.value = tv;
+    row._tg.setAttribute('aria-label', t('apps.tg.aria', { name: o.value }));
+  }
+  function renderCustomPins() { if (tab === 'catalog') return; Array.prototype.forEach.call(el.cList.children, function (row) { if (row._o) paintCustomPin(row, row._o); }); }
   function makeCustom() {
     var host = h('span', { class: 'mono site-n' }), sel = h('select', { class: 'sel sm' }, SITE_ST.map(function (x) { return TP.opt(x, TP.name.app(x)); }));
+    var src = ui.badge(L('sites.src.auto'), 'info', 'scan-search'), meta = h('div', { class: 'muted sm site-d' });
+    var tg = h('select', { class: 'sel sm sx-tg', hidden: true });
     var del = ui.ibtn('delete', t('common.delete'), { cls: 'danger-t' });
-    var row = h('div', { class: 'site custom' }, h('div', { class: 'site-main' }, host), sel, del);
-    row._host = host; row._sel = sel; row._del = del;
+    var row = h('div', { class: 'site custom' }, h('div', { class: 'site-main' }, h('div', { class: 'site-t' }, host, src), meta), h('div', { class: 'sx-ctl' }, sel, tg), del);
+    src.hidden = true; meta.hidden = true;
+    row._host = host; row._sel = sel; row._del = del; row._src = src; row._meta = meta; row._tg = tg;
     ui.selectAct(sel, function () { return row._o.state; }, async function (want) {
       var o = row._o, prev = o.state, tx = TP.txt.app(o.value, prev, want);
       var ok = await ui.confirmDialog({ title: t('sites.change.title'), message: tx.message, detail: tx.detail, confirmText: t('sites.change.go'), rememberKey: 'policy' });
       if (!ok) return;
-      o.state = want; sel.value = want;
-      try { await TP.override('site', o.value, want); } catch (e) { o.state = prev; sel.value = prev; throw e; }
+      o.state = want; if (want !== 'pin') o.target = ''; sel.value = want; paintCustomPin(row, o);
+      try { await TP.override('site', o.value, want); } catch (e) { o.state = prev; sel.value = prev; paintCustomPin(row, o); throw e; }
       ui.toast(t('sites.changed', { name: o.value, state: TP.name.app(want) }), 'ok', 2400);
+      if (want === 'follow') await TP.loadState();                                                // 「跟随规则」= 删除这条覆盖
+    });
+    ui.selectAct(tg, function () { var o = row._o; return !o.target || o.target_ok === false ? 'PIN' : o.target; }, async function (want) {
+      var o = row._o, prev = o.target || '', to = want === 'PIN' ? '' : want;
+      if (to === prev) return;
+      var ok = await ui.confirmDialog({ title: t('apps.tg.title'), message: t('apps.tg.msg', { name: o.value, from: tgName(prev), to: tgName(want) }), detail: [t(want === 'PIN' ? 'apps.tg.dDefault' : want === 'PINAUTO' ? 'apps.tg.dAuto' : 'apps.tg.dOne', { tag: want })], confirmText: t('apps.tg.go'), rememberKey: 'policy' });
+      if (!ok) { paintCustomPin(row, o); return; }
+      o.target = to; o.target_ok = true;
+      try { await TP.override('site', o.value, 'pin', to); } catch (e) { o.target = prev; paintCustomPin(row, o); throw e; }
+      ui.toast(t('apps.tg.done', { name: o.value, to: tgName(want) }), 'ok', 2400);
     });
     ui.act(del, async function () {
-      var v = row._o.value;
-      var ok = await ui.confirmDialog({ title: t('sites.custom.delTitle'), message: t('sites.custom.delMsg', { host: v }), detail: t('sites.custom.delDetail'), confirmText: t('common.delete'), danger: true });
+      var o = row._o, v = o.value, auto = o.src === 'auto';
+      var ok = await ui.confirmDialog({ title: t('sites.custom.delTitle'), message: t(auto ? 'sites.auto.delMsg' : 'sites.custom.delMsg', { host: v }), detail: t('sites.custom.delDetail'), confirmText: t('common.delete'), danger: true });
       if (!ok) return;
       await TP.override('site', v, 'follow');
       ui.toast(t('sites.custom.deleted', { host: v }), 'ok'); await TP.loadState();

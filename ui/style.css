@@ -267,6 +267,19 @@ button.chip{font-family:inherit;cursor:pointer}
 .subtab:hover{background:var(--pri-bg);color:var(--pri)}
 .subtab.on,.subtab[aria-selected=true]{background:var(--pri);color:var(--pri-fg);font-weight:650;box-shadow:0 1px 4px rgba(37,99,235,.35)}      /* 选中的标签: 实心主色, 和没选中的一眼就能分开 */
 .subtab[aria-disabled=true]{opacity:.55;cursor:not-allowed}
+.subtab-n{margin-left:2px;padding:0 6px;min-width:18px;border-radius:99px;background:var(--line);color:var(--muted);font-size:var(--fs-11-5);font-weight:600;line-height:18px;text-align:center;font-variant-numeric:tabular-nums}
+.subtab.on .subtab-n,.subtab[aria-selected=true] .subtab-n{background:rgba(255,255,255,.24);color:inherit}
+.subtab:hover:not(.on) .subtab-n{background:var(--pri-bg2);color:var(--pri)}
+/* 竖向 (网站页左侧二级导航): 同一套标签样式摆成一列, 数字靠右; 窄屏变成一行可横向滚动 */
+.subtabs.is-v{display:flex;flex-direction:column;flex-wrap:nowrap;gap:2px;width:100%;box-sizing:border-box}
+.subtabs.is-v .subtab{justify-content:flex-start;align-items:flex-start;width:100%;text-align:left;padding:7px 11px;white-space:normal}   /* 长标签换行显示, 不截断 */
+.subtabs.is-v .subtab>.ci{margin-top:2px}
+.subtabs.is-v .subtab-l{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+.subtabs.is-v .subtab-n{margin-left:auto;flex:none}
+@media (max-width:760px){
+  .subtabs.is-v{flex-direction:row;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
+  .subtabs.is-v .subtab{width:auto;flex:none}
+}
 
 /* 进度条 / 步骤 / 任务卡片 */
 .bar{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin:8px 0}
@@ -463,6 +476,14 @@ canvas.chart{display:block;width:100%;height:190px}
 .legend .lg-pin i{border-color:var(--pin)} .legend .lg-auto i{border-color:var(--auto)} .legend .lg-direct i{border-color:var(--direct);border-top-style:dashed}
 .st-out{min-height:34px;display:flex;align-items:baseline;gap:6px;margin:8px 0}
 .st-out .big{font-size:22px;font-weight:650;font-variant-numeric:tabular-nums}
+/* 最近 3 次测速记录 */
+.st-hist{margin-top:14px;padding-top:10px;border-top:1px solid var(--line)}
+.st-hist-h{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;font-size:var(--fs-13)}
+.st-hist-l{list-style:none;margin:0;padding:0}
+.st-hist-l li{display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;padding:7px 0;border-top:1px solid var(--line)}
+.st-hist-l li:first-child{border-top:0}
+.st-hist-v{min-width:6.5em;font-size:15px;font-variant-numeric:tabular-nums}
+.st-hist-m{flex:1 1 220px;min-width:0}
 .chk{list-style:none;margin:0;padding:0}
 .chk li{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--line)}
 .chk li:first-child{border-top:0}

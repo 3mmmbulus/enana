@@ -79,7 +79,7 @@ cloud_content_install() {
 txn_content() {
   cloud_content_install "${TXN_FORCE:-}"; local rc=$?
   if [ "$rc" != 0 ]; then TXN_ERR=$CLOUD_ERR; cloud_state_set "$CLOUD_ERR"; return 1; fi
-  [ "$CLOUD_CHANGED" = 1 ] && { job_step 1 30 "下载规则集"; rules_update >/dev/null 2>&1 || true; }
+  [ "$CLOUD_CHANGED" = 1 ] && { job_step 1 30 "下载规则集"; rules_update >/dev/null 2>&1 || true; apps_rerecommend; ovr_sync; }      # 新的应用推荐: 首次扫描时没拿到推荐的应用在这里补上
   return 0
 }
 

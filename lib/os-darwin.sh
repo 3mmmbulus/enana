@@ -212,6 +212,7 @@ shortcut_remove() {
 os_open() { open "$1" >/dev/null 2>&1 || true; }
 
 os_date_minus_days() { date -v-"${1:-0}"d +%F; }      # N 天前的日期 (YYYY-MM-DD); macOS 的 BSD date
+os_date_minus_hours() { date -v-"${1:-0}"H "+%F %T"; }  # N 小时前的本地时间 (YYYY-MM-DD HH:MM:SS)
 
 # 品牌更名前的安装 (v1 / v2 早期: ~/.tokyo-proxy, launchd 标签 local.tokyo-proxy*, 命令 tproxy / ereldaili) -> 迁移到 ~/.enana
 os_legacy_cleanup() { # 卸载旧的 launchd 任务、旧快捷命令、旧 shell 配置里的标记行; 不动数据目录

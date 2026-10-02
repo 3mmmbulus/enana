@@ -20,6 +20,7 @@ export ENANA_ACCOUNT_URL=http://127.0.0.1:$A_PORT ENANA_SPEEDTEST_CONF=$W/speedt
 export ENANA_CLOUD_PUBKEY=$W/cpub.pem ENANA_UPDATE_BASE=http://127.0.0.1:$N_PORT/dl ENANA_CORE_LATEST=99.0.0 ENANA_LANG=zh ENANA_RULE_SOURCE=http://127.0.0.1:$N_PORT/rules/{file} ENANA_DNS_PRESETS=$W/dns-presets.conf
 export ENANA_MOCK_CTL=$W/vpsctl ENANA_VERIFY_IP_URL=http://127.0.0.1:$N_PORT/ipraw ENANA_SSH=$HERE/fakebin/fakessh FAKE_SSH_PW='sshpw-Test-123'
 mkdir -p "$W"/{state,home/Library/LaunchAgents,shortcut,h/rules,h/lib}
+export ENANA_NO_MDFIND=1 ENANA_APPS_ROOTS="$W/home/Applications"            # 应用扫描只看测试夹具里的目录 (不碰这台电脑上真实的应用)
 export PATH="$HERE/fakebin:$PATH"
 for c in launchctl networksetup sudo open; do
   case "$(command -v $c)" in "$HERE"/fakebin/*) ;; *) echo "REFUSING: 真实的 $c 出现在 PATH 中, 为防止改动系统已中止"; exit 1 ;; esac
@@ -367,7 +368,7 @@ insp "$W/Custom/Foo Tool.app" | chk "再次校验同一个软件: exists=true (�
 api -X POST "$A/api/apps/custom" --data-urlencode "path=$CA" -d 'state=pin' | chk "重复添加 → 被拒" 'assert not d["ok"]'
 grep -q 'Foo Tool' "$W/h/rules/ovr-pin.json" && tpass "自定义 .app 写入了「固定出口」规则集 (按路径匹配)" || tfail "自定义 .app 写入了「固定出口」规则集"
 J=$(api -X POST "$A/api/apps/custom" --data-urlencode "path=$W/bin/mytool" -d 'state=direct' | jp 'print(d["job"])'); [ "$(job_wait "$J")" = done ] && tpass "添加命令行工具 (任务完成)" || tfail "添加命令行工具 (任务完成)"
-grep -q '"process_name":\["mytool"\]' "$W/h/rules/ovr-direct.json" && tpass "命令行工具按可执行文件名匹配 (process_name)" || tfail "命令行工具按可执行文件名匹配 (process_name)"
+grep -q '"process_name":\["mytool"\]' "$W/h/rules/ovr-appdirect.json" && tpass "命令行工具按可执行文件名匹配 (process_name)" || tfail "命令行工具按可执行文件名匹配 (process_name)"
 api -X POST "$A/api/apps/custom/delete" -d 'name=mytool' | chk "删除自定义软件 → 任务" 'assert d["ok"] and d["job"]'
 sleep 3; api "$A/api/apps" | chk "删除后不再出现, 规则集也清掉了" 'assert not any(x["name"]=="mytool" for x in d["apps"])'
 api -X POST "$A/api/apps/custom/delete" -d 'name=Nope' | chk "删除不存在的自定义软件 → E_NOT_FOUND" 'assert d["code"]=="E_NOT_FOUND"'
@@ -378,7 +379,7 @@ ENANA_LOG_LEVEL=debug bash "$REPO/install.sh" apply >/dev/null 2>&1; sleep 2
 PID=$(cat "$FAKE_STATE/pid-com.enana.proxy")
 logconn hot.example.org | grep -q 'geosite-notcn => route(Final)' && tpass "覆盖前: 命中社区规则集 → Final" || tfail "覆盖前: 命中社区规则集 → Final"
 api -X POST "$A/api/override?kind=site&value=example.org&state=direct" >/dev/null; sleep 1.5
-logconn hot.example.org | grep -q 'ovr-direct => route(direct)' && tpass "站点覆盖 → 直连 (热生效)" || tfail "站点覆盖 → 直连 (热生效)"
+logconn hot.example.org | grep -q 'ovr-direct => route(direct-site)' && tpass "站点覆盖 → 直连 (热生效, 出口名 direct-site 说明是你设的)" || tfail "站点覆盖 → 直连 (热生效)"
 api -X POST "$A/api/override?kind=site&value=example.org&state=pin" >/dev/null; sleep 1.5
 logconn hot.example.org | grep -q 'ovr-pin => route(PIN)' && tpass "站点覆盖 → 固定出口 (热生效)" || tfail "站点覆盖 → 固定出口 (热生效)"
 api -X POST "$A/api/override?kind=site&value=example.org&state=follow" >/dev/null
@@ -394,7 +395,7 @@ logconn plain-global.example | grep -q 'clash_mode=Global => route(Global)' && t
 logconn cn.example | grep -q 'clash_mode=Global => route(Global)' && tpass "全局代理: 国内域名也走代理 (忽略国内直连规则)" || tfail "全局代理: 国内域名也走代理 (忽略国内直连规则)"
 logconn claude.ai | grep -q 'route(svc-claude)' && tpass "全局代理: 固定出口类服务 (Claude) 仍走固定出口" || tfail "全局代理: 固定出口类服务仍走固定出口"
 api -X POST "$A/api/override?kind=site&value=example.org&state=direct" >/dev/null; sleep 1.5
-logconn hot.example.org | grep -q 'ovr-direct => route(direct)' && tpass "全局代理: 用户手动设置的网站 (直连) 仍然生效" || tfail "全局代理: 用户手动设置的网站仍然生效"
+logconn hot.example.org | grep -q 'ovr-direct => route(direct-site)' && tpass "全局代理: 用户手动设置的网站 (直连) 仍然生效" || tfail "全局代理: 用户手动设置的网站仍然生效"
 api -X POST "$A/api/override?kind=site&value=example.org&state=follow" >/dev/null
 expect "模式写进设置与磁盘配置" sh -c "grep -q '^PROXY_MODE=global' '$W/h/settings.env' && grep -q '\"default_mode\":\"Global\"' '$W/h/config.json'"
 api -X POST "$A/api/proxy" -d 'mode=auto' | chk "切回「自动模式」" 'assert d["ok"] and d["mode"]=="auto"'
@@ -407,6 +408,52 @@ ENANA_LOG_LEVEL=debug bash "$REPO/install.sh" apply >/dev/null 2>&1; sleep 2.5; 
 sed 's/\x1b\[[0-9;]*m//g' "$W/h/sing-box.log" | grep -q 'ovr-pin => route(PIN)' && tpass "自定义软件 (Bar Tool.app) 的流量按设置走固定出口" || tfail "自定义软件的流量按设置走固定出口"
 api -X POST "$A/api/apps/custom/delete" -d 'name=Bar Tool' >/dev/null; sleep 3
 api -X POST "$A/api/override?kind=site&value=a%20b&state=direct" | chk "非法站点名被拒" 'assert not d["ok"]'
+
+echo "== 4b. 固定出口 ≥ 2 个: 应用 / 网站可以指定走哪一个固定出口 (或在固定出口里自动选一个) · 直连原因出口名 · 访问记录 (用核心真实日志)"
+api -X POST "$A/api/override?kind=site&value=target.example&state=pin&target=Fix-Pin" | chk "只有 1 个固定出口时不能指定出口 → 被拒" 'assert not d["ok"]'
+cp "$W/h/servers.jsonl" "$W/servers.before-pin2"
+printf '%s\n' '{"role":"pin","outbound":{"type":"socks","tag":"Fix-Pin2","server":"127.0.0.1","server_port":3,"version":"5","username":"u","password":"p"}}' >> "$W/h/servers.jsonl"
+ENANA_LOG_LEVEL=debug bash "$REPO/install.sh" apply >/dev/null 2>&1; sleep 2.5
+api -X POST "$A/api/override?kind=site&value=target.example&state=pin&target=Nope" | chk "指定的出口不存在 → 被拒" 'assert not d["ok"]'
+api -X POST "$A/api/override?kind=site&value=target.example&state=direct&target=Fix-Pin2" | chk "只有「固定出口」状态才带出口 (其它状态下 target 被忽略)" 'assert d["ok"]'
+api -X POST "$A/api/override?kind=site&value=target.example&state=pin&target=Fix-Pin2" | chk "2 个固定出口: 网站指定走 Fix-Pin2 → 成功" 'assert d["ok"]'
+api "$A/api/state" | chk "状态里带出口: target=Fix-Pin2, target_ok=true, 来源 user" 'o={x["value"]:x for x in d["overrides"]}["target.example"]; assert o["state"]=="pin" and o["target"]=="Fix-Pin2" and o["target_ok"] and o["src"]=="user"'
+sleep 1.5; logconn target.example | grep -q 'ovr-pin-2 => route(Fix-Pin2)' && tpass "指定出口 (热生效): 走的就是 Fix-Pin2 (规则集 ovr-pin-2)" || tfail "指定出口 (热生效)"
+api "$A/api/logs?type=access&q=target.example" | chk "访问记录 (核心真实日志): 走了固定出口 Fix-Pin2, 连不上 → route=pin, 记下失败类型" 'r=d["rows"][0]; assert r["host"]=="target.example" and r["route"]=="pin" and r["node"]=="Fix-Pin2" and r["err"] in ("refused","reset","eof","other","timeout") and d["summary"]["error"]>=1'
+api -X POST "$A/api/override?kind=site&value=target.example&state=pin&target=PINAUTO" >/dev/null; sleep 1.5
+logconn target.example | grep -q 'ovr-pinauto => route(PINAUTO)' && tpass "「在固定出口里自动选」→ PINAUTO (urltest)" || tfail "自动选固定出口 (PINAUTO)"
+api -X POST "$A/api/override?kind=site&value=target.example&state=pin" >/dev/null; sleep 1.5
+logconn target.example | grep -q 'ovr-pin => route(PIN)' && tpass "不指定 → 默认固定出口 PIN" || tfail "默认固定出口 PIN"
+api "$A/api/logs?type=ops&q=target.example" | chk "操作记录: 修改应用/网站策略 —— 谁 / 什么 / 从什么改成什么 / 原来的出口 (target_from)" 'r=[x for x in d["rows"] if x["action"]=="修改应用/网站策略"]; assert len(r)>=3 and "name=target.example" in r[0]["detail"] and "to=pin" in r[0]["detail"] and "target_from=PINAUTO" in r[0]["detail"] and r[0]["who"]=="dashboard"'
+api -X POST "$A/api/override?kind=app&value=Foo&state=pin&target=Fix-Pin2" >/dev/null; sleep 1.5; : > "$W/h/sing-box.log"
+"$W/Foo.app/Contents/MacOS/foo-net" -s -m 4 -x "socks5h://127.0.0.1:$PORT" http://plain3.test/ -o /dev/null 2>/dev/null; sleep 1.2
+sed 's/\x1b\[[0-9;]*m//g' "$W/h/sing-box.log" | grep -q 'ovr-pin-2 => route(Fix-Pin2)' && tpass "按应用指定出口: Foo.app → Fix-Pin2" || tfail "按应用指定出口"
+cl "$U/proxies" | chk "每个服务的选择器 (svc-claude) 可选项里多了「在固定出口里自动选」和各固定出口" 'a=d["proxies"]["svc-claude"]["all"]; assert "PINAUTO" in a and "Fix-Pin" in a and "Fix-Pin2" in a and "PIN" in a'
+api -X POST "$A/api/policy" -d 'tag=svc-claude&name=Fix-Pin2' | chk "网站页切换 svc-claude → Fix-Pin2 (经辅助服务)" 'assert d["ok"] and d["to"]=="Fix-Pin2"'
+cl "$U/proxies" | chk "核心里的选择器确实切换了" 'assert d["proxies"]["svc-claude"]["now"]=="Fix-Pin2"'
+api "$A/api/logs?type=ops&q=svc-claude" | chk "操作记录: 切换策略 (选择器 / 网站名 / 从什么改成什么)" 'r=d["rows"][0]; assert r["action"]=="切换策略" and "tag=svc-claude" in r["detail"] and "to=Fix-Pin2" in r["detail"] and "from=" in r["detail"]'
+api -X POST "$A/api/policy" -d 'tag=svc-claude&name=NoSuch' | chk "切换到不存在的选项 → 被拒" 'assert not d["ok"]'
+api -X POST "$A/api/policy" -d 'tag=bad tag&name=PIN' | chk "选择器名称不合法 → 被拒" 'assert not d["ok"]'
+api -X POST "$A/api/policy" -d 'tag=svc-claude&name=PIN' >/dev/null
+# 直连原因: 出口名区分
+api -X POST "$A/api/override?kind=site&value=example.org&state=direct" >/dev/null; sleep 1.5; logconn hot.example.org >/dev/null
+api "$A/api/logs?type=access&q=hot.example.org" | chk "访问记录: 你把网站设为直连 → route=direct, reason=site (direct-site)" 'r=d["rows"][0]; assert r["route"]=="direct" and r["reason"]=="site" and r["node"]=="direct-site"'
+api -X POST "$A/api/override?kind=site&value=example.org&state=follow" >/dev/null
+api -X POST "$A/api/override?kind=app&value=Foo&state=direct" >/dev/null; sleep 1.5; : > "$W/h/sing-box.log"
+"$W/Foo.app/Contents/MacOS/foo-net" -s -m 4 -x "socks5h://127.0.0.1:$PORT" http://plain4.test/ -o /dev/null 2>/dev/null; sleep 1.2
+api "$A/api/logs?type=access&q=plain4.test" | chk "访问记录: 你把应用设为关 → reason=app (direct-app), 能看到是哪个应用" 'r=d["rows"][0]; assert r["route"]=="direct" and r["reason"]=="app" and r["node"]=="direct-app" and r["app"]=="Foo"'
+logconn cn.example >/dev/null; api "$A/api/logs?type=access&q=cn.example" | chk "访问记录: 国内规则 → reason=cn (direct-cn)" 'r=d["rows"][0]; assert r["route"]=="direct" and r["reason"]=="cn"'
+logconn 192.168.77.7 >/dev/null; api "$A/api/logs?type=access&q=192.168.77.7" | chk "访问记录: 局域网地址 → reason=lan (direct-lan)" 'r=d["rows"][0]; assert r["route"]=="direct" and r["reason"]=="lan"'
+api -X POST "$A/api/proxy" -d 'on=0' >/dev/null; sleep 1; logconn hot.example.org >/dev/null
+api "$A/api/logs?type=access&q=hot.example.org" | chk "访问记录 (代理总开关关闭时也有记录): 全部直连, reason=mode (direct-mode)" 'r=d["rows"][0]; assert r["route"]=="direct" and r["reason"]=="mode" and r["node"]=="direct-mode"'
+api -X POST "$A/api/proxy" -d 'on=1' >/dev/null; sleep 1
+# 指定的固定出口被删除: 设置不丢, 退回默认固定出口, 标记失效
+api -X POST "$A/api/override?kind=site&value=target.example&state=pin&target=Fix-Pin2" >/dev/null
+cp "$W/servers.before-pin2" "$W/h/servers.jsonl"; ENANA_LOG_LEVEL=debug bash "$REPO/install.sh" apply >/dev/null 2>&1; sleep 2.5
+api "$A/api/state" | chk "固定出口被删除后: 网站设置的出口标记为失效 (target_ok=false), 设置还在" 'o={x["value"]:x for x in d["overrides"]}["target.example"]; assert o["state"]=="pin" and o["target"]=="Fix-Pin2" and not o["target_ok"]'
+logconn target.example | grep -q 'ovr-pin => route(PIN)' && tpass "出口失效 → 退回默认固定出口 (不会断网)" || tfail "出口失效 → 退回默认固定出口"
+api -X POST "$A/api/override?kind=site&value=target.example&state=follow" | chk "网站设置恢复跟随 (删除覆盖)" 'assert d["ok"]'
+api -X POST "$A/api/override?kind=app&value=Foo&state=pin" >/dev/null; sleep 1
 
 echo "== 4c. 流量统计 (每分钟采样 → 本机按小时 / 天 / 节点累加; 只保留 3 个月)"
 ST=$W/st; mkdir -p "$ST"; printf 'Fix-Pin\tpin\nLocal-Hop\tauto\n' > "$ST/roles"
@@ -708,7 +755,7 @@ J=$(api -X POST "$A/api/dns/hosts/reset" | jp 'print(d["job"])'); job_wait "$J" 
 api "$A/api/state" | chk "恢复之后: 原来的服务器都回来了" 'ts={s["tag"] for s in d["servers"]}; assert {"Local-Hop","Fix-Pin","Good-Node"} <= ts and "Snap-A" not in ts'
 sy settings -d 'enabled=0' | chk "关闭同步 (自动同步一起关)" 'assert d["ok"]'
 api "$A/api/sync" | chk "已关闭" 'assert not d["enabled"] and not d["auto"]'
-api -X POST "$A/api/settings" -d 'log_days=30' >/dev/null
+api -X POST "$A/api/settings" -d 'log_hours=720' >/dev/null
 sy push | chk "关闭后不能上传" 'assert not d["ok"]'
 
 echo "-- 添加服务器的「保存到云端」: 只有勾选的进入云端同步 · 导出备份带全部 · 登录后自动取回 · 明确关闭过的不动"
@@ -887,12 +934,16 @@ for n in Sudo-VPS My-VPS; do for ip in 9 10 11; do J=$(api -X POST "$A/api/serve
 fi
 
 echo "== 8. 设置 / 操作记录 / 日志"
-api "$A/api/settings" | chk "读取设置: 日志保留 30 天 (上限 365) + 占用 + 账号" 'assert d["settings"]["log_days"]==30 and d["settings"]["log_days_max"]==365 and d["settings"]["access_log"] and "usage" in d and d["account"]["email"]=="user1@example.test" and "proxy" in d'
-api -X POST "$A/api/settings" -d 'log_days=400' | chk "保留天数 400 → 被拒" 'assert not d["ok"]'
-api -X POST "$A/api/settings" -d 'log_days=abc' | chk "保留天数非数字 → 被拒" 'assert not d["ok"]'
+api "$A/api/settings" | chk "读取设置: 日志保留 720 小时 (12 小时 – 30 天) + 三个日志开关 + 自动识别 + 占用 + 账号" 'st=d["settings"]; assert st["log_hours"]==720 and st["log_hours_min"]==12 and st["log_hours_max"]==720 and st["access_log"] and st["log_ops"] and st["log_core"] and st["auto_sites"] is False and "usage" in d and d["account"]["email"]=="user1@example.test" and "proxy" in d'
+api -X POST "$A/api/settings" -d 'log_hours=721' | chk "保留 721 小时 (超过 30 天) → 被拒" 'assert not d["ok"]'
+api -X POST "$A/api/settings" -d 'log_hours=11' | chk "保留 11 小时 (不到 12 小时) → 被拒" 'assert not d["ok"]'
+api -X POST "$A/api/settings" -d 'log_hours=abc' | chk "保留时长非数字 → 被拒" 'assert not d["ok"]'
 api -X POST "$A/api/settings" -d 'lang=fr' | chk "不支持的语言 → 被拒" 'assert not d["ok"]'
-api -X POST "$A/api/settings" -d 'log_days=90' | chk "保留天数改为 90 → 成功" 'assert d["ok"]'
-api "$A/api/settings" | chk "设置已保存" 'assert d["settings"]["log_days"]==90'
+api -X POST "$A/api/settings" -d 'log_hours=168' | chk "保留时长改为 168 小时 (7 天) → 成功" 'assert d["ok"]'
+api "$A/api/settings" | chk "设置已保存" 'assert d["settings"]["log_hours"]==168'
+api -X POST "$A/api/settings" -d 'log_days=2' | chk "旧版仪表盘按天提交 (log_days=2) 仍然接受, 换算成 48 小时" 'assert d["ok"]'
+api "$A/api/settings" | chk "log_days=2 → 48 小时" 'assert d["settings"]["log_hours"]==48'
+api -X POST "$A/api/settings" -d 'log_hours=720' >/dev/null
 api "$A/api/logs?type=ops" | chk "操作记录里有此前的操作 (登录 / 覆盖 / 服务器 …), 不含密码或令牌" 'rows=d["rows"]; assert d["ok"] and len(rows)>=5; t=json.dumps(rows); assert "Passw0rd" not in t and "New-Passw0rd2" not in t and "'"$TOKEN"'" not in t; assert any(r["action"]=="登录" for r in rows)'
 api "$A/api/logs?type=ops&q=%E7%99%BB%E5%BD%95" | chk "操作记录支持关键字搜索" 'assert d["total"]>=1 and all("登录" in (r["action"]+r["detail"]) for r in d["rows"])'
 api -H 'X-Enana-Lang: en' "$A/api/logs?type=ops" | chk "操作记录按请求语言翻译 (英文: Sign in)" 'assert any(r["action"]=="Sign in" for r in d["rows"]) and not any("登录" in r["action"] for r in d["rows"])'
@@ -908,6 +959,73 @@ api -X POST "$A/api/settings" -d 'access_log=0' | chk "关闭「记录网站访�
 sleep 0.5; J=$(api "$A/api/settings" >/dev/null; ls "$W/h/jobs" | grep '^settings-apply.*json$' | head -1 | sed 's/\.json$//'); [ "$(job_wait "$J")" = done ] && tpass "配置已重新生成并应用 (日志级别 warn)" || tfail "配置已重新生成并应用"
 grep -q '"level":"warn"' "$W/h/config.json" && tpass "config.json 日志级别 = warn" || tfail "config.json 日志级别 = warn"
 api -X POST "$A/api/settings" -d 'access_log=1' >/dev/null; sleep 4
+
+echo "== 8b. 日志系统: 概览 / 筛选 / 搜索 (合成日志) · 诊断导出 · 三个独立开关 · 关闭代理时也记录访问"
+D8=$(date -v-1d +%F); mkdir -p "$W/h/logs"
+{
+  for r in "1|10:00:01|chatgpt.com|Google Chrome|direct-app|" "2|10:00:02|www.example.org|Google Chrome|Fix-Pin|" "3|10:00:03|slow.example|curl|direct|timeout"; do
+    IFS='|' read -r id tm h ap tg er <<< "$r"
+    printf '+0800 %s %s INFO [%s 0ms] inbound/mixed[in]: inbound connection to %s:443\n' "$D8" "$tm" "$id" "$h"
+    printf '+0800 %s %s INFO [%s 0ms] router: found process path: /Applications/%s.app/Contents/MacOS/x, user: u\n' "$D8" "$tm" "$id" "$ap"
+    printf '+0800 %s %s INFO [%s 1ms] outbound/%s[%s]: outbound connection to %s:443\n' "$D8" "$tm" "$id" "$([ "${tg#direct}" != "$tg" ] && echo direct || echo socks)" "$tg" "$h"
+    [ -n "$er" ] && printf '+0800 %s %s ERROR [%s 9s] connection: open connection to %s:443 using outbound/direct[direct]: dial tcp 9.9.9.9:443: i/o timeout\n' "$D8" "$tm" "$id" "$h"
+  done
+} > "$W/h/logs/proxy-$D8.log"
+api "$A/api/logs?type=access&day=$D8&limit=10" | chk "访问记录: 3 条连接 + 概览 (全部 3 / 直连 2 / 代理 1 / 失败 1, 原因 app:1 policy:1) + 有记录的日期列表" 's=d["summary"]; assert d["total"]==3 and (s["all"],s["direct"],s["proxy"],s["error"])==(3,2,1,1) and s["reasons"]=={"app":1,"policy":1} and "'"$D8"'" in d["days"]'
+api "$A/api/logs?type=access&day=$D8&f=direct" | chk "筛选 f=direct → 2 条 (概览数字不变)" 'assert d["total"]==2 and d["summary"]["all"]==3'
+api "$A/api/logs?type=access&day=$D8&f=error" | chk "筛选 f=error → 1 条 (slow.example, 失败类型 timeout)" 'assert d["total"]==1 and d["rows"][0]["host"]=="slow.example" and d["rows"][0]["err"]=="timeout"'
+api "$A/api/logs?type=access&day=$D8&q=chrome&limit=1&offset=1" | chk "搜索 + 分页: q=chrome (2 条), limit=1 offset=1 → 返回较早的那条" 'assert d["total"]==2 and len(d["rows"])==1 and d["rows"][0]["host"]=="chatgpt.com"'
+api "$A/api/logs?type=access&day=$D8&f=bogus" | chk "筛选值无效 → 忽略 (返回全部), 不报错" 'assert d["ok"] and d["total"]==3'
+api "$A/api/logs?type=ops&f=dashboard" | chk "操作记录筛选 f=dashboard: 只有来自仪表盘的" 'assert d["rows"] and all(r["who"]=="dashboard" for r in d["rows"])'
+api "$A/api/logs?type=proxy&day=$D8&f=error" | chk "代理日志筛选 f=error: 只有 ERROR 行, 概览带 warn / error 数" 'assert d["total"]==1 and d["rows"][0]["level"]=="ERROR" and d["summary"]["error"]==1'
+# 诊断导出
+api "$A/api/logs/bundle?hours=48&sections=ops,access,proxy,snapshot" -D "$W/bundle.hdr" -o "$W/bundle.txt"
+grep -qi 'content-disposition: attachment; filename="enana-diagnostics-' "$W/bundle.hdr" && tpass "诊断导出: 下载文件名 enana-diagnostics-<时间>.txt" || tfail "诊断导出: 下载文件名"
+head -1 "$W/bundle.txt" | grep -q '^#ENANA-DIAGNOSTICS format=1' && tpass "诊断导出: 第一行格式标记" || tfail "诊断导出: 第一行格式标记"
+python3 - "$W/bundle.txt" "$TOKEN" <<'PY' && tpass "诊断导出: 11 个分区齐全, 行数自洽, 不含令牌 / 服务器密码" || tfail "诊断导出: 分区 / 行数 / 脱敏"
+import sys, re
+txt = open(sys.argv[1], encoding='utf-8').read(); lines = txt.split('\n')
+secs, cur = {}, None
+for l in lines:
+    m = re.match(r'@@SECTION (\S+) format=(\S+) rows=(\d+)$', l)
+    if m: cur = m.group(1); secs[cur] = [int(m.group(3)), 0]; continue
+    if l == '@@END': cur = None; continue
+    if cur and l != '': secs[cur][1] += 1
+need = ['meta','env','config','policy','servers','apps','probes','live','ops','access','proxy']
+assert all(k in secs for k in need), [k for k in need if k not in secs]
+assert all(abs(v[0] - v[1]) <= 1 for v in secs.values()), secs
+assert sys.argv[2] not in txt and 'sshpw-Test-123' not in txt and '"password":"p"' not in txt
+assert 'chatgpt.com' in txt and 'config.check=ok' in txt and 'proxy.enabled=1' in txt, 'content'
+PY
+api "$A/api/logs/bundle?hours=24&sections=ops" | grep -c '^@@SECTION' | { read -r n; [ "$n" = 2 ] && tpass "诊断导出: 只勾选操作记录 → meta + ops 两个分区" || tfail "诊断导出: 只勾选操作记录 (得到 $n 个分区)"; }
+api "$A/api/logs/bundle?hours=24&sections=ops,bogus" | chk "诊断导出: 分区名无效 → 被拒" 'assert not d["ok"]'
+api "$A/api/logs/bundle?hours=abc&sections=ops" | chk "诊断导出: 时间范围无效 → 被拒" 'assert not d["ok"]'
+api "$A/api/logs?type=ops&q=%E5%AF%BC%E5%87%BA%E8%AF%8A%E6%96%AD" | chk "每次导出都留下一条操作记录 (时间范围 / 勾选的内容 / 大小)" 'r=[x for x in d["rows"] if "hours=48 sections=ops,access,proxy,snapshot" in x["detail"]]; assert d["total"]>=2 and r and "bytes=" in r[0]["detail"] and r[0]["action"]=="导出诊断日志" and r[0]["who"]=="dashboard"'
+python3 "$REPO/tools/diag-summary.py" "$W/bundle.txt" 2>&1 | grep -q '== 自动判断' && tpass "tools/diag-summary.py 能解读这份导出文件" || tfail "tools/diag-summary.py 解读导出文件"
+"$W/shortcut/enana" diag 6 2>/dev/null | head -1 | grep -q '^#ENANA-DIAGNOSTICS format=1$' && tpass "终端 enana diag (接管道): 直接输出诊断文件" || tfail "终端 enana diag (接管道)"
+"$W/shortcut/enana" diag abc >/dev/null 2>&1 && tfail "enana diag 时间范围无效 → 应报错退出" || tpass "enana diag 时间范围无效 → 报错退出"
+mkdir -p "$HOME/Downloads"; script -q /dev/null "$W/shortcut/enana" diag 1 >/dev/null 2>&1
+DG=$(ls "$HOME/Downloads"/enana-diagnostics-*.txt 2>/dev/null | head -1)
+[ -n "$DG" ] && head -1 "$DG" | grep -q '^#ENANA-DIAGNOSTICS format=1$' && grep -q '^@@SECTION access ' "$DG" && tpass "终端 enana diag (在终端里): 存成 ~/Downloads/enana-diagnostics-<时间>.txt" || tfail "终端 enana diag (在终端里) 保存文件"
+api "$A/api/logs?type=ops&f=terminal" | chk "终端导出也留下操作记录 (来源 terminal)" 'assert any(r["action"]=="导出诊断日志" and r["who"]=="terminal" for r in d["rows"])'
+# 三个独立开关: 操作记录 / 网站访问 / 代理核心日志
+api -X POST "$A/api/settings" -d 'log_ops=0' | chk "关闭「操作记录」" 'assert d["ok"]'
+api -X POST "$A/api/override?kind=site&value=nolog.example&state=direct" >/dev/null
+api "$A/api/logs?type=ops&q=nolog.example" | chk "操作记录关闭后: 新的操作不再记录" 'assert d["total"]==0'
+api "$A/api/logs?type=ops&q=log_ops" | chk "但「关闭操作记录」这个动作本身留痕 (先写再关)" 'assert any("setting=log_ops" in r["detail"] and "to=0" in r["detail"] for r in d["rows"])'
+api -X POST "$A/api/settings" -d 'log_ops=1' >/dev/null
+api -X POST "$A/api/override?kind=site&value=nolog.example&state=follow" >/dev/null
+api "$A/api/logs?type=ops&q=nolog.example" | chk "重新开启后又开始记录 (只有开启之后的那一次, 关闭期间的没有)" 'assert d["total"]==1 and "to=follow" in d["rows"][0]["detail"]'
+api "$A/api/logs?type=ops&q=log_ops" | chk "「开启操作记录」本身也留痕" 'assert any("to=1" in r["detail"] for r in d["rows"])'
+api "$A/api/settings" | chk "三个开关各自独立: log_ops / access_log / log_core 都能读到" 'st=d["settings"]; assert st["log_ops"] is True and st["access_log"] is True and st["log_core"] is True'
+J=$(api -X POST "$A/api/settings" -d 'log_core=0' | jp 'print(d["job"])'); [ "$(job_wait "$J")" = done ] && tpass "只关「代理核心日志」(网站访问仍开) → 重新生成配置" || tfail "只关代理核心日志"
+grep -q '"level":"info"' "$W/h/config.json" && tpass "网站访问还开着 → 核心仍是 info 级别 (连接记录要用)" || tfail "网站访问开着时核心级别应保持 info"
+J=$(api -X POST "$A/api/settings" -d 'access_log=0' | jp 'print(d["job"])'); [ "$(job_wait "$J")" = done ] && tpass "再关「网站访问」→ 重新生成配置" || tfail "再关网站访问"
+grep -q '"disabled":true' "$W/h/config.json" && tpass "网站访问和核心日志都关闭 → 核心完全不写日志 (log.disabled)" || tfail "两个都关闭 → log.disabled"
+J=$(api -X POST "$A/api/settings" -d 'access_log=1&log_core=1' | jp 'print(d["job"])'); [ "$(job_wait "$J")" = done ] && tpass "两个都重新打开" || tfail "重新打开日志"
+grep -q '"level":"info"' "$W/h/config.json" && ! grep -q '"disabled":true' "$W/h/config.json" && tpass "配置恢复: info 级别, 没有 disabled" || tfail "配置恢复"
+api -X POST "$A/api/settings" -d 'log_ops=2' | chk "开关值无效 → 被拒" 'assert not d["ok"]'
+sleep 3
 
 echo "== 9. 规则库 / DNS"
 api "$A/api/rules" | chk "规则库列表: 必选项不可停用, 含自定义标记" 'n={s["tag"]:s for s in d["sets"]}; assert n["geosite-cn"]["essential"] and n["geosite-cn"]["present"] and len(d["sets"])>=5'
@@ -1106,13 +1224,13 @@ echo "== 15. 每日维护: 日志切分 / 压缩 / 按保留期清理"
 mkdir -p "$W/h/logs"; OLDD=$(date -v-100d +%F); MID=$(date -v-10d +%F)
 printf '%s 00:00:00\tdashboard\t旧记录\t.\tok\n' "$OLDD" > "$W/h/logs/ops-$OLDD.log"; printf '%s 00:00:00\tdashboard\t较新记录\t.\tok\n' "$MID" > "$W/h/logs/ops-$MID.log"
 printf '+0800 %s 01:02:03 INFO [1 0ms] inbound/mixed[in]: inbound connection to a.example:443\n' "$OLDD" > "$W/h/logs/proxy-$OLDD.log"
-api -X POST "$A/api/settings" -d 'log_days=30' >/dev/null
+api -X POST "$A/api/settings" -d 'log_hours=720' >/dev/null
 "$W/shortcut/enana" maintain --quiet >/dev/null 2>&1
 expect "超过保留期 (100 天前) 的日志被清理" test ! -e "$W/h/logs/ops-$OLDD.log" -a ! -e "$W/h/logs/proxy-$OLDD.log"
 expect "保留期内 (10 天前) 的日志被压缩保留" test -e "$W/h/logs/ops-$MID.log.gz"
 api "$A/api/logs?type=ops&day=$MID" | chk "压缩过的日志仍可在仪表盘查询" 'assert d["total"]==1 and d["rows"][0]["action"]=="较新记录"'
-api -X POST "$A/api/settings" -d 'log_days=365' >/dev/null; printf 'x\n' > "$W/h/logs/ops-$(date -v-200d +%F).log"; "$W/shortcut/enana" maintain --quiet >/dev/null 2>&1
-expect "保留期调到 365 天: 200 天前的日志被保留" test -e "$W/h/logs/ops-$(date -v-200d +%F).log.gz" -o -e "$W/h/logs/ops-$(date -v-200d +%F).log"
+api -X POST "$A/api/settings" -d 'log_hours=720' >/dev/null; printf '%s 00:00:00\tdashboard\t二十天前\t.\tok\n' "$(date -v-20d +%F)" > "$W/h/logs/ops-$(date -v-20d +%F).log"; printf '%s 00:00:00\tdashboard\t四十天前\t.\tok\n' "$(date -v-40d +%F)" > "$W/h/logs/ops-$(date -v-40d +%F).log"; "$W/shortcut/enana" maintain --quiet >/dev/null 2>&1
+expect "保留期 30 天 (720 小时): 20 天前的日志被保留, 40 天前的被清理" sh -c "{ test -e '$W/h/logs/ops-$(date -v-20d +%F).log.gz' -o -e '$W/h/logs/ops-$(date -v-20d +%F).log'; } && test ! -e '$W/h/logs/ops-$(date -v-40d +%F).log' -a ! -e '$W/h/logs/ops-$(date -v-40d +%F).log.gz'"
 
 echo "== 16. 卸载"
 cp -R "$W/h/rules" "$W/rules-keep"
@@ -1134,6 +1252,14 @@ expect "旧 launchd 任务与 plist 已清理" test ! -e "$FAKE_STATE/loaded-loc
 expect "旧快捷命令 tproxy 与 shell 配置标记行已清理" sh -c "test ! -e '$HOME/.local/bin/tproxy' && ! grep -q 'tproxy 快捷命令' '$HOME/.zshrc'"
 expect "迁移后的安装可用 (代理在监听, 迁移来的节点已进入配置)" sh -c "nc -z 127.0.0.1 $PORT && grep -q Legacy-Node '$W/h/config.json'"
 "$W/shortcut/enana" uninstall --yes >/dev/null 2>&1; sleep 3.5
+
+echo "== 18. 单元测试 (tests/units.sh: 日志解析 / 自动识别 / 保留期 / 应用扫描 / 规则集拆分 / 诊断导出)"
+bash "$HERE/units.sh" > "$W/units.out" 2>&1
+grep -E '^==|^  ✗|^      ↳' "$W/units.out"
+UP=$(grep -c '^  ✓' "$W/units.out"); UF=$(grep -c '^  ✗' "$W/units.out")
+echo "  (单元测试 $UP 项通过, $UF 项失败)"
+[ "${UP:-0}" -ge 80 ] || { echo "  ✗ 单元测试通过数异常 ($UP), 见 $W/units.out"; echo f >> "$W/.fail"; }
+_i=0; while [ "$_i" -lt "${UP:-0}" ]; do echo p >> "$W/.pass"; _i=$((_i+1)); done; _i=0; while [ "$_i" -lt "${UF:-0}" ]; do echo f >> "$W/.fail"; _i=$((_i+1)); done      # (BSD 的 seq 1 0 会倒数, 所以不用 seq)
 
 PASSES=$(cat "$W/.pass" 2>/dev/null | wc -l | tr -d ' '); FAILS=$(cat "$W/.fail" 2>/dev/null | wc -l | tr -d ' ')
 echo; echo "结果: $PASSES 通过, $FAILS 失败"; [ "$FAILS" = 0 ]

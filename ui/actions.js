@@ -105,7 +105,7 @@
     var ok = await ui.confirmDialog({ title: t('act.kill.title'), message: t('act.kill.msg', { n: n }), detail: [t('act.kill.d1'), t('act.kill.d2')], confirmText: t('act.kill.go', { n: n }), danger: true });
     if (!ok) return;
     killing = true; TP.syncBtns();
-    try { await TP.clash('DELETE', '/connections'); ui.toast(t('act.kill.done', { n: n }), 'ok'); }
+    try { await TP.clash('DELETE', '/connections'); TP.audit('kill', { scope: 'all', n: n }); ui.toast(t('act.kill.done', { n: n }), 'ok'); }
     finally { killing = false; TP.syncBtns(); if (TP.pollers.conns) setTimeout(TP.pollers.conns.kick, 300); }
   };
   TP.bindKillBtn = function (btn) {

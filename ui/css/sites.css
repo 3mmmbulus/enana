@@ -2,6 +2,28 @@
  * 原有的 .site / .grp / .flow 等基础样式在 style.css; 这里只放新增和覆盖的部分。颜色只用主题变量 (深色模式自动跟随)。 */
 
 /* ===== 页面 ===== */
+/* 顶部: 来源标签 (和全站同一套 .subtabs) + 搜索 / 添加 */
+.sx-top{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px;margin:12px 0 8px}
+.sx-tabs{display:flex;align-items:center;gap:4px;min-width:0;max-width:100%}
+.sx-tb{flex:1 1 340px;justify-content:flex-end;min-width:0}
+.sx-tb .inp[type=search]{flex:1 1 200px;max-width:320px}
+/* 标签下面: 左边二级导航 + 右边内容 */
+.sx-layout{display:grid;grid-template-columns:230px minmax(0,1fr);gap:16px;align-items:start;margin-top:10px}
+.sx-nav{position:sticky;top:8px;min-width:0;max-height:calc(100dvh - 150px);overflow:auto}
+.sx-main,.sx-pane{min-width:0}
+.sx-pane>*+*{margin-top:12px}
+@media (max-width:760px){
+  .sx-layout{grid-template-columns:minmax(0,1fr);gap:10px}
+  .sx-nav{position:static;max-height:none;overflow:visible}
+  .sx-tb{flex:1 1 100%;justify-content:flex-start}
+  .sx-tb .inp[type=search]{max-width:none}
+}
+/* 每一行右边的控件: 三段开关 / 下拉 + (固定出口有 2 个以上时) 指定走哪一个 */
+.sx-ctl{display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:0}
+.sx-tg{border-left-width:4px;border-left-color:var(--pin);max-width:230px}
+.sx-autobar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin:0}
+.sx-autobar-t{flex:1 1 280px;min-width:0}
+.sx-autobar .ci{flex:none}
 .sx-how{display:flex;align-items:center;flex-wrap:wrap;gap:2px 8px}
 .sx-how .help-i{margin-left:0}
 /* 出口类型图例: 路由颜色只用在图标上, 文字用正文色 (保证对比度, 也不只靠颜色区分) */

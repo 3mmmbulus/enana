@@ -39,6 +39,10 @@
 .apps-row[data-st=auto] .apps-sel{border-left-color:var(--auto)}
 .apps-row[data-st=direct] .apps-sel{border-left-color:var(--direct)}
 .apps-wrap{overflow-wrap:anywhere;user-select:text}
+/* 模式列: 路由方式下拉 + (固定出口有 2 个以上时) 指定走哪一个固定出口 */
+.apps-md{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}
+.apps-md .sel{min-width:0;max-width:100%}
+.apps-tg{border-left-width:4px;border-left-color:var(--pin)}
 
 /* ===== 表格列头 (软件名 / 路径 / 状态 / 模式 / 操作) =====
  * 列表盒子够宽 (≥ 760px, 用容器查询, 和侧栏是否展开无关) 时变成表格: 每行 = 图标+名称 | 路径 | 状态 | 模式 | 操作, 列头吸顶。
@@ -59,7 +63,8 @@
   .apps-p[hidden]{display:block}                                   /* 没有路径也要占住这一列, 后面的列才不会错位 */
   .apps-stt{display:inline;font-size:var(--fs-12-5);color:var(--muted);white-space:nowrap}
   .apps-row:not(.is-off) .apps-stt{color:var(--ok)}
-  .apps-sel{width:100%}
+  .apps-md{flex-direction:column;align-items:stretch;flex-wrap:nowrap;gap:4px}
+  .apps-md .sel{width:100%}
 }
 
 /* ===== 添加自定义软件 (弹窗) ===== */
