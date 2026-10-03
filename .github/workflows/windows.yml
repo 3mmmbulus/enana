@@ -19,6 +19,8 @@ jobs:
         run: ./tests/windows-bootstrap-language.ps1
       - name: Check terminal entry behavior
         run: ./tests/windows-cli.ps1
+      - name: Check console-free worker launcher and exit handling
+        run: ./tests/windows-launcher.ps1
       - name: Check private directory ACL without audit privileges
         run: ./tests/windows-acl.ps1
       - name: Check directory ACL in PowerShell Core
@@ -34,6 +36,7 @@ jobs:
           path: |
             ${{ runner.temp }}/enana-native-acceptance/api.log
             ${{ runner.temp }}/enana-native-acceptance/worker.log
+            ${{ runner.temp }}/enana-native-acceptance/launcher.log
             ${{ runner.temp }}/enana-native-acceptance/check.log
             ${{ runner.temp }}/enana-native-acceptance/sing-box.log
           if-no-files-found: ignore

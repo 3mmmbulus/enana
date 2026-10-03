@@ -31,6 +31,33 @@ try{
     $installed=$true
     $s=Read-EnanaSettings $HomeDir;$url="http://127.0.0.1:$($s.API_PORT)"
     Assert ((Invoke-WebRequest -UseBasicParsing -Uri "$url/enana/admin/servers" -TimeoutSec 15).StatusCode -eq 200) 'dashboard deep navigation loads'
+    $taskName="Enana Dashboard $(Get-EnanaSid)"
+    $task=Get-ScheduledTask -TaskName $taskName
+    Assert ($task.State -eq 'Running' -and $task.Actions.Execute -contains "$HomeDir\runtime\worker-launcher.exe") 'real dashboard task runs through the console-free launcher'
+    $state=Read-JsonFile "$HomeDir\runtime\service.json"
+    $worker=Get-CimInstance Win32_Process -Filter "ProcessId=$($state.pid)"
+    $parent=Get-CimInstance Win32_Process -Filter "ProcessId=$($worker.ParentProcessId)"
+    Assert ($parent.ExecutablePath -eq "$HomeDir\runtime\worker-launcher.exe") 'real worker belongs to the scheduled launcher rather than the installer terminal'
+    $callerScript=Join-Path $env:TEMP ('enana-caller-'+[Guid]::NewGuid().ToString('N')+'.ps1')
+    $callerReady=$callerScript+'.ready';$terminal=$null
+    Write-Utf8 $callerScript @'
+param([string]$HomeDir,[string]$Ready)
+$ErrorActionPreference='Stop'
+& "$HomeDir\windows\cli.ps1" -Arguments @('status')
+[IO.File]::WriteAllText($Ready,'ready')
+Start-Sleep 120
+'@
+    try {
+        $args='-NoProfile -ExecutionPolicy Bypass -File "{0}" -HomeDir "{1}" -Ready "{2}"' -f $callerScript,$HomeDir,$callerReady
+        $terminal=Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList $args -PassThru
+        for($i=0;$i -lt 100 -and !(Test-Path -LiteralPath $callerReady);$i++){Start-Sleep -Milliseconds 100}
+        Assert (Test-Path -LiteralPath $callerReady) 'separate caller terminal executes the installed enana CLI'
+        Stop-Process -Id $terminal.Id -Force
+        Assert ((Invoke-WebRequest -UseBasicParsing -Uri "$url/enana/admin/" -TimeoutSec 15).StatusCode -eq 200) 'dashboard remains available after its CLI caller terminal is closed'
+    } finally {
+        if($terminal -and !$terminal.HasExited){$terminal.Kill()}
+        Remove-Item -LiteralPath $callerScript,$callerReady -Force -ErrorAction SilentlyContinue
+    }
     $uiEnv=Invoke-RestMethod -Uri "$url/enana/admin/env.json" -TimeoutSec 15
     Assert ($uiEnv.version -eq [IO.File]::ReadAllText("$repo\VERSION").Trim()) 'dashboard metadata is valid JSON with a clean version scalar'
     $auth=Invoke-RestMethod -Uri "$url/api/auth/status" -Headers @{'X-Enana'='1'} -TimeoutSec 15
@@ -98,6 +125,9 @@ try{
     Invoke-EnanaBash $HomeDir "$HomeDir\enana" @('doctor')
     & "$HomeDir\runtime\node\node.exe" "$HomeDir\windows\helper.js" control $HomeDir shutdown
     Assert ($LASTEXITCODE -eq 0) 'owned worker and core stop cleanly'
+    for($i=0;$i -lt 50 -and (Get-ScheduledTask -TaskName $taskName).State -eq 'Running';$i++){Start-Sleep -Milliseconds 100}
+    Assert ((Get-ScheduledTask -TaskName $taskName).State -ne 'Running') 'task finishes after worker shutdown instead of leaving a launcher running'
+    Assert ((Get-ScheduledTaskInfo -TaskName $taskName).LastTaskResult -eq 0) 'clean worker shutdown gives the scheduler a successful exit code'
     # A detached API job may outlive its supervisor. Cleanup must release its
     # private executable while retaining an unrelated process outside HomeDir.
     $orphan=Start-Process -FilePath "$HomeDir\runtime\node\node.exe" -ArgumentList '-e','setTimeout(()=>{},120000)' -WindowStyle Hidden -PassThru

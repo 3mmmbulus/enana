@@ -289,7 +289,7 @@ _b_env() {
   if [ -x "$SB" ] && [ -s "$H/config.json" ]; then
     if out=$("$SB" check -c "$H/config.json" 2>&1); then printf 'config.check=ok\n'; else printf 'config.check=error: %s\n' "$(printf '%s' "$out" | head -1 | cut -c1-200)"; fi
   fi
-  for p in api.log tick.log check.log worker.log; do
+  for p in api.log tick.log check.log worker.log launcher.log; do
     [ -s "$H/$p" ] && tail -n 40 "$H/$p" 2>/dev/null | grep -iE 'error|fail|fatal|warn|denied' | tail -n 8 | _b_mask_user | sed "s/^/helperlog.$p: /"
   done
   return 0
