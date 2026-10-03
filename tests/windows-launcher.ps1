@@ -34,6 +34,7 @@ public static class EnanaLauncherProbe {
     $null=$launcher.Handle
     for($i=0;$i -lt 100 -and !(Test-Path -LiteralPath "$testHome\probe.json");$i++){Start-Sleep -Milliseconds 100}
     $probe=Read-JsonFile "$testHome\probe.json"
+    Write-Host "Native probe: consoleWindow=$($probe.consoleWindow), consoleProcesses=$($probe.consoleProcesses)"
     Assert ($probe.consoleWindow -eq 0 -and $probe.consoleProcesses -eq 0) 'real console child has neither a console window nor an attached console'
     Assert (!$launcher.HasExited) 'launcher stays alive while its child runs'
     Write-Utf8 "$testHome\stop" '37'
