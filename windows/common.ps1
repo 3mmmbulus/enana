@@ -31,7 +31,16 @@ function Set-PrivateDirectory([string]$Path, [string]$Sid = (Get-EnanaSid), [swi
         $rule = New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($id)), $rights, $inherit, 'None', 'Allow')
         $acl.AddAccessRule($rule)
     }
-    Set-Acl -LiteralPath $Path -AclObject $acl
+    # PowerShell's filesystem provider reapplies the complete security
+    # descriptor, including audit sections. An ordinary user has no
+    # SeSecurityPrivilege. Persist only the access/owner sections modified
+    # above through .NET; never read, clear or replace the directory's SACL.
+    $directory = New-Object IO.DirectoryInfo($Path)
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+        [IO.FileSystemAclExtensions]::SetAccessControl($directory, $acl)
+    } else {
+        $directory.SetAccessControl($acl)
+    }
 }
 function Expand-SafeZip([string]$Archive, [string]$Destination) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem

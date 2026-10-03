@@ -1,5 +1,15 @@
 # Changelog / 更新日志
 
+## 2.3.4 (2026-10-04)
+
+### 中文
+- 修复普通 Windows PowerShell 安装/升级时 `Set-Acl` 请求 `SeSecurityPrivilege` 并失败的问题。目录权限通过 .NET 只保存已修改的访问控制和所有者部分, 不触碰审计权限; 保留当前用户、SYSTEM、管理员的私有目录权限与 TUN 的管理员所有权。
+- 增加真实 Windows 令牌测试: 删除审计特权后创建并再次加固目录, 检查当前用户可读写、无公共访问权限。管理员 CI 不再掩盖普通用户安装的这类失败。
+
+### English
+- Fix regular-user Windows installation failing because PowerShell Set-Acl reapplies audit security sections requiring SeSecurityPrivilege. Persist only modified directory access/owner sections through .NET, preserving private access rules and administrator ownership for TUN snapshots.
+- Test real Windows directory hardening under a token with the audit privilege removed, including repeated calls, file access and absence of public access rules.
+
 ## 2.3.3 (2026-10-04)
 
 ### 中文

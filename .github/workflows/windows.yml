@@ -19,6 +19,11 @@ jobs:
         run: ./tests/windows-bootstrap-language.ps1
       - name: Check terminal entry behavior
         run: ./tests/windows-cli.ps1
+      - name: Check private directory ACL without audit privileges
+        run: ./tests/windows-acl.ps1
+      - name: Check directory ACL in PowerShell Core
+        shell: pwsh
+        run: ./tests/windows-acl.ps1
       - name: Install and exercise the real Windows client
         run: ./tests/windows-native.ps1 -HomeDir '${{ runner.temp }}/enana-native-acceptance'
       - name: Retain failure diagnostics without account or server credentials
