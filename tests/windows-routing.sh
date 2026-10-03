@@ -10,7 +10,17 @@ mkdir -p "$ENANA_HOME/rules"
 for f in i18n jobs servers apps sites fetch enhanced auth dns config update; do . "$LIB/$f.sh"; done
 load_settings; ENANA_PLATFORM=windows
 set -e
-windows_node() { node "$repo/windows/helper.js" "$@"; }
+windows_node() {
+  # Keep the simulated home prefix literal, as the production adapter does.
+  # On a native Windows runner only the real input filename is converted;
+  # `command cygpath` bypasses the destination stub below.
+  local helper="$repo/windows/helper.js" cmd=$1 file; shift
+  file=$1; shift
+  if type -P cygpath >/dev/null 2>&1; then
+    helper=$(command cygpath -m "$helper"); file=$(command cygpath -m "$file")
+  fi
+  MSYS2_ARG_CONV_EXCL='*' node "$helper" "$cmd" "$file" "$@"
+}
 app_is_browser() { case $1 in *chrome.exe) return 0 ;; *) return 1 ;; esac; }
 core_version() { echo 1.14.2; }
 enhanced_paths() { TUN_UID=S-1-5-21-1-2-3-1001; }
