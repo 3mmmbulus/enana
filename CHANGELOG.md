@@ -1,5 +1,17 @@
 # Changelog / 更新日志
 
+## 2.2.2 (2026-10-03)
+
+### 中文
+- 修复刷新页面 / 切回浏览器时自动扫描应用弹出「流量接管方式」进度与完成通知: 自动扫描改为安静跟踪任务, 手动扫描与修改应用 / 网站策略使用各自正确的标题。扫描并未切换接管模式。
+- 自动扫描的 60 秒间隔跨页面刷新保留, 回到前台优先读取列表; 并发扫描复用当前任务, 手动重新扫描可立即执行。失败不再显示扫描成功提示。
+- 增加实际数据加载、轮询、可见性事件与任务跟踪回归, 覆盖刷新、切回前台、手动操作和失败恢复。
+
+### English
+- Fix automatic app discovery showing Capture mode progress and completion notices on reload / return to the browser. Follow automatic scans silently and give manual scans and app/site overrides their own titles; discovery does not switch capture modes.
+- Preserve the 60-second automatic scan cadence across page reloads, refresh cached data on foreground kicks, and share concurrent scans. Manual rescans bypass the cadence; failed scans no longer report success.
+- Add regressions using the actual data loaders, poller, visibility handler and job tracker for reloads, foreground changes, manual actions and failure recovery.
+
 ## 2.2.1 (2026-10-03)
 
 ### 中文

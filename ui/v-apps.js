@@ -112,7 +112,7 @@
     el.q.value = name; flt.g = ''; el.g.value = ''; TP.prefs.set('apps.group', undefined); setQ(name);
     try { el.q.scrollIntoView({ block: 'center' }); } catch (e) { /* 忽略 */ }
   }
-  function rescan() { IC.userScan = true; return TP.loadApps(true).then(function () { ui.toast(t('apps.scanned'), 'ok'); }); }
+  function rescan() { IC.userScan = true; return TP.loadApps(true).then(function (r) { if (r) ui.toast(t('apps.scanned'), 'ok'); }); }
 
   /* ================= 构建 ================= */
   V.init = function (root) {

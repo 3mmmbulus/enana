@@ -81,14 +81,45 @@
     } catch (e) { if (e.kind !== 'unreachable') console.warn('state:', e.message); }
   };
 
-  TP.loadApps = async function (scan) {
-    if (scan) { if (S.scanning) return; S.scanning = true; TP.emit('scanning', true); }
+  var appsScanPending = null, APPS_SCAN_INTERVAL = 60000;
+  async function readApps(scan, background) {
+    if (scan) { S.scanning = true; TP.emit('scanning', true); }
     try {
       var r = scan ? await TP.helper('POST', '/api/apps/scan') : await TP.helper('GET', '/api/apps');
-      if (r.job) { await TP.jobs.runInDock(window.I18N.t('set.network.title'), function () { return Promise.resolve(r); }); r = await TP.helper('GET', '/api/apps'); }
-      S.apps = r; TP.emit('apps');
+      if (r.job) {
+        if (background) {
+          // Automatic discovery may apply new app rules, but is not a user
+          // switching capture modes. Follow it without a card/success toast.
+          await TP.jobs.follow(r.job, null);
+          if (TP.afterApply) TP.afterApply();
+        } else {
+          var done = await TP.jobs.runInDock(window.I18N.t('apps.scanJob'), function () { return Promise.resolve(r); });
+          if (!done.ok) return null;
+        }
+        r = await TP.helper('GET', '/api/apps');
+      }
+      S.apps = r; TP.emit('apps'); return r;
     } catch (e) { if (e.kind !== 'unreachable') console.warn('apps:', e.message); }
     finally { if (scan) { S.scanning = false; TP.emit('scanning', false); } }
+    return null;
+  }
+  TP.loadApps = function (scan, o) {
+    var background = !!(o && o.background), age;
+    if (scan && appsScanPending) return appsScanPending;
+    if (scan && background) {
+      // Persist the cadence across page reloads. Visibility kicks refresh the
+      // list immediately, without repeatedly starting another apply job.
+      age = Date.now() - (+TP.ls.get('apps.scanAt', 0) || 0);
+      if (age >= 0 && age < APPS_SCAN_INTERVAL) scan = false;
+    }
+    if (!scan) return readApps(false, background);
+    TP.ls.set('apps.scanAt', Date.now());
+    appsScanPending = readApps(true, background);
+    appsScanPending.then(function () { appsScanPending = null; }, function () { appsScanPending = null; });
+    return appsScanPending;
+  };
+  TP.scanAppsBackground = function () {
+    return TP.noHelper() || TP.isApplying() ? null : TP.loadApps(true, { background: true });
   };
 
   /* 设置 / 日志用量 / 账号摘要 (GET /api/settings -> S.prefs, 事件 'settings') */
@@ -107,7 +138,7 @@
     var q = { kind: kind, value: value, state: state };
     if (state === 'pin' && target) q.target = target;
     var r = await TP.helper('POST', '/api/override', { q: q });
-    if (r.job) await TP.jobs.runInDock(window.I18N.t('set.network.title'), function () { return Promise.resolve(r); });
+    if (r.job) await TP.jobs.runInDock(window.I18N.t('job.override'), function () { return Promise.resolve(r); });
     return r;
   };
   /* 可以单独指定的固定出口: 配置里前 16 个 role=pin 的服务器 (和 lib/config.sh 的规则集序号一致); 不到 2 个就没有「指定」这回事 */

@@ -329,7 +329,7 @@
     TP.pollers.proxies = TP.poll(TP.loadProxies, 3000);
     TP.pollers.conns = TP.poll(TP.loadConns, 1000, { when: function () { return S.monitor; } });
     TP.pollers.version = TP.poll(TP.loadVersion, 60000);
-    TP.pollers.apps = TP.poll(function () { return TP.noHelper() || TP.isApplying() ? null : TP.loadApps(true); }, 60000);
+    TP.pollers.apps = TP.poll(TP.scanAppsBackground, 60000);
     TP.on('helper', function (up) { if (up && !S.locked) { TP.loadState(); TP.loadApps(false); } });
     TP.on('clash', function (st) { if (st === 'ok') { TP.loadVersion(); } });
     TP.on('auth', function (ok) { if (ok) { TP.loadCatalog(); TP.loadSettings(); TP.updates.check(false); } });

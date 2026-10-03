@@ -611,6 +611,8 @@
     "apps.groupFilter": "按分类筛选",
     "apps.allGroups": "全部分类",
     "apps.scan": "重新扫描",
+    "apps.scanJob": "扫描已安装的应用",
+    "job.override": "应用分流规则",
     "apps.scanning": "扫描中…",
     "apps.scanningReason": "正在扫描已安装的应用",
     "apps.scanned": "已重新扫描应用列表",

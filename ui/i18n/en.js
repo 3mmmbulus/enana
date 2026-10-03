@@ -611,6 +611,8 @@
     "apps.groupFilter": "Filter by category",
     "apps.allGroups": "All categories",
     "apps.scan": "Rescan",
+    "apps.scanJob": "Scan installed apps",
+    "job.override": "Apply routing rules",
     "apps.scanning": "Scanning…",
     "apps.scanningReason": "Scanning installed apps",
     "apps.scanned": "App list rescanned",
