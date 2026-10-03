@@ -1,4 +1,4 @@
-# Windows 预览版 (2.3.0)
+# Windows 预览版 (2.3.2)
 
 Windows 与 macOS 共用本机仪表盘、账号/设备 API、服务器管理、应用/网站分流、PIN/Global/direct、DNS、测速、日志和事务回滚。系统适配不另写一份分流引擎。
 
@@ -11,6 +11,8 @@ irm https://install.enana.cc/get.ps1 | iex
 ```
 
 普通 PowerShell 窗口即可安装。默认目录 `%LocalAppData%\enana`, 下载可重试 3 次, 清单/包大小/SHA-256 与 ZIP 路径全部检查通过后才执行安装。安装会自动选择空闲端口并打开本机后台, 不会打开代理总开关。登录、添加服务器后再由用户开启代理。
+
+2.3.1 修复了官网无参数命令的 `Lang` 默认值校验错误: 默认 `auto` 按系统语言选择中文或英文。无需通过执行策略 Bypass 解决该参数错误。2.3.2 进一步清理重复安装产生的分离任务, 避免升级 / 卸载时 Bash 占用私有运行时。
 
 新终端输入 `enana` 打开仪表盘; `enana doctor` 查看状态, `enana diag` 导出同一格式的诊断日志。`enana self-update` 或再次执行安装命令升级, 保留端口、账号、服务器和模式。已有安装失败会恢复程序/配置并重新启动原服务。快捷命令写入当前用户 PATH, 不改机器 PATH。
 
@@ -49,6 +51,8 @@ TUN 包含 IPv4/IPv6, 排除 localhost/127.0.0.0/8/::1、局域网/私网/链路
 
 `.github/workflows/windows.yml` 在原生 Windows / PowerShell 5.1 上执行 `tests/windows-native.ps1`: 安装真实运行时和核心、启动后台、调用真实 Bash API、鉴权拒绝、两种模式配置校验、二次安装、WinINet 恢复/外部修改保留、安全 ZIP、诊断、干净停止和完整卸载。它不代替交互 UAC、TUN 接管或应用 OAuth。
 
+`.github/workflows/windows-download.yml` 从官网获取发布清单、脚本与 ZIP, 在新建的 Restricted 与 Bypass 子进程中原样执行 `irm https://install.enana.cc/get.ps1 | iex`, 验证默认语言、安装、重复安装、后台、核心配置及卸载。该验收不传入 `-Lang` 或 `-NoOpen`, 以覆盖用户实际入口以及浏览器打开后触发的后台任务。版本号或 Windows 运行时变化也会触发它。分离任务清理只针对本安装私有目录下且属于当前用户 SID 的进程, 清理前复核进程路径和创建时间, 保留其它程序。
+
 2.3.0 预览的 [Windows 原生 CI](https://github.com/3mmmbulus/enana/actions/runs/37122396091) 已在 Windows Server 2025 x64 / PowerShell 5.1 上通过; 共享 macOS 回归 791 项通过。Windows 10/11 客户端、ARM64、交互 UAC/TUN 和原生应用登录仍保留下面的实机验收。
 
 Windows 实机请验收:
@@ -65,4 +69,4 @@ Windows 诊断包含模式、任务/接口归属、代理状态和 PIN 主程序
 
 `tools/build-release.sh OUTPUT_DIR` 从明确允许的程序文件构建包, 不包含本机账号、节点、缓存、SSH 密钥或服务器项目。Windows ZIP、清单和更新日志独立发布; macOS 稳定渠道继续保留 2.2.2, 避免 Windows 预览触发 Mac 自动升级。
 
-现有下载主机使用 `tools/deploy-windows-release.sh RELEASE_DIR WEBSITE_DIR 2.3.0`: 先验证包的大小、哈希、版本和入口, 只替换 Windows 下载文件及官网 `index.html` / `site.js`, 清单最后发布。脚本保存回滚备份, 对比稳定 macOS 文件、全部运行服务的 PID/启动时间及 nginx/systemd 配置, 发生变化则撤回本次发布。无需重载 nginx 或修改其它项目。
+现有下载主机使用 `tools/deploy-windows-release.sh RELEASE_DIR WEBSITE_DIR 2.3.2`: 先验证包的大小、哈希、版本和入口, 只替换 Windows 下载文件及官网 `index.html` / `site.js`, 清单最后发布。脚本保存回滚备份, 对比稳定 macOS 文件、全部运行服务的 PID/启动时间及 nginx/systemd 配置, 发生变化则撤回本次发布。无需重载 nginx 或修改其它项目。
