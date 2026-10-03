@@ -1,9 +1,9 @@
 # enana 云端接口 (客户端 ↔ api.enana.cc)
 
-本地辅助服务 (`lib/*.sh`) 与 enana 云端之间的契约。云端实现是私有的; 这里只描述客户端用到的接口, 方便审计「客户端到底向云端发送了什么」。
+本地辅助服务 (`lib/*.sh`) 与 enana 云端之间的契约。账号服务的通用实现见 `server/`; 数据库、邮件和支付凭据仍是服务器私有配置。本文描述客户端用到的接口, 方便审计「客户端到底向云端发送了什么」。
 **客户端从不向云端发送服务器地址、订阅链接、代理密码、SSH 凭据、访问记录。** 云端只知道: 账号 (邮箱 + 密码哈希)、设备信息 (见下)、登录会话、(用户自己打开同步时) 一份在本机加密后的配置密文。
 
-基地址 `https://api.enana.cc` (官网 `https://enana.cc` 只是一个首页, 没有任何 API / 账号页)。JSON, UTF-8。除登录 / 注册外都要带:
+基地址 `https://api.enana.cc` (官网提供静态首页与邮箱验证页, 验证页调用受限的邮箱确认接口)。JSON, UTF-8。除登录 / 注册 / 邮箱确认外都要带:
 `Authorization: Bearer <token>` 与 `X-Enana-Session: <session id>`。时间一律是 Unix 秒 (整数)。平台 `platform` 取值 `macos | windows | linux`。
 
 ## 数据表 (PocketBase 集合, 命名按领域, 方便以后扩展)
@@ -17,6 +17,8 @@
 | `sync_snapshots` | 端到端加密的配置快照: `user` · `version` · `payload`(密文, 云端看不到明文) · `size` · `source_device` |
 | `audit_events` | 安全审计: `user` · `device` · `type`(register/login/login_failed/logout/kick/limit_blocked/sync_push/sync_pull …) · `detail` · `ip_masked` |
 所有集合只允许通过上面的接口访问 (规则: 只能访问自己的记录), 管理员通过 SSH 隧道进入后台。
+
+Pro 订单、余额、到账记录与验证接口见 [BILLING_API.md](BILLING_API.md)。这一阶段上线服务端基础，正式收款关闭，客户端购买界面和官方线路下发尚未发布。
 
 ## 设备数量限制 (服务端强制)
 同一个账号, **同一平台最多同时在线 2 台设备** (macOS 2 台 + Windows 2 台; 上限来自账号套餐 `plans.max_devices_per_platform`)。

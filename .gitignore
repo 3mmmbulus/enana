@@ -6,3 +6,6 @@
 *.swp
 node_modules/
 /out/
+/server/secrets/
+/server/pb_data/
+/server/payments/state/
