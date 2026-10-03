@@ -1,4 +1,4 @@
-# Windows 预览版 (2.3.2)
+# Windows 预览版 (2.3.3)
 
 Windows 与 macOS 共用本机仪表盘、账号/设备 API、服务器管理、应用/网站分流、PIN/Global/direct、DNS、测速、日志和事务回滚。系统适配不另写一份分流引擎。
 
@@ -14,7 +14,7 @@ irm https://install.enana.cc/get.ps1 | iex
 
 2.3.1 修复了官网无参数命令的 `Lang` 默认值校验错误: 默认 `auto` 按系统语言选择中文或英文。无需通过执行策略 Bypass 解决该参数错误。2.3.2 进一步清理重复安装产生的分离任务, 避免升级 / 卸载时 Bash 占用私有运行时。
 
-新终端输入 `enana` 打开仪表盘; `enana doctor` 查看状态, `enana diag` 导出同一格式的诊断日志。`enana self-update` 或再次执行安装命令升级, 保留端口、账号、服务器和模式。已有安装失败会恢复程序/配置并重新启动原服务。快捷命令写入当前用户 PATH, 不改机器 PATH。
+新终端输入 `enana` 打开终端控制台, 显示服务状态并提供启动、重启和诊断操作; 按 `1` 打开仪表盘。输入被重定向时仅输出状态。`enana doctor` 先读取 Windows 任务状态、上次退出码、运行时文件和启动日志, 再执行共享诊断; `enana diag` 导出同一格式的诊断日志。`enana self-update` 或再次执行安装命令升级, 保留端口、账号、服务器和模式。已有安装失败会恢复程序/配置并重新启动原服务。快捷命令写入当前用户 PATH, 不改机器 PATH。
 
 安装包清单是 `https://install.enana.cc/dl/windows-manifest.json`, 包为 `enana-<version>-windows.zip`。与 macOS 的 `manifest.json` / tar.gz 分开, 防止旧客户端误下载另一平台的包。Windows 清单明确标记 `channel=preview`。
 
@@ -40,6 +40,7 @@ TUN 包含 IPv4/IPv6, 排除 localhost/127.0.0.0/8/::1、局域网/私网/链路
 - `windows/install.ps1` 下载 `runtime-pins.json` 中固定 SHA-256 的官方 PortableGit、Node 和 sing-box, 保留上游许可证, 放在私有目录。
 - 当前用户的 `Enana Dashboard <SID>` 计划任务以 Limited 权限运行 `worker.js`, 只监听 127.0.0.1。HTTP 请求通过管道交给现有 `lib/api.sh`, 保留 Host/Origin/X-Enana/登录校验, 增加头/体大小、并发和超时边界。
 - 普通 worker 管理自己的 System Proxy 核心、tick/维护任务, 不作为 SYSTEM 执行用户脚本。停止或升级只关闭当前安装拥有的进程。
+- 代理核心启动失败时保留后台, 可继续查看诊断并重试启动。计划任务启动阶段的错误写入 `worker.log`, 避免只在不可见的控制台报错。若后台自身无法启动, 可直接执行 `windows/diagnostics.ps1`, 不依赖后台、Git 或 Node。
 - Enhanced 的 `Enana Enhanced <SID>` SYSTEM 任务仅运行 `%ProgramData%\enana\<SID>` 中管理员拥有、用户只读的核心/脚本/配置/规则快照。ZIP 复制到受保护目录后重新验证固定哈希并解压, 不直接提升用户可写的 sing-box.exe。快照只允许本机监听和受保护的文件路径。
 - 更新 TUN 规则/节点或切回轻量模式需要 UAC, 失败恢复原快照和任务。没有密码落盘、sudoers 或永久任意命令提权接口。
 
@@ -69,4 +70,4 @@ Windows 诊断包含模式、任务/接口归属、代理状态和 PIN 主程序
 
 `tools/build-release.sh OUTPUT_DIR` 从明确允许的程序文件构建包, 不包含本机账号、节点、缓存、SSH 密钥或服务器项目。Windows ZIP、清单和更新日志独立发布; macOS 稳定渠道继续保留 2.2.2, 避免 Windows 预览触发 Mac 自动升级。
 
-现有下载主机使用 `tools/deploy-windows-release.sh RELEASE_DIR WEBSITE_DIR 2.3.2`: 先验证包的大小、哈希、版本和入口, 只替换 Windows 下载文件及官网 `index.html` / `site.js`, 清单最后发布。脚本保存回滚备份, 对比稳定 macOS 文件、全部运行服务的 PID/启动时间及 nginx/systemd 配置, 发生变化则撤回本次发布。无需重载 nginx 或修改其它项目。
+现有下载主机使用 `tools/deploy-windows-release.sh RELEASE_DIR WEBSITE_DIR 2.3.3`: 先验证包的大小、哈希、版本和入口, 只替换 Windows 下载文件及官网 `index.html` / `site.js`, 清单最后发布。脚本保存回滚备份, 对比稳定 macOS 文件、全部运行服务的 PID/启动时间及 nginx/systemd 配置, 发生变化则撤回本次发布。无需重载 nginx 或修改其它项目。

@@ -17,6 +17,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check no-argument bootstrap language selection
         run: ./tests/windows-bootstrap-language.ps1
+      - name: Check terminal entry behavior
+        run: ./tests/windows-cli.ps1
       - name: Install and exercise the real Windows client
         run: ./tests/windows-native.ps1 -HomeDir '${{ runner.temp }}/enana-native-acceptance'
       - name: Retain failure diagnostics without account or server credentials
@@ -26,6 +28,7 @@ jobs:
           name: windows-acceptance-logs
           path: |
             ${{ runner.temp }}/enana-native-acceptance/api.log
+            ${{ runner.temp }}/enana-native-acceptance/worker.log
             ${{ runner.temp }}/enana-native-acceptance/check.log
             ${{ runner.temp }}/enana-native-acceptance/sing-box.log
           if-no-files-found: ignore

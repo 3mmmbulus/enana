@@ -2,8 +2,17 @@ param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
 . "$PSScriptRoot\common.ps1"
 $HomeDir = Split-Path $PSScriptRoot -Parent
 if (!$Arguments -or $Arguments.Count -eq 0) {
-    $settings=Read-EnanaSettings $HomeDir
-    Start-Process "http://127.0.0.1:$($settings.API_PORT)/enana/admin/"; exit 0
+    # Use the shared terminal console, including its stopped-service status
+    # and restart/diagnostics actions. A browser alone cannot recover a worker
+    # that failed to start. The console falls back to status when redirected.
+    $Arguments = @('console')
+}
+if ($Arguments[0] -eq 'doctor') {
+    & "$PSScriptRoot\diagnostics.ps1" -HomeDir $HomeDir
+    if (!(Test-Path -LiteralPath "$HomeDir\runtime\git\bin\bash.exe") -or !(Test-Path -LiteralPath "$HomeDir\runtime\git\usr\bin\cygpath.exe")) {
+        Write-Warning 'Private Bash runtime is incomplete. Run the official installer again to repair it.'
+        exit 1
+    }
 }
 Invoke-EnanaBash $HomeDir (Join-Path $HomeDir 'enana') $Arguments
 $plan=Join-Path $HomeDir '.windows-uninstall'

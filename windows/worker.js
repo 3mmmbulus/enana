@@ -3,7 +3,19 @@
 const fs=require('node:fs'),path=require('node:path'),net=require('node:net'),crypto=require('node:crypto');
 const {spawn,execFileSync}=require('node:child_process');
 const {atomic,settings,state,probe,requestSize}=require('./helper.js');
+function workerLog(home,event,error){
+  // A scheduled task has no visible console. Keep startup failures on disk,
+  // including failures before the HTTP/Bash bridge has opened api.log.
+  const file=path.join(home,'worker.log');
+  try{
+    if(fs.existsSync(file)&&fs.statSync(file).size>1048576)fs.renameSync(file,file+'.previous');
+    const raw=error?.name==='SyntaxError'?'Invalid JSON configuration; run enana doctor':error?.message;
+    const message=raw?.replace(/https?:\/\/[^\s]+/g,'[URL redacted]').replace(/(password|token|secret|authorization|cookie)([=: ]+)\S+/gi,'$1$2[redacted]').replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'[token redacted]').slice(0,1000);
+    fs.appendFileSync(file,JSON.stringify({at:new Date().toISOString(),event,...(error?{error:message,code:error.code||error.name}: {})})+'\n',{mode:0o600});
+  }catch(_){} // Preserve the original startup error when storage also fails.
+}
 async function serve(home) {
+  workerLog(home,'worker.start');
   const runtime=path.join(home,'runtime');fs.mkdirSync(runtime,{recursive:true});
   if(state(home))throw Error('enana dashboard is already running');
   const boot=crypto.randomUUID(), logfile=fs.openSync(path.join(home,'api.log'),'a');
@@ -14,9 +26,9 @@ async function serve(home) {
     PATH:[path.join(runtime,'node'),path.join(runtime,'git','usr','bin'),...['ucrt64','mingw64','mingw32','clangarm64'].map(d=>path.join(runtime,'git',d,'bin')),process.env.PATH].join(path.delimiter)};
   const api=posix(path.join(home,'lib','api.sh')),entry=posix(path.join(home,'enana'));
   execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(home,'windows','platform.ps1'),'-Action','cleanup-core','-HomeDir',home],{windowsHide:true,stdio:['ignore','ignore','inherit']});
-  let core=null,desired=settings(home).AUTOSTART==='1',closing=false,commandsBusy=false,active=0,restartAt=0;
+  let core=null,coreError=null,desired=settings(home).AUTOSTART==='1',closing=false,commandsBusy=false,active=0,restartAt=0;
   const tasks=new Map(),children=new Set(),sockets=new Set();
-  function publish(){atomic(path.join(runtime,'service.json'),JSON.stringify({pid:process.pid,corePid:core?.pid||null,boot,updated:Date.now()}));}
+  function publish(){atomic(path.join(runtime,'service.json'),JSON.stringify({pid:process.pid,corePid:core?.pid||null,coreError,boot,updated:Date.now()}));}
   function kill(child){if(!child||child.exitCode!==null)return;
     try{execFileSync('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'});}catch(_){child.kill();}}
   async function stopCore(){desired=false;const c=core;core=null;if(c){kill(c);for(let i=0;i<50&&c.exitCode===null;i++)await new Promise(r=>setTimeout(r,100));if(c.exitCode===null)throw Error('Could not stop the owned core');}publish();}
@@ -30,8 +42,12 @@ async function serve(home) {
     c.on('exit',()=>{if(core===c)core=null;restartAt=Date.now()+3000;publish();});
     desired=true;publish();
     const p=Number(settings(home).PORT);
-    for(let i=0;i<100;i++){if(c.exitCode!==null||!core)break;if(await probe('127.0.0.1',p,150)){publish();return;}await new Promise(r=>setTimeout(r,100));}
+    for(let i=0;i<100;i++){if(c.exitCode!==null||!core)break;if(await probe('127.0.0.1',p,150)){coreError=null;publish();workerLog(home,'core.ready');return;}await new Promise(r=>setTimeout(r,100));}
     await stopCore();throw Error('Proxy did not become ready; see sing-box.log');
+  }
+  function coreFailed(e){
+    coreError='Proxy startup failed; see worker.log and sing-box.log';
+    workerLog(home,'core.failed',e);publish();
   }
   function runPeriodic(cmd,file,limit){if(tasks.has(cmd)||closing)return;
     const fd=fs.openSync(path.join(home,file),'a');const c=spawn(bash,[entry,cmd,'--quiet'],{cwd:home,env,windowsHide:true,stdio:['ignore',fd,fd]});fs.closeSync(fd);tasks.set(cmd,c);
@@ -62,11 +78,11 @@ async function serve(home) {
   const commandDir=path.join(runtime,'commands');fs.mkdirSync(commandDir,{recursive:true});
   async function commands(){if(commandsBusy||closing)return;commandsBusy=true;
     try{for(const f of fs.readdirSync(commandDir).filter(f=>/^[a-f0-9-]{73}\.json$/.test(f))){
-      const file=path.join(commandDir,f);let r={ok:false,error:'Invalid command'};
-      try{const req=JSON.parse(fs.readFileSync(file,'utf8'));if(req.boot!==boot)throw Error('Stale worker command');
+      const file=path.join(commandDir,f);let r={ok:false,error:'Invalid command'},action='';
+      try{const req=JSON.parse(fs.readFileSync(file,'utf8'));if(req.boot!==boot)throw Error('Stale worker command');action=req.action;
         if(req.action==='stop')await stopCore();else if(req.action==='start')await startCore();else if(req.action==='restart'){await stopCore();await startCore();}
         else if(req.action==='shutdown'){await stopCore();setTimeout(shutdown,500);}else throw Error('Invalid command');r={ok:true};
-      }catch(e){r={ok:false,error:e.message};}
+      }catch(e){if(['start','restart'].includes(action))coreFailed(e);r={ok:false,error:e.message};}
       fs.unlinkSync(file);atomic(file.replace(/\.json$/,'.reply'),JSON.stringify(r));
     }}finally{commandsBusy=false;}
   }
@@ -81,7 +97,7 @@ async function serve(home) {
     }catch(e){if(e.code!=='ENOENT'&&e.code!=='EACCES')fs.writeSync(logfile,'worker.log='+e.message+'\n');}
   }
   const timer=setInterval(()=>{publish();mirrorRootLog();commands().catch(e=>fs.writeSync(logfile,'worker.command='+e.message+'\n'));
-    if(desired&&!core&&!commandsBusy&&Date.now()>restartAt&&settings(home).NETWORK_MODE!=='tun') {restartAt=Date.now()+30000;startCore().catch(e=>fs.writeSync(logfile,'worker.restart='+e.message+'\n'));}
+    if(desired&&!core&&!commandsBusy&&Date.now()>restartAt&&settings(home).NETWORK_MODE!=='tun') {restartAt=Date.now()+30000;startCore().catch(e=>{coreFailed(e);desired=true;});}
   },500);
   const tick=setInterval(()=>runPeriodic('tick','tick.log',55000),60000);
   const maintain=setInterval(()=>{const day=new Date().toISOString().slice(0,10);let old='';try{old=fs.readFileSync(path.join(runtime,'maintained-day'),'utf8');}catch(_){}
@@ -92,8 +108,15 @@ async function serve(home) {
     try{fs.unlinkSync(path.join(runtime,'service.json'));}catch(_){}fs.closeSync(logfile);process.exit(0);
   }
   process.once('SIGTERM',shutdown);process.once('SIGINT',shutdown);
-  if(desired&&settings(home).NETWORK_MODE!=='tun')await startCore();
+  // Keep the dashboard available for diagnostics and recovery even if the
+  // saved proxy configuration cannot start. A failed core must not terminate
+  // the HTTP supervisor or leave the browser at ERR_CONNECTION_REFUSED.
+  if(desired&&settings(home).NETWORK_MODE!=='tun'){
+    commandsBusy=true;
+    try{await startCore();}catch(e){coreFailed(e);desired=true;restartAt=Date.now()+30000;}
+    finally{commandsBusy=false;}
+  }
   runPeriodic('tick','tick.log',55000);
 }
-if(require.main===module){if(process.platform!=='win32')throw Error('The Windows worker must run on Windows');serve(path.resolve(process.argv[2])).catch(e=>{console.error(e.message);process.exit(1);});}
-module.exports={serve};
+if(require.main===module){if(process.platform!=='win32')throw Error('The Windows worker must run on Windows');const home=path.resolve(process.argv[2]);serve(home).catch(e=>{workerLog(home,'worker.fatal',e);console.error(e.message);process.exit(1);});}
+module.exports={serve,workerLog};

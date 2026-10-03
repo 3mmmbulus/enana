@@ -1,5 +1,18 @@
 # Changelog / 更新日志
 
+## 2.3.3 (2026-10-04)
+
+### 中文
+- 修复 Windows 无参数 `enana` 直接打开浏览器、无法通过终端查看或恢复服务的问题。现在复用终端控制台, 按 `1` 打开仪表盘; 重定向输入时输出状态。
+- 修复 Windows 代理核心启动失败会带着后台一起退出的问题。后台保留用于诊断和恢复, 核心失败记录明确错误并有限频率重试; 恢复成功清除错误状态。
+- 计划任务启动错误写入有大小上限、脱敏的 `worker.log`; `enana doctor` 增加原生 Windows 启动任务、退出码、运行时和日志检查, 不依赖后台正常运行。增加真实 Windows 核心故障恢复和 CLI 回归测试。
+- 以上修复不表示所有 Windows 11 ARM64 故障已定位: Parallels 来宾现场日志和交互验收仍需检查。
+
+### English
+- Restore the shared terminal console for bare `enana` on Windows, so a stopped dashboard can be diagnosed and restarted without first opening an unavailable browser page.
+- Keep the Windows dashboard alive when the proxy core fails to start. Record the failure, retry at a bounded rate, and clear the error after recovery.
+- Persist redacted, bounded scheduled-task startup logs and add native Windows diagnostics. Cover real failed-core recovery and CLI dispatch in regression tests. Windows 11 ARM64 on-device diagnosis remains separate from x64 CI.
+
 ## 2.3.2 (2026-10-03)
 
 ### 中文
