@@ -95,7 +95,7 @@ function Set-EnanaEnvironment([string]$HomeDir) {
     $env:ENANA_WINDOWS_SID = Get-EnanaSid
     $env:ENANA_WINDOWS_ARCH = if (($env:PROCESSOR_ARCHITEW6432,$env:PROCESSOR_ARCHITECTURE) -contains 'ARM64') {'arm64'} else {'amd64'}
     $git = Join-Path $HomeDir 'runtime\git'
-    $env:PATH = "$HomeDir\runtime\node;$git\usr\bin;$git\mingw64\bin;$git\mingw32\bin;$git\clangarm64\bin;$env:PATH"
+    $env:PATH = "$HomeDir\runtime\node;$git\usr\bin;$git\ucrt64\bin;$git\mingw64\bin;$git\mingw32\bin;$git\clangarm64\bin;$env:PATH"
     $bash = Join-Path $git 'bin\bash.exe'
     $env:ENANA_HOME = (& (Join-Path $git 'usr\bin\cygpath.exe') -u $HomeDir).Trim()
     return $bash

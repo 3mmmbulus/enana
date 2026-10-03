@@ -40,13 +40,19 @@ try {
         if(Test-Path -LiteralPath $dest){Remove-Item -LiteralPath $dest -Recurse -Force}
         if ($component -eq 'git') {
             Write-Host 'Extracting verified private PortableGit runtime...'
-            $p=Start-Process -FilePath $archive -ArgumentList ('-y -gm2 -o"{0}"' -f $dest) -PassThru
+            # Upstream's modified SFX ignores ordinary 7z -o. Its reviewed
+            # InstallPath is %%S\PortableGit: a private sibling of the archive.
+            # Let its post-install complete there, then move the whole runtime.
+            $extracted=Join-Path ([IO.Path]::GetDirectoryName($archive)) 'PortableGit'
+            Assert-NoReparse $extracted
+            if(Test-Path -LiteralPath $extracted){Remove-Item -LiteralPath $extracted -Recurse -Force}
+            $p=Start-Process -FilePath $archive -ArgumentList '-y -gm2' -PassThru
             $null=$p.Handle; $p.WaitForExit(); $p.Refresh()
-            if($p.ExitCode -ne 0 -or !(Test-Path -LiteralPath "$dest\bin\bash.exe")){
-                Write-Host "PortableGit exit=$($p.ExitCode), expected Bash exists=$(Test-Path -LiteralPath "$dest\bin\bash.exe")"
-                Get-ChildItem -LiteralPath "$HomeDir\runtime\cache" -Directory | Select-Object -ExpandProperty Name | Write-Host
+            if($p.ExitCode -ne 0 -or !(Test-Path -LiteralPath "$extracted\bin\bash.exe")){
+                Write-Host "PortableGit exit=$($p.ExitCode), expected Bash exists=$(Test-Path -LiteralPath "$extracted\bin\bash.exe")"
                 throw 'PortableGit extraction failed.'
             }
+            Move-Item -LiteralPath $extracted -Destination $dest
         } else { Expand-SafeZip $archive $dest }
         $changed=$true
         if($component -eq 'core') {
