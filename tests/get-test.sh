@@ -20,6 +20,8 @@ BASE=$((20000 + RANDOM % 20000))
 export PORT=$BASE UI_PORT=$((BASE+1)) API_PORT=$((BASE+2)) SPEED_PORT=$((BASE+3))
 DL_PORT=$((BASE+4)); GH_PORT=$((BASE+5)); N_PORT=$((BASE+6))
 export FAKE_STATE=$W/state TESTS_DIR=$HERE HOME=$W/home ENANA_HOME=$W/h ENANA_SHORTCUT_DIR=$W/shortcut ENANA_PLIST_DIR=$W/home/Library/LaunchAgents
+# Keep a real Enhanced installation on the host outside this installer fixture.
+export ENANA_TUN_ROOT="$W/tun-root" ENANA_TUN_PLIST_DIR="$W/tun-plists"
 export ENANA_SKIP_PROBE=1 ENANA_LANG=zh ENANA_CORE_LATEST=99.0.0 ENANA_ACCOUNT_URL=http://127.0.0.1:1
 export ENANA_RULE_SOURCE=http://127.0.0.1:$N_PORT/rules/{file} ENANA_IPLOOKUP_URL=http://127.0.0.1:$N_PORT/ip ENANA_IPLOOKUP_URL2=http://127.0.0.1:$N_PORT/trace
 export ENANA_INSTALL_BASE=http://127.0.0.1:$DL_PORT ENANA_UPDATE_BASE=http://127.0.0.1:$DL_PORT/dl ENANA_GH_REPO=test/enana ENANA_GH_BASE=http://127.0.0.1:$GH_PORT

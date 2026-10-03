@@ -118,6 +118,9 @@ pick_ports() {
   local spec name lbl cur new used=" $PORT $UI_PORT $API_PORT $SPEED_PORT "
   for spec in "PORT:$LABEL" "UI_PORT:$LABEL" "API_PORT:$LABEL_API" "SPEED_PORT:$LABEL"; do
     name=${spec%%:*}; lbl=${spec#*:}; cur=${!name}
+    # A root TUN core owns the same ports but has no GUI LaunchAgent.
+    # Treating it as foreign silently changes ports during an upgrade.
+    [ "$lbl" != "$LABEL" ] || ! os_service_loaded || continue
     launchctl print "$GUI/$lbl" >/dev/null 2>&1 && continue
     port_busy "$cur" || continue
     new=$(port_random "$used") || die "找不到空闲的本地端口" "请先关闭一些占用端口的程序, 再重新运行安装命令"
@@ -386,7 +389,8 @@ cmd_doctor() { _doctor_body 2>&1 | i18n_filter; }      # 整段输出逐行翻�
 _doctor_body() { # 诊断信息 (不含任何密码/订阅链接), 出问题时把输出发给开发者
   echo "== 环境 =="; echo "enana $VERSION · macOS $(sw_vers -productVersion) $(uname -m) · bash $BASH_VERSION · 安装目录 $H · 语言 $LANG_UI"
   echo "核心: $(core_version) $(core_ok && echo OK || echo 无法运行)"
-  echo "== 服务 =="; launchctl print "$GUI/$LABEL" 2>&1 | grep -E 'state|pid|last exit' | head -5 || echo "未加载"
+  echo "== 服务 =="; os_service_info
+  printf 'service.loaded=%s\nservice.running=%s\nservice.pid=%s\n' "$SVC_LOADED" "$SVC_RUNNING" "$SVC_PID"
   launchctl print "$GUI/$LABEL_API" >/dev/null 2>&1 && echo "辅助服务: 已加载" || echo "辅助服务: 未加载"
   launchctl print "$GUI/$LABEL_UPD" >/dev/null 2>&1 && echo "每日维护: 已加载" || echo "每日维护: 未加载"
   for _p in $PORT $UI_PORT $API_PORT $SPEED_PORT; do nc -z 127.0.0.1 "$_p" 2>/dev/null && echo "端口 $_p: 监听中" || echo "端口 $_p: 未监听"; done

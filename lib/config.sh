@@ -51,6 +51,12 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
     # Exclusions exist at the OS routing layer too; localhost OAuth callbacks
     # and private networks must never enter a proxy just because an App is PIN.
     tun_in=',{"type":"tun","tag":"tun-in","address":["172.19.0.1/30","fdfe:dcba:9876::1/126"],"mtu":1500,"auto_route":true,"route_exclude_address":["0.0.0.0/8","127.0.0.0/8","10.0.0.0/8","100.64.0.0/10","172.16.0.0/12","192.168.0.0/16","169.254.0.0/16","224.0.0.0/4","255.255.255.255/32","::/128","::1/128","fc00::/7","fe80::/10","ff00::/8"]}'
+    # macOS kernel TCP reinjection can lose IPv4 handshakes with private-route
+    # exclusions. Use userspace TCP/UDP on legacy cores; 1.15+ has its own stack
+    # and deprecates this field. Keep the LAN exclusions in both cases.
+    if [ "$SB_MAJOR" -eq 1 ] && [ "$SB_MINOR" -lt 15 ]; then
+      tun_in="${tun_in%\}},\"stack\":\"gvisor\"}"
+    fi
     tun_route=',"auto_detect_interface":true'
   fi
   T=$(mktemp -d)

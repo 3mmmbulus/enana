@@ -30,7 +30,7 @@ System Proxy 默认不变。Enhanced/TUN 是显式选择, 包含双栈捕获、D
 - `tests/vps-ui.test.js`: 真实向导任务流程, 验证任务编号返回前取消、取消请求失败时已完成 / 未完成任务的恢复, 避免再次卡住。
 - `tests/run.sh` / `tests/units.sh`: 原有隔离端到端与单元回归。
 
-真实管理员授权、macOS TUN 路由与 Gemini/Claude/ChatGPT 原生登录流程仍需在用户选择 Enhanced 后验收。Schema 校验与假 launchd 回归不能替代这一步。
+真实管理员授权、macOS TUN 路由与原生 App 登录需要用户选择 Enhanced 后分别验收。下文记录本机 Gemini 的实际登录结果; Claude/ChatGPT 登录、UDP/QUIC、断开 PIN 和切回轻量模式仍需各自验收。Schema 校验与假 launchd 回归不能替代真实流程。
 
 ## 本机验收步骤
 
@@ -59,6 +59,33 @@ System Proxy 默认不变。Enhanced/TUN 是显式选择, 包含双栈捕获、D
 
 ## 本次本机检查
 
-最近一次完整隔离回归: 788 通过, 0 失败 (包含 94 项单元测试及实际 Node 组件测试); 后续 SSH 取消 / 重试与向导完成竞态回归单独执行。真实核心配置校验、进程路由测试与中英文文案检查通过。本机仍使用 System Proxy。更新前后核对了账号/令牌、服务器/订阅、应用策略、settings.env 及 macOS 三种系统代理的值, 均保持一致。代码与旧配置保留在 `~/.enana/backups/codex-macos-tun-20261003-064947` 和 `~/.enana/backups/codex-2.2.0-20261003-132044`。
+最近一次完整隔离回归: 788 通过, 0 失败 (包含 94 项单元测试及实际 Node 组件测试); 后续 SSH 取消 / 重试与向导完成竞态回归单独执行。真实核心配置校验、进程路由测试与中英文文案检查通过。2.2.0 升级时本机仍使用 System Proxy; 之后按用户明确选择开启 Enhanced/TUN。升级前后核对了账号/令牌、服务器/订阅、应用策略、settings.env 及 macOS 三种系统代理的值, 均保持一致。代码与旧配置保留在 `~/.enana/backups/codex-macos-tun-20261003-064947` 和 `~/.enana/backups/codex-2.2.0-20261003-132044`。
 
 更新前的独立 socket 采样发现 ChatGPT 安装包内 `codex-cli/CodexCLI.app` 的子进程有 4 条公网连接未匹配到核心连接; 当时控制 API 可读 (32 条活跃连接), 两个地址族的公网路由为 en0。该证据属于采样时刻的包内子进程, 不能替代 Gemini token 请求或 ChatGPT 主界面登录流程的复现。
+
+## 2026-10-03 Gemini 真实登录与 2.2.1 修复
+
+14:19 的 System Proxy 登录重试再次在 authorization code 交换阶段超时。开启 Enhanced 后, 14:31:18.742 开始交换, 14:31:19.327 收到 refresh token, 14:31:19.506 收到 access token, 14:31:19.508 状态变为 signedIn。App 展示账号、历史对话和新对话界面, 完成了浏览器回调之后的原生登录流程。以上只记录状态与时间, 不包含 code、token 或账号内容。
+
+此时控制 API 确认 Gemini 主程序及 GeminiAppLauncher 的连接命中 `ovr-apppin`, 链路为 `PIN → Tokyo`; PIN 保留 Tokyo, Global 保留 AUTO。IPv4 与 IPv6 公网路由指向同一 utun, localhost 回调仍使用 lo0, 私网路由使用物理网卡。短暂的 token 请求没有保留控制 API 连接快照, 因此不能用后续活跃连接声称逐包记录了该请求; token 成功由 App 自身日志和实际界面确认。
+
+验收发现两个此前假服务测试未覆盖的问题:
+
+- `decode(<>)` 的列表上下文会把随后用于路径替换的 home/root 参数当作文件名读取, 耗尽 `@ARGV`。root 核心因此继续使用用户目录的缓存、日志和规则路径; 日志句柄随用户日志迁移后仍写入旧文件, 诊断导出缺失新的 TUN 连接。改为显式 open 配置文件并标量读取, 测试实际转换后的 log/cache/rules 路径以及出口保持。
+- `disable` 加 `kill` 没有卸载已加载的 KeepAlive LaunchAgent, 旧核心仍反复启动并争抢缓存。改为 bootout 原任务, 保存其既有 plist 路径以在失败时重新 bootstrap 原用户服务; 固定 root daemon 的程序路径和权限策略不变。
+
+升级前检查端口只看 GUI 服务, 把 root 核心监听当成外部程序并重新分配端口。现在识别实际后台服务; 回归模拟仅有 root 核心和本机辅助服务的状态, 要求四个现有端口全部保留。doctor 也改为报告实际工作的后台。快照指纹包含转换和 root helper 实现, 使配置内容相同时的实现修复也能部署。
+
+完整回归启动时曾受本机已安装 TUN plist 影响, 在隔离夹具中误进入管理员停止分支, 使首装夹具失败。测试现在把非特权 TUN 路径查询限定到临时目录; privileged helper 独立使用固定 Library 路径, 不读取这些测试环境覆盖。该失败不能计入通过的测试结果, 修复后重新执行完整回归。
+
+实际更新辅助脚本时, macOS 管理员授权成功后仍拒绝后台进程读取 Desktop 中的仓库脚本 (`Operation not permitted`, 126)。helper 现在和已经过审查的核心配置一起放入安装临时目录, 在原生授权后执行; 它不会作为 launchd 程序安装。新增测试执行真实 enhanced_start 编排并验证使用的是临时 helper 副本。
+
+本机 1.14.2 在默认内核 TCP 实现下还出现了非显式代理 IPv4 请求握手超时, 尽管 route 检查显示 utun。2.2.1 在旧版核心使用 gVisor TCP/UDP, 保留全部私网排除; 1.15+ 按 [上游 TUN 文档](https://sing-box.sagernet.org/configuration/inbound/tun/) 使用自有栈, 不生成已弃用的 stack 选项。更新后 IPv4 `--noproxy '*'` 的 token 端点 HEAD 请求在约 0.3 秒完成 TLS 并收到 HTTP 404 (HEAD 不能交换 token, 这里仅验证连通性), 核心日志同时记录 TUN 入站。这修复的是网络层捕获, 没有添加 Gemini 专用域名规则。
+
+2.2.1 本机更新完成, root 服务运行, 旧用户服务未加载, 四个端口保留。IPv4/IPv6 公网仍为 utun, localhost 为 lo0, 私网为 en0。账号、令牌、服务器、订阅、应用覆盖以及 settings.env 键值与更新前完全一致, PIN 为 Tokyo、Global 为 AUTO。Gemini 保持已登录; 其后续接口连接继续使用 Tokyo。
+
+完整回归还暴露了原有 DNS 测速夹具对 AUTO 先前探测结果的依赖: AUTO 的公网探测地址在隔离环境不可用, 可能选中故意不可用的测试节点, 使全部海外 DNS 测速为 null。该测试现在明确选定已知可用的本机 Local-Hop, 通过真实 Global detour 测量, 结束后还原选择器; 不修改 DNS 产品逻辑, 不放宽原断言。
+
+最终完整隔离回归: 790 通过, 0 失败 (含 94 项单元及实际 Node 组件回调回归)。新增 snapshot / helper 临时目录 / 端口保留 / 指纹目录无关性与诊断探测标签测试另行通过。IPv6 强制端点探测也进入 TUN 并使用配置的 Global 出口, 但此次该端点 TLS 失败; 不把路由归属等同于每个出口都可访问任意 IPv6 端点。Gemini 真实登录和持续接口访问是单独的验收结果。
+
+实际发布的 2.2.1 安装包另通过 `tests/get-test.sh <发布目录>`: 55 通过, 0 失败, 覆盖首装、哈希不符拦截、下载线路回退、升级 / self-update 和用户数据保留。安装夹具也使用临时 TUN 路径, 不读取本机已加载服务的 plist。

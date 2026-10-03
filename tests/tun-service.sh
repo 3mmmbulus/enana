@@ -5,6 +5,7 @@ set -eu
 R=$(cd "$(dirname "$0")/.." && pwd -P)
 W=$(mktemp -d /tmp/enana-root-test.XXXXXX); trap 'rm -rf "$W"' EXIT
 export FIXTURE="$W"; mkdir -p "$W/bin" "$W/stage/rules"
+touch "$W/gui.plist"
 python3 - "$R" "$W" <<'PY'
 import sys
 r,w=sys.argv[1:]; s=open(r+'/lib/enhanced-root.sh').read()
@@ -21,7 +22,7 @@ cat > "$W/bin/launchctl" <<'MOCK'
 #!/bin/sh
 echo "$*" >> "$FIXTURE/calls"
 case $1 in
- print) echo 'pid = 100'; exit 0 ;;
+ print) echo 'pid = 100'; echo "path = $FIXTURE/gui.plist"; exit 0 ;;
  bootstrap) if [ -f "$FIXTURE/fail-bootstrap" ]; then rm "$FIXTURE/fail-bootstrap"; exit 1; fi ;;
 esac
 exit 0
@@ -36,11 +37,14 @@ printf '{"snapshot":"first"}\n' > "$W/stage/config.json"
 printf '{}\n' > "$W/stage/rules/one.json"
 bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1
 cmp "$W/stage/config.json" "$W/runtime/config.json"
+grep -q '^asuser 501 launchctl bootout gui/501/com.enana.proxy$' "$W/calls"
+! grep -q '^asuser 501 launchctl kill ' "$W/calls"
 printf '{"snapshot":"second"}\n' > "$W/stage/config.json"
 touch "$W/fail-bootstrap"
 if bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1; then echo 'FAIL: bootstrap failure succeeded'; exit 1; fi
 grep -q first "$W/runtime/config.json"
 grep -q 'asuser 501 launchctl enable gui/501/com.enana.proxy' "$W/calls"
+grep -q "asuser 501 launchctl bootstrap gui/501 $W/gui.plist" "$W/calls"
 [ -f "$W/daemon.plist" ]
 # Reject staged symlinks before replacing any running service.
 ln -s /tmp "$W/stage/link"

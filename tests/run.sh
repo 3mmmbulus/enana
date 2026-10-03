@@ -16,6 +16,7 @@ HOP_PORT=$((BASE+4)); A_PORT=$((BASE+5)); N_PORT=$((BASE+6)); DOH_PORT=$((BASE+7
 VER=$(cat "$REPO/VERSION" 2>/dev/null || echo 2.1.0)
 export FAKE_STATE=$W/state TESTS_DIR=$HERE HOME=$W/home ENANA_HOME=$W/h ENANA_SHORTCUT_DIR=$W/shortcut ENANA_PLIST_DIR=$W/home/Library/LaunchAgents
 export FAKE_PORT=$BASE PORT=$BASE UI_PORT=$((BASE+1)) API_PORT=$((BASE+2)) SPEED_PORT=$((BASE+3)) ENANA_YES=1 ENANA_SKIP_PROBE=1
+export ENANA_TUN_ROOT="$W/tun-root" ENANA_TUN_PLIST_DIR="$W/tun-plists"
 export ENANA_ACCOUNT_URL=http://127.0.0.1:$A_PORT ENANA_SPEEDTEST_CONF=$W/speedtest.conf ENANA_IPLOOKUP_URL=http://127.0.0.1:$N_PORT/ip ENANA_IPLOOKUP_URL2=http://127.0.0.1:$N_PORT/trace
 export ENANA_CLOUD_PUBKEY=$W/cpub.pem ENANA_UPDATE_BASE=http://127.0.0.1:$N_PORT/dl ENANA_CORE_LATEST=99.0.0 ENANA_LANG=zh ENANA_RULE_SOURCE=http://127.0.0.1:$N_PORT/rules/{file} ENANA_DNS_PRESETS=$W/dns-presets.conf
 export ENANA_MOCK_CTL=$W/vpsctl ENANA_VERIFY_IP_URL=http://127.0.0.1:$N_PORT/ipraw ENANA_SSH=$HERE/fakebin/fakessh FAKE_SSH_PW='sshpw-Test-123'
@@ -1178,8 +1179,14 @@ J=$(api -X POST "$A/api/dns/hosts/reset" | jp 'print(d["job"])'); [ "$(job_wait 
 api "$A/api/dns" | chk "清空后 hosts 为空, 解析流程回到原样" 'assert d["hosts"]==[] and d["pipeline"][0]["id"]!="hosts"'
 grep -q 'override_address' "$W/h/config.json" && tfail "清空后核心配置里没有 override_address" || tpass "清空后核心配置里没有 override_address"
 echo "-- DNS 服务器测速 (本机模拟的 DNS: UDP + DoH + DoT)"
+# AUTO's public connectivity URL is intentionally unreachable in the isolated
+# fixture. Select its known-working local hop instead of relying on incidental
+# URLTest history from prior sections; still exercise the real Global detour.
+dns_bench_global_before=$(cl "$U/proxies/Global" | jp 'print(d["now"])')
+cl -X PUT "$U/proxies/Global" -d '{"name":"Local-Hop"}' >/dev/null
 J=$(api -X POST "$A/api/dns/bench" | jp 'print(d["job"])'); [ "$(job_wait "$J")" = done ] && tpass "DNS 测速任务完成" || tfail "DNS 测速任务完成"
 api "$A/api/job?id=$J" | chk "测速结果: 能通的有毫秒数, 不通的是 null, 没有 system / custom" 'r=d["result"]; c={x["id"]:x["ms"] for x in r["cn"]}; g={x["id"]:x["ms"] for x in r["global"]}; assert isinstance(c["alidns"],int) and isinstance(c["alidns-dot"],int) and isinstance(c["114"],int) and c["deaddns"] is None and isinstance(g["cloudflare"],int) and g["quad9"] is None and "system" not in c and "custom" not in c and r["via"]'
+cl -X PUT "$U/proxies/Global" -d "{\"name\":\"$dns_bench_global_before\"}" >/dev/null
 
 echo "== 10. 检查更新 (本机模拟的版本源)"
 rm -f "$W/h/update.json"

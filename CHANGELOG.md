@@ -1,5 +1,25 @@
 # Changelog / 更新日志
 
+## 2.2.1 (2026-10-03)
+
+### 中文
+- 修复 Enhanced/TUN 配置快照的路径转换: 显式读取配置文件, 防止 Perl 的列表上下文耗尽路径参数, 使 root 核心使用独立的缓存、日志与规则快照。
+- 切换到 TUN 时完整卸载旧用户态 KeepAlive 服务, 防止被 launchd 反复拉起; 启动失败时重新注册原用户服务。实现文件变更也会触发快照更新。
+- 增强模式升级正确识别 root 核心占用的端口, 保留现有端口和系统代理配置; doctor 显示实际工作的核心服务。
+- 旧版核心使用 gVisor TCP/UDP 修复 macOS 内核 TCP 接管的 IPv4 握手失败; 1.15+ 使用上游自有栈。辅助安装脚本放在临时目录, 避免后台进程无法读取 Desktop / Downloads 的 macOS 权限限制。
+- 诊断将增强模式下的非显式代理探测标为 tun, 防止误当作物理直连。
+- 补充真实配置转换、KeepAlive 卸载 / 失败恢复和 TUN 升级端口保留回归。隔离测试不再读取本机的真实 TUN plist。
+- 本机 Gemini 已完成增强接管后的 OAuth token 交换并进入已登录界面; 观察到主程序与辅助程序使用 PIN Tokyo。其它原生应用登录与网络场景仍需各自验收。
+
+### English
+- Fix privileged Enhanced/TUN snapshot path rewriting by explicitly reading the config file; Perl list context previously consumed the path arguments, leaving the root core on user cache/log/rule paths.
+- Unload the old user KeepAlive job when switching to TUN and re-register it on failed startup, preventing launchd respawns. Changes to snapshot implementation now trigger redeployment.
+- Preserve ports owned by the root TUN core during upgrades and retain System Proxy settings; doctor reports the active backend.
+- Use gVisor TCP/UDP on legacy cores to resolve macOS IPv4 handshake failures; use the upstream native stack on 1.15+. Stage the installation helper in a temporary directory to avoid protected Desktop / Downloads access failures.
+- Label no-explicit-proxy probes as tun during enhanced capture, avoiding false physical-direct interpretations.
+- Add actual snapshot conversion, KeepAlive unload/recovery and TUN upgrade port regressions. Isolated tests no longer inspect the host's real TUN plist.
+- Verify Gemini OAuth token exchange and signed-in UI on this Mac after enhanced capture; observed main/helper connections use PIN Tokyo. Other native-app logins and network scenarios require separate acceptance checks.
+
 ## 2.2.0 (2026-10-03)
 
 ### 中文

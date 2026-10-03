@@ -357,8 +357,9 @@ _b_probe() { # <名称> <经过 proxy|direct> <地址> [curl 参数…]
   if [ "$rc" = 0 ]; then printf '%s\t%s\t%s\t%s\n' "$n" "$via" "$url" "$(printf '%s' "$out" | awk -F'\t' '{ printf "%s\t%d\t%d\t%s\tok", $1, $2*1000, $3*1000, $4 }')"
   else printf '%s\t%s\t%s\t000\t0\t0\t\tcurl-exit-%s\n' "$n" "$via" "$url" "$rc"; fi
 }
-_b_probes() { # 实时自检 (最多 8 秒): 同一批网站分别 经过代理 / 直连 访问, 并对照系统 DNS 和核心 DNS 的解析结果
-  local d i n; d=$(mktemp -d); printf 'probe\tvia\turl\thttp\tconnect_ms\ttotal_ms\tremote_ip\tnote\n'
+_b_probes() { # --noproxy bypasses an explicit proxy, but never bypasses TUN.
+  local d i n native=direct; [ "${NETWORK_MODE:-system}" != tun ] || native=tun
+  d=$(mktemp -d); printf 'probe\tvia\turl\thttp\tconnect_ms\ttotal_ms\tremote_ip\tnote\n'
   if [ -n "${ENANA_SKIP_PROBE:-}" ]; then printf 'skipped\t-\t-\t000\t0\t0\t\tENANA_SKIP_PROBE\n'; rm -rf "$d"; return 0; fi        # 离线 / 测试: 不联网
   if nc -z 127.0.0.1 "$PORT" 2>/dev/null; then
     _b_probe google_204 proxy http://www.gstatic.com/generate_204 -x "http://127.0.0.1:$PORT" > "$d/1" &
@@ -366,9 +367,9 @@ _b_probes() { # 实时自检 (最多 8 秒): 同一批网站分别 经过代理 
     _b_probe github proxy https://github.com/ -x "http://127.0.0.1:$PORT" > "$d/3" &
     _b_probe baidu proxy https://www.baidu.com/ -x "http://127.0.0.1:$PORT" > "$d/4" &
   fi
-  _b_probe google_204 direct http://www.gstatic.com/generate_204 --noproxy '*' > "$d/5" &
-  _b_probe google_page direct https://www.google.com/ --noproxy '*' > "$d/6" &
-  _b_probe baidu direct https://www.baidu.com/ --noproxy '*' > "$d/7" &
+  _b_probe google_204 "$native" http://www.gstatic.com/generate_204 --noproxy '*' > "$d/5" &
+  _b_probe google_page "$native" https://www.google.com/ --noproxy '*' > "$d/6" &
+  _b_probe baidu "$native" https://www.baidu.com/ --noproxy '*' > "$d/7" &
   wait
   for i in 1 2 3 4 5 6 7; do [ -f "$d/$i" ] && cat "$d/$i"; done
   printf 'dns_system\tsystem\twww.google.com\t-\t-\t-\t%s\t\n' "$(dscacheutil -q host -a name www.google.com 2>/dev/null | awk '/^(ip_address|ipv6_address):/ {print $2}' | head -4 | paste -sd' ' -)"

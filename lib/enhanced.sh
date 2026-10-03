@@ -4,8 +4,10 @@
 enhanced_paths() {
   TUN_UID=$(id -u)
   TUN_LABEL="$LABEL.tun.$TUN_UID"
-  TUN_ROOT="/Library/Application Support/enana-$TUN_UID"
-  TUN_PLIST="/Library/LaunchDaemons/$TUN_LABEL.plist"
+  # Fixture overrides apply only to unprivileged lookups. The root helper
+  # independently uses its fixed Library paths and never trusts these values.
+  TUN_ROOT="${ENANA_TUN_ROOT:-/Library/Application Support/enana-$TUN_UID}"
+  TUN_PLIST="${ENANA_TUN_PLIST_DIR:-/Library/LaunchDaemons}/$TUN_LABEL.plist"
 }
 enhanced_configured() { grep -q '"type":"tun"' "$H/config.json" 2>/dev/null; }
 enhanced_loaded() { enhanced_paths; launchctl print "system/$TUN_LABEL" >/dev/null 2>&1; }
@@ -24,7 +26,23 @@ enhanced_admin() {
   fi
 }
 enhanced_fingerprint() {
-  { printf 'autostart=%s\n' "${AUTOSTART:-1}"; shasum -a 256 "$SB" "$H/config.json"; find "$H/rules" "$H/certs" -type f -exec shasum -a 256 {} \; 2>/dev/null; } | LC_ALL=C sort | shasum -a 256 | awk '{print $1}'
+  {
+    printf 'autostart=%s\n' "${AUTOSTART:-1}"; shasum -a 256 "$SB" "$H/config.json"
+    # Source checkouts and the installed copy must fingerprint identically.
+    local impl
+    for impl in enhanced.sh enhanced-root.sh; do printf 'implementation:%s %s\n' "$impl" "$(shasum -a 256 "$LIB/$impl" | awk '{print $1}')"; done
+    find "$H/rules" "$H/certs" -type f -exec shasum -a 256 {} \; 2>/dev/null
+  } | LC_ALL=C sort | shasum -a 256 | awk '{print $1}'
+}
+enhanced_stage_config() {
+  # Explicitly open the config: decode(<>) evaluates the diamond in list
+  # context and consumes the home/root arguments as additional filenames.
+  perl -MJSON::PP -e '
+    my ($file,$h,$r)=@ARGV; open my $fh,"<",$file or die "$file: $!";
+    local $/; my $j=JSON::PP->new->utf8->decode(scalar <$fh>);
+    sub walk { my ($x)=@_; if(ref $x eq "HASH") { for my $k(keys %$x) { if(($k eq "path" || $k eq "output" || $k =~ /_path$/) && !ref($x->{$k}) && index($x->{$k}, "$h/")==0) { $x->{$k}=$r.substr($x->{$k},length($h)); } else { walk($x->{$k}); } } } elsif(ref $x eq "ARRAY") { walk($_) for @$x; } }
+    walk($j); print JSON::PP->new->utf8->encode($j);
+  ' "$1" "$2" "$3"
 }
 enhanced_start() {
   local stage rc name choice
@@ -35,14 +53,13 @@ enhanced_start() {
   cp "$SB" "$stage/sing-box" && cp -R "$H/rules" "$stage/rules" || { rm -rf "$stage"; return 1; }
   [ ! -d "$H/certs" ] || cp -R "$H/certs" "$stage/certs"
   # Rewrite only local filesystem paths, never server names or credentials.
-  perl -MJSON::PP -e '
-    local $/; my $j=JSON::PP->new->utf8->decode(<>); my ($h,$r)=@ARGV;
-    sub walk { my ($x)=@_; if(ref $x eq "HASH") { for my $k(keys %$x) { if(($k eq "path" || $k eq "output" || $k =~ /_path$/) && !ref($x->{$k}) && index($x->{$k}, "$h/")==0) { $x->{$k}=$r.substr($x->{$k},length($h)); } else { walk($x->{$k}); } } } elsif(ref $x eq "ARRAY") { walk($_) for @$x; } }
-    walk($j); print JSON::PP->new->utf8->encode($j);
-  ' "$H/config.json" "$H" "$TUN_ROOT" > "$stage/config.json" || { rm -rf "$stage"; return 1; }
+  enhanced_stage_config "$H/config.json" "$H" "$TUN_ROOT" > "$stage/config.json" || { rm -rf "$stage"; return 1; }
+  # The privileged AppleScript process cannot read TCC-protected Desktop or
+  # Downloads checkouts. Stage the reviewed helper beside its input snapshot.
+  cp "$LIB/enhanced-root.sh" "$stage/enhanced-root.sh" || { rm -rf "$stage"; return 1; }
   # The root helper never sources settings.env and never installs user scripts
   # as launchd programs. The executable and configuration are root-owned copies.
-  enhanced_admin /bin/bash "$LIB/enhanced-root.sh" install "$TUN_UID" "$stage" "$LABEL" "${AUTOSTART:-1}" > "$H/enhanced-check.log" 2>&1; rc=$?
+  enhanced_admin /bin/bash "$stage/enhanced-root.sh" install "$TUN_UID" "$stage" "$LABEL" "${AUTOSTART:-1}" > "$H/enhanced-check.log" 2>&1; rc=$?
   if [ "$rc" != 0 ]; then rm -rf "$stage"; cat "$H/enhanced-check.log" >> "$H/check.log"; return "$rc"; fi
   logs_rotate
   [ ! -f "$H/sing-box.log" ] || [ -L "$H/sing-box.log" ] || mv "$H/sing-box.log" "$H/sing-box.system.log"

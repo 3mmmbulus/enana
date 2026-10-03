@@ -34,6 +34,7 @@ assert not any(i['type']=='tun' for i in s['inbounds'])
 i=next(i for i in t['inbounds'] if i['type']=='tun')
 assert any(a.get('clash_mode')=='Direct' and a.get('server')=='dns-cn' for a in t['dns']['rules'])
 assert i['auto_route'] and t['route']['auto_detect_interface'] and t['route']['find_process']
+assert i['stack']=='gvisor'
 for ip in ['127.0.0.1','127.1.2.3','10.0.1.1','100.100.100.100','172.20.1.1','192.168.1.1','169.254.1.1','::1','fd12::1','fe80::1']:
  assert any(ipaddress.ip_address(ip) in ipaddress.ip_network(c) for c in i['route_exclude_address'])
 for ip in ['8.8.8.8','2606:4700:4700::1111']:
@@ -59,6 +60,61 @@ if [ -n "${SINGBOX:-}" ]; then
  "$SINGBOX" check -c "$W/tun.json"
  echo 'PASS: real sing-box validates both generated configurations'
 fi
+# Run the actual snapshot transform with directory arguments. A list-context
+# diamond used to consume these arguments, leaving root on user cache/logs.
+enhanced_stage_config "$W/tun.json" "$H" "$W/root with spaces" > "$W/snapshot.json"
+python3 - "$W" "$H" <<'PY'
+import json,sys
+w,h=sys.argv[1:]; before=json.load(open(w+'/tun.json')); after=json.load(open(w+'/snapshot.json')); root=w+'/root with spaces'
+assert after['log']['output']==root+'/sing-box.log'
+assert after['experimental']['cache_file']['path']==root+'/cache.db'
+assert after['outbounds']==before['outbounds']
+for a,b in zip(before['route'].get('rule_set',[]),after['route'].get('rule_set',[])):
+ if 'path' in a: assert b['path']==root+a['path'][len(h):]
+print('PASS: actual privileged snapshot isolates log/cache/rule paths and preserves outbounds')
+PY
+# Exercise the installer port decision with a root core and only a helper GUI
+# job. A TUN upgrade must keep the ports already used by System Proxy/UI.
+(
+  eval "$(sed -n '/^pick_ports() {/,/^}/p' "$REPO/install.sh")"
+  PORT=7890; UI_PORT=9090; API_PORT=9091; SPEED_PORT=7892
+  os_service_loaded() { return 0; }
+  launchctl() { [ "$1" = print ] && [ "$2" = "$GUI/$LABEL_API" ]; }
+  port_busy() { return 0; }
+  port_random() { echo 49999; }
+  settings_set() { echo 'FAIL: root core ports were reassigned'; exit 1; }
+  set_ui_url() { :; }
+  pick_ports
+  [ "$PORT:$UI_PORT:$API_PORT:$SPEED_PORT" = 7890:9090:9091:7892 ]
+)
+echo 'PASS: installer preserves ports owned by the root TUN service'
+(
+  SB=${SINGBOX:-/bin/true}
+  cp "$W/tun.json" "$H/config.json"
+  enhanced_paths() { TUN_UID=501; TUN_ROOT="$W/staged-root"; mkdir -p "$TUN_ROOT"; }
+  enhanced_supported() { return 0; }
+  clash() { printf '{"proxies":{}}'; }
+  logs_rotate() { :; }
+  enhanced_admin() {
+    [ "$2" = "$5/enhanced-root.sh" ]
+    cmp "$LIB/enhanced-root.sh" "$2"
+    : > "$TUN_ROOT/sing-box.log"
+  }
+  enhanced_start
+  [ -L "$H/sing-box.log" ]
+  rm "$H/sing-box.log"
+)
+echo 'PASS: actual launch stages helper outside protected source directories'
+(
+  unset ENANA_SKIP_PROBE
+  nc() { return 1; }; dscacheutil() { :; }; clash() { printf '{"Answer":[]}'; }
+  _b_probe() { printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
+  NETWORK_MODE=tun; _b_probes > "$W/probes-tun"
+  NETWORK_MODE=system; _b_probes > "$W/probes-system"
+  [ "$(awk -F'\t' '$2=="tun" {n++} END {print n+0}' "$W/probes-tun")" = 3 ]
+  [ "$(awk -F'\t' '$2=="direct" {n++} END {print n+0}' "$W/probes-system")" = 3 ]
+)
+echo 'PASS: no-explicit-proxy diagnostics distinguish TUN capture from direct access'
 # Self egress readiness must belong to OUR interface, not another VPN.
 cp "$W/tun.json" "$H/config.json"
 enhanced_loaded() { return 0; }
@@ -108,6 +164,11 @@ echo 'PASS: administrator cancellation restores config without a second restart/
 # Rule-only edits change the snapshot even if the main JSON stays identical.
 SB=${SINGBOX:-/bin/true}
 before=$(enhanced_fingerprint)
+saved_lib=$LIB; mkdir "$W/changed-lib"
+cp "$LIB/enhanced.sh" "$LIB/enhanced-root.sh" "$W/changed-lib/"
+LIB="$W/changed-lib"; [ "$before" = "$(enhanced_fingerprint)" ]
+printf '\n# snapshot implementation update\n' >> "$LIB/enhanced.sh"
+[ "$before" != "$(enhanced_fingerprint)" ]; LIB=$saved_lib
 printf 'app|Google Chrome|auto|ack\napp|Gemini|pin|ack\n' > "$H/overrides.tsv"
 ovr_sync || exit 1
 [ "$before" != "$(enhanced_fingerprint)" ]

@@ -29,9 +29,13 @@ fi
 mkdir -p "$root"; chown root:wheel "$root"; chmod 711 "$root"
 work=$(mktemp -d "$root/.prepare.XXXXXX")
 backup=$(mktemp -d "$root/.rollback.XXXXXX")
-changed=0; committed=0; had_root=0; had_gui=0
+changed=0; committed=0; had_root=0; had_gui=0; gui_plist=''
 launchctl print "system/$label" >/dev/null 2>&1 && had_root=1
-launchctl print "gui/$uid/$agent" >/dev/null 2>&1 && had_gui=1
+if gui_info=$(launchctl print "gui/$uid/$agent" 2>/dev/null); then
+  had_gui=1
+  gui_plist=$(printf '%s\n' "$gui_info" | sed -n 's/^[[:space:]]*path = //p' | head -1)
+  [ -n "$gui_plist" ] && [ -f "$gui_plist" ] || { echo 'Cannot save existing user service for rollback'; exit 2; }
+fi
 for name in sing-box config.json rules certs; do
   [ ! -e "$root/$name" ] || cp -R "$root/$name" "$backup/$name"
 done
@@ -55,6 +59,7 @@ rollback() {
     fi
     if [ "$had_gui" = 1 ]; then
       launchctl asuser "$uid" launchctl enable "gui/$uid/$agent" || true
+      launchctl asuser "$uid" launchctl bootstrap "gui/$uid" "$gui_plist" || true
       launchctl asuser "$uid" launchctl kickstart "gui/$uid/$agent" || true
     fi
   fi
@@ -76,7 +81,11 @@ chown "$uid" "$root/sing-box.log"; chmod 600 "$root/sing-box.log"
 changed=1
 launchctl bootout "system/$label" 2>/dev/null || true
 launchctl asuser "$uid" launchctl disable "gui/$uid/$agent" 2>/dev/null || true
-launchctl asuser "$uid" launchctl kill SIGTERM "gui/$uid/$agent" 2>/dev/null || true
+# Disabling a loaded KeepAlive job does not unload it; killing its process
+# allows launchd to respawn it against the new TUN config. Remove the job.
+if [ "$had_gui" = 1 ]; then
+  launchctl asuser "$uid" launchctl bootout "gui/$uid/$agent"
+fi
 # Preserve the root-owned cache (selected PIN/Global nodes) across restarts.
 for name in sing-box config.json rules certs; do
   [ -e "$work/$name" ] || continue
