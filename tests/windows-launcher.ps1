@@ -18,10 +18,12 @@ try {
 using System; using System.IO; using System.Runtime.InteropServices; using System.Threading;
 public static class EnanaLauncherProbe {
  [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
- [DllImport("kernel32.dll",SetLastError=true)] static extern uint GetConsoleProcessList(uint[] ids,uint length);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern uint GetConsoleProcessList([Out] uint[] ids,uint length);
+ [DllImport("kernel32.dll")] static extern uint GetCurrentProcessId();
  public static int Main(string[] args) {
-   string home=args[1]; uint count=GetConsoleProcessList(new uint[64],64);
-   File.WriteAllText(Path.Combine(home,"probe.json"),"{\"consoleWindow\":"+GetConsoleWindow().ToInt64()+",\"consoleProcesses\":"+count+"}");
+   string home=args[1]; uint[] ids=new uint[64]; uint count=GetConsoleProcessList(ids,64); bool shared=count>64;
+   for(int i=0;i<Math.Min(count,64);i++)if(ids[i]!=GetCurrentProcessId())shared=true;
+   File.WriteAllText(Path.Combine(home,"probe.json"),"{\"consoleWindow\":"+GetConsoleWindow().ToInt64()+",\"consoleProcesses\":"+count+",\"sharedConsole\":"+shared.ToString().ToLowerInvariant()+"}");
    // Fill both pipes beyond their buffer sizes: the GUI launcher must drain
    // them without blocking and without copying raw output into diagnostics.
    Console.Out.Write(new string('x',131072)); Console.Error.Write(new string('y',131072));
@@ -34,8 +36,8 @@ public static class EnanaLauncherProbe {
     $null=$launcher.Handle
     for($i=0;$i -lt 100 -and !(Test-Path -LiteralPath "$testHome\probe.json");$i++){Start-Sleep -Milliseconds 100}
     $probe=Read-JsonFile "$testHome\probe.json"
-    Write-Host "Native probe: consoleWindow=$($probe.consoleWindow), consoleProcesses=$($probe.consoleProcesses)"
-    Assert ($probe.consoleWindow -eq 0 -and $probe.consoleProcesses -eq 0) 'real console child has neither a console window nor an attached console'
+    Write-Host "Native probe: consoleWindow=$($probe.consoleWindow), consoleProcesses=$($probe.consoleProcesses), sharedConsole=$($probe.sharedConsole)"
+    Assert ($probe.consoleWindow -eq 0 -and !$probe.sharedConsole) 'real console child has no console window and does not share a caller console'
     Assert (!$launcher.HasExited) 'launcher stays alive while its child runs'
     Write-Utf8 "$testHome\stop" '37'
     Assert ($launcher.WaitForExit(15000)) 'launcher waits for pipe drain and exits after its child'
