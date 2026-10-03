@@ -147,6 +147,7 @@
     ok = await ui.confirmDialog({ title: t('set.asite.clearTitle'), message: t('set.asite.clearMsg', { n: n }), detail: [t('set.asite.clearD')], confirmText: t('set.asite.clearGo'), danger: true });
     if (!ok) return;
     r = await TP.helper('POST', '/api/sites/auto/clear');
+    if (r.job) await TP.jobs.runInDock(t('set.asite.clear'), function () { return Promise.resolve(r); });
     ui.toast(t('set.asite.cleared', { n: (r && +r.removed) || n }), 'ok');
     await TP.loadState(); renderAutoSites();
   }
@@ -164,11 +165,23 @@
       h('span', { class: 'kv-v' }, h('div', null, el.masterTxt), h('div', { class: 'muted sm' }, L('set.proxy.masterNote'))), h('label', { class: 'sw' }, el.master, h('span', { class: 'sw-ui' }))));
     c.appendChild(h('div', { class: 'kv-row set-row set-pm' }, h('span', { class: 'kv-k' }, L('set.proxy.mode'), hl('settings.mode')), h('span', { class: 'kv-v' }, el.pm.el)));
     c.appendChild(h('div', { class: 'muted sm set-note' }, L('set.proxy.modeNote')));
+    el.networkMode = h('select', { class: 'sel', 'aria-label': L('set.network.title') }, TP.opt('system', t('set.network.system')), TP.opt('tun', t('set.network.tun')));
+    ui.selectAct(el.networkMode, function () { return (S.state && S.state.proxy && S.state.proxy.network_mode) || 'system'; }, async function (mode) {
+      await TP.actions.setNetworkMode(mode); renderProxy();
+    });
+    el.networkNote = h('p', { class: 'muted sm', 'aria-live': 'polite' });
+    c.appendChild(row(L('set.network.title'), el.networkMode));
+    c.appendChild(h('p', { class: 'muted sm' }, L('set.network.note')));
+    c.appendChild(el.networkNote);
     c.appendChild(row(L('set.proxy.service'), el.svcTxt, el.restart, 'settings.service'));
     return c;
   }
   function renderProxy() {
-    var on = TP.actions.proxyOn();
+    var on = TP.actions.proxyOn(), p = (S.state && S.state.proxy) || {};
+    el.networkMode.options[0].text = t('set.network.system'); el.networkMode.options[1].text = t('set.network.tun');
+    el.networkMode.value = p.network_mode || 'system';
+    ui.avail(el.networkMode, TP.why.helper());
+    setText(el.networkNote, t(p.network_mode === 'tun' ? (p.tun_ready ? 'set.network.ready' : 'set.network.notReady') : 'set.network.systemScope'));
     el.master.checked = on === true;
     ui.avail(el.master, TP.actions.proxyWhy());
     setText(el.masterTxt, on === true ? t('proxy.stateOn') : on === false ? t('proxy.stateOff') : t('proxy.stateUnknown'));

@@ -11,23 +11,24 @@ os_detect() { # 设置 OS MACOS MACOS_MAJOR ARCH CHIP BREW IS_ADMIN
 }
 
 # ---------- launchd ----------
-os_service_info() { # 一次 launchctl 调用得到 SVC_LOADED SVC_RUNNING SVC_PID
+os_system_service_info() { # 一次 launchctl 调用得到 SVC_LOADED SVC_RUNNING SVC_PID
   local out; SVC_LOADED=0; SVC_RUNNING=0; SVC_PID=''
   out=$(launchctl print "$GUI/$LABEL" 2>/dev/null) || return 0
   SVC_LOADED=1
   case $out in *"state = running"*) SVC_RUNNING=1 ;; esac
   SVC_PID=$(printf '%s\n' "$out" | awk '/^[[:space:]]*pid = /{print $3; exit}')
 }
-os_service_loaded()  { launchctl print "$GUI/$LABEL" >/dev/null 2>&1; }
-os_service_running() { launchctl print "$GUI/$LABEL" 2>/dev/null | grep -q 'state = running'; }
-os_service_pid()     { launchctl print "$GUI/$LABEL" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}'; }
-os_service_restart() { launchctl kickstart -k "$GUI/$LABEL" >/dev/null 2>&1 || os_service_start; }
-os_service_start() {
+os_system_service_loaded()  { launchctl print "$GUI/$LABEL" >/dev/null 2>&1; }
+os_system_service_running() { launchctl print "$GUI/$LABEL" 2>/dev/null | grep -q 'state = running'; }
+os_system_service_pid()     { launchctl print "$GUI/$LABEL" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}'; }
+os_system_service_restart() { launchctl kickstart -k "$GUI/$LABEL" >/dev/null 2>&1 || os_system_service_start; }
+os_system_service_start() {
+  launchctl enable "$GUI/$LABEL" >/dev/null 2>&1 || return 1
   local i; launchctl bootout "$GUI/$LABEL" 2>/dev/null || true; sleep 1
   for i in 1 2 3; do launchctl bootstrap "$GUI" "$PLIST" 2>/dev/null && { launchctl kickstart "$GUI/$LABEL" >/dev/null 2>&1 || true; return 0; }; sleep 1; done
   return 1
 }
-os_service_stop() { launchctl bootout "$GUI/$LABEL" 2>/dev/null || true; }
+os_system_service_stop() { launchctl bootout "$GUI/$LABEL" 2>/dev/null || true; }
 
 _write_if_changed() { # 文件 内容  -> 0=已写入(内容有变化) 1=无变化
   [ -f "$1" ] && [ "$(cat "$1")" = "$2" ] && return 1
@@ -40,8 +41,8 @@ os_write_plists() { # 写主服务 / 本地辅助服务(inetd) / 每日维护 �
   _write_if_changed "$PLIST" "$xml_head
 <key>Label</key><string>$LABEL</string>
 <key>ProgramArguments</key><array><string>$H/sing-box</string><string>run</string><string>-c</string><string>$H/config.json</string><string>-D</string><string>$H</string></array>
-<key>RunAtLoad</key>$([ "${AUTOSTART:-1}" = 1 ] && echo '<true/>' || echo '<false/>')
-<key>KeepAlive</key>$([ "${AUTOSTART:-1}" = 1 ] && echo '<true/>' || echo '<false/>')
+<key>RunAtLoad</key>$([ "${AUTOSTART:-1}" = 1 ] && [ "${NETWORK_MODE:-system}" != tun ] && echo '<true/>' || echo '<false/>')
+<key>KeepAlive</key>$([ "${AUTOSTART:-1}" = 1 ] && [ "${NETWORK_MODE:-system}" != tun ] && echo '<true/>' || echo '<false/>')
 <key>StandardOutPath</key><string>$H/sing-box.log</string>
 <key>StandardErrorPath</key><string>$H/sing-box.log</string>
 </dict></plist>" && n=$((n+1))
@@ -84,6 +85,43 @@ os_aux_load() { # 加载辅助 plist (已加载的先卸载再加载, 保证拿�
   done
 }
 os_aux_unload() { launchctl bootout "$GUI/$LABEL_API" 2>/dev/null || true; launchctl bootout "$GUI/$LABEL_UPD" 2>/dev/null || true; launchctl bootout "$GUI/$LABEL_TICK" 2>/dev/null || true; }
+
+# The configured file decides the backend during rollback, rather than a
+# setting that may still describe the failed transaction.
+os_service_info() {
+  if enhanced_loaded; then
+    local out; out=$(launchctl print "system/$TUN_LABEL" 2>/dev/null)
+    SVC_LOADED=1; SVC_RUNNING=0; SVC_PID=''
+    case $out in *"state = running"*) SVC_RUNNING=1 ;; esac
+    SVC_PID=$(printf '%s\n' "$out" | awk '/^[[:space:]]*pid = /{print $3; exit}')
+  else os_system_service_info; fi
+}
+os_service_loaded() { enhanced_loaded || os_system_service_loaded; }
+os_service_running() { os_service_info; [ "$SVC_RUNNING" = 1 ]; }
+os_service_pid() { os_service_info; printf '%s' "$SVC_PID"; }
+os_service_start() {
+  if enhanced_configured; then enhanced_start
+  else
+    local selected='' rc=0
+    if enhanced_loaded; then selected=$(mktemp); clash GET /proxies > "$selected" 2>/dev/null || true; fi
+    if ! enhanced_stop; then [ -z "$selected" ] || rm -f "$selected"; return 1; fi
+    enhanced_paths; enhanced_system_log
+    # Only a TUN -> System transition needs to restore user autostart settings.
+    # Ordinary starts must not rewrite all plists from a differently resolved
+    # /tmp vs /private/tmp path and cause a later installer restart.
+    [ ! -e "$TUN_PLIST" ] || os_write_plists >/dev/null || true
+    os_system_service_start || rc=$?
+    if [ -n "$selected" ]; then
+      if [ "$rc" = 0 ] && wait_port "$PORT" 15; then enhanced_restore_selectors "$selected"; else rc=1; fi
+      rm -f "$selected"
+    fi
+    return "$rc"
+  fi
+}
+os_service_restart() {
+  if enhanced_configured || enhanced_loaded; then os_service_start; else os_system_service_restart; fi
+}
+os_service_stop() { enhanced_stop || return 1; os_system_service_stop; }
 
 # ---------- 系统代理 (所有已启用的网络服务) ----------
 os_sysproxy_services() { networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | grep -v '^\*' || true; }

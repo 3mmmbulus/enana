@@ -246,3 +246,8 @@
   .spd-node,.spd-tc,.spd-tg-t,.spd-cb{min-height:44px} .spd-ico>span{min-height:44px}
   .spd-tf label.fld-l,.spd-fl label{padding:11px 0;margin:-11px 0}                  /* 表单标签: 点击区域 >= 44px (版面间距不变), 点标签会聚焦对应的输入框 */
 }
+
+/* The main action is visible before the long target lists and remains nearby. */
+.spd-actions{position:sticky;top:0;z-index:5;background:var(--surface);padding:10px 0;margin-bottom:14px;border-top:0;border-bottom:1px solid var(--line)}
+.spd-dialog .spd-actions{position:static}
+.spd-dialog .spd-res{margin-top:12px}

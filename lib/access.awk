@@ -65,6 +65,7 @@ mode_ == 3 {
   msg = substr(rest, RLENGTH + 1)
 
   if ((p = index(msg, ": inbound connection to ")) > 0 || (p = index(msg, ": inbound packet connection to ")) > 0) {
+    if (index(msg, "inbound/tun[") > 0) capture[id] = "tun"; else capture[id] = "mixed"
     mkid(id); isudp = (index(msg, "inbound packet connection to ") > 0)
     hp = msg; sub(/.*inbound (packet )?connection to /, "", hp); hostport(hp)
     ts[id] = when; host[id] = HOST_; port[id] = PORT_; net[id] = isudp ? "udp" : "tcp"
@@ -127,16 +128,16 @@ END {
     M[++nm] = id
   }
   if (mode == "tsv") {
-    print "ts\tid\tnet\thost\tport\tapp\tuser\troute\tnode\treason\tresult\terr\tdur\tips\terrmsg\tpath"
+    print "ts\tid\tnet\thost\tport\tapp\tuser\troute\tnode\treason\tresult\terr\tdur\tips\terrmsg\tpath\tcapture"
     for (i = 1; i <= nm; i++) {
       id = M[i]; pa = path[id]; us = usr[id]; if (mask) { pa = maskp(pa); us = masku(us) }
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", ts[id], id, net[id], tsvc(host[id]), port[id], tsvc(app[id]), tsvc(us), rtc[id], tsvc(tag[id]), rs[id], ((id in err) ? "error" : "ok"), err[id], edur[id], tsvc(ips[id]), tsvc(emsg[id]), tsvc(pa)
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", ts[id], id, net[id], tsvc(host[id]), port[id], tsvc(app[id]), tsvc(us), rtc[id], tsvc(tag[id]), rs[id], ((id in err) ? "error" : "ok"), err[id], edur[id], tsvc(ips[id]), tsvc(emsg[id]), tsvc(pa), capture[id]
     }
   } else {
     printf "{\"total\":%d,\"rows\":[", nm; c = 0
     for (i = nm - off; i >= 1 && c < lim; i--) {
       id = M[i]
-      printf "%s{\"ts\":\"%s\",\"id\":\"%s\",\"net\":\"%s\",\"host\":\"%s\",\"port\":%d,\"app\":\"%s\",\"user\":\"%s\",\"path\":\"%s\",\"route\":\"%s\",\"node\":\"%s\",\"reason\":\"%s\",\"err\":\"%s\",\"errmsg\":\"%s\",\"dur\":\"%s\",\"ips\":\"%s\"}", (c++ ? "," : ""), esc(ts[id]), esc(id), net[id], esc(host[id]), port[id] + 0, esc(app[id]), esc(usr[id]), esc(path[id]), rtc[id], esc(tag[id]), rs[id], err[id], esc(emsg[id]), esc(edur[id]), esc(ips[id])
+      printf "%s{\"ts\":\"%s\",\"id\":\"%s\",\"net\":\"%s\",\"host\":\"%s\",\"port\":%d,\"app\":\"%s\",\"user\":\"%s\",\"path\":\"%s\",\"capture\":\"%s\",\"route\":\"%s\",\"node\":\"%s\",\"reason\":\"%s\",\"err\":\"%s\",\"errmsg\":\"%s\",\"dur\":\"%s\",\"ips\":\"%s\"}", (c++ ? "," : ""), esc(ts[id]), esc(id), net[id], esc(host[id]), port[id] + 0, esc(app[id]), esc(usr[id]), esc(path[id]), capture[id], rtc[id], esc(tag[id]), rs[id], err[id], esc(emsg[id]), esc(edur[id]), esc(ips[id])
     }
     printf "],\"summary\":{\"all\":%d,\"direct\":%d,\"proxy\":%d,\"pin\":%d,\"auto\":%d,\"error\":%d,\"reasons\":{", c_all + 0, c_direct + 0, c_proxy + 0, c_pin + 0, c_auto + 0, c_err + 0
     k = 0; for (r in c_reason) printf "%s\"%s\":%d", (k++ ? "," : ""), r, c_reason[r]

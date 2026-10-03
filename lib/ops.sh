@@ -4,7 +4,7 @@
 # 因此连续快速的操作不会互相覆盖备份, 坏配置绝不会留在磁盘上。每次操作都会写一条「操作记录」(不含任何密码/令牌)。
 
 APPLY_STEPS='生成配置|校验配置|应用并重启|等待就绪'
-TXN_FILES="servers.jsonl subs.tsv dns.conf rules.state custom-rulesets.tsv settings.env overrides.tsv autosites.tsv custom-apps.tsv site-domains.tsv hosts.tsv speedtest-custom.tsv prefs.json vps.jsonl"
+TXN_FILES="servers.jsonl subs.tsv dns.conf rules.state custom-rulesets.tsv settings.env overrides.tsv autosites.tsv autosites.dismissed custom-apps.tsv site-domains.tsv hosts.tsv speedtest-custom.tsv prefs.json vps.jsonl"
 TXN_ERR=''; TXN_RESULT=''
 
 op_wait_turn() { # 轮到我了吗? 等所有「更早创建且还在运行」的排队任务结束 (任务进程已死/卡住超过 5 分钟的忽略)
@@ -109,6 +109,20 @@ op_txn() {
 }
 
 # ---- 变更函数 (在 op_txn 持锁期间运行) ----
+txn_override() {
+  local kind=$1 value=$2 state=$3 target=${4:-}
+  ovr_valid "$kind" "$value" && ovr_target_valid "$target" || return 1
+  case $state in follow|direct|pin|auto) ;; *) return 1 ;; esac
+  if [ "$kind" = site ] && [ "$state" = follow ]; then ovr_delete site "$value"; autosite_forget "$value" dismiss
+  else ovr_set "$kind" "$value" "$state" ack "$target"; fi
+}
+txn_apps_adopt() {
+  local f=''
+  if [ -n "${1:-}" ]; then f=$(mktemp); printf '%s\n' "$1" > "$f"; fi
+  apps_adopt "$f"; [ -z "$f" ] || rm -f "$f"; return 0
+}
+txn_apps_scan() { apps_scan >/dev/null; }
+txn_autosites_clear() { autosite_remove_all >/dev/null; }
 txn_none()   { return 0; }
 txn_import() { # sub mode   (内容来自 $JOB_BODY; 订阅信息来自 TXN_* 变量)
   local sub=${1:-} mode=${2:-merge} res a r
@@ -153,6 +167,10 @@ txn_settings() { # KEY=VALUE… (LOG_HOURS ACCESS_LOG AUTO_SITES LANG_UI AUTO_UP
   for kv in "$@"; do
     k=${kv%%=*}; v=${kv#*=}
     case $k in
+      NETWORK_MODE)
+        case $v in system|tun) ;; *) TXN_ERR="流量接管模式无效"; return 1 ;; esac
+        if [ "$v" = tun ] && ! enhanced_supported; then TXN_ERR="Enhanced/TUN 需要 sing-box 1.12 或更新版本"; return 1; fi
+        settings_set NETWORK_MODE "$v" ;;
       LOG_HOURS)   settings_set LOG_HOURS "$(logs_hours_clamp "$v")"; sed -i '' '/^LOG_DAYS=/d' "$H/settings.env" 2>/dev/null || true ;;
       AUTO_SITES)  case $v in 0|1) settings_set AUTO_SITES "$v" ;; *) TXN_ERR="参数无效"; return 1 ;; esac ;;
       ACCESS_LOG)  case $v in 0|1) settings_set ACCESS_LOG "$v" ;; *) TXN_ERR="参数无效"; return 1 ;; esac ;;
@@ -175,9 +193,9 @@ op_apply() { op_txn "应用配置" txn_none; }
 
 op_restart() {
   job_step 0 20 "重启服务"
-  os_service_restart
+  os_service_restart || { job_fail "核心未能重启 (Enhanced/TUN 需要管理员授权)" 0; return 1; }
   job_step 1 60 "等待服务就绪"
-  if wait_port "$PORT" 15; then proxy_sync_mode; oplog "${OP_WHO:-terminal}" "重启服务" "" ok; job_ok "服务已重启"; else oplog "${OP_WHO:-terminal}" "重启服务" "" error; job_fail "服务没有在 15 秒内启动, 运行 enana doctor 查看原因" 1; return 1; fi
+  if wait_port "$PORT" 15 && enhanced_ready; then proxy_sync_mode; oplog "${OP_WHO:-terminal}" "重启服务" "" ok; job_ok "服务已重启"; else oplog "${OP_WHO:-terminal}" "重启服务" "" error; job_fail "服务没有在 15 秒内启动, 运行 enana doctor 查看原因" 1; return 1; fi
 }
 
 op_update_rules() { # 规则集 (本地规则集文件变化后 sing-box 自动重载, 无需重启)
@@ -185,7 +203,9 @@ op_update_rules() { # 规则集 (本地规则集文件变化后 sing-box 自动�
   QUIET=1
   if rules_update; then
     job_step 2 90 "应用规则集"
-    if op_lock; then apply_config >/dev/null 2>&1 || true; op_unlock; else apply_config >/dev/null 2>&1 || true; fi       # 和其它配置任务排队
+    local rc=1
+    if op_lock; then apply_config >/dev/null 2>&1; rc=$?; op_unlock; fi
+    if [ "$rc" != 0 ]; then job_fail "规则已下载, 但未应用到核心 (Enhanced/TUN 需要管理员授权)" 2; return 1; fi
     oplog "${OP_WHO:-terminal}" "更新规则集" "$RULES_CHANGED 个有变化, $RULES_FAILED 个失败" ok
     job_ok "规则集已更新 ($RULES_CHANGED 个有变化, $RULES_FAILED 个失败)" "{\"changed\":$RULES_CHANGED,\"failed\":$RULES_FAILED}"
   else oplog "${OP_WHO:-terminal}" "更新规则集" "全部下载失败" error; job_fail "所有规则集下载失败, 已保留旧规则" 1; return 1; fi
@@ -230,7 +250,13 @@ op_logout() { # [purge]
   if [ "$rc" = 0 ]; then _txn_end ok "已退出账号并关闭代理, 所有浏览器需要重新登录"; else _txn_end fail "代理已关闭、令牌已更换, 但核心没有成功重启, 运行 enana doctor 查看原因" 3; return 1; fi
 }
 # 仪表盘退出账号后的收尾: 令牌已经换了, 让核心也换上 (期间核心已是全部直连, 不会影响上网)
-op_sync_secret() { if op_lock; then apply_config >/dev/null 2>&1; op_unlock; fi; job_ok "完成"; }
+op_sync_secret() {
+  local rc
+  op_lock || { job_fail "另一个配置任务正在运行" 0; return 1; }
+  apply_config >/dev/null 2>&1; rc=$?; op_unlock
+  if [ "$rc" = 0 ]; then job_ok "完成"
+  else job_fail "核心令牌尚未更新; Enhanced/TUN 需要管理员授权, 运行 enana doctor 查看原因" 1; return 1; fi
+}
 
 # 升级核心: 先下载, 用新核心校验现有配置, 通过才替换, 否则回退
 op_core_upgrade() { # [版本|latest]
@@ -243,7 +269,13 @@ op_core_upgrade() { # [版本|latest]
   fi
   job_step 2 70 "用新核心校验现有配置"
   if "$SB" check -c "$H/config.json" >/dev/null 2>&1; then
-    rm -f "$SB.old"; job_step 3 85 "重启服务"; os_service_restart; wait_port "$PORT" 15 || true
+    job_step 3 85 "重启服务"
+    if ! os_service_restart || ! wait_port "$PORT" 15 || ! enhanced_ready; then
+      mv "$SB.old" "$SB"; os_service_restart >/dev/null 2>&1 || true
+      oplog "${OP_WHO:-terminal}" "升级核心" "新版本未就绪, 已回退" error
+      _txn_end fail "新版本未能启动, 已回退到 $old" 3; return 1
+    fi
+    rm -f "$SB.old"; proxy_sync_mode
     new=$(core_version); rm -f "$H/.core-version"; update_check force >/dev/null 2>&1 || true
     oplog "${OP_WHO:-terminal}" "升级核心" "$old → $new" ok; _txn_end ok "已升级到 sing-box $new"
   else
@@ -295,6 +327,10 @@ job_dispatch() {
   JOB_BODY="$H/jobs/$JOB_ID.body"
   case $JOB_NAME in
     apply)          op_apply ;;
+    override)       op_txn "修改应用/网站策略" txn_override "$@" ;;
+    apps-adopt)     op_txn "采用推荐设置" txn_apps_adopt "$@" ;;
+    apps-scan)      op_txn "识别已安装的应用" txn_apps_scan ;;
+    autosites-clear) op_txn "自动识别: 全部撤销" txn_autosites_clear ;;
     restart)        op_restart ;;
     update-rules)   op_update_rules ;;
     servers-import) TXN_INTERVAL=${3:-}; TXN_USED=${4:-}; TXN_TOTAL=${5:-}; TXN_EXPIRE=${6:-}; TXN_SAVE=${7:-}; op_txn "导入服务器" txn_import "${1:-}" "${2:-merge}" ;;
@@ -315,6 +351,7 @@ job_dispatch() {
     sync-push)      sync_push_job "$@" ;;
     sync-login)     sync_login_auto ;;
     sync-pull)      sync_pull_job "$@" ;;
+    network-mode) op_txn "切换流量接管模式" txn_settings "NETWORK_MODE=$1" ;;
     settings-apply) APPLY_BASE=2; op_txn "修改设置" txn_settings "$@" ;;
     site-domain)    op_txn "修改网站域名" txn_site_domain "$@" ;;
     site-domain-reset) op_txn "重置网站域名" txn_site_reset "$1" ;;

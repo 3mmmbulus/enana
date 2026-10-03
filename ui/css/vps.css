@@ -148,3 +148,5 @@ dialog.dlg:has(.vps){align-items:stretch}
 @media (max-width:700px){
   .vps-g-srv,.vps-g-node{grid-template-columns:minmax(0,1fr)}
 }
+
+.vps-table .tbl{min-width:850px}.vps-table td{vertical-align:top}.vps-table .vps-chips{display:flex;flex-wrap:wrap;gap:4px;max-width:240px}.vps-table .c-act{white-space:nowrap}

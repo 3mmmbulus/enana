@@ -95,7 +95,7 @@ case $path in /favicon.ico) path="$ADMIN_PATH/favicon.png" ;; esac      # 浏览
 case $path in /|"$ADMIN_PATH"|"$ADMIN_PATH"/*) serve_static ;; esac
 
 # ---------- 以下是 JSON 接口: 到这里才加载其余模块 ----------
-for _f in i18n jobs servers apps autosites sites fetch os-darwin auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os-darwin enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps; do . "$LIB/$_f.sh"; done
 i18n_init
 OP_WHO=dashboard; export OP_WHO
 BODY=$(mktemp "${TMPDIR:-/tmp}/enana-body.XXXXXX"); trap 'rm -f "$BODY" "$BODY".*' EXIT
@@ -185,7 +185,7 @@ ep_proxy() { # 代理总开关 + 模式 (on=0|1, mode=auto|global; 至少给一�
   case $on in ''|0|1) ;; *) fail "参数无效" ;; esac
   case $mode in ''|auto|global) ;; *) fail "代理模式无效" ;; esac
   if { [ "$on" = 1 ] || { [ -z "$on" ] && [ "${PROXY_ENABLED:-0}" = 1 ]; }; } && ! os_service_running; then
-    os_service_start; wait_port "$PORT" 10 || fail "代理服务没有运行, 启动也失败了 (运行 enana doctor 查看原因)" E_NOT_RUNNING
+    os_service_start && wait_port "$PORT" 10 && enhanced_ready || fail "代理服务没有运行, 启动也失败了 (运行 enana doctor 查看原因)" E_NOT_RUNNING
   fi
   [ -n "$mode" ] && proxy_set_mode "$mode"
   [ -n "$on" ] && proxy_set_enabled "$on"
@@ -373,7 +373,7 @@ ep_state() {
   if [ -n "$sc" ]; then scmd=enana; else scmd="$H/enana"; fi              # 在终端里能直接运行、打开控制台的完整命令: 装了快捷命令就是 enana, 没装就是脚本的完整路径
   for t in $(rules_missing); do missing="$missing${missing:+,}\"$t\""; rs=0; done
   [ -s "$H/.osver" ] || sw_vers -productVersion > "$H/.osver" 2>/dev/null; IFS= read -r osver < "$H/.osver"; arch=$(uname -m)
-  json "{\"ok\":true,\"version\":\"$VERSION\",\"prefs_version\":$(prefs_version),\"core\":\"${core:-}\",\"lang\":\"${LANG_UI:-zh}\",\"platform\":{\"os\":\"darwin\",\"osver\":\"${osver:-}\",\"arch\":\"$arch\"},\"ports\":{\"proxy\":$PORT,\"ui\":$UI_PORT,\"api\":$API_PORT,\"speed\":$SPEED_PORT},\"env\":{\"core\":$([ -n "$core" ] && echo true || echo false),\"rules\":$(bool $rs),\"service\":$(bool $svc),\"sysproxy\":$(bool $sp),\"shortcut\":$([ -n "$sc" ] && printf '"%s"' "$sc" || printf null),\"shortcut_cmd\":\"$(jesc "$scmd")\",\"rules_updated\":$(rules_updated_at),\"rules_missing\":[$missing]},\"update\":$(update_available),\"proxy\":{\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\"},\"account\":{\"email\":\"$(jesc "$(auth_current_email)")\"},\"servers\":$(servers_json),\"subs\":$(subs_json),\"overrides\":$(overrides_json),\"first_run\":$([ "$(srv_count)" = 0 ] && echo true || echo false)}"
+  json "{\"ok\":true,\"version\":\"$VERSION\",\"prefs_version\":$(prefs_version),\"core\":\"${core:-}\",\"lang\":\"${LANG_UI:-zh}\",\"platform\":{\"os\":\"darwin\",\"osver\":\"${osver:-}\",\"arch\":\"$arch\"},\"ports\":{\"proxy\":$PORT,\"ui\":$UI_PORT,\"api\":$API_PORT,\"speed\":$SPEED_PORT},\"env\":{\"core\":$([ -n "$core" ] && echo true || echo false),\"rules\":$(bool $rs),\"service\":$(bool $svc),\"sysproxy\":$(bool $sp),\"shortcut\":$([ -n "$sc" ] && printf '"%s"' "$sc" || printf null),\"shortcut_cmd\":\"$(jesc "$scmd")\",\"rules_updated\":$(rules_updated_at),\"rules_missing\":[$missing]},\"update\":$(update_available),\"proxy\":{\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\",\"network_mode\":\"${NETWORK_MODE:-system}\",\"tun_ready\":$(enhanced_ready && enhanced_configured && echo true || echo false)},\"account\":{\"email\":\"$(jesc "$(auth_current_email)")\"},\"servers\":$(servers_json),\"subs\":$(subs_json),\"overrides\":$(overrides_json),\"first_run\":$([ "$(srv_count)" = 0 ] && echo true || echo false)}"
 }
 apps_resp() {
   [ -f "$H/ui/appicons/index.tsv" ] || ( apps_icons >/dev/null 2>&1 & )          # 第一次: 后台提取应用图标
@@ -422,6 +422,10 @@ ep_override() {
   ovr_target_valid "$target" || fail "指定的固定出口不存在 (固定出口至少要有 2 个才能单独指定)"
   old=$(ovr_get "$kind" "$value"); oldt=$(ovr_target "$kind" "$value"); [ -n "$old" ] || old=follow
   src=''; [ "$kind" = site ] && autosite_registry_has "$value" && src=auto
+  if [ "${NETWORK_MODE:-system}" = tun ]; then
+    local j; j=$(job_spawn override "$APPLY_STEPS" "$kind" "$value" "$state" "$target"); okj "\"job\":\"$j\""
+    return
+  fi
   lock_take || fail "系统繁忙, 请重试" E_BUSY
   if [ "$kind" = site ] && [ "$state" = follow ]; then ovr_delete site "$value"; autosite_forget "$value" dismiss; else ovr_set "$kind" "$value" "$state" ack "$target"; fi
   ovr_sync; lock_drop
@@ -431,11 +435,23 @@ ep_override() {
 
 ep_apps_adopt() { # 采用推荐设置: 不带 names = 所有「新应用」; 带 names (换行分隔) = 只处理这几个 (用户已经看过这一页, 新应用的标记已被确认)
   local names n F=''; names=$(fp names)
+  if [ "${NETWORK_MODE:-system}" = tun ]; then
+    local j; j=$(job_spawn apps-adopt "$APPLY_STEPS" "$names"); okj "\"job\":\"$j\""; return
+  fi
   if [ -n "$names" ]; then F=$(mktemp); printf '%s\n' "$names" > "$F"; fi
   lock_take && { apps_adopt "$F"; lock_drop; }
   [ -z "$F" ] || rm -f "$F"
   oplog dashboard "采用推荐设置" "$(kv scope "${names:+selected}" count "$(printf '%s' "$names" | awk 'NF' | wc -l | tr -d ' ')")" ok
   okj
+}
+
+ep_apps_scan() {
+  if [ "${NETWORK_MODE:-system}" = tun ]; then
+    local j; j=$(job_spawn apps-scan "$APPLY_STEPS"); okj "\"job\":\"$j\""; return
+  fi
+  lock_take && { apps_scan >/dev/null; lock_drop; }
+  ( apps_icons >/dev/null 2>&1 & )
+  apps_resp
 }
 
 ep_policy() { # 切换一个策略开关 (网站 / 默认出口 / 节点选择): 由辅助服务代为切换, 这样每一次切换都有操作记录 (原来 → 现在)
@@ -465,6 +481,9 @@ ep_audit() { # 仪表盘直接对代理核心做的、不经过辅助服务的�
 }
 
 ep_sites_auto_clear() { # 撤销所有「自动识别」添加的网站
+  if [ "${NETWORK_MODE:-system}" = tun ]; then
+    local j; j=$(job_spawn autosites-clear "$APPLY_STEPS"); okj "\"job\":\"$j\""; return
+  fi
   local n; n=$(autosite_remove_all)
   oplog dashboard "自动识别: 全部撤销" "$(kv count "${n:-0}")" ok
   okj "\"removed\":${n:-0}"
@@ -542,7 +561,7 @@ ep_log() { # 兼容旧接口: 核心实时日志的最后 n 行 (纯文本)
 
 # ---------- 设置 ----------
 ep_settings_get() {
-  json "{\"ok\":true,\"lang\":\"${LANG_UI:-zh}\",$(settings_json),\"ports\":{\"proxy\":$PORT,\"ui\":$UI_PORT,\"api\":$API_PORT,\"speed\":$SPEED_PORT},\"proxy\":{\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\"},\"account\":{\"email\":\"$(jesc "$(auth_current_email)")\"}}"
+  json "{\"ok\":true,\"lang\":\"${LANG_UI:-zh}\",$(settings_json),\"ports\":{\"proxy\":$PORT,\"ui\":$UI_PORT,\"api\":$API_PORT,\"speed\":$SPEED_PORT},\"proxy\":{\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\",\"network_mode\":\"${NETWORK_MODE:-system}\",\"tun_ready\":$(enhanced_ready && enhanced_configured && echo true || echo false)},\"account\":{\"email\":\"$(jesc "$(auth_current_email)")\"}}"
 }
 ep_settings_set() {
   local lang hours days alog lcore lops asites job='' changed=0 oldh restart=''
@@ -753,9 +772,12 @@ case "$method $path" in
   "GET /api/plan")             ep_plan ;;
   "GET /api/state")            ep_state ;;
   "GET /api/settings")         ep_settings_get ;;
+  "POST /api/network-mode")
+    nm=$(fp mode); case $nm in system|tun) ;; *) fail "流量接管模式无效" ;; esac
+    j=$(job_spawn network-mode "$APPLY_STEPS" "$nm"); okj "\"job\":\"$j\"" ;;
   "POST /api/settings")        ep_settings_set ;;
   "GET /api/apps")             apps_resp ;;
-  "POST /api/apps/scan")       lock_take && { apps_scan >/dev/null; lock_drop; }; ( apps_icons >/dev/null 2>&1 & ); apps_resp ;;
+  "POST /api/apps/scan")       ep_apps_scan ;;
   "GET /api/sites/domains")    ep_sites_domains_get ;;
   "POST /api/sites/domains")   ep_sites_domains_post ;;
   "POST /api/sites/domains/reset") ep_sites_domains_reset ;;

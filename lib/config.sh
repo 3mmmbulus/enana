@@ -12,8 +12,8 @@
 #   direct-mode / direct-lan / direct-site / direct-app / direct-cn   都是直连 (类型 direct), 只是名字不同: 日志里的出口名就说明了「为什么直连」
 #                               代理总开关关闭 / 本机和局域网 / 你把某个网站设为直连 / 你把某个应用设为直连 (关) / 国内规则;  单独的 direct = 策略选了直连
 #   Final  (selector)           其余海外流量的兜底策略
-# 路由优先级: 全局直连模式 → 内网 → 你的覆盖(应用/网站) → 屏蔽广告(可选) → 目录里的网站(固定出口类在前) → 自定义规则集
-#            → 国内直连 → 海外网站(兜底) → 解析后按 IP 判断国内直连 → 兜底。
+# 路由优先级: DNS 控制 → 总开关直连 → 内网 → PIN/普通应用覆盖 → 网站覆盖 → 广告/目录/自定义规则
+#            → 浏览器 Direct/Auto 兜底 → Global → 国内/海外/IP → 最终兜底。
 # 没有配置任何服务器时, PIN/Global 只含 direct, 所有流量直连 (不会因为空配置而断网)。
 
 sb_ver() { # 设置 SB_MAJOR SB_MINOR
@@ -43,9 +43,16 @@ gen_catalog_json() { # $1 = 临时目录 (含 cat) -> $H/ui/catalog.json (中文
 seqn() { local i=1; while [ "$i" -le "${1:-0}" ]; do printf '%s ' "$i"; i=$((i + 1)); done; }      # 1..N (N=0 什么也不打印; BSD 的 seq 1 0 会倒着数)
 
 gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
-  local norules=0 T role tag ob dns_block='' resolver='' rs_defs='' i ctag cname cpol lvl logoff secret ads=0
+  local norules=0 T role tag ob dns_block='' resolver='' rs_defs='' i ctag cname cpol lvl logoff secret ads=0 tun_in='' tun_route=''
   [ "${1:-}" = "--no-rulesets" ] && norules=1
   sb_ver; dns_load
+  if [ "${NETWORK_MODE:-system}" = tun ]; then
+    enhanced_supported || { printf '%s\n' 'Enhanced/TUN requires sing-box >= 1.12' > "$H/check.log"; return 1; }
+    # Exclusions exist at the OS routing layer too; localhost OAuth callbacks
+    # and private networks must never enter a proxy just because an App is PIN.
+    tun_in=',{"type":"tun","tag":"tun-in","address":["172.19.0.1/30","fdfe:dcba:9876::1/126"],"mtu":1500,"auto_route":true,"route_exclude_address":["0.0.0.0/8","127.0.0.0/8","10.0.0.0/8","100.64.0.0/10","172.16.0.0/12","192.168.0.0/16","169.254.0.0/16","224.0.0.0/4","255.255.255.255/32","::/128","::1/128","fc00::/7","fe80::/10","ff00::/8"]}'
+    tun_route=',"auto_detect_interface":true'
+  fi
   T=$(mktemp -d)
   : > "$T/ob"; : > "$T/pins"; : > "$T/autos"; : > "$T/have"; : > "$T/cust"
   while IFS=$'\t' read -r role tag ob; do
@@ -96,8 +103,11 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
     printf '{"type":"urltest","tag":"PINAUTO","outbounds":[%s],"url":"http://www.gstatic.com/generate_204","interval":"10m","tolerance":50,"idle_timeout":"30m"}\n' "$(json_list < "$T/pinx")" >> "$T/ob"
     pinx_opts=",\"PINAUTO\",$(json_list < "$T/pinx")"
   fi
-  for i in direct appdirect pin pinauto auto $(seqn "$npinx"); do
-    case $i in [0-9]*) i="pin-$i" ;; esac
+  for i in direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto auto $(seqn "$npinx"); do
+    case $i in [0-9]*)
+      rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"ovr-apppin-$i\",\"format\":\"source\",\"path\":\"$H/rules/ovr-apppin-$i.json\"}"
+      rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"ovr-browserpin-$i\",\"format\":\"source\",\"path\":\"$H/rules/ovr-browserpin-$i.json\"}"
+      i="pin-$i" ;; esac
     rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"ovr-$i\",\"format\":\"source\",\"path\":\"$H/rules/ovr-$i.json\"}"
   done
 
@@ -116,22 +126,38 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
   # 路由规则总表 (先匹配先生效)
   if [ "$DNS_ADS" = 1 ] && grep -qx geosite-ads "$T/have"; then ads=1; fi
   {
+    if [ -n "$tun_in" ]; then
+      # DNS control traffic is handled before LAN/Direct/App terminal routes.
+      # TCP, TLS and QUIC sniffing supplies domain rules for IP-only connections.
+      printf '%s\n' '{"inbound":["tun-in"],"action":"sniff"}'
+      printf '%s\n' '{"inbound":["tun-in"],"port":53,"action":"hijack-dns"}'
+    fi
     [ "$have_nodes" = 1 ] && printf '%s\n' '{"inbound":["speed-in"],"action":"route","outbound":"SPEEDTEST"}'
     [ "$SB_MAJOR" -gt 1 ] || [ "$SB_MINOR" -ge 12 ] && dns_hosts_route_rules      # 自定义解析: 在所有模式下都生效 (route-options 不终止匹配, 后面的规则照常匹配)
     printf '%s\n' '{"clash_mode":"Direct","action":"route","outbound":"direct-mode"}'
     printf '%s\n' '{"clash_mode":"Rule","domain":["rule.mode.enana.invalid"],"action":"route","outbound":"direct-mode"}'   # 永远不会命中; 只为让核心的模式列表里有 Rule (否则无法从 Direct 切回 Rule)
     printf '%s\n' '{"ip_is_private":true,"action":"route","outbound":"direct-lan"}'
     printf '%s\n' '{"domain_suffix":["local","lan","localhost","home.arpa"],"action":"route","outbound":"direct-lan"}'
-    printf '%s\n' '{"rule_set":["ovr-direct"],"action":"route","outbound":"direct-site"}'            # 你的覆盖: 网站设为直连
     printf '%s\n' '{"rule_set":["ovr-appdirect"],"action":"route","outbound":"direct-app"}'          # 你的覆盖: 应用设为直连 (关)
+    for i in $(seqn "$npinx"); do printf '{"rule_set":["ovr-apppin-%s"],"action":"route","outbound":"%s"}\n' "$i" "$(sed -n "${i}p" "$T/pinx" | sed 's/["\\]//g')"; done
+    [ "$npinx" -ge 2 ] && printf '%s\n' '{"rule_set":["ovr-apppinauto"],"action":"route","outbound":"PINAUTO"}'
+    printf '%s\n' '{"rule_set":["ovr-apppin"],"action":"route","outbound":"PIN"}'
     for i in $(seqn "$npinx"); do printf '{"rule_set":["ovr-pin-%s"],"action":"route","outbound":"%s"}\n' "$i" "$(sed -n "${i}p" "$T/pinx" | sed 's/["\\]//g')"; done
     [ "$npinx" -ge 2 ] && printf '%s\n' '{"rule_set":["ovr-pinauto"],"action":"route","outbound":"PINAUTO"}'
     printf '%s\n' '{"rule_set":["ovr-pin"],"action":"route","outbound":"PIN"}'
     printf '%s\n' '{"rule_set":["ovr-auto"],"action":"route","outbound":"Global"}'
+    printf '%s\n' '{"rule_set":["ovr-direct"],"action":"route","outbound":"direct-site"}'
     [ "$ads" = 1 ] && printf '%s\n' '{"rule_set":["geosite-ads"],"action":"reject"}'
     cat "$T/r1"
-    printf '%s\n' '{"clash_mode":"Global","action":"route","outbound":"Global"}'      # 全局代理模式: 固定出口类服务 (上面) 仍走固定出口, 其余全部走自动线路 / 所选节点
     cat "$T/r2"
+    # A browser is a container of websites: direct/auto are its fallback,
+    # while explicit website policies still work. Native App PIN is an override.
+    printf '%s\n' '{"rule_set":["ovr-browserdirect"],"action":"route","outbound":"direct-app"}'
+    printf '%s\n' '{"rule_set":["ovr-browserauto"],"action":"route","outbound":"Global"}'
+    for i in $(seqn "$npinx"); do printf '{"rule_set":["ovr-browserpin-%s"],"action":"route","outbound":"%s"}\n' "$i" "$(sed -n "${i}p" "$T/pinx" | sed 's/["\\]//g')"; done
+    [ "$npinx" -ge 2 ] && printf '%s\n' '{"rule_set":["ovr-browserpinauto"],"action":"route","outbound":"PINAUTO"}'
+    printf '%s\n' '{"rule_set":["ovr-browserpin"],"action":"route","outbound":"PIN"}'
+    printf '%s\n' '{"clash_mode":"Global","action":"route","outbound":"Global"}'
     grep -qx geosite-cn "$T/have" && printf '%s\n' '{"rule_set":["geosite-cn"],"action":"route","outbound":"direct-cn"}'
     grep -qx geosite-notcn "$T/have" && printf '%s\n' '{"rule_set":["geosite-notcn"],"action":"route","outbound":"Final"}'
     if grep -qx geoip-cn "$T/have"; then
@@ -150,9 +176,9 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
   {
     printf '{\n"log":{%s"level":"%s","timestamp":true,"output":"%s/sing-box.log"},\n' "$logoff" "$lvl" "$H"
     printf '%s\n' "$dns_block"
-    printf '"inbounds":[{"type":"mixed","tag":"in","listen":"127.0.0.1","listen_port":%s}%s],\n' "$PORT" "$speed_in"
+    printf '"inbounds":[{"type":"mixed","tag":"in","listen":"127.0.0.1","listen_port":%s}%s%s],\n' "$PORT" "$speed_in" "$tun_in"
     printf '"outbounds":[{"type":"direct","tag":"direct"},{"type":"direct","tag":"direct-mode"},{"type":"direct","tag":"direct-lan"},{"type":"direct","tag":"direct-site"},{"type":"direct","tag":"direct-app"},{"type":"direct","tag":"direct-cn"},\n%s],\n' "$(paste -sd, - < "$T/ob")"
-    printf '"route":{"rule_set":[%s],\n"rules":[\n%s],\n"final":"Final","find_process":true%s},\n' "$rs_defs" "$(paste -sd, - < "$T/rules")" "$resolver"
+    printf '"route":{"rule_set":[%s],\n"rules":[\n%s],\n"final":"Final","find_process":true%s%s},\n' "$rs_defs" "$(paste -sd, - < "$T/rules")" "$resolver" "$tun_route"
     # 仪表盘页面不再由核心提供 (改由本地辅助服务在 /enana/admin/ 提供), 核心只留控制接口; 只允许仪表盘的来源跨域访问它 (还要有令牌)
     printf '"experimental":{"cache_file":{"enabled":true,"path":"%s/cache.db"},"clash_api":{"external_controller":"127.0.0.1:%s","default_mode":"%s"%s,"access_control_allow_origin":["http://127.0.0.1:%s","http://localhost:%s"]}}\n}\n' \
       "$H" "$UI_PORT" "$(proxy_clash_mode)" "${secret:+,\"secret\":\"$secret\"}" "$API_PORT" "$API_PORT"
@@ -170,22 +196,31 @@ apply_config() {
   _apply_step 0 10 "生成配置"
   load_settings        # 生成配置前读最新的设置 (本进程启动之后别的进程可能改过, 例如代理总开关)
   ovr_sync
-  gen_config
+  gen_config || return 1
   _apply_step 1 35 "校验配置"
   if ! "$SB" check -c "$H/config.json.new" > "$H/check.log" 2>&1; then
     if gen_config --no-rulesets && "$SB" check -c "$H/config.json.new" > "$H/check.log.2" 2>&1; then
       warn "社区规则集未通过校验, 已临时停用 (运行 enana update 重新下载)"
     else return 1; fi
   fi
-  if [ -f "$H/config.json" ] && cmp -s "$H/config.json" "$H/config.json.new"; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi
+  if [ -f "$H/config.json" ] && cmp -s "$H/config.json" "$H/config.json.new" && { [ "${NETWORK_MODE:-system}" != tun ] || { enhanced_loaded && [ "$(enhanced_fingerprint)" = "$(cat "$H/.enhanced-fingerprint" 2>/dev/null)" ]; }; }; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi
   [ -f "$H/config.json" ] && cp -p "$H/config.json" "$H/config.json.bak"
+  local previous_pid; previous_pid=$(os_service_pid)
   mv "$H/config.json.new" "$H/config.json"; APPLY_CHANGED=1
-  if os_service_loaded; then
+  if os_service_loaded || [ "${NETWORK_MODE:-system}" = tun ]; then
     _apply_step 2 60 "应用并重启"
-    os_service_restart
     _apply_step 3 80 "等待服务就绪"
-    if ! wait_port "$PORT" 15; then
-      if [ -f "$H/config.json.bak" ]; then cp -p "$H/config.json.bak" "$H/config.json"; os_service_restart; wait_port "$PORT" 15 || true; proxy_sync_mode; fi
+    if ! os_service_restart || ! wait_port "$PORT" 15 || ! enhanced_ready; then
+      if [ -f "$H/config.json.bak" ]; then
+        cp -p "$H/config.json.bak" "$H/config.json"
+        # The privileged helper already restores its previous snapshot. An
+        # authorization cancellation also leaves the old core alive. Avoid a
+        # second admin prompt/restart when that old backend is still healthy.
+        if ! { os_service_running && wait_port "$PORT" 2 && { { enhanced_configured && enhanced_ready; } || { [ -n "$previous_pid" ] && [ "$(os_service_pid)" = "$previous_pid" ]; }; }; }; then
+          os_service_restart; wait_port "$PORT" 15 || true
+        fi
+        proxy_sync_mode
+      fi
       return 3
     fi
     proxy_sync_mode

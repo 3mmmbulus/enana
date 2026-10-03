@@ -261,6 +261,7 @@ _b_meta() {
   role_other=$(( $(srv_count) - role_pin - role_auto ))
   printf 'app=enana\nversion=%s\ncore=%s\nos=macOS %s\narch=%s\nlang=%s\ntimezone=%s\nnow=%s\nepoch=%s\n' "$VERSION" "$core" "$osv" "$arch" "${LANG_UI:-zh}" "$tz" "$(date '+%F %T')" "$(now)"
   printf 'service.loaded=%s\nservice.running=%s\nservice.pid=%s\n' "${SVC_LOADED:-0}" "${SVC_RUNNING:-0}" "${SVC_PID:-}"
+  printf 'capture.mode=%s\n' "${NETWORK_MODE:-system}"
   printf 'proxy.enabled=%s\nproxy.mode=%s\nclash.mode=%s\n' "${PROXY_ENABLED:-0}" "${PROXY_MODE:-auto}" "${clash_mode:-unknown}"
   printf 'settings.log_ops=%s\nsettings.access_log=%s\nsettings.log_core=%s\nsettings.log_hours=%s\nsettings.auto_sites=%s\nsettings.auto_update=%s\n' "${LOG_OPS:-1}" "${ACCESS_LOG:-1}" "${LOG_CORE:-1}" "$(logs_hours)" "${AUTO_SITES:-0}" "${AUTO_UPDATE:-1}"
   printf 'ports.proxy=%s\nports.clash=%s\nports.api=%s\nports.speed=%s\n' "$PORT" "$UI_PORT" "$API_PORT" "$SPEED_PORT"
@@ -270,6 +271,7 @@ _b_meta() {
 
 _b_env() {
   local p pid out
+  network_diagnostics | _b_mask_user
   scutil --proxy 2>/dev/null | awk '/^[[:space:]]+(HTTP|HTTPS|SOCKS|ProxyAutoConfig|ProxyAutoDiscovery|Exclude|FTP|RTSP|Gopher)[A-Za-z]* :/ { k = $1; $1 = ""; $2 = ""; sub(/^  */, ""); print "sysproxy." k "=" $0 }'
   printf 'sysproxy.points_to_enana=%s\n' "$(os_sysproxy_ok && echo yes || echo no)"
   printf 'dns.system=%s\n' "$(scutil --dns 2>/dev/null | awk '/nameserver\[[0-9]+\]/ {print $3}' | sort -u | head -6 | paste -sd' ' -)"
@@ -302,7 +304,9 @@ _b_config() { # 脱敏后的运行配置: 日志 / 入站 / 路由规则 (按顺
     print "log ", $E->encode($j->{log} || {}), "\n";
     my %ca = %{ $j->{experimental}{clash_api} || {} }; delete $ca{secret}; print "clash_api ", $E->encode(\%ca), "\n";
     for my $i (0 .. $#{ $j->{inbounds} || [] }) { my $b = $j->{inbounds}[$i]; print "inbound[$i] type=$b->{type} tag=$b->{tag} listen=", ($b->{listen} // ""), ":", ($b->{listen_port} // ""), "\n" }
+    for my $b (@{ $j->{inbounds} || [] }) { if ($b->{type} eq "tun") { print "tun ", $E->encode($b), "\n"; } }
     my $r = $j->{route} || {};
+    print "route auto_detect_interface=", ($r->{auto_detect_interface} ? 1 : 0), "\n";
     print "route final=", ($r->{final} // ""), " find_process=", ($r->{find_process} ? 1 : 0), " default_domain_resolver=", ($r->{default_domain_resolver} // ""), "\n";
     for my $i (0 .. $#{ $r->{rules} || [] }) { print "rule[$i] ", $E->encode($r->{rules}[$i]), "\n" }
     for my $s (@{ $r->{rule_set} || [] }) { (my $p = $s->{path} // $s->{url} // "") =~ s{.*/}{}; print "ruleset tag=$s->{tag} type=$s->{type} format=", ($s->{format} // ""), " file=$p\n" }
@@ -403,7 +407,7 @@ _b_proxy() { # <起始时间|空> <日期…>
 
 # logs_bundle <小时数|all> <分区 逗号分隔: ops access proxy snapshot>  -> 打印诊断导出文件 (UTF-8 文本)
 logs_bundle() {
-  local hours=${1:-24} secs=${2:-ops,access,proxy,snapshot} since='' days dlist BT
+  local hours=${1:-24} secs=${2:-ops,access,proxy,snapshot} since='' days dlist BT declared=meta
   case $hours in all) ;; ''|*[!0-9]*) hours=24 ;; esac
   [ "$hours" = all ] || { [ "$hours" -lt 1 ] && hours=1; [ "$hours" -gt $LOG_HOURS_MAX ] && hours=$LOG_HOURS_MAX; since=$(os_date_minus_hours "$hours"); }
   days=$(_b_days "$hours"); dlist=$(printf '%s' "$days" | paste -sd, -)
@@ -411,7 +415,12 @@ logs_bundle() {
   printf '#ENANA-DIAGNOSTICS format=%s\n' "$BUNDLE_FORMAT"
   printf '#generated=%s tz=%s app=enana version=%s\n' "$(date '+%F %T')" "$(date +%z)" "$VERSION"
   printf '#range since="%s" hours=%s days=%s\n' "${since:-beginning}" "$hours" "${dlist:-none}"
-  printf '#sections=meta%s%s%s%s\n' "$(case ",$secs," in *,snapshot,*) printf ',env,config,policy,servers,apps,probes,live' ;; esac)" "$(case ",$secs," in *,ops,*) printf ',ops' ;; esac)" "$(case ",$secs," in *,access,*) printf ',access' ;; esac)" "$(case ",$secs," in *,proxy,*) printf ',proxy' ;; esac)"
+  # macOS bash 3.2 misparses unparenthesized case patterns inside quoted $().
+  case ",$secs," in *,snapshot,*) declared="$declared,env,config,policy,servers,apps,probes,live" ;; esac
+  case ",$secs," in *,ops,*) declared="$declared,ops" ;; esac
+  case ",$secs," in *,access,*) declared="$declared,access" ;; esac
+  case ",$secs," in *,proxy,*) declared="$declared,proxy" ;; esac
+  printf '#sections=%s\n' "$declared"
   printf '%s\n' '#about=这是 enana 的诊断导出文件, 用来排查「网站打不开 / 走错出口 / 应用没识别」之类的问题。每个 "@@SECTION 名称 format=… rows=N" 开始一个分区, 到下一个 "@@SECTION" 或 "@@END" 结束; 以 "#" 开头的行是说明; format=kv 是 键=值, tsv 的第一行是列名 (制表符分隔), raw 是原始日志行。'
   printf '%s\n' '#privacy=不含任何密码 / 令牌 / 服务器凭据; 服务器地址和系统用户名已打码; 但包含访问过的域名和应用名, 请只发给你信任的人。'
   printf '%s\n' '#route-reasons=出口名 direct-mode(代理总开关关闭) direct-lan(本机/局域网) direct-site(你把该网站设为直连) direct-app(你把该应用设为直连/关) direct-cn(国内规则) direct(策略选了直连) 都是直连; 其它名字是代理服务器节点。'

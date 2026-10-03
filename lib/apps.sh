@@ -1,6 +1,6 @@
 # 应用识别 + 用户覆盖层。
 # 覆盖层 = 用户对「某个应用 / 某个网站」的显式设置, 保存在 $H/overrides.tsv:  类型|名称|状态|标记|出口
-#   类型 app|site;  状态 follow(跟随规则=开) direct(直连=关) pin(全走固定出口) auto(全走自动线路);
+#   类型 app|site;  状态 follow(跟随规则=开) direct(直连=关) pin(进入核心的流量走固定出口) auto(全走自动线路);
 #   标记 new(扫描新发现, 还没处理) ack(用户设置过 / 已知晓) def(首次扫描按推荐设置的默认值, 云端推荐更新后可以刷新);
 #   出口 只对 pin 有意义: 空 = 默认固定出口 · PINAUTO = 在固定出口里自动选一个 · 其它 = 指定走这一个固定出口 (固定出口有 2 个以上时才能选)
 # 设置分别写成 sing-box 本地规则集 (rules/ovr-<名字>.json): direct(网站直连) appdirect(应用直连) pin(默认固定出口) pinauto(固定出口里自动选) pin-<序号>(指定的固定出口) auto(自动线路),
@@ -57,14 +57,29 @@ app_regex_json() { # 应用名 -> JSON 字符串内容: (?i)/名称\\.app/  (点
 
 # 由 overrides.tsv 生成各个规则集文件 (原地覆盖写, 让 sing-box 的文件监视生效; 内容没变就不写)
 ovr_sync() {
-  local T bset f body name
+  local T bset f body name path
   mkdir -p "$H/rules"; T=$(mktemp -d); touch "$H/overrides.tsv"
   bset="|$(awk -F'|' '$2=="bin" {printf "%s|", $1}' "$H/custom-apps.tsv" 2>/dev/null)"        # 自定义的命令行工具 (按可执行文件名匹配, 不是 .app 路径)
   ovr_pins > "$T.pins"
-  LC_ALL=C awk -F'|' -v dir="$T" -v bset="$bset" -v pf="$T.pins" '
+  : > "$T.browsers"
+  while IFS=$'\t' read -r name path; do
+    if app_is_browser "$path" || awk -F'|' -v n="$name" '$1==n && $3=="浏览器" {found=1} END {exit !found}' "$(content_file apps.conf)"; then
+      printf '%s\n' "$name" >> "$T.browsers"
+    fi
+  done < "$H/.apps.now" 2>/dev/null
+  LC_ALL=C awk -F'|' -v dir="$T" -v bset="$bset" -v bf="$T.browsers" -v pf="$T.pins" '
     function js(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
     function rx(n,   t) { t = n; gsub(/[][\\.*^$+?(){}|\/]/, "\\\\&", t); return "(?i)/" t "\\.app/" }          # 应用名里的正则符号转义, 再整体当 JSON 字符串写
-    function key(st, kind, tg) {
+    function key(st, kind, tg, name) {
+      if (kind == "app" && (name in browsers)) {
+        if (st == "direct") return "browserdirect"
+        if (st == "auto") return "browserauto"
+        if (st == "pin") {
+          if (np >= 2 && tg == "PINAUTO") return "browserpinauto"
+          if (np >= 2 && tg in pidx) return "browserpin-" pidx[tg]
+          return "browserpin"
+        }
+      }
       if (st == "direct") return (kind == "site") ? "direct" : "appdirect"
       if (st == "auto") return "auto"
       if (np < 2) return "pin"
@@ -72,14 +87,21 @@ ovr_sync() {
       if (tg in pidx) return "pin-" pidx[tg]
       return "pin"                                                                                           # 指定的出口已经不存在: 退回默认固定出口
     }
-    BEGIN { np = 0; while ((getline l < pf) > 0) if (l != "") { P[++np] = l; pidx[l] = np }
-            nk = split("direct appdirect pin pinauto auto", K, " "); for (i = 1; i <= np; i++) K[++nk] = "pin-" i
+    BEGIN { while ((getline l < bf) > 0) browsers[l] = 1; np = 0; while ((getline l < pf) > 0) if (l != "") { P[++np] = l; pidx[l] = np }
+            nk = split("direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto auto", K, " "); for (i = 1; i <= np; i++) { K[++nk] = "pin-" i; K[++nk] = "apppin-" i; K[++nk] = "browserpin-" i }
             for (i = 1; i <= nk; i++) known[K[i]] = 1 }
     ($1 == "site" || $1 == "app") && $3 != "follow" && $3 != "" {
-      k = key($3, $1, $5)
+      k = key($3, $1, $5, $2)
       if ($1 == "site") S[k] = S[k] (S[k] == "" ? "" : ",") "\"" js($2) "\""
       else if (index(bset, "|" $2 "|") > 0) B[k] = B[k] (B[k] == "" ? "" : ",") "\"" js($2) "\""
       else A[k] = A[k] (A[k] == "" ? "" : ",") "\"" js(rx($2)) "\""
+      # App PIN must precede EVERY website PIN, including a site-specific node.
+      # Keep combined files for compatibility and add app-only precedence files.
+      if ($1 == "app" && $3 == "pin" && !($2 in browsers)) {
+        ak = "app" k
+        if (index(bset, "|" $2 "|") > 0) B[ak] = B[ak] (B[ak] == "" ? "" : ",") "\"" js($2) "\""
+        else A[ak] = A[ak] (A[ak] == "" ? "" : ",") "\"" js(rx($2)) "\""
+      }
     }
     END {
       for (i = 1; i <= nk; i++) {
@@ -92,12 +114,12 @@ ovr_sync() {
       }
     }' "$H/overrides.tsv" 2>/dev/null
   # 没有 overrides.tsv 时 awk 不会产出文件: 补齐占位, 保证每个规则集文件都存在
-  for name in direct appdirect pin pinauto auto; do [ -f "$T/$name.json" ] || printf '%s\n' '{"version":3,"rules":[{"domain":["enana-placeholder.invalid"]}]}' > "$T/$name.json"; done
+  for name in direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto auto; do [ -f "$T/$name.json" ] || printf '%s\n' '{"version":3,"rules":[{"domain":["enana-placeholder.invalid"]}]}' > "$T/$name.json"; done
   for f in "$T"/*.json; do
     name=$(basename "$f"); body=$(cat "$f")
     if [ ! -f "$H/rules/ovr-$name" ] || [ "$(cat "$H/rules/ovr-$name")" != "$body" ]; then printf '%s\n' "$body" > "$H/rules/ovr-$name.tmp" && cat "$H/rules/ovr-$name.tmp" > "$H/rules/ovr-$name" && rm -f "$H/rules/ovr-$name.tmp"; fi
   done
-  rm -rf "$T" "$T.pins"
+  rm -rf "$T" "$T.pins" "$T.browsers"
 }
 
 # ---------- 应用扫描 ----------
@@ -129,7 +151,14 @@ apps_installed() { # 每行: 名称<TAB>路径  (自动识别的 + 用户手动�
 }
 
 app_is_browser() { # <.app 路径>  声明自己能打开 http / https 链接的应用 = 浏览器
-  local plist="$1/Contents/Info.plist"
+  local plist="$1/Contents/Info.plist" name group
+  name=$(basename "$1" .app)
+  # Known native apps can register http/https for OAuth or deep links too.
+  # Their catalog category takes precedence over that URL-handler heuristic.
+  group=$(LC_ALL=C awk -F'|' -v n="$name" '
+    !/^[ \t]*(#|$)/ {p=tolower($1); x=tolower(n); if (substr(p,length(p))=="*") {if (index(x,substr(p,1,length(p)-1))!=1) next} else if (x!=p) next; print $3; exit}
+  ' "$(content_file apps.conf)" 2>/dev/null)
+  if [ -n "$group" ]; then [ "$group" = 浏览器 ]; return; fi
   [ -f "$plist" ] && plutil -extract CFBundleURLTypes json -o - "$plist" 2>/dev/null | LC_ALL=C grep -Eq '"https?"'
 }
 

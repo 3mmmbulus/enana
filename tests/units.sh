@@ -4,7 +4,7 @@
 # 用法: bash tests/units.sh        (tests/run.sh 最后也会调用它)
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd -P); REPO=$(dirname "$HERE")
-UW=$(mktemp -d /tmp/enana-unit.XXXXXX); trap 'rm -rf "$UW"' EXIT; : > "$UW/.pass"; : > "$UW/.fail"
+UW=$(mktemp -d /tmp/enana-unit.XXXXXX); UW=$(cd "$UW" && pwd -P); trap 'rm -rf "$UW"' EXIT; : > "$UW/.pass"; : > "$UW/.fail"
 tpass()   { echo p >> "$UW/.pass"; echo "  ✓ $1"; }              # 计数写文件: chk 常在管道的子 shell 里运行
 tfail()  { echo f >> "$UW/.fail"; echo "  ✗ $1"; [ -n "${2:-}" ] && printf '      ↳ %s\n' "$(printf '%s' "$2" | head -c 600)"; return 0; }
 t()    { local d=$1; shift; local out; if out=$("$@" 2>&1); then tpass "$d"; else tfail "$d" "$out"; fi; }
@@ -17,7 +17,7 @@ export PORT=39700 UI_PORT=39701 API_PORT=39702 SPEED_PORT=39703
 mkdir -p "$UW/home/Applications" "$UW/h/rules" "$UW/h/logs"
 . "$REPO/lib/common.sh"; init_paths "$REPO/install.sh"
 LIB=$REPO/lib; DATA=$REPO/data
-for _f in i18n jobs servers apps autosites sites fetch os-darwin auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os-darwin enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps; do . "$LIB/$_f.sh"; done
 load_settings; QUIET=1
 [ "$H" = "$UW/h" ] || { echo "REFUSING: 数据目录不是临时目录 ($H)"; exit 1; }
 
@@ -81,8 +81,8 @@ Q=refused acc | chk "搜索: 按失败类型 (refused) 找到 1 条" 'assert d["
 Q=104.18 acc | chk "搜索: 按解析出的地址找到 1 条" 'assert d["total"]==1 and d["rows"][0]["id"]=="1001"'
 SINCE="$D 22:34:10" acc | chk "起始时间: 只保留之后开始的连接" 'assert d["total"]==5 and d["rows"][-1]["id"]=="1007"'
 { printf '@@PINS\nFix-Pin\n@@AUTOS\n@@LOG\n'; cat "$UW/proxy.log"; } | LC_ALL=C awk -f "$REPO/lib/access.awk" -v mode=tsv -v q= -v f= -v lim=0 -v off=0 -v since= -v mask=1 > "$UW/acc.tsv"
-eq "导出表格 (tsv): 表头列固定" "$(head -1 "$UW/acc.tsv")" "$(printf 'ts\tid\tnet\thost\tport\tapp\tuser\troute\tnode\treason\tresult\terr\tdur\tips\terrmsg\tpath')"
-eq "导出表格: 11 行数据 + 1 行表头, 每行 16 列" "$(awk -F'\t' 'NF==16 {n++} END{print n" "NR}' "$UW/acc.tsv")" "12 12"
+eq "导出表格 (tsv): 表头列固定" "$(head -1 "$UW/acc.tsv")" "$(printf 'ts\tid\tnet\thost\tport\tapp\tuser\troute\tnode\treason\tresult\terr\tdur\tips\terrmsg\tpath\tcapture')"
+eq "导出表格: 11 行数据 + 1 行表头, 每行 17 列" "$(awk -F'\t' 'NF==17 {n++} END{print n" "NR}' "$UW/acc.tsv")" "12 12"
 t "导出表格打码: 用户名只剩 <user> (root 保留), 路径里的 /Users/<名字> 被替换" sh -c "! grep -q $'\tfa\t' '$UW/acc.tsv' && grep -q $'\troot\t' '$UW/acc.tsv'"
 
 echo "== U2. 自动识别: 事件提取 · 候选判定 · 误报保护"
@@ -129,8 +129,9 @@ eq "kv: 空值省略, 带空格的值加引号, 引号和反斜杠转义, 制表
 T20=$(date -v-20H '+%F %T'); T5=$(date -v-5H '+%F %T'); T1=$(date -v-1H '+%F %T')
 for ts in "$T20" "$T5" "$T1"; do printf '%s\tdashboard\t测试\tk=v\tok\n' "$ts" >> "$LOGS/ops-${ts%% *}.log"; done
 OLDEST=$(date -v-5d +%F); printf '%s 00:00:00\tdashboard\t很旧\t\tok\n' "$OLDEST" > "$LOGS/ops-$OLDEST.log"
-printf '+0800 %s INFO [1 0ms] inbound/mixed[in]: inbound connection to a.example:443\n+0800 %s INFO [1 0ms] outbound/direct[direct]: outbound connection to a.example:443\n' "$T20" "$T1" > "$LOGS/proxy-${T20%% *}.log.tmp"
-cat "$LOGS/proxy-${T20%% *}.log.tmp" >> "$LOGS/proxy-${T20%% *}.log"; rm -f "$LOGS/proxy-${T20%% *}.log.tmp"
+# Records belong in their own daily file even when the fixture spans midnight.
+printf '+0800 %s INFO [1 0ms] inbound/mixed[in]: inbound connection to a.example:443\n' "$T20" >> "$LOGS/proxy-${T20%% *}.log"
+printf '+0800 %s INFO [1 0ms] outbound/direct[direct]: outbound connection to a.example:443\n' "$T1" >> "$LOGS/proxy-${T1%% *}.log"
 LOG_HOURS=12 logs_purge >/dev/null
 all_ops=$(cat "$LOGS"/ops-*.log 2>/dev/null | cut -f1 | sort | paste -sd, -)
 case $all_ops in *"$T20"*) tfail "12 小时保留: 20 小时前的操作记录被裁掉" "$all_ops" ;; *) tpass "12 小时保留: 20 小时前的操作记录被裁掉 (同一天里按小时裁剪)" ;; esac
@@ -199,7 +200,7 @@ printf '%s\n' '{"role":"pin","outbound":{"type":"socks","tag":"Pin-A","server":"
 printf 'site|direct.io|direct|ack|\nsite|proxy.io|pin|ack|\nsite|auto.io|auto|ack|\napp|Plain App|direct|ack|\napp|Odd Browser|pin|ack|\napp|Auto App|auto|ack|\napp|Cursor|follow|ack|\n' > "$H/overrides.tsv"
 ovr_sync
 eq "网站直连 → ovr-direct (domain_suffix); 应用直连 → ovr-appdirect (process_path_regex) —— 两个规则集分开, 才能在日志里区分原因" "$(rs direct | grep -c direct.io):$(rs direct | grep -c Plain):$(rs appdirect | grep -c 'Plain App'):$(rs appdirect | grep -c direct.io)" "1:0:1:0"
-eq "固定出口 → ovr-pin (网站按域名, 应用按路径正则); 自动线路 → ovr-auto; 跟随的不写进任何规则集" "$(rs pin | grep -c proxy.io):$(rs pin | grep -c 'Odd Browser'):$(rs auto | grep -c auto.io):$(rs auto | grep -c 'Auto App'):$(cat "$H"/rules/ovr-*.json | grep -c Cursor)" "1:1:1:1:0"
+eq "固定出口网站 → ovr-pin; 浏览器 PIN → 独立兜底规则; 自动线路 → ovr-auto; 跟随的不写进任何规则集" "$(rs pin | grep -c proxy.io):$(rs browserpin | grep -c 'Odd Browser'):$(rs pin | grep -c 'Odd Browser'):$(rs auto | grep -c auto.io):$(rs auto | grep -c 'Auto App'):$(cat "$H"/rules/ovr-*.json | grep -c Cursor)" "1:1:0:1:1:0"
 eq "应用名按正则转义写入 (点号 / 括号不会匹配到别的应用)" "$(printf 'app|Foo.Bar (x)|direct|ack|\n' >> "$H/overrides.tsv"; ovr_sync; rs appdirect | grep -o '(?i)/Foo[^"]*' | head -1)" '(?i)/Foo\\.Bar \\(x\\)\\.app/'
 eq "只有 1 个固定出口: 不能指定出口 (只能是默认)" "$(ovr_target_valid '' && echo ok1; ovr_target_valid Pin-A || echo no1; ovr_target_valid PINAUTO || echo no2)" "ok1
 no1
@@ -238,6 +239,7 @@ printf '{"role":"pin","outbound":{"type":"socks","tag":"Pin-A","server":"203.0.1
 echo '{"log":{"level":"info"},"route":{"rules":[{"rule_set":["ovr-direct"],"action":"route","outbound":"direct-site"}],"final":"Final"},"outbounds":[{"type":"socks","tag":"Pin-A","server":"203.0.113.77","server_port":1080,"username":"u-secret","password":"PW-SECRET-123"}],"experimental":{"clash_api":{"external_controller":"127.0.0.1:1","secret":"CLASH-SECRET-XYZ"}}}' > "$H/config.json"
 logs_bundle 24 ops,access,proxy,snapshot > "$UW/bundle.txt" 2>/dev/null
 eq "第一行是格式标记 (#ENANA-DIAGNOSTICS format=1)" "$(head -1 "$UW/bundle.txt")" "#ENANA-DIAGNOSTICS format=1"
+eq "bash 3.2: 导出分区声明完整, 不混入 shell 代码" "$(sed -n '/^#sections=/p' "$UW/bundle.txt")" "#sections=meta,env,config,policy,servers,apps,probes,live,ops,access,proxy"
 python3 - "$UW/bundle.txt" > "$UW/bundle.check" 2>&1 <<'PY'
 import sys, re
 lines = open(sys.argv[1], encoding='utf-8').read().split('\n')

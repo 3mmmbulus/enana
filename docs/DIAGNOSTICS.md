@@ -143,3 +143,17 @@ python3 tools/diag-summary.py <文件> --app "Google Chrome" --host google.com
 - 三类日志各有独立开关 (设置 → 日志): **操作记录** / **网站访问** / **代理日志**; 关闭哪一类, 导出里对应分区就没有数据 (`meta` 的 `settings.*` 会如实标出)。
 - 保留时长 12 小时 – 30 天 (默认 3 天), 按小时清理; 超出的日志在每小时的维护里自动压缩 / 删除。
 - 日志只存在本机 (`~/.enana/logs`), 不会自动上传; 导出文件由用户自己决定发给谁。
+
+## 接管与绕过代理的证据
+
+`meta.capture.mode` 与 env 中的 `capture.mode` 区分 `system` 和 `tun`。
+`capture.tun.configured/ready/service`、`capture.route.ipv4/ipv6/localhost` 描述当前状态; configured 不等于已建立 TUN。访问表尾新增 `capture` 列 (`mixed` 或 `tun`), 访问详情也显示入口。
+
+环境快照附带当前用户的公网 TCP/UDP socket 表 (`pid/app/policy/network/destination/observation/process_path`):
+
+- `captured`: OS 源地址/端口与 Clash API 活跃连接匹配。
+- `bypass-system-proxy`: System Proxy 下观察到了公网 socket, 但没有核心连接与之匹配。可在复现时导出, 将 App 的直接请求与策略一起定位。短连接或采样竞争仍需连续复现核对。
+- `core-api-unavailable`: 控制 API 不可读时无法对照, 不判定绕过代理。
+- `tun-unobserved`: TUN 下没匹配到活跃连接, **不是已确认泄漏**; 检查服务、实际路由和入口日志。共享服务、进程归属与采样时机也可能影响匹配。
+
+localhost 回调、局域网 socket 和核心自身出口不计入绕过系统代理。只读取当前用户的连接, 不要求 root; 目标 IP 脱敏。没有访问记录不能证明 App 没发请求或已被代理。旧版文件缺少 socket 快照时, 无法追溯证明某次 OAuth token 请求的接管情况。

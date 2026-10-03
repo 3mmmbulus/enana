@@ -97,8 +97,12 @@ autosite_add() { # <域名> <失败数> <尝试数> <失败类型> <应用> <示
   local d=$1 nf=$2 na=$3 ec=$4 app=$5 host=$6 tg=$7 st code out ms
   ovr_valid site "$d" || return 2
   st=$(autosite_state)
-  lock_take || return 2
-  ovr_set site "$d" "$st" ack ''; ovr_sync; lock_drop
+  if [ "${NETWORK_MODE:-system}" = tun ]; then
+    op_txn "自动识别: 添加网站到代理" txn_override site "$d" "$st" '' >/dev/null 2>&1 || return 2
+  else
+    lock_take || return 2
+    ovr_set site "$d" "$st" ack ''; ovr_sync; lock_drop
+  fi
   sleep 2                                                                       # 规则集是文件监视热加载, 等它生效
   out=$(curl -s -o /dev/null -m 8 --connect-timeout 6 -x "http://127.0.0.1:$PORT" -w 'ENANA:%{http_code}:%{time_total}' "${ENANA_AUTOSITE_VERIFY_URL:-https://${host:-$d}/}" 2>/dev/null || true)       # (ENANA_AUTOSITE_VERIFY_URL: 只给测试用, 让验证不去连真实的互联网)
   code=${out#ENANA:}; code=${code%%:*}
@@ -109,7 +113,9 @@ autosite_add() { # <域名> <失败数> <尝试数> <失败类型> <应用> <示
        oplog auto "自动识别: 添加网站到代理" "$(kv domain "$d" state "$st" fails "$nf" attempts "$na" err "$ec" app "$app" was "$tg" verify "http=$code ${ms}ms")" ok
        return 0 ;;
   esac
-  lock_take && { ovr_delete site "$d"; ovr_sync; lock_drop; }
+  if [ "${NETWORK_MODE:-system}" = tun ]; then
+    op_txn "自动识别: 撤销网站" txn_override site "$d" follow '' >/dev/null 2>&1 || return 2
+  else lock_take && { ovr_delete site "$d"; ovr_sync; lock_drop; }; fi
   printf '%s %s\n' "$d" "$(now)" >> "$H/.autosite.cool"
   oplog auto "自动识别: 放弃网站" "$(kv domain "$d" fails "$nf" attempts "$na" err "$ec" app "$app" was "$tg" verify "no response through proxy")" error
   return 1

@@ -20,10 +20,10 @@ valid_text_file() { [ -s "$1" ] && ! LC_ALL=C grep -q '<html' "$1"; }
 
 _update_urls() { # 文件名 -> 每行一个 URL
   if [ -n "${ENANA_UPDATE_BASE:-}" ]; then printf '%s/%s\n' "$ENANA_UPDATE_BASE" "$1"; return 0; fi     # 测试用
-  printf '%s\n' "https://raw.githubusercontent.com/$UPDATE_REPO/$UPDATE_BRANCH/$1" \
+  printf '%s\n' "${UPDATE_MIRROR:-https://enana.cc/dl}/$1" \
+                "https://raw.githubusercontent.com/$UPDATE_REPO/$UPDATE_BRANCH/$1" \
                 "https://fastly.jsdelivr.net/gh/$UPDATE_REPO@$UPDATE_BRANCH/$1" \
-                "https://cdn.jsdelivr.net/gh/$UPDATE_REPO@$UPDATE_BRANCH/$1" \
-                "${UPDATE_MIRROR:-https://enana.cc/dl}/$1"
+                "https://cdn.jsdelivr.net/gh/$UPDATE_REPO@$UPDATE_BRANCH/$1"
 }
 _update_get() { # 文件名 校验函数 输出文件
   local f=$1 v=$2 o=$3 u

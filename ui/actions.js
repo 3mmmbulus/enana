@@ -6,6 +6,31 @@
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, setText = TP.setText, I = window.I18N, t = I.t, L = I.L;
   var A = TP.actions = {};
   var rules = { running: false, pct: 0, doneAt: 0 }, restarting = false, killing = false;
+  var changingCapture = false;
+  A.setNetworkMode = async function (mode, confirmed) {
+    if (changingCapture) return false;
+    var why = TP.why.helper();
+    if (why) { ui.toast(why, 'warn'); return false; }
+    if (!confirmed && !await ui.confirmDialog({ title: t('set.network.title'), message: t('set.network.confirm'), detail: t('set.network.note'), confirmText: t(mode === 'tun' ? 'apps.capture.enable' : 'common.apply') })) return false;
+    changingCapture = true;
+    try {
+      await TP.jobs.runInDock(t('set.network.title'), function () { return TP.helper('POST', '/api/network-mode', { form: { mode: mode } }); });
+      await TP.loadState(); await TP.loadSettings();
+      if (mode === 'tun' && !(S.state && S.state.proxy && S.state.proxy.tun_ready)) throw new Error(t('set.network.notReady'));
+      return true;
+    } finally { changingCapture = false; }
+  };
+  A.offerAppCapture = async function (name) {
+    var choice = await ui.modal({ title: t('apps.capture.title'), size: 'md', icon: 'warning', iconKind: 'warn',
+      body: h('div', null, h('p', null, t('apps.capture.choose', { name: name })), h('p', { class: 'muted sm' }, t('set.network.note'))),
+      actions: [
+        { label: t('common.cancel'), cancel: true },
+        { label: t('apps.capture.limited'), value: 'system' },
+        { label: t('apps.capture.enable'), kind: 'primary', value: 'tun', autofocus: true }
+      ] }).closed;
+    if (choice === 'tun') return A.setNetworkMode('tun', true);
+    return choice === 'system';
+  };
 
   /* ---------- 按钮状态绑定 ---------- */
   var bound = [];
@@ -21,8 +46,9 @@
   function apply(b, st) {
     ui.setBtn(b, st.label, st.icon);
     ui.avail(b, st.reason || '', st.fix || null);
-    b.classList.toggle('is-muted', !!st.muted); b.classList.toggle('is-busy', !!st.busy);
-    if (st.busy) b.setAttribute('aria-busy', 'true'); else b.removeAttribute('aria-busy');
+    b._renderBusy = !!st.busy; b.disabled = !!st.busy || !!b._busy;
+    b.classList.toggle('is-muted', !!st.muted); b.classList.toggle('is-busy', !!st.busy || !!b._busy);
+    if (st.busy || b._busy) b.setAttribute('aria-busy', 'true'); else b.removeAttribute('aria-busy');
     if (b.classList.contains('rowbtn') && !st.reason) { b._tip = st.label; b.title = st.label; }      // 顶栏上窄屏只显示图标时, 用提示补上文字
   }
   TP.paintBtn = apply;
@@ -213,7 +239,7 @@
   /* 代理模式控件 (概览 / 设置里共用): 分段开关 + 当前模式的说明 + 代理关闭时的提示 */
   TP.modeControl = function () {
     var seg = ui.seg(L('pmode.aria'), [{ v: 'mode-auto', label: L('pmode.auto'), icon: 'auto' }, { v: 'mode-global', label: L('pmode.global'), icon: 'globe' }],
-      function (v) { paint(); TP.safe(function () { return A.setProxyMode(v === 'mode-global' ? 'global' : 'auto'); })(); });   // 先恢复显示, 确认之后才真正改变
+      function (v) { paint(); return TP.safe(function () { return A.setProxyMode(v === 'mode-global' ? 'global' : 'auto'); })(); });   // 先恢复显示, 确认之后才真正改变
     var desc = h('p', { class: 'muted sm pmode-d' });
     var off = h('p', { class: 'hint warn pmode-off', hidden: true }, ui.icon('power', 15, 'ci'), h('span', null, L('pmode.offHint')));
     var el = h('div', { class: 'pmode' }, seg.el, desc, off);

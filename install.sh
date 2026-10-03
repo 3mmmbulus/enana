@@ -16,7 +16,7 @@ while [ -L "$_p" ]; do _l=$(readlink "$_p"); case $_l in /*) _p=$_l ;; *) _p=$(d
 _d=$(cd "$(dirname "$_p")" && pwd -P)
 . "$_d/lib/common.sh"
 init_paths "$_p"
-for _f in i18n jobs servers apps autosites sites fetch os-darwin auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps menu detect console; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os-darwin enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps menu detect console; do . "$LIB/$_f.sh"; done
 load_settings
 
 FORCE=''; KEEP=''; QUIET=${QUIET:-}; UPGRADE=''; CMD=''; ARG1=''; ARG2=''
@@ -199,6 +199,7 @@ st_service() {
 }
 
 st_sysproxy() {
+  [ "${NETWORK_MODE:-system}" != tun ] || { info "Enhanced/TUN: 保留现有系统代理设置"; return 0; }
   step "设置系统代理 (让 Claude App / 浏览器等自动走本地代理)"
   if os_sysproxy_ok && [ -z "$FORCE" ]; then ok "系统代理已指向本程序, 无需密码"; return 0; fi
   os_sysproxy_backup
@@ -291,6 +292,7 @@ cmd_install() {
 
 # ============================== 日常命令 ==============================
 cmd_status() {
+  info "capture.mode=${NETWORK_MODE:-system}"
   if os_service_running; then ok "服务运行中 (sing-box $(core_version))"; else warn "服务未运行 (enana start)"; fi
   if os_sysproxy_ok; then ok "系统代理: 已开启"; else warn "系统代理: 未开启 (enana on)"; fi
   if auth_logged_in; then ok "账号: 已登录 $(auth_mask_email "$(auth_current_email)")"; else info "账号: 未登录 — 打开仪表盘, 用 enana.cc 账号登录 (没有账号可以直接注册)"; fi
@@ -298,13 +300,14 @@ cmd_status() {
   update_has_new && warn "有新版本 (enana self-update 更新)"
   info "服务器 $(srv_count) 台 · 后台地址 $UI_URL"
 }
-cmd_start() { os_service_start && wait_port "$PORT" 15 && { proxy_sync_mode; ok "已启动"; } || warn "启动失败: enana doctor"; }
-cmd_restart() { info "正在重启服务…"; os_service_restart; if wait_port "$PORT" 15; then proxy_sync_mode; ok "已重启"; oplog terminal "重启服务" "" ok; else warn "没有在 15 秒内启动: 运行 enana doctor"; fi; }
+cmd_start() { os_service_start && wait_port "$PORT" 15 && enhanced_ready && { proxy_sync_mode; ok "已启动"; } || warn "启动失败: enana doctor"; }
+cmd_restart() { info "正在重启服务…"; if os_service_restart && wait_port "$PORT" 15 && enhanced_ready; then proxy_sync_mode; ok "已重启"; oplog terminal "重启服务" "" ok; else warn "没有在 15 秒内启动: 运行 enana doctor"; fi; }
+cmd_network_mode() { network_mode_set "$ARG1"; }
 cmd_on() { # 开启代理: 必须先在仪表盘登录 enana.cc 账号
   if ! auth_logged_in; then warn "还没有登录: 请先打开仪表盘 ($UI_URL) 用 enana.cc 账号登录, 再开启代理"; return 1; fi
-  cmd_start && proxy_set_enabled 1 && os_sysproxy_set on
+  cmd_start && proxy_set_enabled 1 && { [ "$NETWORK_MODE" = tun ] || os_sysproxy_set on; }
 }
-cmd_off() { proxy_set_enabled 0; if os_sysproxy_mine; then os_sysproxy_set off || { warn "系统代理没有关闭成功 (需要管理员密码), 服务未停止以免断网; 请重试 enana off"; return 1; }; fi; os_service_stop; ok "已关闭系统代理并停止服务"; }
+cmd_off() { proxy_set_enabled 0; if os_sysproxy_mine; then os_sysproxy_set off || { warn "系统代理没有关闭成功 (需要管理员密码), 服务未停止以免断网; 请重试 enana off"; return 1; }; fi; os_service_stop || return 1; ok "已关闭系统代理并停止服务"; }
 cmd_open() { os_open "$UI_URL"; echo "$UI_URL"; }
 cmd_env() { echo "export http_proxy=http://127.0.0.1:$PORT https_proxy=http://127.0.0.1:$PORT all_proxy=socks5://127.0.0.1:$PORT no_proxy=localhost,127.0.0.1,::1"; }
 cmd_logs() { tail -n "${ARG1:-100}" "$H/sing-box.log" 2>/dev/null || _t "(暂无日志)"; }
@@ -394,6 +397,7 @@ _doctor_body() { # 诊断信息 (不含任何密码/订阅链接), 出问题时�
   echo "服务器 $(srv_count) 台, 订阅 $(awk 'END{print NR}' "$H/subs.tsv" 2>/dev/null) 个, 应用覆盖 $(awk -F'|' '$1=="app"{n++} END{print n+0}' "$H/overrides.tsv" 2>/dev/null) 个"
   echo "规则集缺失: $(rules_missing | paste -sd, -)"
   echo "== 更新 =="; echo "$(update_available)"
+  echo "== Capture =="; network_diagnostics
   echo "== 系统代理 =="; while IFS= read -r _s; do printf '%s: ' "$_s"; networksetup -getsecurewebproxy "$_s" | tr '\n' ' '; echo; done < <(os_sysproxy_services)
   echo "== 网络 =="; probe_net; echo "GitHub ${NET_GITHUB}ms · jsDelivr ${NET_JSD}ms · Google ${NET_GOOGLE}ms · 百度 ${NET_BAIDU}ms → $NET_REGION"
   date "+系统时间: %F %T %Z"
@@ -406,7 +410,7 @@ cmd_uninstall() {
   [ -n "$KEEP" ] && msg="$msg (保留 $H 里的数据)" || msg="$msg, 并删除 $H (含你的服务器 / 订阅配置)"
   confirm "$msg" n || { info "已取消"; return 1; }
   os_sysproxy_mine && os_sysproxy_set off
-  os_service_stop; os_aux_unload
+  os_service_stop || return 1; enhanced_remove || return 1; os_aux_unload
   rm -f "$PLIST" "$PLIST_API" "$PLIST_UPD" "$PLIST_TICK"
   shortcut_remove
   if [ -z "$KEEP" ] && [ -n "$H" ] && [ "$H" != / ] && [ "$H" != "$HOME" ]; then
@@ -430,6 +434,7 @@ $(_t "  enana self-update    更新 enana 本体 (先询问确认; --yes 跳过)
 $(_t "  enana upgrade [版本]  升级 sing-box 核心 (先校验现有配置, 不通过自动回退)")
 $(_t "  enana logout         退出账号: 关闭代理, 清除本机登录信息 (之后要重新登录才能再开启代理)")
 $(_t "  enana lang [zh|en]   切换界面语言 (终端与仪表盘)")
+  enana network-mode system|tun   System Proxy / Enhanced (管理员授权)
 $(_t "  enana doctor         诊断信息 (不含密码, 反馈问题时贴出来)")
 $(_t "  enana logs [行数]     查看日志")
 $(_t "  enana diag [小时数]   导出诊断文件 (操作记录 + 网站访问 + 代理日志 + 当前状态, 默认最近 24 小时; 接管道直接输出)")
@@ -465,6 +470,7 @@ case ${CMD:-auto} in
   diag|diagnostics) cmd_diag ;;
   open)      cmd_open ;;
   env)       cmd_env ;;
+  network-mode) cmd_network_mode ;;
   uninstall) cmd_uninstall ;;
   version|--version) echo "enana $VERSION" ;;
   help|-h|--help) cmd_help ;;

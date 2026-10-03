@@ -366,3 +366,11 @@
 3. **每个功能旁有一个常显的「!」说明图标** (圆圈里的感叹号, 中性蓝灰色, 不是警告色): 点击弹出小面板, 写清「这是什么 / 怎么用 / 注意事项」, 键盘可达、可关闭; 文案放 i18n。
 4. **表格默认分页** (默认每页 10 / 20 / 50 可选), 页大小与当前页偏好记在 prefs 里, 换设备同步。
 5. **欢迎 / 新手引导卡片**默认半隐藏 (只露出一个小标签/进度环), 用户点击才展开, 关闭状态记在 prefs 里。
+
+## macOS Enhanced/TUN
+
+`POST /api/network-mode` 表单 `mode=system|tun` → `{ok:true,job}`。设置是本机独有, 不进入跨设备同步; 升级缺省 `system`。`GET /api/state` 与 `/api/settings` 的 `proxy` 增加 `network_mode`、`tun_ready`。
+
+TUN 使用管理员授权后的规则快照。此模式下 `/api/override`、`/api/apps/adopt`、`/api/apps/scan`、`/api/sites/auto/clear` 返回异步 `{ok:true,job}`, 前端必须等 job 完成再显示成功, 取消授权时事务撤销。System Proxy 下这些接口沿用立即响应/文件热加载。自动识别网站也必须先应用快照, 再验证实际连接; 不能把用户目录文件已更改当成 root 核心规则已生效。
+
+访问记录新增 `capture:"mixed|tun"` (老记录可能为空)。

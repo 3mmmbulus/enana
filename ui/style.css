@@ -917,3 +917,5 @@ dialog.authpage::backdrop{background:var(--bg)}
 .imp-save-n{flex-basis:100%;padding-left:24px;color:var(--warn)}
 .vps-save{margin-top:10px}
 .vps-save input{accent-color:var(--pri)}
+
+.seg.is-busy{cursor:progress;opacity:.7}

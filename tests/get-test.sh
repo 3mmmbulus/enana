@@ -8,6 +8,7 @@
 # 系统命令 (launchctl / networksetup / sudo / open) 用 tests/fakebin 里的假命令并有硬性保护; 「下载服务」「GitHub」「互联网」
 # 都是本机的模拟服务, 不产生任何外部流量。
 set -u
+export LC_ALL=C # Byte-oriented shell/log checks also handle macOS Bash 3.2.
 HERE=$(cd "$(dirname "$0")" && pwd -P); REPO=$(dirname "$HERE")
 SB=${SINGBOX:-$(command -v sing-box || true)}
 [ -x "$SB" ] || { echo "跳过: 需要 sing-box 二进制 (SINGBOX=/路径/sing-box)"; exit 77; }
@@ -169,7 +170,7 @@ OUT=$(env2 bash "$GET" --yes --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain);
 expect "端口被占用时安装仍然成功 (退出码 0)" test "$RC" = 0
 NEWP=$(sed -n 's/^PORT=//p' "$W/s2/h/settings.env" | tail -1)
 expect "代理端口已自动换成别的空闲端口 (写进了设置, 不是被占用的那个)" sh -c "[ -n '$NEWP' ] && [ '$NEWP' != '$B1' ] && [ '$NEWP' -ge 20000 ] && [ '$NEWP' -le 59999 ]"
-echo "$OUT" | grep -q "本地端口 $B1 已被其它程序占用, 已自动改用 $NEWP" && tpass "输出里说明了「端口 $B1 被占用, 已自动改用 $NEWP」" || tfail "输出里说明了端口被占用并自动改用了哪个"
+echo "$OUT" | grep -q "本地端口 $B1 已被其它程序占用, 已自动改用 ${NEWP}" && tpass "输出里说明了「端口 $B1 被占用, 已自动改用 ${NEWP}」" || tfail "输出里说明了端口被占用并自动改用了哪个"
 expect "新端口上代理在监听; 被占用的端口没有被动过 (占用它的程序还在)" sh -c "nc -z 127.0.0.1 '$NEWP' && kill -0 \$(cat '$W/pid-busy')"
 echo "$OUT" | grep -q "后台地址.*http://127.0.0.1:$B3/enana/admin/" && tpass "安装完成后打印了后台地址 http://127.0.0.1:$B3/enana/admin/" || tfail "安装完成后打印了后台地址 http://127.0.0.1:$B3/enana/admin/"
 expect "后台地址能打开 (由本地辅助服务提供)" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' http://127.0.0.1:$B3/enana/admin/)" = 200

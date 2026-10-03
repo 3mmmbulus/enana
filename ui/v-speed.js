@@ -14,6 +14,7 @@
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, I = window.I18N, t = I.t, L = I.L, fmt = TP.fmt, setText = TP.setText;
   var V = TP.V.speed = { id: 'speed' };
 
+  var runDialog = null, runDialogSig = '';
   var MAX_NODES = 12;                                   // POST /api/speedtest/start: nodes ≤ 12
   var BULLET = '•', DASH = '—', SEP = '\u0001';
   var GROUPS = ['global', 'cn', 'carrier', 'dev', 'media'];             // 目标分组的显示顺序; 其它分组按出现顺序排在后面
@@ -113,9 +114,16 @@
   V.init = function (root) {
     loadOpen();
     root.appendChild(h('div', { class: 'intro spd-intro' }, h('p', { class: 'muted' }, L('speed.intro')), ui.help('speed.page')));
-    root.appendChild(buildIp());
-    root.appendChild(buildTest());
-    root.appendChild(buildResult());
+    el.speedPanels = {};
+    var views = ['test', 'ip', 'results'], current = TP.prefs.get('speed.tab', 'test');
+    if (views.indexOf(current) < 0) current = 'test';
+    el.resultCard = buildResult();
+    var contents = { test: buildTest(), ip: buildIp(), results: el.resultCard };
+    var tabs = ui.tabs(L('speed.tabs.aria'), views.map(function (id) { return { id: id, label: L('speed.tab.' + id), icon: id === 'ip' ? 'globe' : 'speed' }; }), function (id) {
+      tabs.set(id); views.forEach(function (k) { el.speedPanels[k].hidden = id !== k; }); TP.prefs.set('speed.tab', id);
+    });
+    root.appendChild(tabs.el); tabs.set(current);
+    views.forEach(function (id) { el.speedPanels[id] = h('div', { role: 'tabpanel', id: 'speed-panel-' + id, 'aria-labelledby': tabs.btn(id).id }, contents[id]); tabs.btn(id).setAttribute('aria-controls', el.speedPanels[id].id); el.speedPanels[id].hidden = id !== current; root.appendChild(el.speedPanels[id]); });
     built = true;
     TP.on('lang', function () {
       renderAll();
@@ -348,7 +356,7 @@
     el.nodeCount = h('span', { class: 'muted sm' });
     el.nodeDef = ui.btn(L('speed.nodes.defaults'), { sm: true, kind: 'ghost', icon: 'rotate-ccw' });
     ui.act(el.nodeDef, function () { setPref(PK.nodes, undefined); loadSel(); renderTest(); });         // 不再保存选择 -> 回到 plan 推荐的节点
-    el.nodeAll = ui.btn(L('speed.sel.all'), { sm: true, kind: 'ghost', icon: 'check' }); ui.act(el.nodeAll, function () { setNodes('all'); });
+    el.nodeAll = ui.btn(L('speed.sel.all'), { sm: true, kind: 'ghost', icon: 'check' }); ui.act(el.nodeAll, function () { setNodes(nodesBulkSelected() ? 'none' : 'all'); });
     el.nodeNone = ui.btn(L('speed.sel.none'), { sm: true, kind: 'ghost', icon: 'x' }); ui.act(el.nodeNone, function () { setNodes('none'); });
     /* 节点: 表格 (选择框 | 名称 | 角色 | 类型 | 延迟), 点整行也能选; 节点多时有搜索框 */
     el.nodeAllCb = h('input', { type: 'checkbox', 'aria-label': L('speed.nodes.allAria') });
@@ -367,16 +375,16 @@
         h('label', { class: 'spd-sw' }, h('span', { class: 'sw' }, el.spd, h('span', { class: 'sw-ui' })),
           h('span', { class: 'spd-sw-t' }, h('b', { id: 'spd-sw-l' }, L('speed.measure')), el.spdHint)),
         ui.help('speed.download')),
-      h('div', { class: 'spd-block' }, h('div', { class: 'spd-lab-row' }, h('span', { class: 'spd-lab' }, L('speed.nodes.title'), ui.help('speed.nodes')), el.nodeCount, h('span', { class: 'spd-lab-r' }, el.nodeAll, el.nodeNone, el.nodeDef)), el.nodeList, el.nodeNote));
+      h('div', { class: 'spd-block' }, h('div', { class: 'spd-lab-row' }, h('span', { class: 'spd-lab' }, L('speed.nodes.title'), ui.help('speed.nodes')), el.nodeCount, h('span', { class: 'spd-lab-r' }, el.nodeAll, el.nodeDef)), el.nodeList, el.nodeNote));
 
     /* 测速目标: 标题行 (含「管理测速目标」) 在测速进行中也保留, 按钮「暂不可用」并说明原因; 选择器本体 (el.tgBody) 在测速时隐藏 */
     el.tgCount = h('span', { class: 'muted sm', 'aria-live': 'polite' });
     el.mgrBtn = ui.btn(L('speed.tg.manage'), { sm: true, icon: 'list-checks' });
     ui.act(el.mgrBtn, openManage);
     el.tgDef = ui.btn(L('speed.sel.defaults'), { sm: true }); ui.act(el.tgDef, function () { setTargets('def'); });
-    el.tgAll = ui.btn(L('speed.sel.all'), { sm: true }); ui.act(el.tgAll, function () { setTargets('all'); });
+    el.tgAll = ui.btn(L('speed.sel.all'), { sm: true }); ui.act(el.tgAll, function () { setTargets(selectedTargets().length === arr(plan.data && plan.data.targets).length ? 'none' : 'all'); });
     el.tgNone = ui.btn(L('speed.sel.none'), { sm: true }); ui.act(el.tgNone, function () { setTargets('none'); });
-    el.tgBar = h('div', { class: 'spd-tgbar' }, el.tgDef, el.tgAll, el.tgNone);
+    el.tgBar = h('div', { class: 'spd-tgbar' }, el.tgDef, el.tgAll);
     el.groupList = h('div', { class: 'spd-groups', role: 'group', 'aria-label': L('speed.targets.aria') });
     el.groupNone = h('p', { class: 'muted sm', hidden: true }, L('speed.targets.none'));
     el.tgBody = h('div', { class: 'spd-tgbody' }, el.tgBar, el.groupList, el.groupNone);
@@ -398,8 +406,7 @@
     el.planBox = ui.emptyBox();
     return h('section', { class: 'card spd-sec', 'aria-labelledby': 'spd-h-test' },
       h('div', { class: 'spd-hd' }, h('div', { class: 'spd-hd-t' }, h('h3', { id: 'spd-h-test' }, L('speed.test.title')), h('span', { class: 'muted sm' }, L('speed.test.sub')))),
-      el.planBox.el, el.form, el.tgBox, el.run,
-      h('div', { class: 'spd-actions' }, el.go, el.est));
+      h('div', { class: 'spd-actions' }, el.go, el.est), el.planBox.el, el.form, el.tgBox, el.run);
   }
 
   function directOk(p) { return !!p && p.direct_available !== false; }
@@ -522,8 +529,10 @@
     tr.title = d ? t('speed.nodes.delayTip', { ms: ms(d) }) : t('speed.nodes.noDelay');
   }
   /* 节点「全选 / 全不选」: 一次最多测 MAX_NODES 个, 节点更多时只选前 MAX_NODES 个并说明 */
+  function nodesBulk() { return arr(plan.data && plan.data.nodes).filter(function (n) { return n && (!nodeQ || String(n.tag).toLowerCase().indexOf(nodeQ) >= 0); }).map(function (n) { return n.tag; }).slice(0, MAX_NODES); }
+  function nodesBulkSelected() { var tags = nodesBulk(); return tags.length > 0 && tags.every(function (tag) { return sel.nodes.indexOf(tag) >= 0; }); }
   function setNodes(how) {
-    var tags = arr(plan.data && plan.data.nodes).filter(Boolean).map(function (n) { return n.tag; });
+    var tags = nodesBulk();
     sel.nodes = how === 'all' ? tags.slice(0, MAX_NODES) : [];
     if (how === 'all' && tags.length > MAX_NODES) ui.toast(t('speed.nodes.allMax', { n: MAX_NODES, total: tags.length }), 'warn', 5200);
     setPref(PK.nodes, sel.nodes.slice()); renderTest();
@@ -586,10 +595,10 @@
     r.bAll = ui.btn(L('speed.sel.gAll'), { sm: true, kind: 'ghost' }); r.bNone = ui.btn(L('speed.sel.gNone'), { sm: true, kind: 'ghost' }); r.bDef = ui.btn(L('speed.sel.gDef'), { sm: true, kind: 'ghost' });
     r.body = h('div', { class: 'spd-tg-b', hidden: true });
     r.t.addEventListener('click', TP.safe(function () { toggleOpen(row._id); }));
-    r.bAll.addEventListener('click', TP.safe(function () { setGroup(row._id, 'all'); }));
+    r.bAll.addEventListener('click', TP.safe(function () { setGroup(row._id, row._allSelected ? 'none' : 'all'); }));
     r.bNone.addEventListener('click', TP.safe(function () { setGroup(row._id, 'none'); }));
     r.bDef.addEventListener('click', TP.safe(function () { setGroup(row._id, 'def'); }));
-    row.appendChild(h('div', { class: 'spd-tg-h' }, r.t, h('span', { class: 'spd-tg-a', role: 'group' }, r.bAll, r.bNone, r.bDef)));
+    row.appendChild(h('div', { class: 'spd-tg-h' }, r.t, h('span', { class: 'spd-tg-a', role: 'group' }, r.bAll, r.bDef)));
     row.appendChild(r.body);
     row._r = r;
     return row;
@@ -604,6 +613,7 @@
     TP.setCls(r.cnt, 'chip' + (n === all ? ' rec' : n > 0 ? ' info' : ''));
     r.t.setAttribute('aria-expanded', open ? 'true' : 'false');
     r.t.setAttribute('aria-label', t('speed.sel.toggleAria', { name: name, n: n, total: all }));
+    row._allSelected = n === all; ui.setBtn(r.bAll, t(n === all ? 'speed.sel.gNone' : 'speed.sel.gAll'));
     r.bAll.setAttribute('aria-label', t('speed.sel.allAria', { name: name })); r.bNone.setAttribute('aria-label', t('speed.sel.noneAria', { name: name })); r.bDef.setAttribute('aria-label', t('speed.sel.defaultsAria', { name: name }));
     r.body.hidden = !open; row.classList.toggle('is-open', open);
     if (open) ui.syncList(r.body, g.items, function (x) { return x.id; }, makeChip, updateChip);
@@ -612,6 +622,7 @@
     var total = arr(p.targets).length;
     setText(el.tgCount, total ? t('speed.sel.count', { n: selectedTargets().length, total: total }) : '');
     el.tgBar.hidden = !total;
+    ui.setBtn(el.tgAll, t(total && selectedTargets().length === total ? 'speed.sel.none' : 'speed.sel.all'), 'check');
     ui.syncList(el.groupList, groupsOf(p), function (g) { return g.id; }, makeGroup, updateGroup);
     el.groupNone.hidden = total > 0;
   }
@@ -623,14 +634,15 @@
     ['node', 'both'].forEach(function (m) { el.mode.avail(m, nOk ? '' : t('speed.noNodes.reason'), nOk ? null : addFix()); });
     el.spd.checked = !!sel.speed;
     setText(el.spdHint, sel.speed ? t('speed.measure.on', { mb: fmt.num(e.mb) }) : t('speed.measure.off'));
-    el.nodeList.hidden = !showChips; el.nodeNote.hidden = showChips; el.nodeDef.hidden = !showChips; el.nodeAll.hidden = !showChips; el.nodeNone.hidden = !showChips;
+    el.nodeList.hidden = !showChips; el.nodeNote.hidden = showChips; el.nodeDef.hidden = !showChips; el.nodeAll.hidden = !showChips; el.nodeNone.hidden = true;
+    ui.setBtn(el.nodeAll, nodesBulkSelected() ? t('speed.sel.none') : nodesBulk().length < arr(p.nodes).length ? t('speed.nodes.selectMax', { n: MAX_NODES }) : t('speed.sel.all'), 'check');
     el.nodeAll.setAttribute('aria-label', t('speed.nodes.allAria')); el.nodeNone.setAttribute('aria-label', t('speed.nodes.noneAria'));
     setText(el.nodeCount, showChips ? t('speed.nodes.count', { n: sel.nodes.length, max: MAX_NODES }) : '');
     if (showChips) {
       var all = arr(p.nodes).filter(Boolean), shown = nodeQ ? all.filter(function (n) { return String(n.tag).toLowerCase().indexOf(nodeQ) >= 0; }) : all, nsel = shown.filter(function (n) { return sel.nodes.indexOf(n.tag) >= 0; }).length;
       el.nodeQ.hidden = all.length <= 8; el.nodeEmpty.hidden = shown.length > 0;
       ui.syncList(el.nodeBody, shown, function (n) { return n.tag; }, makeNode, updateNode);
-      el.nodeAllCb.checked = shown.length > 0 && nsel === shown.length; el.nodeAllCb.indeterminate = nsel > 0 && nsel < shown.length;
+      el.nodeAllCb.checked = nodesBulkSelected(); el.nodeAllCb.indeterminate = nsel > 0 && nsel < shown.length;
     }
     else ui.memo(el.nodeNote, nOk ? 'direct' : 'none', function () {
       if (nOk) return h('span', { class: 'muted' }, t('speed.nodes.directNote'));
@@ -663,16 +675,39 @@
     el.est.hidden = running;
     if (running) {
       ui.setBtn(b, t(run.stopping ? 'speed.stopping' : 'speed.stop'), 'stop');
+      b._renderBusy = run.stopping; b.disabled = run.stopping || !!b._busy;
       ui.avail(b, run.stopping ? t('speed.stopping.reason') : TP.why.helper());
       return;
     }
+    b._renderBusy = false; b.disabled = !!b._busy;
     why = startWhy(); e = plan.data ? estimate() : null;
     ui.setBtn(b, e ? t(sel.speed ? 'speed.start' : 'speed.startLatency', { dur: dur(e.sec) }) : t('speed.startPlain'), 'speed');
     ui.avail(b, why ? why.reason : '', why && why.fix);
     setText(el.est, e ? t(sel.speed ? 'speed.est.speed' : 'speed.est.latency', { dur: dur(e.sec), mb: fmt.num(e.mb) }) : '');
   }
+  function showRunDialog() {
+    if (runDialog) return;
+    var runParent = el.run.parentNode, resultParent = el.resultCard.parentNode;
+    runDialog = ui.modal({ title: t('speed.test.title'), icon: 'speed', size: 'lg', cls: 'spd-dialog',
+      body: h('div', null, el.run, el.resultCard),
+      actions: [], onClose: function () { runParent.appendChild(el.run); resultParent.appendChild(el.resultCard); runDialog = null; runDialogSig = ''; renderAll(); }
+    });
+    runDialogSig = ''; renderRunDialog();
+  }
+  function renderRunDialog() {
+    if (!runDialog) return;
+    var sig = !!run.id + '|' + run.stopping;
+    if (sig === runDialogSig) return;
+    runDialogSig = sig;
+    runDialog.setActions(run.id ? [
+      { label: t('speed.run.background'), cancel: true },
+      { label: t(run.stopping ? 'speed.stopping' : 'speed.stop'), icon: 'stop', kind: 'danger', keep: true,
+        disabled: run.stopping, unavail: run.stopping ? { reason: t('speed.stopping.reason') } : null, onClick: async function () { await stopTest(); return false; } }
+    ] : [{ label: t('common.close'), cancel: true }]);
+  }
   function renderRun() {
     if (!built) return;
+    renderRunDialog();
     el.run.hidden = !run.id;
     if (!run.id) return;
     var r = run.res, pct = r ? Math.max(0, Math.min(100, +r.pct || 0)) : 0;
@@ -696,7 +731,7 @@
       throw e;
     }
     if (!r || !okId(r.id)) throw new Error(t('speed.toast.noId'));
-    attach(r.id);
+    attach(r.id); showRunDialog();
   }
   /* E_RUNNING: 先用错误里带的 id; 没有就问 status (不带 id) 当前在跑哪个; 都不行就只提示 */
   async function attachRunning(e) {
@@ -705,7 +740,7 @@
       try { var s = await TP.helper('GET', '/api/speedtest/status', { timeout: 8000 }); if (s && s.state === 'running' && okId(s.id)) id = s.id; }
       catch (x) { if (x && x.kind === 'auth') return; }
     }
-    if (id) { attach(id); ui.toast(t('speed.toast.attached'), '', 4200); }
+    if (id) { attach(id); showRunDialog(); ui.toast(t('speed.toast.attached'), '', 4200); }
     else ui.toast(t('speed.toast.running'), 'warn');
   }
   async function stopTest() {

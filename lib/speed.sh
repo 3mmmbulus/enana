@@ -49,7 +49,7 @@ speed_probe() {
   else
     case ",$expect," in
       *",$code,"*) if [ "$ms" -gt "$SPEED_SLOW_MS" ] || [ "$rc" = 28 ]; then st=slow; else st=ok; fi ;;
-      *) st=limited ;;
+      *) case $code in 5??) st=fail; err=upstream ;; *) st=limited ;; esac ;;
     esac
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$st" "$ms" "$cm" "$ms" "$code" "$err"

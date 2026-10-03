@@ -1,6 +1,6 @@
 /* enana · ui.js — 界面组件
  * 图标 / 按钮 / 提示 / 「暂不可用」状态 / 弹窗 (焦点锁定, ESC, 放弃确认) / confirmDialog / 菜单 / 分段开关 / 进度卡片 / 空状态
- * 原则: 不可用的控件用 aria-disabled + title, 不用 disabled 属性 —— 点击仍然会触发, 并用提示说明原因和解决办法。
+ * 原则: 受限控件用 aria-disabled + title; 进行中的操作使用 disabled + aria-busy, 禁止重复提交。受限操作点击说明原因和解决办法。
  * 文案全部来自词典 (I18N.t); 在 init 里一次性创建的静态文字用 I18N.L(键), 切换语言后会自动更新。 */
 (function () {
   'use strict';
@@ -96,32 +96,47 @@
   };
   function fail(e) { if (!(e && (e.kind === 'auth' || e.kind === 'cancel'))) ui.toast(TP.errMsg(e), 'err'); }
   /* 点击处理: 不可用 -> 提示原因; 否则执行 (异步期间忽略重复点击; 错误变成 toast) */
+  ui.actionBusy = function (el, busy) {
+    if (busy) {
+      el._busyLabel = el._label && el._label.textContent; el._busyIcon = el._iconName;
+      el._wasDisabled = el.disabled;
+      if (el._label) ui.setBtn(el, t('common.loading'), 'refresh');
+    }
+    el._busy = !!busy; el.disabled = busy || !!el._wasDisabled || !!el._renderBusy;
+    el.classList.toggle('is-busy', busy || !!el._renderBusy);
+    if (busy || el._renderBusy) el.setAttribute('aria-busy', 'true'); else el.removeAttribute('aria-busy');
+    if (!busy && el._label && el._label.textContent === t('common.loading')) ui.setBtn(el, el._busyLabel, el._busyIcon);
+  };
   ui.act = function (el, handler) {
     el.addEventListener('click', function (ev) {
+      if (el._busy || el.disabled) { ev.preventDefault(); return; }
       if (el._un) { ev.preventDefault(); ui.unavailable(el); return; }
-      if (el._busy) return;
-      el._busy = true;
-      Promise.resolve().then(function () { return handler(ev); }).catch(fail).then(function () { el._busy = false; });
+      ui.actionBusy(el, true);
+      Promise.resolve().then(function () { return handler(ev); }).catch(fail).then(function () { ui.actionBusy(el, false); });
     });
   };
   /* <select>: 先把显示恢复成当前值, 再把用户想要的值交给 handler (它负责确认并真正应用) */
   ui.selectAct = function (sel, getCurrent, handler) {
     sel.addEventListener('change', function () {
+      if (sel._busy) return;
       var want = sel.value;
       sel.value = getCurrent();
       if (sel._un) { ui.unavailable(sel); return; }
       if (want === getCurrent()) return;
-      Promise.resolve().then(function () { return handler(want); }).catch(fail);
+      ui.actionBusy(sel, true);
+      Promise.resolve().then(function () { return handler(want); }).catch(fail).then(function () { ui.actionBusy(sel, false); sel.value = getCurrent(); });
     });
   };
   /* 开关 <input type=checkbox>: 同上 */
   ui.switchAct = function (inp, getCurrent, handler) {
     inp.addEventListener('change', function () {
+      if (inp._busy) return;
       var want = inp.checked;
       inp.checked = getCurrent();
       if (inp._un) { ui.unavailable(inp); return; }
       if (want === getCurrent()) return;
-      Promise.resolve().then(function () { return handler(want); }).catch(fail);
+      ui.actionBusy(inp, true);
+      Promise.resolve().then(function () { return handler(want); }).catch(fail).then(function () { ui.actionBusy(inp, false); inp.checked = getCurrent(); });
     });
   };
 
@@ -132,7 +147,7 @@
    * 基于原生 <dialog>.showModal(): 背景不可操作; 另外自己处理 Tab 循环、ESC、点遮罩。 */
   var modalSeq = 0, FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
   ui.modal = function (o) {
-    var id = 'dlg' + (++modalSeq), opener = document.activeElement, closing = false, resolveClosed, state = { busy: false }, downOnBackdrop = false;
+    var id = 'dlg' + (++modalSeq), opener = document.activeElement, closing = false, resolveClosed, state = { busy: false, actionPending: false }, downOnBackdrop = false;
     var closed = new Promise(function (r) { resolveClosed = r; });
     var dlg = h('dialog', { class: 'dlg ' + (o.size || 'md') + (o.cls ? ' ' + o.cls : ''), 'aria-labelledby': id + 't' });
     var titleEl = h('h2', { class: 'dlg-t', id: id + 't' }, o.title || '');
@@ -144,12 +159,12 @@
     var api = {
       el: dlg, body: body, foot: foot, closed: closed,
       setTitle: function (v) { TP.setText(titleEl, v); },
-      setBusy: function (b) { state.busy = !!b; dlg.classList.toggle('is-busy', !!b); if (xBtn) { if (b) xBtn.setAttribute('aria-disabled', 'true'); else xBtn.removeAttribute('aria-disabled'); } },
+      setBusy: function (b) { state.busy = !!b; syncBusy(); },
       getBtn: function (bid) { return foot.querySelector('[data-id="' + bid + '"]'); },
       /* 用户想关闭 (✕ / ESC / 点遮罩 / 取消): 忙碌时拒绝; 有未保存输入时先确认 */
       request: async function () {
         if (closing) return;
-        if (state.busy || (o.lock && o.lock())) { ui.toast(t('modal.busy'), 'warn', 2500); return; }
+        if (state.busy || state.actionPending || (o.lock && o.lock())) { ui.toast(t('modal.busy'), 'warn', 2500); return; }
         if (o.dirty && o.dirty()) {
           var ok = await ui.confirmDialog({ title: t('confirm.discard.title'), message: t('confirm.discard.msg'), confirmText: t('confirm.discard.yes'), cancelText: t('confirm.discard.no'), danger: true });
           if (!ok) return;
@@ -170,28 +185,35 @@
       }
     };
 
+    function syncBusy() {
+      var busy = state.busy || state.actionPending;
+      dlg.classList.toggle('is-busy', busy); dlg.setAttribute('aria-busy', busy ? 'true' : 'false');
+      if (xBtn) xBtn.disabled = busy;
+      Array.prototype.forEach.call(foot.querySelectorAll('button'), function (b) { b.disabled = busy || !!b._actionDisabled; });
+    }
     function renderActions(list) {
       TP.clear(foot);
       (list || []).forEach(function (a) {
         var b = ui.btn(a.label, { kind: a.kind, icon: a.icon, cls: a.cls });
+        b._actionDisabled = !!a.disabled;
         if (a.id) b.setAttribute('data-id', a.id);
         if (a.autofocus) b.setAttribute('data-autofocus', '');
         if (a.unavail) ui.avail(b, a.unavail.reason, a.unavail.fix);
         b.addEventListener('click', async function () {
+          if (b._busy || state.busy || state.actionPending || b.disabled) return;
           if (b._un) { ui.unavailable(b); return; }
-          if (b._busy) return;
           if (a.cancel) { api.request(); return; }
-          b._busy = true; b.setAttribute('aria-busy', 'true');
+          state.actionPending = true; ui.actionBusy(b, true); syncBusy();
           var r;
           try { r = a.onClick ? await a.onClick(api, b) : undefined; }
           catch (e) { fail(e); r = false; }
-          b._busy = false; b.removeAttribute('aria-busy');
+          state.actionPending = false; ui.actionBusy(b, false); syncBusy();
           if (r === false || a.keep) return;
           api.close(a.value !== undefined ? a.value : true);
         });
         foot.appendChild(b);
       });
-      foot.hidden = !list || !list.length;
+      foot.hidden = !list || !list.length; syncBusy();
     }
     api.setActions = renderActions;
 
@@ -315,10 +337,19 @@
       var inp = h('input', { type: 'radio', name: name, value: op.v });
       inputs[op.v] = inp;
       inp.addEventListener('click', function (ev) {
+        if (inp._busy || inp.disabled) { ev.preventDefault(); return; }
         if (un[op.v]) { ev.preventDefault(); ui.toast(un[op.v].reason, 'warn', 5200, un[op.v].fix ? { action: un[op.v].fix } : null); return; }
         if (cur === op.v) { if (o.onSame) o.onSame(op.v); else ui.toast(t('seg.same', { name: I.isL(op.label) ? I.text(op.label) : op.label }), '', 2200); }
       });
-      inp.addEventListener('change', function () { if (inp.checked && cur !== op.v) onPick(op.v); });
+      inp.addEventListener('change', function () {
+        if (inp._busy || !inp.checked || cur === op.v) return;
+        Object.keys(inputs).forEach(function (k) { ui.actionBusy(inputs[k], true); });
+        node.setAttribute('aria-busy', 'true'); node.classList.add('is-busy');
+        Promise.resolve().then(function () { return onPick(op.v); }).catch(fail).then(function () {
+          Object.keys(inputs).forEach(function (k) { ui.actionBusy(inputs[k], false); });
+          node.removeAttribute('aria-busy'); node.classList.remove('is-busy');
+        });
+      });
       var lab = h('label', { 'data-v': op.v, title: op.title || null }, inp, h('span', null, op.icon ? ui.icon(op.icon, 15, 'si') : null, h('span', { class: 'sl' }, op.label)));
       lab._title0 = op.title || null;
       return lab;

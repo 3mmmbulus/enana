@@ -263,6 +263,7 @@
       f.push([t('logs.dt.result'), r.err ? ui.badge(errText(r.err), 'bad', 'error') : ui.badge(t('logs.result.ok'), 'ok', 'success'), r.err ? errText(r.err) : t('logs.result.ok')]);
       if (r.errmsg) f.push([t('logs.dt.errmsg'), h('span', { class: 'mono lgd-msg' }, str(r.errmsg)), str(r.errmsg)]);
       if (r.dur && r.err) f.push([t('logs.dt.dur'), h('span', { class: 'mono' }, str(r.dur)), str(r.dur)]);
+      if (r.capture) f.push([t('logs.dt.capture'), r.capture === 'tun' ? 'TUN' : 'System Proxy', r.capture]);
       if (r.ips) f.push([t('logs.dt.ips'), h('span', { class: 'mono lgd-text' }, str(r.ips)), str(r.ips)]);
     } else {
       f.push([t('logs.col.level'), levelBadge(r.level), str(r.level).toUpperCase()]);

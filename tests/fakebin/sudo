@@ -18,4 +18,6 @@ if [ "$S" = 1 ]; then
   want=${FAKE_SUDO_PW:-$(sed -n 's/^sudopw=//p' "${ENANA_MOCK_CTL:-/dev/null}" 2>/dev/null | head -1)}
   if [ -n "$want" ] && [ "$pw" != "$want" ]; then echo "Sorry, try again." >&2; echo "sudo: 1 incorrect password attempt" >&2; exit 1; fi
 fi
+# Root TUN installation must never escape the fixture, including CI as root.
+for arg in "$@"; do case $arg in */enhanced-root.sh) echo 'Simulated administrator cancellation' >&2; exit 1 ;; esac; done
 exec "$@"

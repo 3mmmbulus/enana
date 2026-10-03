@@ -363,15 +363,15 @@
       if (ph === 'form') {
         why = TP.why.helper();
         return [{ label: t('common.cancel'), cancel: true },
-          { label: t('vps.detect'), kind: 'primary', icon: 'search', id: 'go', keep: true, unavail: why ? { reason: why } : null, onClick: function () { detect(); return false; } }];
+          { label: t('vps.detect'), kind: 'primary', icon: 'search', id: 'go', keep: true, unavail: why ? { reason: why } : null, onClick: async function () { await detect(); return false; } }];
       }
       if (ph === 'probeErr' || ph === 'provErr') {
         return [{ label: t('vps.backEdit'), icon: 'chevron-left', id: 'back', keep: true, onClick: function () { backToForm(); return false; } },
-          { label: t('common.retry'), kind: 'primary', icon: 'refresh', id: 'retry', keep: true, onClick: function () { retry(); return false; } }];
+          { label: t('common.retry'), kind: 'primary', icon: 'refresh', id: 'retry', keep: true, onClick: async function () { await retry(); return false; } }];
       }
       if (ph === 'result') {
         return [{ label: t('common.back'), icon: 'chevron-left', id: 'back', keep: true, onClick: function () { backToForm(); return false; } },
-          { label: t('vps.continue'), kind: 'primary', icon: 'arrow-right', id: 'go', keep: true, unavail: contReason(), onClick: function () { onContinue(false); return false; } }];
+          { label: t('vps.continue'), kind: 'primary', icon: 'arrow-right', id: 'go', keep: true, unavail: contReason(), onClick: async function () { await onContinue(false); return false; } }];
       }
       if (ph === 'done') {
         return [{ label: t('vps.done.again'), icon: 'plus', id: 'again', keep: true, onClick: function () { again(); return false; } },
@@ -379,6 +379,7 @@
           { label: t('vps.done.speed'), icon: 'speed', id: 'speed', onClick: function () { host.close(true); TP.go('speed'); } },
           { label: t('common.close'), kind: 'primary', id: 'close', cancel: true }];
       }
+      if (isBusy()) return [{ label: t('common.loading'), icon: 'refresh', id: 'progress', keep: true }];
       return [];
     }
     function setFoot(force) { if (force || (P._seen && visible())) host.setActions(footer()); }
@@ -414,7 +415,7 @@
     function wipeAll() { forgetSecrets(); st.probe = null; st.fpOk = false; st.err = null; st.card = null; st.res = null; }
     function backToForm() { st.run++; wipeAll(); setPhase('form'); }
     function again() { st.run++; wipeAll(); st.meta = null; cf.reset(); sh().snap = cf.snapshot(); setPhase('form'); }
-    function retry() { if (st.phase === 'probeErr') runProbe(); else onContinue(true); }
+    function retry() { return st.phase === 'probeErr' ? runProbe() : onContinue(true); }
 
     /* ---------- 1. 表单 -> 探测 ---------- */
     function detect() {
@@ -425,7 +426,7 @@
       st.creds = { host: v.host, port: +v.port, user: v.user, mode: v.mode, password: v.password, key: v.key, passphrase: v.passphrase, sudo: v.sudo };
       st.meta = { name: v.name || defName(v.host), role: v.role, save: v.save ? 1 : 0 };
       v = null; cf.wipeSecrets();                                   // 输入框里的秘密立即清空, 之后只剩闭包里这一份
-      runProbe();
+      return runProbe();
     }
     async function runProbe() {
       var my = ++st.run;
@@ -457,7 +458,7 @@
       }
       ok = await ui.confirmDialog({ title: t('vps.cf2.title'), message: t('vps.cf2.msg', { target: target }), detail: planOf(p), confirmText: t('vps.cf2.go') });
       if (!ok) return;
-      runProvision();
+      await runProvision();
     }
     /* 确认 2: 逐条列出将在服务器和本机上做的事 */
     function planOf(p) {
@@ -673,14 +674,16 @@
     var C = { _seen: false }, data = [], loaded = false, loading = false, err = null, at = 0, busy = {};
     var card = h('section', { class: 'card vps-card' }), empty = ui.emptyBox();
     var addBtn = ui.btn(L('vps.list.add'), { icon: 'plus', kind: 'primary', sm: true });
-    var note = h('p', { class: 'hint warn', hidden: true }), list = h('div', { class: 'rows vps-rows' });
+    var note = h('p', { class: 'hint warn', hidden: true }), list = h('tbody');
+    var table = h('div', { class: 'tbl-wrap vps-table' }, h('table', { class: 'tbl' },
+      h('thead', null, h('tr', null, ['name', 'addr', 'user', 'os', 'ips', 'nodes', 'updated', 'actions'].map(function (k) { return h('th', { scope: 'col' }, L('vps.col.' + k)); }))), list));
     function openWizard() { return TP.imp.open('vps-password'); }
     ui.act(addBtn, openWizard);
     var titleId = 'vps-card-t' + (++uid);
     card.setAttribute('aria-labelledby', titleId);
     card.appendChild(h('div', { class: 'card-h' }, ui.icon('server', 20, 'ci'), h('h3', { id: titleId }, L('vps.list.title'), ui.help('vps.list')), h('span', { class: 'muted sm' }, L('vps.list.sub')), addBtn));
     var pg = ui.pager('vps.list', { def: 10 }); pg.onChange(function () { render(); });
-    card.appendChild(note); card.appendChild(list); card.appendChild(empty.el); card.appendChild(pg.el);
+    card.appendChild(note); card.appendChild(table); card.appendChild(empty.el); card.appendChild(pg.el);
     C.el = card;
 
     function tip(b, text) { b._tip = text; b.setAttribute('aria-label', text); if (!b._un) b.title = text; }
@@ -701,9 +704,9 @@
       r.lIps = h('span', { class: 'vps-lbl muted sm' }); r.lNodes = h('span', { class: 'vps-lbl muted sm' });
       r.ips = h('span', { class: 'vps-chips' }); r.nodes = h('span', { class: 'vps-chips' }); r.upd = h('div', { class: 'muted sm' });
       r.re = ui.ibtn('scan-search', t('vps.row.redetectShort')); r.fg = ui.ibtn('unbind', t('vps.row.forgetShort'), { cls: 'danger-t' });
-      row = h('div', { class: 'vps-row' },
-        h('div', { class: 'vps-row-main' }, h('div', { class: 'vps-row-t' }, r.name, r.addr, r.user, r.os), line(r.lIps, r.ips), line(r.lNodes, r.nodes), r.upd),
-        h('div', { class: 'acts' }, r.re, r.fg));
+      row = h('tr', null,
+        h('td', null, r.name), h('td', null, r.addr), h('td', null, r.user), h('td', null, r.os),
+        h('td', null, r.ips), h('td', null, r.nodes), h('td', null, r.upd), h('td', { class: 'c-act' }, h('div', { class: 'acts' }, r.re, r.fg)));
       row._r = r;
       ui.act(r.re, function () { return vps.openRedetect(row._rec); });
       ui.act(r.fg, function () { return forget(row._rec); });
@@ -725,7 +728,7 @@
       var why = TP.why.helper(), rows = loaded && data.length > 0;
       C._seen = C._seen || card.isConnected;
       addBtn.hidden = !rows; ui.avail(addBtn, why);
-      list.hidden = !rows; note.hidden = !(rows && err);
+      table.hidden = !rows; note.hidden = !(rows && err);
       if (!note.hidden) setText(note, t('vps.list.stale'));
       var pr = pg.update(rows ? data.length : 0);
       if (rows) { ui.syncList(list, data.slice(pr.start, pr.end), function (x) { return x.id; }, makeRow, updateRow); empty.hide(); return; }
@@ -790,8 +793,8 @@
 
     function footer() {
       var why = TP.why.helper();
-      if (phase === 'form') return [{ label: t('common.cancel'), cancel: true }, { label: t('vps.re.go'), kind: 'primary', icon: 'scan-search', id: 'go', keep: true, unavail: why ? { reason: why } : null, onClick: function () { go(); return false; } }];
-      if (phase === 'error') return [{ label: t('vps.backEdit'), icon: 'chevron-left', id: 'back', keep: true, onClick: function () { back(); return false; } }, { label: t('common.retry'), kind: 'primary', icon: 'refresh', id: 'retry', keep: true, onClick: function () { runIt(); return false; } }];
+      if (phase === 'form') return [{ label: t('common.cancel'), cancel: true }, { label: t('vps.re.go'), kind: 'primary', icon: 'scan-search', id: 'go', keep: true, unavail: why ? { reason: why } : null, onClick: async function () { await go(); return false; } }];
+      if (phase === 'error') return [{ label: t('vps.backEdit'), icon: 'chevron-left', id: 'back', keep: true, onClick: function () { back(); return false; } }, { label: t('common.retry'), kind: 'primary', icon: 'refresh', id: 'retry', keep: true, onClick: async function () { await runIt(); return false; } }];
       if (phase === 'result') return [{ label: t('common.close'), kind: 'primary', id: 'close', cancel: true }];
       return [];
     }
@@ -832,7 +835,7 @@
       if (!ok) { v = null; return; }                                  // 取消: 表单保持原样
       creds = { host: v.host, port: +v.port, user: v.user, mode: v.mode, password: v.password, key: v.key, passphrase: v.passphrase, sudo: v.sudo };
       v = null; cf.wipeSecrets();
-      runIt();
+      return runIt();
     }
     async function fetchRecord() {
       try { var r = await TP.helper('GET', '/api/vps'); return (Array.isArray(r && r.vps) ? r.vps : []).filter(function (x) { return x.id === rec.id; })[0] || null; } catch (e) { return null; }

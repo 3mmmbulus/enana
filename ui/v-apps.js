@@ -139,6 +139,14 @@
 
     root.appendChild(h('div', { class: 'intro' }, h('p', { class: 'muted' }, L('apps.intro'), hl('apps.page'))));
     root.appendChild(TP.proxyNote());
+    el.captureText = h('span');
+    el.captureBtn = ui.btn(L('apps.capture.enable'), { kind: 'primary', icon: 'check' });
+    ui.act(el.captureBtn, function () {
+      if (S.state && S.state.proxy && S.state.proxy.network_mode === 'tun') { TP.settingsTab('proxy'); return; }
+      return TP.actions.setNetworkMode('tun');
+    });
+    el.capture = h('section', { class: 'hint warn', hidden: true }, el.captureText, el.captureBtn);
+    root.appendChild(el.capture);
     root.appendChild(el.bar);
     root.appendChild(h('div', { class: 'toolbar apps-tb' }, el.q, el.g, el.scan, el.addBtn,
       h('span', { class: 'apps-tb-r' }, h('span', { class: 'apps-opts muted sm' }, L('apps.opts'), hl('apps.policy')), el.count)));
@@ -147,6 +155,7 @@
 
     TP.on('apps', function () { noteIcons(); if (active()) seeNew(); renderBar(); if (active()) { V.render(); kickIcons(); } });
     TP.on('helper', function () { renderBar(); if (active()) V.render(); });
+    TP.on('state', function () { if (active()) V.render(); });
     TP.on('lang', function () { renderBar(); el._gsig = null; V.render(); });
     TP.on('scanning', function (on) {
       if (active()) renderTools();
@@ -209,7 +218,8 @@
     if (rest > 0) lines.push(t('apps.adopt.rest', { n: rest }));
     var ok = await ui.confirmDialog({ title: t('apps.adopt.title'), message: t('apps.adopt.msg', { n: rec.length }), detail: lines, confirmText: t('apps.adopt.go') });
     if (!ok) return;
-    await TP.helper('POST', '/api/apps/adopt', { form: { names: rec.map(function (a) { return a.name; }).join('\n') } });          // 只处理这几个: 进页面时新标记已经确认掉了
+    var adopted = await TP.helper('POST', '/api/apps/adopt', { form: { names: rec.map(function (a) { return a.name; }).join('\n') } });
+    if (adopted.job) await TP.jobs.runInDock(t('apps.adopt'), function () { return Promise.resolve(adopted); });          // 只处理这几个: 进页面时新标记已经确认掉了
     rec.forEach(function (a) { delete VN[a.name]; });
     ui.toast(t('apps.adopt.done'), 'ok'); await TP.loadApps(false);
   }
@@ -223,6 +233,11 @@
   /* ================= 列表 ================= */
   V.render = function () {
     var apps = list(), why = TP.why.helper(), qq = flt.q.toLowerCase();
+    var capture = S.state && S.state.proxy || {}, pins = apps.some(function (a) { return a.state === 'pin'; });
+    el.capture.hidden = !pins || (capture.network_mode === 'tun' && capture.tun_ready);
+    setText(el.captureText, t(capture.network_mode === 'tun' ? 'set.network.notReady' : 'apps.capture.warning'));
+    ui.setBtn(el.captureBtn, t(capture.network_mode === 'tun' ? 'apps.capture.check' : 'apps.capture.enable'), 'check');
+    ui.avail(el.captureBtn, why);
     // 分类下拉 (按词典顺序; 语言或分类集合变了才重建)
     var gs = {}; apps.forEach(function (a) { gs[groupOf(a)] = 1; });
     var names = Object.keys(gs).sort(function (a, b) { return groupRank(a) - groupRank(b) || a.localeCompare(b); });
@@ -379,7 +394,10 @@
     var pw = polWhy(to);                                                // 没有对应的服务器: 说明原因并给出「添加服务器」
     if (pw) { ui.toast(pw, 'warn', 5200, { action: addFix() }); return; }
     var tx = TP.txt.app(a.name, prev, to);
-    var ok = await ui.confirmDialog({ title: t('apps.change.title'), message: tx.message, detail: tx.detail, confirmText: t('apps.change.go'), rememberKey: 'appstate' });
+    var p = S.state && S.state.proxy || {}, browser = /^(Google Chrome|Safari|Firefox|Microsoft Edge|Brave Browser|Arc|Opera)$/.test(a.name) || a.group === t('apps.groupBrowserRaw');
+    var ok = to === 'pin' && !browser && p.network_mode !== 'tun'
+      ? await TP.actions.offerAppCapture(a.name)
+      : await ui.confirmDialog({ title: t('apps.change.title'), message: tx.message, detail: tx.detail, confirmText: t('apps.change.go'), rememberKey: 'appstate' });
     if (!ok) return;
     a.state = to; if (to !== 'pin') a.target = ''; V.render();         // 立即显示新状态; 失败时恢复 (离开「固定出口」时后端会清掉指定的出口)
     try { await TP.override('app', a.name, to); }

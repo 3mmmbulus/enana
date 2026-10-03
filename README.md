@@ -43,6 +43,24 @@ curl -fsSL https://install.enana.cc | bash
 - **代理默认是关闭的**(所有流量直连,不经过任何代理服务器):登录后在仪表盘里手动打开「代理」总开关,再选 **自动模式**(国内直连、海外按策略分流)或 **全局代理**。**退出账号会自动关闭代理。**
 - 删除服务器、查看凭据、导出备份、清日志、下线设备这类敏感操作,即使已登录也要**再输入一次账号密码**。
 
+
+## macOS 流量接管模式
+
+默认及升级继续使用 **System Proxy**: mixed 入站监听 `127.0.0.1`, 轻量, 只处理遵守 macOS HTTP/HTTPS/SOCKS 代理的连接。应用的 `process_path_regex` 只决定已进入核心的连接怎么分流, 不能让忽略系统代理的 App 自动进入核心。
+
+「设置 → 流量接管」可选择 **Enhanced/TUN** (sing-box ≥ 1.12), 或运行 `enana network-mode tun`; `enana network-mode system` 切回轻量模式。增强模式由 sing-box TUN 接管公网 TCP/UDP, 包括原本直接拨号的 App, 使用同一套应用/网站 PIN、Global、direct 规则。模式选择不改写当前系统代理配置, 不会在升级时自动开启 TUN。
+
+TUN 核心需要 macOS 管理员授权。后台使用系统授权弹窗, 终端使用 sudo; 可取消, 失败则恢复原配置与服务。核心、规则和证书复制到 root 拥有的 `/Library/Application Support/enana-<UID>`, 不安装 sudoers 规则。更改规则、节点或证书时需要再次授权更新该快照; 切回轻量模式/停止增强服务也需要授权。启动会验证 IPv4/IPv6 路由属于该核心的 TUN, 而不只检查 mixed 端口。
+
+本机 `localhost`、`127.0.0.0/8`、`::1`、局域网/私网/链路本地地址在系统路由和核心规则中排除; OAuth localhost 回调保留直连。`route.auto_detect_interface` 让核心出口绑定默认网络接口, 防止出口重新进入 TUN。与其他 VPN 共用时需检查诊断中的路由归属, 无法建立正确路由会回滚。
+
+**PIN 的范围**: 已被接管且识别为该应用的公网 TCP/UDP 使用所选固定出口; 本机与局域网是例外。DNS 控制请求遵循 DNS 页策略; 系统共享服务发出的请求、无法归属到应用的进程和非 TCP/UDP 协议不能声称自动继承该应用 PIN。固定池不会失败后漂移到自动池, 但无节点时原有行为仍是直连, 节点供应商也可能改变公网 IP。Gemini、Claude、ChatGPT 需要设为 PIN 才适用, 没有任何针对 Gemini OAuth 的域名补丁。
+
+**网站与浏览器的优先级**: 代理总开关关闭/内网直连 → 应用 PIN 与普通应用策略 → 网站覆盖与网站目录规则 → 浏览器策略兜底 → Global/国内/最终兜底。Chrome/Safari 的 Direct、Auto 或 PIN 均作为网站策略之后的兜底; 原生 App 的明确 PIN 仍优先于网站。网站解析需要域名可见; IP 直连且无法嗅探域名时只能按进程/IP 规则匹配。
+
+`enana doctor` 和诊断导出包含接管模式、TUN 路由与当前用户的 OS socket/API 连接对照。`bypass-system-proxy` 表示观察到了未进入核心的公网连接; `tun-unobserved` 仅表示两次采样未匹配, 不能直接断言泄漏。详见 [诊断说明](docs/DIAGNOSTICS.md)。
+
+
 ## 仪表盘能做什么
 
 | 页面 | 功能 |
@@ -106,6 +124,9 @@ bash tests/run.sh                  # 约 700 条测试: 在隔离目录里完整
 bash tests/units.sh                # 几秒钟的单元测试: 日志解析 / 自动识别 / 保留期 / 应用扫描 / 规则集拆分 / 诊断导出 (不需要 sing-box; run.sh 末尾也会跑)
 python3 tools/i18n-verify.py       # 检查英文译文覆盖了所有会显示给用户的中文提示
 # tools/ui-audit.js              # 粘进浏览器控制台 (登录本机 mock / 开发实例后): 把每个页面、标签、弹窗点一遍并收集 JS 报错 (发布前跑一遍)
+SINGBOX=/路径/sing-box bash tests/enhanced.sh # System/TUN 配置与路由优先级、绕过代理诊断
+bash tests/tun-service.sh            # 隔离的 root 服务替身: 启动失败/路由冲突回滚, 不改本机网络
+node tests/ui-busy.test.js           # 异步控件与弹窗重复提交回归
 bash tests/get-test.sh [发布目录]    # 一行安装命令 (get.sh) 的整条链路: 首次安装 / 篡改拦截 / 两线路交叉校验 / 升级 / wget / 端口占用自动换 / 快捷命令; 全部用本机模拟的下载服务
 ```
 
@@ -131,6 +152,8 @@ bash tests/get-test.sh [发布目录]    # 一行安装命令 (get.sh) 的整条
 curl -fsSL https://install.enana.cc | bash
 ```
 
+- System Proxy remains the default after upgrades and captures only connections honoring OS proxy settings. Opt into Enhanced/TUN in Settings (or `enana network-mode tun`) to capture public TCP/UDP that bypasses System Proxy. It needs macOS administrator authorization, keeps local callbacks/LAN direct, and reuses app/website PIN rules. Shared system processes still require attribution checks. Switch back with `enana network-mode system`; mode selection preserves existing System Proxy settings.
+- All browser policies now act as a fallback after website policies; explicit native app PIN remains higher priority.
 - Sign in with an enana account (at most 2 devices per platform). The proxy is **off by default**; turn it on in the dashboard, choose Auto (rule-based) or Global mode. Signing out turns it off.
 - Server addresses, passwords, subscription links and SSH credentials **never leave your computer**; optional cloud sync is end-to-end encrypted (the key is derived from your password locally), and SSH passwords / private keys are never stored or synced.
 - Sensitive actions re-ask for your password. Configuration changes are validated and rolled back automatically if they fail.

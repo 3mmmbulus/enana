@@ -85,6 +85,7 @@
     if (scan) { if (S.scanning) return; S.scanning = true; TP.emit('scanning', true); }
     try {
       var r = scan ? await TP.helper('POST', '/api/apps/scan') : await TP.helper('GET', '/api/apps');
+      if (r.job) { await TP.jobs.runInDock(window.I18N.t('set.network.title'), function () { return Promise.resolve(r); }); r = await TP.helper('GET', '/api/apps'); }
       S.apps = r; TP.emit('apps');
     } catch (e) { if (e.kind !== 'unreachable') console.warn('apps:', e.message); }
     finally { if (scan) { S.scanning = false; TP.emit('scanning', false); } }
@@ -105,7 +106,9 @@
   TP.override = async function (kind, value, state, target) {
     var q = { kind: kind, value: value, state: state };
     if (state === 'pin' && target) q.target = target;
-    return TP.helper('POST', '/api/override', { q: q });
+    var r = await TP.helper('POST', '/api/override', { q: q });
+    if (r.job) await TP.jobs.runInDock(window.I18N.t('set.network.title'), function () { return Promise.resolve(r); });
+    return r;
   };
   /* 可以单独指定的固定出口: 配置里前 16 个 role=pin 的服务器 (和 lib/config.sh 的规则集序号一致); 不到 2 个就没有「指定」这回事 */
   TP.pinServers = function () { return TP.servers().filter(function (s) { return s.role === 'pin'; }).slice(0, 16).map(function (s) { return s.tag; }); };

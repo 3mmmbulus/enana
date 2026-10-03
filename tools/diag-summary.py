@@ -57,6 +57,14 @@ def main():
     if env:
         print('  系统代理指向 enana: %s · 配置校验: %s · 端口占用: %s' % (env.get('sysproxy.points_to_enana'), env.get('config.check'), ', '.join('%s=%s' % (k[7:], v) for k, v in env.items() if k.startswith('listen.'))))
         if env.get('other_proxy_software'): print('  !! 检测到其它代理软件:', env['other_proxy_software'])
+    capture = meta.get('capture.mode', env.get('capture.mode', 'unknown (old export)'))
+    print('  流量接管: %s · TUN configured=%s ready=%s' % (capture, env.get('capture.tun.configured', '?'), env.get('capture.tun.ready', '?')))
+    evidence = [line for line in secs.get('env', ('', []))[1] if '\tbypass-system-proxy\t' in line or '\ttun-unobserved\t' in line]
+    if evidence:
+        print('  OS socket 独立证据 (采样时刻, 非历史请求归因):')
+        for line in evidence[:20]: print('   ', line)
+    else:
+        print('  没有绕过代理的 socket 证据; 不能据此证明应用全部请求进入核心。')
     # ---- 自检
     pr = tsv(secs.get('probes', ('', []))[1])
     if pr:
@@ -122,7 +130,7 @@ def main():
     print('\n== 自动判断')
     notes = []
     if meta.get('proxy.enabled') == '0': notes.append('代理总开关是关闭的: 所有连接都按 direct-mode 直连。')
-    if env.get('sysproxy.points_to_enana') == 'no': notes.append('系统代理没有指向 enana: 浏览器的流量不经过它, 不会有访问记录, 也不会被代理。')
+    if capture != 'tun' and env.get('sysproxy.points_to_enana') == 'no': notes.append('系统代理没有指向 enana: 遵守系统代理且没有其他代理入口的连接可能不进入核心。')
     if env.get('config.check', 'ok') != 'ok': notes.append('配置没有通过 sing-box check: ' + env['config.check'])
     if acc:
         dapp = collections.Counter(r['app'] for r in acc if r['reason'] == 'app')

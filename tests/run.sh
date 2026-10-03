@@ -10,7 +10,7 @@ SB=${SINGBOX:-$(command -v sing-box || true)}
 [ -x "$SB" ] || { echo "跳过: 需要 sing-box 二进制 (SINGBOX=/路径/sing-box)"; exit 77; }
 command -v python3 >/dev/null || { echo "跳过: 需要 python3"; exit 77; }
 
-W=$(mktemp -d /tmp/enana-test.XXXXXX); FAILS=0; PASSES=0
+W=$(mktemp -d /tmp/enana-test.XXXXXX); W=$(cd "$W" && pwd -P); FAILS=0; PASSES=0
 BASE=$((20000 + RANDOM % 20000))
 HOP_PORT=$((BASE+4)); A_PORT=$((BASE+5)); N_PORT=$((BASE+6)); DOH_PORT=$((BASE+7)); SSHD_PORT=$((BASE+8))
 VER=$(cat "$REPO/VERSION" 2>/dev/null || echo 2.1.0)
@@ -388,7 +388,7 @@ api -X POST "$A/api/override?kind=site&value=example.org&state=follow" >/dev/nul
 mkdir -p "$W/Foo.app/Contents/MacOS"; cp /usr/bin/curl "$W/Foo.app/Contents/MacOS/foo-net"; codesign --force -s - "$W/Foo.app/Contents/MacOS/foo-net" 2>/dev/null
 api -X POST "$A/api/override?kind=app&value=Foo&state=pin" >/dev/null; sleep 1.5; : > "$W/h/sing-box.log"
 "$W/Foo.app/Contents/MacOS/foo-net" -s -m 4 -x "socks5h://127.0.0.1:$PORT" http://plain.test/ -o /dev/null 2>/dev/null; sleep 1.2
-sed 's/\x1b\[[0-9;]*m//g' "$W/h/sing-box.log" | grep -q 'ovr-pin => route(PIN)' && tpass "按应用覆盖: Foo.app → 固定出口 (识别到进程路径)" || tfail "按应用覆盖 (进程路径识别)"
+sed 's/\x1b\[[0-9;]*m//g' "$W/h/sing-box.log" | grep -q 'ovr-apppin => route(PIN)' && tpass "按应用覆盖: Foo.app → 固定出口 (识别到进程路径)" || tfail "按应用覆盖 (进程路径识别)"
 api -X POST "$A/api/proxy" -d 'mode=sideways' | chk "代理模式无效 → 被拒" 'assert not d["ok"]'
 api -X POST "$A/api/proxy" -d 'mode=global' | chk "切到「全局代理」模式" 'assert d["ok"] and d["mode"]=="global" and d["enabled"] is True'
 cl "$U/configs" | chk "核心模式 = Global" 'assert d["mode"]=="Global"'
@@ -407,7 +407,7 @@ expect "整个过程核心没有重启 (PID 不变)" test "$PID" = "$(cat "$FAKE
 CB=$(mkapp "$W/Custom" "Bar Tool" /usr/bin/curl); J=$(api -X POST "$A/api/apps/custom" --data-urlencode "path=$CB" -d 'state=pin' | jp 'print(d["job"])'); job_wait "$J" >/dev/null
 ENANA_LOG_LEVEL=debug bash "$REPO/install.sh" apply >/dev/null 2>&1; sleep 2.5; : > "$W/h/sing-box.log"       # (任务重新生成配置时日志级别回到默认, 这里再切回 debug 才看得到路由日志)
 "$CB/Contents/MacOS/Bar-Tool" -s -m 4 -x "socks5h://127.0.0.1:$PORT" http://plain2.test/ -o /dev/null 2>/dev/null; sleep 1.2
-sed 's/\x1b\[[0-9;]*m//g' "$W/h/sing-box.log" | grep -q 'ovr-pin => route(PIN)' && tpass "自定义软件 (Bar Tool.app) 的流量按设置走固定出口" || tfail "自定义软件的流量按设置走固定出口"
+sed 's/\x1b\[[0-9;]*m//g' "$W/h/sing-box.log" | grep -q 'ovr-apppin => route(PIN)' && tpass "自定义软件 (Bar Tool.app) 的流量按设置走固定出口" || tfail "自定义软件的流量按设置走固定出口"
 api -X POST "$A/api/apps/custom/delete" -d 'name=Bar Tool' >/dev/null; sleep 3
 api -X POST "$A/api/override?kind=site&value=a%20b&state=direct" | chk "非法站点名被拒" 'assert not d["ok"]'
 
@@ -429,7 +429,7 @@ logconn target.example | grep -q 'ovr-pin => route(PIN)' && tpass "不指定 →
 api "$A/api/logs?type=ops&q=target.example" | chk "操作记录: 修改应用/网站策略 —— 谁 / 什么 / 从什么改成什么 / 原来的出口 (target_from)" 'r=[x for x in d["rows"] if x["action"]=="修改应用/网站策略"]; assert len(r)>=3 and "name=target.example" in r[0]["detail"] and "to=pin" in r[0]["detail"] and "target_from=PINAUTO" in r[0]["detail"] and r[0]["who"]=="dashboard"'
 api -X POST "$A/api/override?kind=app&value=Foo&state=pin&target=Fix-Pin2" >/dev/null; sleep 1.5; : > "$W/h/sing-box.log"
 "$W/Foo.app/Contents/MacOS/foo-net" -s -m 4 -x "socks5h://127.0.0.1:$PORT" http://plain3.test/ -o /dev/null 2>/dev/null; sleep 1.2
-sed 's/\x1b\[[0-9;]*m//g' "$W/h/sing-box.log" | grep -q 'ovr-pin-2 => route(Fix-Pin2)' && tpass "按应用指定出口: Foo.app → Fix-Pin2" || tfail "按应用指定出口"
+sed 's/\x1b\[[0-9;]*m//g' "$W/h/sing-box.log" | grep -q 'ovr-apppin-2 => route(Fix-Pin2)' && tpass "按应用指定出口: Foo.app → Fix-Pin2" || tfail "按应用指定出口"
 cl "$U/proxies" | chk "每个服务的选择器 (svc-claude) 可选项里多了「在固定出口里自动选」和各固定出口" 'a=d["proxies"]["svc-claude"]["all"]; assert "PINAUTO" in a and "Fix-Pin" in a and "Fix-Pin2" in a and "PIN" in a'
 api -X POST "$A/api/policy" -d 'tag=svc-claude&name=Fix-Pin2' | chk "网站页切换 svc-claude → Fix-Pin2 (经辅助服务)" 'assert d["ok"] and d["to"]=="Fix-Pin2"'
 cl "$U/proxies" | chk "核心里的选择器确实切换了" 'assert d["proxies"]["svc-claude"]["now"]=="Fix-Pin2"'
@@ -456,6 +456,51 @@ api "$A/api/state" | chk "固定出口被删除后: 网站设置的出口标记�
 logconn target.example | grep -q 'ovr-pin => route(PIN)' && tpass "出口失效 → 退回默认固定出口 (不会断网)" || tfail "出口失效 → 退回默认固定出口"
 api -X POST "$A/api/override?kind=site&value=target.example&state=follow" | chk "网站设置恢复跟随 (删除覆盖)" 'assert d["ok"]'
 api -X POST "$A/api/override?kind=app&value=Foo&state=pin" >/dev/null; sleep 1
+
+echo "== 4bb. Browser fallback and rejected Enhanced authorization"
+FB=$(mkapp "$W/Custom" "Fixture Browser" /usr/bin/curl)
+python3 - "$FB/Contents/Info.plist" <<'BROWSER'
+import sys,plistlib
+p=sys.argv[1]; d=plistlib.load(open(p,'rb')); d['CFBundleURLTypes']=[{'CFBundleURLSchemes':['http','https']}]; plistlib.dump(d,open(p,'wb'))
+BROWSER
+codesign --force -s - "$FB" >/dev/null 2>&1
+J=$(api -X POST "$A/api/apps/custom" --data-urlencode "path=$FB" -d 'state=follow' | jp 'print(d["job"])'); job_wait "$J" >/dev/null
+ENANA_LOG_LEVEL=debug bash "$REPO/install.sh" apply >/dev/null 2>&1; sleep 2
+cl -X PUT "$U/proxies/svc-claude" -d '{"name":"PIN"}' >/dev/null
+for policy in direct auto; do
+  api -G -X POST --data-urlencode 'kind=app' --data-urlencode 'value=Fixture Browser' --data-urlencode "state=$policy" "$A/api/override" | chk "Browser $policy policy API accepts query parameters" 'assert d["ok"]'; sleep 1.5
+  expect "Browser $policy rule set contains the actual process" grep -q "Fixture Browser" "$W/h/rules/ovr-browser$policy.json"
+  : > "$W/h/sing-box.log"
+  "$FB/Contents/MacOS/Fixture-Browser" -s -m 3 -x "socks5h://127.0.0.1:$PORT" http://claude.com/ -o /dev/null 2>/dev/null; sleep 1
+  expect "Browser $policy does not override website PIN (real process path)" grep -q 'route(svc-claude)' "$W/h/sing-box.log"
+done
+# Websites outrank browser PIN; native app PIN still controls that app's traffic.
+printf '%s\n' '{"role":"pin","outbound":{"type":"socks","tag":"Browser-Other-PIN","server":"127.0.0.1","server_port":3,"version":"5"}}' >> "$W/h/servers.jsonl"
+ENANA_LOG_LEVEL=debug bash "$REPO/install.sh" apply >/dev/null 2>&1; sleep 2
+api -G -X POST --data-urlencode 'kind=site' -d 'value=claude.com&state=pin&target=Browser-Other-PIN' "$A/api/override" >/dev/null
+api -G -X POST --data-urlencode 'kind=app' --data-urlencode 'value=Fixture Browser' -d 'state=pin' "$A/api/override" >/dev/null; sleep 1.5
+: > "$W/h/sing-box.log"
+"$FB/Contents/MacOS/Fixture-Browser" -s -m 3 -x "socks5h://127.0.0.1:$PORT" http://claude.com/ -o /dev/null 2>/dev/null; sleep 1
+expect "Website-specific PIN outranks browser default PIN" grep -q 'ovr-pin-2 => route(Browser-Other-PIN)' "$W/h/sing-box.log"
+: > "$W/h/sing-box.log"; "$FB/Contents/MacOS/Fixture-Browser" -s -m 3 -x "socks5h://127.0.0.1:$PORT" http://browser-fallback.example/ -o /dev/null 2>/dev/null || true; sleep 1
+expect "Browser PIN remains the fallback for unconfigured websites" grep -q 'ovr-browserpin => route(PIN)' "$W/h/sing-box.log"
+api -G -X POST --data-urlencode 'kind=app' --data-urlencode 'value=Foo' -d 'state=pin' "$A/api/override" >/dev/null; sleep 1.5
+: > "$W/h/sing-box.log"; "$W/Foo.app/Contents/MacOS/foo-net" -s -m 3 -x "socks5h://127.0.0.1:$PORT" http://claude.com/ -o /dev/null 2>/dev/null || true; sleep 1
+expect "Native app PIN outranks website-specific alternate PIN" grep -q 'ovr-apppin => route(PIN)' "$W/h/sing-box.log"
+api -G -X POST --data-urlencode 'kind=app' --data-urlencode 'value=Foo' -d 'state=direct' "$A/api/override" >/dev/null
+api -G -X POST -d 'kind=site&value=claude.com&state=follow' "$A/api/override" >/dev/null
+python3 - "$W/h/servers.jsonl" <<'RESTORE'
+import sys,json
+p=sys.argv[1]; rows=[l for l in open(p) if json.loads(l)['outbound']['tag']!='Browser-Other-PIN'];open(p,'w').writelines(rows)
+RESTORE
+api -G -X POST --data-urlencode 'kind=app' --data-urlencode 'value=Fixture Browser' -d 'state=follow' "$A/api/override" >/dev/null
+bash "$REPO/install.sh" apply >/dev/null 2>&1; sleep 1.5 # leave debug instrumentation before cancellation check
+NM_PID=$(cat "$FAKE_STATE/pid-com.enana.proxy")
+J=$(api -X POST "$A/api/network-mode" -d 'mode=tun' | jp 'print(d["job"])')
+expect "TUN authorization cancellation reports a failed job" test "$(job_wait "$J")" = error
+api "$A/api/state" | chk "Cancelled Enhanced selection keeps System mode and live service" 'assert d["proxy"]["network_mode"]=="system" and d["env"]["service"]'
+expect "Cancelled Enhanced selection leaves original core PID untouched" test "$NM_PID" = "$(cat "$FAKE_STATE/pid-com.enana.proxy")"
+api -X POST "$A/api/network-mode" -d 'mode=invalid' | chk "Capture mode validates its input" 'assert not d["ok"]'
 
 echo "== 4c. 流量统计 (每分钟采样 → 本机按小时 / 天 / 节点累加; 只保留 3 个月)"
 ST=$W/st; mkdir -p "$ST"; printf 'Fix-Pin\tpin\nLocal-Hop\tauto\n' > "$ST/roles"
@@ -1264,7 +1309,12 @@ api -X POST "$A/api/proxy" -d 'on=0' >/dev/null
 echo "== 14. 重复运行安装器 / 升级模式: 不重装 / 不重启 / 不要密码 / 不动系统代理"
 bash "$REPO/install.sh" apply >/dev/null 2>&1; sleep 1.5      # 回到默认日志级别 (前面为了看路由日志用了 debug)
 : > "$FAKE_STATE/calls.log"; PID=$(cat "$FAKE_STATE/pid-com.enana.proxy")
-bash "$REPO/install.sh" --yes >/dev/null 2>&1
+cp "$W/h/config.json" "$W/reinstall-before.json"
+cp -R "$ENANA_PLIST_DIR" "$W/reinstall-plists-before"
+bash "$REPO/install.sh" --yes > "$W/reinstall.out" 2>&1
+cp "$W/h/config.json" "$W/reinstall-after.json"
+cp "$FAKE_STATE/calls.log" "$W/reinstall-calls.log"
+cp -R "$ENANA_PLIST_DIR" "$W/reinstall-plists-after"
 expect "核心没有被重启" test "$PID" = "$(cat "$FAKE_STATE/pid-com.enana.proxy")"
 expect "没有调用 sudo (不再要密码)" test "$(grep -c '^sudo' "$FAKE_STATE/calls.log")" = 0
 expect "没有改动系统代理" test "$(grep -c 'networksetup -set' "$FAKE_STATE/calls.log")" = 0
@@ -1316,6 +1366,14 @@ UP=$(grep -c '^  ✓' "$W/units.out"); UF=$(grep -c '^  ✗' "$W/units.out")
 echo "  (单元测试 $UP 项通过, $UF 项失败)"
 [ "${UP:-0}" -ge 80 ] || { echo "  ✗ 单元测试通过数异常 ($UP), 见 $W/units.out"; echo f >> "$W/.fail"; }
 _i=0; while [ "$_i" -lt "${UP:-0}" ]; do echo p >> "$W/.pass"; _i=$((_i+1)); done; _i=0; while [ "$_i" -lt "${UF:-0}" ]; do echo f >> "$W/.fail"; _i=$((_i+1)); done      # (BSD 的 seq 1 0 会倒数, 所以不用 seq)
+
+echo "== 19. Enhanced/TUN isolated regressions"
+if SINGBOX="$SB" bash "$HERE/enhanced.sh" > "$W/enhanced.out" 2>&1; then tpass "System/TUN schema, exclusions, PIN priority and socket evidence"; else tfail "Enhanced config regression"; cat "$W/enhanced.out"; fi
+if bash "$HERE/tun-service.sh" > "$W/tun-service.out" 2>&1; then tpass "Root snapshot rollback and route ownership"; else tfail "TUN service regression"; cat "$W/tun-service.out"; fi
+if command -v node >/dev/null; then
+  if node "$HERE/ui-busy.test.js" > "$W/ui-busy.out" 2>&1; then tpass "Async UI buttons and modal duplicate submissions"; else tfail "UI busy regression"; cat "$W/ui-busy.out"; fi
+  if node "$HERE/network-mode-ui.test.js" > "$W/network-mode-ui.out" 2>&1; then tpass "App capture onboarding, cancellation and readiness"; else tfail "Capture onboarding regression"; cat "$W/network-mode-ui.out"; fi
+fi
 
 PASSES=$(cat "$W/.pass" 2>/dev/null | wc -l | tr -d ' '); FAILS=$(cat "$W/.fail" 2>/dev/null | wc -l | tr -d ' ')
 echo; echo "结果: $PASSES 通过, $FAILS 失败"; [ "$FAILS" = 0 ]

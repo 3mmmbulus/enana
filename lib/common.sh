@@ -42,7 +42,12 @@ init_paths() {
   LIB="$SRC/lib"; DATA="$SRC/data"
   if [ -f "$SRC/.enana-home" ]; then H=$SRC          # 已安装的副本: 目录就是它所在位置
   else H="${ENANA_HOME:-$HOME/.enana}"; fi          # 源码目录: 安装到 $H
-  VERSION=2.1.2; [ -s "$SRC/VERSION" ] && IFS= read -r VERSION < "$SRC/VERSION"
+  # Installer environment paths and the installed entry point must agree.
+  # macOS aliases /tmp to /private/tmp; otherwise rollback regenerates an
+  # identical configuration with different paths and restarts the old core.
+  if [ -d "$H" ]; then H=$(cd "$H" && pwd -P)
+  elif [ -d "$(dirname "$H")" ]; then H=$(resolve_path "$H"); fi
+  VERSION=2.2.0; [ -s "$SRC/VERSION" ] && IFS= read -r VERSION < "$SRC/VERSION"
 }
 
 set_ui_url() { UI_URL="http://127.0.0.1:$API_PORT$ADMIN_PATH/"; }     # 后台地址: 由本地辅助服务直接提供, 路径固定为 /enana/admin/ (端口变了要重新调用)
@@ -55,9 +60,10 @@ settings_set() { # settings_set KEY VALUE   (调用方负责校验值; 写入 $H
 
 load_settings() { # 可调项: 环境变量 > $H/settings.env > 默认值
   local p=${PORT:-} u=${UI_PORT:-} a=${API_PORT:-} s=${SPEED_PORT:-}
-  PORT=7890; UI_PORT=9090; API_PORT=9091; SPEED_PORT=''; LOG_HOURS=''; LOG_DAYS=''; LOG_OPS=1; ACCESS_LOG=1; LOG_CORE=1; AUTO_SITES=0; AUTO_UPDATE=1; AUTOSTART=1; PROXY_ENABLED=0; PROXY_MODE=auto; LANG_UI=''
+  PORT=7890; UI_PORT=9090; API_PORT=9091; SPEED_PORT=''; LOG_HOURS=''; LOG_DAYS=''; LOG_OPS=1; ACCESS_LOG=1; LOG_CORE=1; AUTO_SITES=0; AUTO_UPDATE=1; AUTOSTART=1; PROXY_ENABLED=0; PROXY_MODE=auto; NETWORK_MODE=system; LANG_UI=''
   ACCOUNT_URL=https://api.enana.cc; ACCOUNT_SITE=https://enana.cc     # 云端接口 / 官网 (官网只有一个首页: 账号的注册、登录、改密码都在仪表盘里)
   [ -f "$H/settings.env" ] && . "$H/settings.env"
+  case $NETWORK_MODE in system|tun) ;; *) NETWORK_MODE=system ;; esac
   # 日志保留时长 (小时): 默认 3 天, 最短 12 小时, 最长 30 天; 旧版本的 LOG_DAYS (天) 自动换算
   [ -n "$LOG_HOURS" ] || { case $LOG_DAYS in ''|*[!0-9]*) LOG_HOURS=72 ;; *) LOG_HOURS=$((LOG_DAYS * 24)) ;; esac; }
   case $LOG_HOURS in ''|*[!0-9]*) LOG_HOURS=72 ;; esac; [ "$LOG_HOURS" -lt 12 ] && LOG_HOURS=12; [ "$LOG_HOURS" -gt 720 ] && LOG_HOURS=720

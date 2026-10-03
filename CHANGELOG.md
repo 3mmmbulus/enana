@@ -1,5 +1,23 @@
 # Changelog / 更新日志
 
+## 2.2.0 (2026-10-03)
+
+### 中文
+- 新增 macOS 可选增强接管 (Enhanced/TUN): 接管绕过系统代理的公网 TCP/UDP, 复用应用与网站分流; localhost、局域网与核心出口正确排除。升级保留 System Proxy, 开启增强接管需要管理员授权。
+- 修复浏览器 Direct/Auto 抢先覆盖网站策略; 原生应用 PIN 优先于网站指定出口, 不回落到自动池。应用页提供增强接管引导, 明确轻量模式的覆盖范围。
+- 修复添加服务器、日志导出与其它异步控件重复提交; 显示忙碌状态, 禁用进行中的按钮。
+- 调整服务器、网站与测速的二级导航; 我的服务器使用表格, 测速操作栏置顶、合并全选/取消全选, 进度在弹窗展示。
+- 诊断加入接管模式、路由归属、入站来源及系统 socket/核心连接对照。缺少核心日志不再被当作没有请求的证据。
+- 核心配置校验、授权取消/服务启动失败回滚、进程路由和异步组件均增加自动化回归。真实原生 App 登录需要增强接管后的端到端验收。
+
+### English
+- Add optional macOS Enhanced/TUN capture for public TCP/UDP bypassing System Proxy, reusing app/site routing with localhost, LAN and core egress exclusions. Upgrades keep System Proxy; enhanced capture requires administrator authorization.
+- Fix browser Direct/Auto overriding site policies; native app PIN takes precedence over site-specific exits and does not fall back to Auto. Guide users to enhanced capture from the Apps page and explain lightweight coverage.
+- Prevent duplicate submissions during server setup, log export and other asynchronous actions, with disabled buttons and visible progress.
+- Restructure server, site and speed-test navigation; use a table for owned servers, a top action bar and combined selection toggle for tests, and a progress dialog.
+- Include capture mode, route ownership, inbound source and OS socket/core connection comparison in diagnostics. Missing core logs alone do not prove absence of traffic.
+- Add schema, cancellation/startup rollback, real process routing and async UI regressions. Native app login still needs end-to-end validation with enhanced capture enabled.
+
 ## 2.1.2 (2026-10-03)
 
 ### 中文

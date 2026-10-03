@@ -32,6 +32,15 @@
       h('section', { class: 'card' }, h('div', { class: 'card-h' }, ui.icon('pin', 20, 'ci'), h('h3', null, L('servers.pin.title'), ui.help('servers.pin'))), h('div', { class: 'row wrap' }, el.pinSel), el.pinInfo),
       h('section', { class: 'card' }, h('div', { class: 'card-h' }, ui.icon('auto', 20, 'ci'), h('h3', null, L('servers.auto.title'), ui.help('servers.auto'))), h('div', { class: 'row wrap' }, el.autoSel, el.autoBack), el.autoInfo)));
 
+    var panels = {}, names = ['nodes', 'vps', 'subs', 'official'];
+    var curTab = TP.prefs.get('servers.tab', 'nodes');
+    if (names.indexOf(curTab) < 0) curTab = 'nodes';
+    names.forEach(function (k) { panels[k] = h('div', { class: 'servers-pane', role: 'tabpanel', id: 'servers-panel-' + k }); panels[k].hidden = k !== curTab; });
+    var tabs = ui.tabs(L('servers.tabs.aria'), names.map(function (k) { return { id: k, label: L('servers.tab.' + k), icon: k === 'vps' ? 'server' : k === 'subs' ? 'refresh' : k === 'official' ? 'pro' : 'nav-servers' }; }), function (k) {
+      tabs.set(k); names.forEach(function (n) { panels[n].hidden = n !== k; }); TP.prefs.set('servers.tab', k);
+    });
+    names.forEach(function (k) { panels[k].setAttribute('aria-labelledby', tabs.btn(k).id); tabs.btn(k).setAttribute('aria-controls', panels[k].id); });
+    tabs.set(curTab); root.appendChild(tabs.el); names.forEach(function (k) { root.appendChild(panels[k]); });
     /* 工具栏 */
     el.addBtn = ui.btn(L('servers.add'), { kind: 'primary', icon: 'plus' });
     ui.act(el.addBtn, function () { return TP.imp.open('import'); });
@@ -45,30 +54,30 @@
     el.tBar = ui.bar(); el.tMsg = h('span', { class: 'muted sm', 'aria-live': 'polite' });
     el.tBox = h('div', { class: 'testbar', hidden: true }, el.tBar.el, el.tMsg);
     el.sort.value = sortKey;
-    root.appendChild(h('div', { class: 'toolbar' }, el.addBtn, el.testBtn, el.stopBtn, el.sort, el.count, ui.help('servers.nodes')));
-    root.appendChild(el.tBox);
+    panels.nodes.appendChild(h('div', { class: 'toolbar' }, el.addBtn, el.testBtn, el.stopBtn, el.sort, el.count, ui.help('servers.nodes')));
+    panels.nodes.appendChild(el.tBox);
 
     /* 服务器表 */
     el.tbody = h('tbody');
     el.empty = ui.emptyBox();
     el.pg = ui.pager('servers', { def: 10 }); el.pg.onChange(function () { renderTable(); });
-    root.appendChild(h('section', { class: 'card flush' },
+    panels.nodes.appendChild(h('section', { class: 'card flush' },
       h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl rt' },
         h('thead', null, h('tr', null, ['servers.col.name', 'servers.col.type', 'servers.col.addr', 'servers.col.role', 'servers.col.lat', 'servers.col.act'].map(function (k) { return h('th', { scope: 'col', class: /\.act$/.test(k) ? 'c-act' : null }, L(k), k === 'servers.col.role' ? ui.help('servers.roles') : null); }))),
         el.tbody)),
       el.empty.el, el.pg.el));
 
     /* enana 官方线路 (会员): 以后订阅用户登录后自动出现; 现在是「即将推出」占位卡片 (读 GET /api/plan 的 features.official_proxy) */
-    root.appendChild(officialCard());
+    panels.official.appendChild(officialCard());
 
     /* 订阅 */
     el.subs = h('div', { class: 'rows' });
     el.subsEmpty = ui.emptyBox();
-    root.appendChild(h('section', { class: 'card' },
+    panels.subs.appendChild(h('section', { class: 'card' },
       h('div', { class: 'card-h' }, h('h3', null, L('servers.subs.title'), ui.help('servers.subs')), h('span', { class: 'muted sm' }, L('servers.subs.sub'))), el.subs, el.subsEmpty.el));
 
     /* 我的服务器 (SSH 一键部署过的 VPS 记录, 不含任何密码 / 私钥) — 由 v-vps.js 提供, 缺失时整块省略 */
-    if (TP.vps && TP.vps.listCard) { try { root.appendChild(TP.vps.listCard()); } catch (e) { console.error('[vps.listCard]', e); } }
+    if (TP.vps && TP.vps.listCard) { try { panels.vps.appendChild(TP.vps.listCard()); } catch (e) { console.error('[vps.listCard]', e); } }
 
     TP.on('state', function () { if (active()) V.render(); autoCheck(); });
     TP.on('proxies', function () { if (active()) V.render(); });

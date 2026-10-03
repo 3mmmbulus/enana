@@ -160,6 +160,9 @@ dns_block_json() { # dns_block_json <have 文件(已就绪且启用的规则集 
     servers="$servers,$(dns_hosts_server_json)"
     rules="{\"domain\":[$(dns_hosts_list | awk -F'|' "$_HOSTS_OK"'{ printf "%s\"%s\"", (n++ ? "," : ""), $1 }')],\"action\":\"route\",\"server\":\"dns-hosts\"}"
   fi
+  # TUN also intercepts public DNS. The master-off mode must not keep sending
+  # DNS over the proxy just because leak guard's normal final server is global.
+  rules="$rules${rules:+,}{\"clash_mode\":\"Direct\",\"action\":\"route\",\"server\":\"dns-cn\"}"
   if [ "$DNS_ADS" = 1 ] && grep -qx geosite-ads "$1" 2>/dev/null; then rules="$rules${rules:+,}{\"rule_set\":[\"geosite-ads\"],\"action\":\"reject\"}"; fi
   if grep -qx geosite-cn "$1" 2>/dev/null; then rules="$rules${rules:+,}{\"rule_set\":[\"geosite-cn\"],\"action\":\"route\",\"server\":\"dns-cn\"}"; fi
   final=dns-cn; [ "$DNS_LEAK" = 1 ] && final=dns-global

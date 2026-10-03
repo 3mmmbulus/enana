@@ -58,7 +58,7 @@
     V.render();
   }
   function setNav(v) {
-    nav = String(v || ''); TP.prefs.set(navKey(), nav || undefined);
+    nav = String(v || ''); TP.prefs.set(navKey(), nav);
     if (pgC) pgC.setPage(1);
     V.render();
   }
@@ -74,7 +74,7 @@
     /* 顶部标签 (来源) + 搜索 + 添加 */
     tabsCtl = ui.tabs(L('sites.tab.aria'), TABS.map(function (k) { return { id: k, label: L('sites.tab.' + k), icon: k === 'catalog' ? 'library' : k === 'mine' ? 'user' : 'scan-search', count: 0 }; }), function (id) { setTab(id, true); });
     tabsCtl.set(tab);
-    el.q = h('input', { class: 'inp', type: 'search', placeholder: L('sites.search'), 'aria-label': L('sites.search'), autocomplete: 'off', on: { input: function () { flt.q = el.q.value.trim().toLowerCase(); if (pgC) pgC.setPage(1); V.render(); } } });
+    el.q = h('input', { class: 'inp', type: 'search', placeholder: L('sites.search'), 'aria-label': L('sites.search'), autocomplete: 'off', on: { input: function () { flt.q = el.q.value.trim().toLowerCase(); nav = flt.q ? '' : String(TP.prefs.get(navKey(), '') || ''); if (pgC) pgC.setPage(1); V.render(); } } });
     el.addBtn = ui.btn(L('sites.add'), { kind: 'primary', icon: 'plus' });
     ui.act(el.addBtn, function () { return openAddSite(); });
     el.count = h('span', { class: 'muted sm' });
@@ -127,6 +127,7 @@
       if (d.all || d.key === navKey()) { var nn = String(TP.prefs.get(navKey(), '') || ''); if (nn !== nav) { nav = nn; V.render(); return; } }
       if (d.all || d.key === PREF_COLLAPSED) renderRows();
     });
+    window.addEventListener('resize', function () { if (active()) renderNav(); });
     buildFinal(); buildGroups(); V.render();
   };
   V.show = function () { readPrefs(); tabsCtl.set(tab); V.render(); if (!S.prefs) TP.loadSettings(); };
@@ -152,16 +153,17 @@
     } else {
       var list = sitesOf(tab);
       out.push({ id: '', label: t('sites.all'), icon: 'list-checks', count: list.length });
-      ['pin', 'auto', 'direct'].forEach(function (k) { out.push({ id: k, label: TP.name.route(k), icon: k, count: list.filter(function (o) { return polClass(o.state) === k; }).length }); });
+      ['pin', 'auto', 'direct', 'follow'].forEach(function (k) { out.push({ id: k, label: k === 'follow' ? t('txt.app.followLabel') : TP.name.route(k), icon: k === 'follow' ? 'waypoints' : k, count: list.filter(function (o) { return (o.state === 'follow' ? 'follow' : polClass(o.state)) === k; }).length }); });
     }
     return out;
   }
   function renderNav() {
-    var items = navItems(), sig = tab + '|' + I.lang + '|' + items.map(function (x) { return x.id; }).join(',');
+    var items = navItems(), compact = window.matchMedia('(max-width:760px)').matches, sig = compact + '|' + tab + '|' + I.lang + '|' + items.map(function (x) { return x.id; }).join(',');
+    if (tab === 'catalog' && !flt.q && !nav && TP.prefs.get(navKey(), null) === null && items.length > 2) nav = items[1].id;
     if (!items.some(function (x) { return x.id === nav; })) nav = '';
     if (el.nav._sig !== sig) {
       el.nav._sig = sig; TP.clear(el.nav);
-      navCtl = ui.tabs(L('sites.nav.aria'), items, function (id) { setNav(id); }, { vertical: true });
+      navCtl = ui.tabs(L('sites.nav.aria'), items, function (id) { setNav(id); }, { vertical: !compact });
       el.nav.appendChild(navCtl.el);
     }
     items.forEach(function (x) { navCtl.count(x.id, x.count); });
