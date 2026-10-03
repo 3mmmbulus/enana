@@ -760,6 +760,27 @@ sudo 没有通过: sudo 密码不对, 或这个用户没有 sudo 权限	sudo fai
 需要 sudo 密码	The sudo password is required
 需要先确认并固定服务器的主机指纹	Confirm and pin the server's host fingerprint first
 验证连通	Verify connectivity
+  [1] 打开仪表盘\n	  [1] Open dashboard\n
+  [2] 重启服务\n	  [2] Restart service\n
+  [3] %s\n	  [3] %s\n
+  [4] 更新规则/订阅\n	  [4] Update rules/subscriptions\n
+  [5] 查看日志\n	  [5] View logs\n
+  [6] 诊断\n	  [6] Diagnose\n
+  [7] 退出账号 (关闭代理并清除登录)\n	  [7] Log out (turns the proxy off and clears your sign-in)\n
+  [8] 更新 enana\n	  [8] Update enana\n
+%s  [9] 卸载%s\n	%s  [9] Uninstall%s\n
+  [s] %s\n	  [s] %s\n
+  [l] 语言 / Language\n	  [l] Language\n
+  [r] 刷新\n	  [r] Refresh\n
+  [q] 退出\n	  [q] Quit\n
+请选择 (输入选项后按 Enter)	Choose an option and press Enter
+按 Enter 返回…	Press Enter to go back…
+确认完整卸载? 将还原系统代理、停止服务、删除快捷命令和全部本机数据 (账号、服务器、订阅、设置、日志与缓存)	Fully uninstall? Restore proxy settings, stop services and remove shortcuts and all local data (account, servers, subscriptions, settings, logs and caches)
+完整卸载会删除全部本机数据; 请先导出需要保留的数据, 再执行 enana uninstall	Full uninstall removes all local data; export anything you need before running enana uninstall
+安装目录不安全, 未执行卸载	Unsafe installation directory; uninstall was not performed
+删除安装数据失败, 卸载未完成	Could not remove installation data; uninstall is incomplete
+已完整卸载, 本机数据已删除	Fully uninstalled; local data removed
+  enana uninstall      完整卸载 (删除全部本机数据)	  enana uninstall      Fully uninstall (remove all local data)
 # --- generic patterns (keep last: they are broader than everything above)
 尝试 [*] *	Trying [*] *
 下载完成 (线路: *)*	Download finished (route: *)*

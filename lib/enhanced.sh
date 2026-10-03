@@ -84,7 +84,7 @@ enhanced_restore_selectors() {
     }' "$1")
 }
 enhanced_stop() { enhanced_paths; [ -e "$TUN_PLIST" ] || return 0; enhanced_admin /bin/bash "$LIB/enhanced-root.sh" stop "$TUN_UID"; }
-enhanced_remove() { enhanced_paths; [ -e "$TUN_PLIST" ] || return 0; enhanced_admin /bin/bash "$LIB/enhanced-root.sh" remove "$TUN_UID"; }
+enhanced_remove() { enhanced_paths; [ -e "$TUN_PLIST" ] || [ -e "$TUN_ROOT" ] || return 0; enhanced_admin /bin/bash "$LIB/enhanced-root.sh" remove "$TUN_UID"; }
 enhanced_system_log() {
   if [ -L "$H/sing-box.log" ] && [ "$(readlink "$H/sing-box.log")" = "$TUN_ROOT/sing-box.log" ]; then
     logs_rotate; rm -f "$H/sing-box.log"; : > "$H/sing-box.log"

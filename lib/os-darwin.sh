@@ -165,6 +165,9 @@ os_sysproxy_mine() { # 任何网络服务的代理指向本地端口 -> 0
 }
 os_sysproxy_backup() {
   local s k
+  if [ ! -f "$H/proxy-state.json" ]; then
+    ( umask 077; osascript -l JavaScript "$LIB/proxy-state.js" snapshot "$PORT" > "$H/proxy-state.json.tmp" ) && chmod 600 "$H/proxy-state.json.tmp" && mv "$H/proxy-state.json.tmp" "$H/proxy-state.json" || { rm -f "$H/proxy-state.json.tmp"; return 1; }
+  fi
   : > "$H/proxy-backup.txt"
   while IFS= read -r s; do
     for k in webproxy securewebproxy socksfirewallproxy; do printf '[%s %s]\n%s\n' "$s" "$k" "$(networksetup -get$k "$s" 2>/dev/null)" >> "$H/proxy-backup.txt"; done
@@ -174,6 +177,7 @@ os_sysproxy_set() { # on|off  (需要管理员密码)
   local s k v; [ "$1" = on ] && v=开启 || v=关闭
   rm -f "$H/.cache-sysproxy"
   sudo -v || return 1
+  [ "$1" != on ] || os_sysproxy_backup || return 1
   while IFS= read -r s; do
     if [ "$1" = on ]; then
       sudo networksetup -setwebproxy "$s" 127.0.0.1 "$PORT"
@@ -186,6 +190,15 @@ os_sysproxy_set() { # on|off  (需要管理员密码)
     ok "$s: 系统代理已$v"
   done < <(os_sysproxy_services)
 }
+os_sysproxy_uninstall() {
+  # Restore proxy fields/bypass lists, not just Enable=off with localhost still
+  # configured. Never erase foreign endpoints installed after enana.
+  local status; status=$(osascript -l JavaScript "$LIB/proxy-state.js" check "$PORT" "$H/proxy-state.json") || return 1
+  [ "$status" = changed ] || return 0
+  sudo -v || return 1
+  sudo osascript -l JavaScript "$LIB/proxy-state.js" restore "$PORT" "$H/proxy-state.json"
+}
+os_stop_owned_jobs() { perl "$LIB/stop-jobs.pl" "$H" "$$"; }
 
 # ---------- 快捷命令 enana ----------
 # 目标: 装完在任何终端输入 enana 都能打开控制台。优先放进「已经在 PATH 里、当前用户能写」的目录 (马上可用, 不用密码, 不用重开终端);
@@ -236,12 +249,13 @@ shortcut_remove() {
   local d p rc
   while IFS= read -r d; do
     p="$d/$SHORTCUT_NAME"
-    if [ -L "$p" ] && [ "$(resolve_path "$p")" = "$H/enana" ]; then rm -f "$p" 2>/dev/null || sudo rm -f "$p"; fi
+    if [ -L "$p" ] && [ "$(resolve_path "$p")" = "$H/enana" ]; then rm -f "$p" 2>/dev/null || sudo rm -f "$p" || return 1; fi
   done < <(shortcut_dirs)
-  rm -f "$HOME/.config/fish/conf.d/enana.fish"
-  for rc in "$HOME/.zshrc" "$HOME/.bash_profile"; do
+  for rc in "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.config/fish/conf.d/enana.fish"; do
     if [ -f "$rc" ] && grep -qF '# enana 快捷命令' "$rc"; then   # 只删除我们加的两行 (标记行 + 紧随其后的 export)
-      awk -v m='# enana 快捷命令' '$0==m {skip=1; next} skip && /^export PATH="\$HOME\/\.local\/bin:\$PATH"$/ {skip=0; next} {skip=0; print}' "$rc" > "$rc.tmp" && cat "$rc.tmp" > "$rc"; rm -f "$rc.tmp"
+      awk -v m='# enana 快捷命令' '$0==m {skip=1; next} skip && (/^export PATH="\$HOME\/\.local\/bin:\$PATH"$/ || /^contains \$HOME\/\.local\/bin \$PATH; or set -gx PATH \$HOME\/\.local\/bin \$PATH$/) {skip=0; next} {skip=0; print}' "$rc" > "$rc.tmp" && cat "$rc.tmp" > "$rc" || { rm -f "$rc.tmp"; return 1; }
+      rm -f "$rc.tmp" || return 1
+      [ "$rc" != "$HOME/.config/fish/conf.d/enana.fish" ] || [ -s "$rc" ] || rm -f "$rc" || return 1
     fi
   done
   return 0

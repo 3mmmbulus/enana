@@ -17,17 +17,14 @@ if ($Arguments[0] -eq 'doctor') {
 Invoke-EnanaBash $HomeDir (Join-Path $HomeDir 'enana') $Arguments
 $plan=Join-Path $HomeDir '.windows-uninstall'
 if(Test-Path -LiteralPath $plan){
-    $keep=[IO.File]::ReadAllText($plan,$Utf8).Trim();if($keep -notin @('','keep')){throw 'Invalid uninstall plan'}
+    if([IO.File]::ReadAllText($plan,$Utf8).Trim() -ne ''){throw 'Invalid uninstall plan: full removal is required'}
     Assert-NoReparse $HomeDir
     if($HomeDir -eq [IO.Path]::GetPathRoot($HomeDir) -or $HomeDir -eq [Environment]::GetFolderPath('UserProfile')){throw 'Unsafe uninstall directory'}
     Stop-EnanaRuntime $HomeDir
     Remove-Item -LiteralPath $plan
-    if($keep -eq 'keep'){Write-Host "enana services and command removed; data kept at $HomeDir"}
-    else{
-        for($attempt=1;$attempt -le 10;$attempt++){
-            try{Remove-Item -LiteralPath $HomeDir -Recurse -Force;break}
-            catch{if($attempt -eq 10){throw};Start-Sleep -Milliseconds 500}
-        }
-        Write-Host 'enana uninstalled.'
+    for($attempt=1;$attempt -le 10;$attempt++){
+        try{Remove-Item -LiteralPath $HomeDir -Recurse -Force;break}
+        catch{if($attempt -eq 10){throw};Start-Sleep -Milliseconds 500}
     }
+    Write-Host 'enana fully uninstalled. All local installation data removed.'
 }

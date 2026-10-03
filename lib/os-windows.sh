@@ -57,6 +57,8 @@ os_sysproxy_foreign() { win_bridge sysproxy-foreign; }
 os_sysproxy_backup() { :; } # The native setter captures all WinINet/PAC values transactionally.
 os_sysproxy_services() { printf '%s\n' Windows-user; }
 os_sysproxy_set() { case $1 in on|off) win_bridge "sysproxy-$1" ;; *) return 1 ;; esac; }
+os_sysproxy_uninstall() { win_bridge sysproxy-off; }
+os_stop_owned_jobs() { :; } # Native CLI releases this installation's runtime after Bash exits.
 os_open() { win_bridge open "$1"; }
 os_date_minus_days() { date -d "$1 days ago" +%F; }
 os_date_minus_hours() { date -d "$1 hours ago" '+%F %T'; }

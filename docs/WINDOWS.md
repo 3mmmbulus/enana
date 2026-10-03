@@ -41,6 +41,7 @@ TUN 包含 IPv4/IPv6, 排除 localhost/127.0.0.0/8/::1、局域网/私网/链路
 - 当前用户的 `Enana Dashboard <SID>` 计划任务以 Limited 权限运行 `worker.js`, 只监听 127.0.0.1。HTTP 请求通过管道交给现有 `lib/api.sh`, 保留 Host/Origin/X-Enana/登录校验, 增加头/体大小、并发和超时边界。
 - 计划任务通过 `runtime/worker-launcher.exe` 启动后台: 从随包的 `windows/worker-launcher.cs` 用 Windows PowerShell 5.1/.NET Framework 编译为 Windows GUI 程序, 并用 `CreateNoWindow` 启动 Node。启动器等待 Node 结束并传递退出码, 不使用可被用户关掉的终端窗口承载后台; 退出终端控制台不会停止后台服务。启动器自身失败记入仅含事件和数字的 `launcher.log`。
 - 普通 worker 管理自己的 System Proxy 核心、tick/维护任务, 不作为 SYSTEM 执行用户脚本。停止或升级只关闭当前安装拥有的进程。
+- Mac/Windows 共用逐行终端菜单, 输入完整选项并按 Enter 后执行。红色的卸载选项会删除全部本机安装数据, 包括账号缓存、节点、订阅、设置、证书、日志、备份与私有运行时; 清除本用户的后台任务与 TUN 快照, 还原 enana 管理的系统代理/PATH。其它用户的快照、程序和外部改动保留; 不提供保留数据的卸载分支。
 - 代理核心启动失败时保留后台, 可继续查看诊断并重试启动。计划任务启动阶段的错误写入 `worker.log`, 避免只在不可见的控制台报错。若后台自身无法启动, 可直接执行 `windows/diagnostics.ps1`, 不依赖后台、Git 或 Node。
 - Enhanced 的 `Enana Enhanced <SID>` SYSTEM 任务仅运行 `%ProgramData%\enana\<SID>` 中管理员拥有、用户只读的核心/脚本/配置/规则快照。ZIP 复制到受保护目录后重新验证固定哈希并解压, 不直接提升用户可写的 sing-box.exe。快照只允许本机监听和受保护的文件路径。
 - 更新 TUN 规则/节点或切回轻量模式需要 UAC, 失败恢复原快照和任务。没有密码落盘、sudoers 或永久任意命令提权接口。
@@ -71,4 +72,4 @@ Windows 诊断包含模式、任务/接口归属、代理状态和 PIN 主程序
 
 `tools/build-release.sh OUTPUT_DIR` 从明确允许的程序文件构建包, 不包含本机账号、节点、缓存、SSH 密钥或服务器项目。Windows ZIP、清单和更新日志独立发布; macOS 稳定渠道继续保留 2.2.2, 避免 Windows 预览触发 Mac 自动升级。
 
-现有下载主机使用 `tools/deploy-windows-release.sh RELEASE_DIR WEBSITE_DIR 2.3.5`: 先验证包的大小、哈希、版本和入口, 只替换 Windows 下载文件及官网 `index.html` / `site.js`, 清单最后发布。脚本保存回滚备份, 对比稳定 macOS 文件、全部运行服务的 PID/启动时间及 nginx/systemd 配置, 发生变化则撤回本次发布。无需重载 nginx 或修改其它项目。
+Windows 独立发布使用 `tools/deploy-windows-release.sh RELEASE_DIR WEBSITE_DIR 2.3.6`: 先验证包的大小、哈希、版本和入口, 只替换 Windows 下载文件及官网 `index.html` / `site.js`, 清单最后发布。脚本保存回滚备份, 对比稳定 macOS 文件、全部运行服务的 PID/启动时间及 nginx/systemd 配置, 发生变化则撤回本次发布。无需重载 nginx 或修改其它项目。
