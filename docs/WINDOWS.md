@@ -47,7 +47,9 @@ TUN 包含 IPv4/IPv6, 排除 localhost/127.0.0.0/8/::1、局域网/私网/链路
 
 `tests/windows-helper.test.js` 与 `tests/windows-routing.sh` 覆盖原规则生成器、Windows 路径与辅助 EXE、PIN/网站/浏览器优先级、双栈排除、HTTP 字节边界和实际 UDP DNS 往返。Mac 回归继续验证共享逻辑。
 
-`.github/workflows/windows.yml` 在原生 Windows / PowerShell 5.1 上执行 `tests/windows-native.ps1`: 安装真实运行时和核心、启动后台、调用真实 Bash API、鉴权拒绝、配置校验、二次安装、WinINet 恢复/外部修改保留、安全 ZIP、诊断和干净停止。它不代替交互 UAC、TUN 接管或应用 OAuth。
+`.github/workflows/windows.yml` 在原生 Windows / PowerShell 5.1 上执行 `tests/windows-native.ps1`: 安装真实运行时和核心、启动后台、调用真实 Bash API、鉴权拒绝、两种模式配置校验、二次安装、WinINet 恢复/外部修改保留、安全 ZIP、诊断、干净停止和完整卸载。它不代替交互 UAC、TUN 接管或应用 OAuth。
+
+2.3.0 预览的 [Windows 原生 CI](https://github.com/3mmmbulus/enana/actions/runs/37122396091) 已在 Windows Server 2025 x64 / PowerShell 5.1 上通过; 共享 macOS 回归 791 项通过。Windows 10/11 客户端、ARM64、交互 UAC/TUN 和原生应用登录仍保留下面的实机验收。
 
 Windows 实机请验收:
 
@@ -58,3 +60,9 @@ Windows 实机请验收:
 5. 导出仪表盘诊断或运行 `enana diag`; 错误时附诊断、Windows 版本和重现步骤。
 
 Windows 诊断包含模式、任务/接口归属、代理状态和 PIN 主程序/辅助进程的公网 TCP socket。`possible_system_proxy_bypass` 是绕过候选, 不是证明; Windows 普通 TCP 快照无法得知 UDP 远端, 日志明确写 `udp_remote_visibility=unavailable-on-Windows`, 不将没有采样到连接宣称为没有泄漏。
+
+## 下载站发布
+
+`tools/build-release.sh OUTPUT_DIR` 从明确允许的程序文件构建包, 不包含本机账号、节点、缓存、SSH 密钥或服务器项目。Windows ZIP、清单和更新日志独立发布; macOS 稳定渠道继续保留 2.2.2, 避免 Windows 预览触发 Mac 自动升级。
+
+现有下载主机使用 `tools/deploy-windows-release.sh RELEASE_DIR WEBSITE_DIR 2.3.0`: 先验证包的大小、哈希、版本和入口, 只替换 Windows 下载文件及官网 `index.html` / `site.js`, 清单最后发布。脚本保存回滚备份, 对比稳定 macOS 文件、全部运行服务的 PID/启动时间及 nginx/systemd 配置, 发生变化则撤回本次发布。无需重载 nginx 或修改其它项目。
