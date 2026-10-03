@@ -1,5 +1,15 @@
 # Changelog / 更新日志
 
+## 2.3.1 (2026-10-03)
+
+### 中文
+- 修复 Windows 官网 `irm https://install.enana.cc/get.ps1 | iex` 安装入口的 `Lang` 默认值校验错误。语言默认值改为合法的 `auto`, 自动使用系统语言; 保留显式中文 / 英文选项。
+- 补测无参数 `Invoke-Expression`、中文 / 英文 / 其它系统语言与重复执行; 官网下载验收改为在 Windows PowerShell 5.1 的 Restricted 和 Bypass 进程中执行原样安装命令, 防止传入 `-Lang en` 掩盖默认入口故障。
+
+### English
+- Fix the Windows website's `irm https://install.enana.cc/get.ps1 | iex` failing before download because an empty default `Lang` was outside its validation set. Use a valid `auto` default and resolve the system culture, retaining explicit Chinese and English options.
+- Cover no-argument Invoke-Expression, multiple cultures and retries. Published-download acceptance now executes the documented command unchanged in Windows PowerShell 5.1 Restricted and Bypass processes; an explicit `-Lang en` must not hide a broken default entry point.
+
 ## 2.3.0 (2026-10-03)
 
 ### 中文

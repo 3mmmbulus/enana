@@ -1,13 +1,15 @@
 # enana Windows bootstrap: irm https://install.enana.cc/get.ps1 | iex
-# Saved script options: -Upgrade -NoOpen -Force -Lang zh|en
-param([switch]$Upgrade, [switch]$NoOpen, [switch]$Force, [ValidateSet('zh','en')][string]$Lang = '', [string]$HomeDir = '')
+# Saved script options: -Upgrade -NoOpen -Force -Lang auto|zh|en
+# Invoke-Expression validates defaults too: an empty Lang outside ValidateSet
+# fails before any download. Keep auto valid, then resolve the user's culture.
+param([switch]$Upgrade, [switch]$NoOpen, [switch]$Force, [ValidateSet('auto','zh','en')][string]$Lang = 'auto', [string]$HomeDir = '')
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 if ([Environment]::OSVersion.Platform -ne 'Win32NT' -or ![Environment]::Is64BitOperatingSystem -or ![Environment]::Is64BitProcess) { throw 'Use 64-bit PowerShell on Windows 10/11 (x64 or ARM64).' }
 if ($PSVersionTable.PSVersion -lt [Version]'5.1') { throw 'PowerShell 5.1 or later is required.' }
 if ([Environment]::OSVersion.Version.Build -lt 19041) { throw 'Windows 10 version 2004 (build 19041) or later is required.' }
 if (!$HomeDir) { $HomeDir = if ($env:ENANA_WINDOWS_HOME) {$env:ENANA_WINDOWS_HOME} else {Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'enana'} }
-if (!$Lang) { $Lang = if ((Get-Culture).Name -like 'zh*') {'zh'} else {'en'} }
+if ($Lang -eq 'auto') { $Lang = if ((Get-Culture).Name -like 'zh*') {'zh'} else {'en'} }
 $base = if ($env:ENANA_INSTALL_BASE) {$env:ENANA_INSTALL_BASE.TrimEnd('/')} else {'https://install.enana.cc'}
 $github = 'https://github.com/3mmmbulus/enana'
 if ($base -notmatch '^https://') { throw 'Install source requires HTTPS.' }
