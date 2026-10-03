@@ -10,7 +10,7 @@ Write-Output "windows.arch=$env:PROCESSOR_ARCHITECTURE"
 if (Test-Path -LiteralPath "$HomeDir\VERSION") {
     Write-Output "enana.version=$([IO.File]::ReadAllText("$HomeDir\VERSION",$utf8).Trim())"
 }
-foreach ($name in @('runtime\node\node.exe','runtime\git\bin\bash.exe','runtime\git\usr\bin\cygpath.exe','sing-box.exe','config.json')) {
+foreach ($name in @('runtime\worker-launcher.exe','runtime\node\node.exe','runtime\git\bin\bash.exe','runtime\git\usr\bin\cygpath.exe','sing-box.exe','config.json')) {
     Write-Output "runtime.$name.present=$(Test-Path -LiteralPath (Join-Path $HomeDir $name) -PathType Leaf)"
 }
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -19,6 +19,7 @@ $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 Write-Output "worker.task.present=$([bool]$task)"
 if ($task) {
     Write-Output "worker.task.state=$($task.State)"
+    Write-Output "worker.task.console_free_launcher=$([bool]($task.Actions.Execute -contains (Join-Path $HomeDir 'runtime\worker-launcher.exe')))"
     $info = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction SilentlyContinue
     Write-Output ('worker.task.last_result=0x{0:X8}' -f [long]$info.LastTaskResult)
     Write-Output "worker.task.last_run=$($info.LastRunTime.ToString('o'))"
@@ -37,7 +38,7 @@ if ($port -gt 0 -and $port -le 65535) {
     Write-Output "worker.api_port=$port"
     Write-Output "worker.api_listening=$([bool]$listening.Count)"
 }
-foreach ($name in @('worker.log','api.log','check.log','sing-box.log')) {
+foreach ($name in @('launcher.log','worker.log','api.log','check.log','sing-box.log')) {
     if (!(Test-Path -LiteralPath "$HomeDir\$name")) { continue }
     Write-Output "== $name (last 20 lines, redacted) =="
     # Avoid URLs, credentials and full command/environment dumps in reports.

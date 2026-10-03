@@ -146,10 +146,12 @@ switch ($Action) {
     'admin' { if (Test-EnanaAdmin) {'1'} else {'0'} }
     'task-register' {
         $node = Join-Path $HomeDir 'runtime\node\node.exe'; $worker = Join-Path $HomeDir 'windows\worker.js'
-        $spec = "$HomeDir|$((Get-FileHash -LiteralPath $worker).Hash)|$((Get-FileHash -LiteralPath $node).Hash)"
+        & "$PSScriptRoot\build-launcher.ps1" -HomeDir $HomeDir
+        $launcher = Join-Path $HomeDir 'runtime\worker-launcher.exe'
+        $spec = "$HomeDir|$((Get-FileHash -LiteralPath $worker).Hash)|$((Get-FileHash -LiteralPath $node).Hash)|$((Get-FileHash -LiteralPath $launcher).Hash)"
         $file = Join-Path $HomeDir 'runtime\task.spec'
         if ((Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $file) -and [IO.File]::ReadAllText($file) -eq $spec) { 'unchanged'; break }
-        $taskAction = New-ScheduledTaskAction -Execute $node -Argument ('"{0}" "{1}"' -f $worker,$HomeDir) -WorkingDirectory $HomeDir
+        $taskAction = New-ScheduledTaskAction -Execute $launcher -WorkingDirectory $HomeDir
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $sid
         $principal = New-ScheduledTaskPrincipal -UserId $sid -LogonType Interactive -RunLevel Limited
         $opts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew

@@ -1,5 +1,17 @@
 # Changelog / 更新日志
 
+## 2.3.5 (2026-10-04)
+
+### 中文
+- 修复 Windows 安装/启动时额外出现空白终端、关闭该终端后仪表盘失联的问题: 计划任务改用无控制台的 Windows GUI 启动器, Node 子进程使用 `CreateNoWindow`, 服务不再依附可关闭的控制台。用户主动运行 `enana` 的终端菜单保持不变。
+- 启动器从随包审核的 C# 源码使用 Windows 自带的 .NET Framework 编译, 等待后台退出并保留退出码, 继续使用原有计划任务重启策略。增加仅含固定事件/数字的 `launcher.log` 与诊断中的启动方式检查。
+- 自动测试检查真实子进程没有附加控制台、输出管道不会阻塞、失败退出码和缺失运行时日志; 原生安装验收检查任务/进程归属、关闭调用终端后后台可访问及干净关闭任务。Windows ARM64 用户的关窗验收仍需升级后确认。
+
+### English
+- Fix the extra blank Windows terminal whose closure stopped the dashboard. Schedule a GUI-subsystem launcher and create Node without a console; retain the interactive `enana` menu.
+- Compile reviewed launcher source with the built-in .NET Framework, wait for worker exit and preserve scheduler exit/restart behavior. Add bounded metadata-only launcher diagnostics.
+- Exercise native console attachment, pipe draining, exit propagation, missing-runtime failures, actual scheduled-task ownership and dashboard survival after a caller terminal exits.
+
 ## 2.3.4 (2026-10-04)
 
 ### 中文
