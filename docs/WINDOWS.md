@@ -40,100 +40,34 @@ TUN 包含 IPv4/IPv6, 排除 localhost/127.0.0.0/8/::1、局域网/私网/链路
 - `windows/install.ps1` 下载 `runtime-pins.json` 中固定 SHA-256 的官方 PortableGit、Node 和 sing-box, 保留上游许可证, 放在私有目录。
 - 当前用户的 `Enana Dashboard <SID>` 计划任务以 Limited 权限运行 `worker.js`, 只监听 127.0.0.1。HTTP 请求通过管道交给现有 `lib/api.sh`, 保留 Host/Origin/X-Enana/登录校验, 增加头/体大小、并发和超时边界。
 - 普通 worker 管理自己的 System Proxy 核心、tick/维护任务, 不作为 SYSTEM 执行用户脚本。停止或升级只关闭当前安装拥有的进程。
-- 代理核心启动失败时保留后台, 可继续查看诊断并重试启动。计划任务启动阶段的错误写入 `worke…8880 tokens truncated…up\tpath\n'
-  apps_json | perl -MJSON::PP -e 'local $/; my $l = eval { decode_json(<STDIN>) } || []; for my $a (@$l) { my $p = $a->{path} // ""; $p =~ s{/Users/[^/]+}{/Users/<user>}; print join("\t", map { $_ // "" } @$a{qw(name state flag target)}, ($a->{known} ? "yes" : "no"), @$a{qw(rec group)}, $p), "\n" }'
-}
+- 代理核心启动失败时保留后台, 可继续查看诊断并重试启动。计划任务启动阶段的错误写入 `worker.log`, 避免只在不可见的控制台报错。若后台自身无法启动, 可直接执行 `windows/diagnostics.ps1`, 不依赖后台、Git 或 Node。
+- Enhanced 的 `Enana Enhanced <SID>` SYSTEM 任务仅运行 `%ProgramData%\enana\<SID>` 中管理员拥有、用户只读的核心/脚本/配置/规则快照。ZIP 复制到受保护目录后重新验证固定哈希并解压, 不直接提升用户可写的 sing-box.exe。快照只允许本机监听和受保护的文件路径。
+- 更新 TUN 规则/节点或切回轻量模式需要 UAC, 失败恢复原快照和任务。没有密码落盘、sudoers 或永久任意命令提权接口。
 
-_b_probe() { # <名称> <经过 proxy|direct> <地址> [curl 参数…]
-  local n=$1 via=$2 url=$3 out rc; shift 3
-  out=$(curl -s -o /dev/null -m 8 --connect-timeout 5 "$@" -w '%{http_code}\t%{time_connect}\t%{time_total}\t%{remote_ip}' "$url" 2>&1); rc=$?
-  if [ "$rc" = 0 ]; then printf '%s\t%s\t%s\t%s\n' "$n" "$via" "$url" "$(printf '%s' "$out" | awk -F'\t' '{ printf "%s\t%d\t%d\t%s\tok", $1, $2*1000, $3*1000, $4 }')"
-  else printf '%s\t%s\t%s\t000\t0\t0\t\tcurl-exit-%s\n' "$n" "$via" "$url" "$rc"; fi
-}
-_b_probes() { # --noproxy bypasses an explicit proxy, but never bypasses TUN.
-  local d i n native=direct; [ "${NETWORK_MODE:-system}" != tun ] || native=tun
-  d=$(mktemp -d); printf 'probe\tvia\turl\thttp\tconnect_ms\ttotal_ms\tremote_ip\tnote\n'
-  if [ -n "${ENANA_SKIP_PROBE:-}" ]; then printf 'skipped\t-\t-\t000\t0\t0\t\tENANA_SKIP_PROBE\n'; rm -rf "$d"; return 0; fi        # 离线 / 测试: 不联网
-  if nc -z 127.0.0.1 "$PORT" 2>/dev/null; then
-    _b_probe google_204 proxy http://www.gstatic.com/generate_204 -x "http://127.0.0.1:$PORT" > "$d/1" &
-    _b_probe google_page proxy https://www.google.com/ -x "http://127.0.0.1:$PORT" > "$d/2" &
-    _b_probe github proxy https://github.com/ -x "http://127.0.0.1:$PORT" > "$d/3" &
-    _b_probe baidu proxy https://www.baidu.com/ -x "http://127.0.0.1:$PORT" > "$d/4" &
-  fi
-  _b_probe google_204 "$native" http://www.gstatic.com/generate_204 --noproxy '*' > "$d/5" &
-  _b_probe google_page "$native" https://www.google.com/ --noproxy '*' > "$d/6" &
-  _b_probe baidu "$native" https://www.baidu.com/ --noproxy '*' > "$d/7" &
-  wait
-  for i in 1 2 3 4 5 6 7; do [ -f "$d/$i" ] && cat "$d/$i"; done
-  local system_dns
-  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then system_dns=$(win_bridge dns-system www.google.com 2>/dev/null)
-  else system_dns=$(dscacheutil -q host -a name www.google.com 2>/dev/null | awk '/^(ip_address|ipv6_address):/ {print $2}' | head -4 | paste -sd' ' -); fi
-  printf 'dns_system\tsystem\twww.google.com\t-\t-\t-\t%s\t\n' "$system_dns"
-  n=$(clash GET "/dns/query?name=www.google.com&type=A" 2>/dev/null | perl -MJSON::PP -e 'local $/; my $j = eval { decode_json(<STDIN>) } or exit 0; print join(" ", map { $_->{data} // "" } @{ $j->{Answer} || [] })')
-  printf 'dns_core\tcore\twww.google.com\t-\t-\t-\t%s\t%s\n' "$n" "$([ -n "$n" ] || echo no-answer)"
-  rm -rf "$d"
-}
-_b_live() { # 此刻核心里还开着的连接 (最多 60 条, 按下载量): 含命中的规则 (rule) —— 能直接看出「为什么走了这个出口」
-  printf 'start\tnet\thost\tport\tapp\tchain\trule\tup\tdown\n'
-  clash GET /connections 2>/dev/null | perl -MJSON::PP -e '
-    local $/; my $j = eval { decode_json(<STDIN>) } or exit 0; my @c = sort { ($b->{download} // 0) <=> ($a->{download} // 0) } @{ $j->{connections} || [] }; @c = @c[0 .. 59] if @c > 60;
-    for my $c (@c) { my $m = $c->{metadata} || {}; my $pp = $m->{processPath} // ""; $pp =~ s{\\}{/}g; my $app = $pp =~ m{([^/]+)\.app/} ? $1 : ($pp =~ m{([^/]+)$} ? $1 : "");
-      my $r = join(" ", grep { length } ($c->{rule} // "", $c->{rulePayload} // ""));
-      print join("\t", ($c->{start} // ""), ($m->{network} // ""), ($m->{host} || $m->{destinationIP} || ""), ($m->{destinationPort} // ""), $app, join(">", reverse @{ $c->{chains} || [] }), $r, ($c->{upload} // 0), ($c->{download} // 0)), "\n" }'
-}
+固定核心版本改变时必须同时审核 `runtime-pins.json` 与 `tun.ps1` 的授权哈希。Windows 不接受任意核心版本提升为 SYSTEM; 先升级 enana 到审核过该核心的版本。
 
-_b_days() { # <小时数|all> -> 要读取的日期 (旧→新)
-  local h=$1 first
-  if [ "$h" = all ]; then logs_days | sort; return; fi
-  first=$(os_date_minus_hours "$h"); first=${first%% *}
-  logs_days | sort | awk -v f="$first" '$0 >= f'
-}
-_b_ops() { # <起始时间|空> <日期…>
-  local since=$1 d; shift
-  printf 'ts\twho\taction\tdetail\tresult\n'
-  for d in "$@"; do _logs_stream ops "$d"; done | LC_ALL=C awk -v s="$since" 'BEGIN { FS = "\t" } { if (s == "" || substr($0, 1, 19) >= s) print }' | _b_mask_user
-}
-_b_access() { # <起始时间|空> <日期…>
-  local since=$1; shift
-  _logs_access_input "$@" | LC_ALL=C awk -f "$LIB/access.awk" -v mode=tsv -v q= -v lim=0 -v off=0 -v since="$since" -v mask=1
-}
-_b_proxy() { # <起始时间|空> <日期…>
-  local since=$1 d; shift
-  for d in "$@"; do _logs_stream proxy "$d"; done | sed $'s/\033\\[[0-9;]*m//g' | LC_ALL=C awk -v s="$since" '{ ch = substr($0, 1, 1); if ((ch == "+" || ch == "-") && $2 ~ /^[0-9][0-9][0-9][0-9]-/) keep = (s == "" || ($2 " " $3) >= s); if (keep) print }' | _b_mask_user
-}
+## 自动测试与实机验收
 
-# logs_bundle <小时数|all> <分区 逗号分隔: ops access proxy snapshot>  -> 打印诊断导出文件 (UTF-8 文本)
-logs_bundle() {
-  local hours=${1:-24} secs=${2:-ops,access,proxy,snapshot} since='' days dlist BT declared=meta
-  case $hours in all) ;; ''|*[!0-9]*) hours=24 ;; esac
-  [ "$hours" = all ] || { [ "$hours" -lt 1 ] && hours=1; [ "$hours" -gt $LOG_HOURS_MAX ] && hours=$LOG_HOURS_MAX; since=$(os_date_minus_hours "$hours"); }
-  days=$(_b_days "$hours"); dlist=$(printf '%s' "$days" | paste -sd, -)
-  BT=$(mktemp -d)
-  printf '#ENANA-DIAGNOSTICS format=%s\n' "$BUNDLE_FORMAT"
-  printf '#generated=%s tz=%s app=enana version=%s\n' "$(date '+%F %T')" "$(date +%z)" "$VERSION"
-  printf '#range since="%s" hours=%s days=%s\n' "${since:-beginning}" "$hours" "${dlist:-none}"
-  # macOS bash 3.2 misparses unparenthesized case patterns inside quoted $().
-  case ",$secs," in *,snapshot,*) declared="$declared,env,config,policy,servers,apps,probes,live" ;; esac
-  case ",$secs," in *,ops,*) declared="$declared,ops" ;; esac
-  case ",$secs," in *,access,*) declared="$declared,access" ;; esac
-  case ",$secs," in *,proxy,*) declared="$declared,proxy" ;; esac
-  printf '#sections=%s\n' "$declared"
-  printf '%s\n' '#about=这是 enana 的诊断导出文件, 用来排查「网站打不开 / 走错出口 / 应用没识别」之类的问题。每个 "@@SECTION 名称 format=… rows=N" 开始一个分区, 到下一个 "@@SECTION" 或 "@@END" 结束; 以 "#" 开头的行是说明; format=kv 是 键=值, tsv 的第一行是列名 (制表符分隔), raw 是原始日志行。'
-  printf '%s\n' '#privacy=不含任何密码 / 令牌 / 服务器凭据; 服务器地址和系统用户名已打码; 但包含访问过的域名和应用名, 请只发给你信任的人。'
-  printf '%s\n' '#route-reasons=出口名 direct-mode(代理总开关关闭) direct-lan(本机/局域网) direct-site(你把该网站设为直连) direct-app(你把该应用设为直连/关) direct-cn(国内规则) direct(策略选了直连) 都是直连; 其它名字是代理服务器节点。'
-  _b_sec meta kv _b_meta
-  case ",$secs," in *,snapshot,*)
-    _b_sec env kv _b_env
-    _b_sec config text _b_config
-    _b_sec policy text _b_policy
-    _b_sec servers tsv _b_servers
-    _b_sec apps tsv _b_apps
-    _b_sec probes tsv _b_probes
-    _b_sec live tsv _b_live ;; esac
-  # shellcheck disable=SC2086
-  case ",$secs," in *,ops,*) _b_sec ops tsv _b_ops "$since" $days ;; esac
-  case ",$secs," in *,access,*) _b_sec access tsv _b_access "$since" $days ;; esac
-  case ",$secs," in *,proxy,*) _b_sec proxy raw _b_proxy "$since" $days ;; esac
-  printf '@@END\n'
-  rm -rf "$BT"
-}
+`tests/windows-helper.test.js` 与 `tests/windows-routing.sh` 覆盖原规则生成器、Windows 路径与辅助 EXE、PIN/网站/浏览器优先级、双栈排除、HTTP 字节边界和实际 UDP DNS 往返。Mac 回归继续验证共享逻辑。
+
+`.github/workflows/windows.yml` 在原生 Windows / PowerShell 5.1 上执行 `tests/windows-native.ps1`: 安装真实运行时和核心、启动后台、调用真实 Bash API、鉴权拒绝、两种模式配置校验、二次安装、WinINet 恢复/外部修改保留、安全 ZIP、诊断、干净停止和完整卸载。它不代替交互 UAC、TUN 接管或应用 OAuth。
+
+`.github/workflows/windows-download.yml` 从官网获取发布清单、脚本与 ZIP, 在新建的 Restricted 与 Bypass 子进程中原样执行 `irm https://install.enana.cc/get.ps1 | iex`, 验证默认语言、安装、重复安装、后台、核心配置及卸载。该验收不传入 `-Lang` 或 `-NoOpen`, 以覆盖用户实际入口以及浏览器打开后触发的后台任务。版本号或 Windows 运行时变化也会触发它。分离任务清理只针对本安装私有目录下且属于当前用户 SID 的进程, 清理前复核进程路径和创建时间, 保留其它程序。
+
+2.3.0 预览的 [Windows 原生 CI](https://github.com/3mmmbulus/enana/actions/runs/37122396091) 已在 Windows Server 2025 x64 / PowerShell 5.1 上通过; 共享 macOS 回归 791 项通过。Windows 10/11 客户端、ARM64、交互 UAC/TUN 和原生应用登录仍保留下面的实机验收。
+
+Windows 实机请验收:
+
+1. 安装、登录、导入节点并打开代理; Chrome/Edge 自动线路和指定网站 PIN 按规则生效。
+2. 切换 Enhanced/TUN, 接受 UAC; 检查就绪、非显式代理 TCP/UDP/IPv6、localhost OAuth 回调、局域网和实际出口。
+3. 将已安装的 Gemini/Claude/ChatGPT 设为 PIN, 确认主程序及辅助进程出口、OAuth token 交换和已登录界面。浏览器显示授权完成并不等于 App 登录成功。
+4. 拒绝 UAC/故意使用失败配置、切回 System Proxy、停止/重启 Windows; 验证恢复与网络可用, 并检查已有 VPN 共存。
+5. 导出仪表盘诊断或运行 `enana diag`; 错误时附诊断、Windows 版本和重现步骤。
+
+Windows 诊断包含模式、任务/接口归属、代理状态和 PIN 主程序/辅助进程的公网 TCP socket。`possible_system_proxy_bypass` 是绕过候选, 不是证明; Windows 普通 TCP 快照无法得知 UDP 远端, 日志明确写 `udp_remote_visibility=unavailable-on-Windows`, 不将没有采样到连接宣称为没有泄漏。
+
+## 下载站发布
+
+`tools/build-release.sh OUTPUT_DIR` 从明确允许的程序文件构建包, 不包含本机账号、节点、缓存、SSH 密钥或服务器项目。Windows ZIP、清单和更新日志独立发布; macOS 稳定渠道继续保留 2.2.2, 避免 Windows 预览触发 Mac 自动升级。
+
+现有下载主机使用 `tools/deploy-windows-release.sh RELEASE_DIR WEBSITE_DIR 2.3.3`: 先验证包的大小、哈希、版本和入口, 只替换 Windows 下载文件及官网 `index.html` / `site.js`, 清单最后发布。脚本保存回滚备份, 对比稳定 macOS 文件、全部运行服务的 PID/启动时间及 nginx/systemd 配置, 发生变化则撤回本次发布。无需重载 nginx 或修改其它项目。
