@@ -20,6 +20,12 @@ valid_text_file() { [ -s "$1" ] && ! LC_ALL=C grep -q '<html' "$1"; }
 
 _update_urls() { # 文件名 -> 每行一个 URL
   if [ -n "${ENANA_UPDATE_BASE:-}" ]; then printf '%s/%s\n' "$ENANA_UPDATE_BASE" "$1"; return 0; fi     # 测试用
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ] && [ "$1" = windows-manifest.json ]; then
+    printf '%s\n' "${UPDATE_MIRROR:-https://enana.cc/dl}/windows-manifest.json" "https://github.com/$UPDATE_REPO/releases/latest/download/windows-manifest.json"; return 0
+  fi
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ] && [ "$1" = CHANGELOG.md ]; then
+    printf '%s\n' "${UPDATE_MIRROR:-https://enana.cc/dl}/windows-CHANGELOG.md" "https://raw.githubusercontent.com/$UPDATE_REPO/$UPDATE_BRANCH/CHANGELOG.md"; return 0
+  fi
   printf '%s\n' "${UPDATE_MIRROR:-https://enana.cc/dl}/$1" \
                 "https://raw.githubusercontent.com/$UPDATE_REPO/$UPDATE_BRANCH/$1" \
                 "https://fastly.jsdelivr.net/gh/$UPDATE_REPO@$UPDATE_BRANCH/$1" \
@@ -29,6 +35,9 @@ _update_get() { # 文件名 校验函数 输出文件
   local f=$1 v=$2 o=$3 u
   set --; while IFS= read -r u; do set -- "$@" "$u"; done < <(_update_urls "$f")
   QUIET=1 fetch_any "$o" "$v" "$@" >/dev/null 2>&1
+}
+valid_windows_manifest() {
+  perl -MJSON::PP -e 'local $/; my $j=eval {decode_json(<>)} or exit 1; exit (($j->{platform}//"") eq "windows" && ($j->{version}//"") =~ /^\d+\.\d+\.\d+$/ && ($j->{sha256}//"") =~ /^[0-9a-f]{64}$/ && ($j->{size}//0)>0 && $j->{size}<=104857600 && ($j->{url}//"") eq "/dl/enana-$j->{version}-windows.zip" ? 0 : 1)' "$1"
 }
 
 # 从 CHANGELOG.md 里取某个版本的说明: 输出两个变量 NOTES_ZH NOTES_EN (最多 20 行)
@@ -44,8 +53,14 @@ update_check() {
   now_=$(now)
   if [ -f "$f" ] && [ -z "$force" ]; then ts=$(sed -n 's/.*"checked":\([0-9]*\).*/\1/p' "$f" | head -1); [ $((now_ - ${ts:-0})) -lt $UPDATE_TTL ] && return 0; fi
   tmp=$(mktemp)
-  if _update_get VERSION valid_version_file "$tmp"; then latest=$(tr -d '[:space:]' < "$tmp"); fi
-  core_latest=$(core_latest_version 2>/dev/null || true)
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then
+    if _update_get windows-manifest.json valid_windows_manifest "$tmp"; then latest=$(perl -MJSON::PP -e 'local $/; print decode_json(<>)->{version}' "$tmp"); fi
+    # SYSTEM snapshots accept only the core reviewed and pinned in this client.
+    core_latest=$(perl -MJSON::PP -e 'local $/; print decode_json(<>)->{core}->{version}' "$H/windows/runtime-pins.json" 2>/dev/null || true)
+  else
+    if _update_get VERSION valid_version_file "$tmp"; then latest=$(tr -d '[:space:]' < "$tmp"); fi
+    core_latest=$(core_latest_version 2>/dev/null || true)
+  fi
   NOTES_ZH=''; NOTES_EN=''
   if [ -n "$latest" ] && version_gt "$latest" "$VERSION" && _update_get CHANGELOG.md valid_text_file "$tmp"; then update_notes "$latest" "$tmp"; fi
   rm -f "$tmp"

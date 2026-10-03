@@ -39,8 +39,14 @@ try {
         $dest=Join-Path $HomeDir "runtime\$component.next"
         if(Test-Path -LiteralPath $dest){Remove-Item -LiteralPath $dest -Recurse -Force}
         if ($component -eq 'git') {
-            $p=Start-Process -FilePath $archive -ArgumentList ('-y -gm2 -o"{0}"' -f $dest) -Wait -PassThru
-            if($p.ExitCode -ne 0 -or !(Test-Path -LiteralPath "$dest\bin\bash.exe")){throw 'PortableGit extraction failed.'}
+            Write-Host 'Extracting verified private PortableGit runtime...'
+            $p=Start-Process -FilePath $archive -ArgumentList ('-y -gm2 -o"{0}"' -f $dest) -PassThru
+            $null=$p.Handle; $p.WaitForExit(); $p.Refresh()
+            if($p.ExitCode -ne 0 -or !(Test-Path -LiteralPath "$dest\bin\bash.exe")){
+                Write-Host "PortableGit exit=$($p.ExitCode), expected Bash exists=$(Test-Path -LiteralPath "$dest\bin\bash.exe")"
+                Get-ChildItem -LiteralPath "$HomeDir\runtime\cache" -Directory | Select-Object -ExpandProperty Name | Write-Host
+                throw 'PortableGit extraction failed.'
+            }
         } else { Expand-SafeZip $archive $dest }
         $changed=$true
         if($component -eq 'core') {

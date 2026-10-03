@@ -2,6 +2,7 @@
 # Saved script options: -Upgrade -NoOpen -Force -Lang zh|en
 param([switch]$Upgrade, [switch]$NoOpen, [switch]$Force, [ValidateSet('zh','en')][string]$Lang = '', [string]$HomeDir = '')
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 if ([Environment]::OSVersion.Platform -ne 'Win32NT' -or ![Environment]::Is64BitOperatingSystem -or ![Environment]::Is64BitProcess) { throw 'Use 64-bit PowerShell on Windows 10/11 (x64 or ARM64).' }
 if ($PSVersionTable.PSVersion -lt [Version]'5.1') { throw 'PowerShell 5.1 or later is required.' }
 if ([Environment]::OSVersion.Version.Build -lt 19041) { throw 'Windows 10 version 2004 (build 19041) or later is required.' }

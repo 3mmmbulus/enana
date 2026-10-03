@@ -70,13 +70,14 @@ async function serve(home) {
       fs.unlinkSync(file);atomic(file.replace(/\.json$/,'.reply'),JSON.stringify(r));
     }}finally{commandsBusy=false;}
   }
-  let rootOffset=0;
+  const cursorFile=path.join(runtime,'tun-log-cursor.json');let cursor={offset:0,key:''};
+  try{const saved=JSON.parse(fs.readFileSync(cursorFile,'utf8'));if(Number.isSafeInteger(saved.offset)&&saved.offset>=0&&typeof saved.key==='string')cursor=saved;}catch(_){}
   function mirrorRootLog(){
-    if(settings(home).NETWORK_MODE!=='tun'){rootOffset=0;return;}
+    if(settings(home).NETWORK_MODE!=='tun')return;
     const file=path.join(process.env.ProgramData,'enana',sid,'sing-box.log');
-    try{const size=fs.statSync(file).size;if(size<rootOffset)rootOffset=0;
-      if(size>rootOffset){const fd=fs.openSync(file,'r'),length=Math.min(size-rootOffset,1048576),b=Buffer.alloc(length);
-        const read=fs.readSync(fd,b,0,length,rootOffset);fs.closeSync(fd);fs.appendFileSync(path.join(home,'sing-box.log'),b.subarray(0,read));rootOffset+=read;}
+    try{const st=fs.statSync(file),size=st.size,key=st.ino+':'+st.birthtimeMs;if(size<cursor.offset||key!==cursor.key)cursor={offset:0,key};
+      if(size>cursor.offset){const fd=fs.openSync(file,'r'),length=Math.min(size-cursor.offset,1048576),b=Buffer.alloc(length);
+        const read=fs.readSync(fd,b,0,length,cursor.offset);fs.closeSync(fd);fs.appendFileSync(path.join(home,'sing-box.log'),b.subarray(0,read));cursor.offset+=read;atomic(cursorFile,JSON.stringify(cursor));}
     }catch(e){if(e.code!=='ENOENT'&&e.code!=='EACCES')fs.writeSync(logfile,'worker.log='+e.message+'\n');}
   }
   const timer=setInterval(()=>{publish();mirrorRootLog();commands().catch(e=>fs.writeSync(logfile,'worker.command='+e.message+'\n'));

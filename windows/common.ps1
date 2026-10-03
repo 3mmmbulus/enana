@@ -1,5 +1,6 @@
 # Windows PowerShell 5.1 compatible. ASCII source avoids its BOM-less UTF-8 trap.
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue' # Keep explicit stages; PS 5.1 web progress is very slow.
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 function Read-JsonFile([string]$Path) { return ([IO.File]::ReadAllText($Path, $Utf8) | ConvertFrom-Json) }

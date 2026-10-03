@@ -21,4 +21,5 @@ manifest = dict(platform="windows", channel="preview", version=version,
                 released=datetime.now(timezone.utc).isoformat())
 (out / "windows-manifest.json").write_text(json.dumps(manifest, separators=(",", ":")) + "\n")
 (out / "get.ps1").write_bytes((stage / "get.ps1").read_bytes())
+(out / "windows-CHANGELOG.md").write_bytes((stage / "CHANGELOG.md").read_bytes())
 print(f"Built {archive.name}, SHA-256 {manifest['sha256']}")
