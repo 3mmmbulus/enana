@@ -2,6 +2,7 @@ param([string]$HomeDir = (Join-Path $env:TEMP 'enana-native-acceptance'))
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 . "$repo\windows\common.ps1"
+$HomeDir=[IO.Path]::GetFullPath($HomeDir)
 $oldPath=[Environment]::GetEnvironmentVariable('Path','User')
 function Assert($Condition,[string]$Message){if(!$Condition){throw $Message};Write-Host "PASS: $Message"}
 $installed=$false
