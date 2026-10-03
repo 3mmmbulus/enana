@@ -118,17 +118,25 @@
       out.hint = e && e.kind === 'unreachable' ? t('why.helper') : t('vps.hint.generic');
     }
     if (raw && raw !== out.msg) out.detail = raw;
+    if (where === 'probe' && d.result && d.result.attempt) out.hint += ' ' + t('vps.err.attempts', { n: d.result.attempt, max: d.result.max_attempts });
     out.verify = verify;
     return out;
   }
 
   /* 提交一个远程任务并跟随进度 (凭据只在 form 里, 即请求体); card = ui.taskCard; quiet = 只读任务 (探测): 不让顶栏变成「正在应用配置…」 */
-  async function remote(path, form, card, defMsg, quiet) {
+  async function remote(path, form, card, defMsg, quiet, control) {
     card.set({ pct: null, msg: t('vps.job.submit') });
-    var r = await TP.helper('POST', path, { form: form, timeout: 20000 });
+    var r;
+    try { r = await TP.helper('POST', path, { form: form, timeout: 20000 }); }
+    finally { if (control) { control.job = r && r.job || ''; control.ready(); } }
     if (!r || !r.job) throw TP.mkErr('api', t('vps.err.noJob'));
     return TP.jobs.follow(r.job, {
-      fromJob: function (j) { card.set({ pct: +j.pct > 0 ? +j.pct : null, msg: j.msg || defMsg, steps: j.steps || [] }); }
+      fromJob: function (j) {
+        var c = j.result && j.result.connection, msg = j.msg || defMsg;
+        if (c) msg = t('vps.connect.' + c.stage, { n: c.attempt, max: c.max_attempts, elapsed: c.elapsed, timeout: c.timeout });
+        if (control && control.cancelled) msg = t('vps.cancel.running');
+        card.set({ pct: +j.pct > 0 ? +j.pct : null, msg: msg, steps: j.steps || [] });
+      }
     }, { maxFails: 60, quiet: !!quiet });
   }
   /* 通用凭据字段 (只带有值的可选字段) */
@@ -324,7 +332,7 @@
   vps.pane = function (mode, host) {
     mode = mode === 'key' ? 'key' : 'password';
     var P = { _seen: false };
-    var st = { phase: 'form', run: 0, creds: null, probe: null, meta: null, fpOk: false, sudoIn: '', res: null, err: null, card: null };
+    var st = { phase: 'form', run: 0, creds: null, probe: null, meta: null, fpOk: false, sudoIn: '', res: null, err: null, card: null, control: null, cancelling: false };
     var live = h('div', { class: 'sr', role: 'status', 'aria-live': 'polite' }), cbFp = null, sudoInp = null;
     var cf = credForm({ mode: mode, withNode: true, onEnter: function () { detect(); }, onChange: function (s) { sh().snap = s; } });
     var formBox = h('div', { class: 'vps-form' },
@@ -379,6 +387,8 @@
           { label: t('vps.done.speed'), icon: 'speed', id: 'speed', onClick: function () { host.close(true); TP.go('speed'); } },
           { label: t('common.close'), kind: 'primary', id: 'close', cancel: true }];
       }
+      if (ph === 'probing') return [{ label: t(st.cancelling ? 'vps.cancel.running' : 'vps.cancel'), icon: 'x', id: 'cancelProbe', keep: true, allowBusy: true, disabled: st.cancelling,
+        onClick: async function () { await cancelProbe(); return false; } }];
       if (isBusy()) return [{ label: t('common.loading'), icon: 'refresh', id: 'progress', keep: true }];
       return [];
     }
@@ -429,18 +439,42 @@
       return runProbe();
     }
     async function runProbe() {
-      var my = ++st.run;
+      var my = ++st.run, control = { job: '', cancelled: false };
+      control.whenReady = new Promise(function (resolve) { control.ready = resolve; });
+      control.whenFinished = new Promise(function (resolve) { control.finished = resolve; });
+      st.control = control; st.cancelling = false;
       st.card = ui.taskCard(t('vps.card.progress'), { horizontal: false });
       setPhase('probing');
       try {
-        var j = await remote('/api/vps/probe', formOf(st.creds), st.card, t('vps.probe.running'), true);
-        if (my !== st.run) return;
+        var j = await remote('/api/vps/probe', formOf(st.creds), st.card, t('vps.probe.running'), true, control);
         if (!j.result || typeof j.result !== 'object') throw TP.mkErr('api', t('vps.err.noResult'));
-        st.probe = j.result; st.fpOk = false; st.sudoIn = '';
-        setPhase('result');
+        control.result = j.result;
       } catch (e) {
-        if (my !== st.run) return;
-        st.err = explain(e, 'probe'); setPhase('probeErr');
+        control.error = e;
+      } finally {
+        control.done = true; control.finished();
+        if (my === st.run && !control.cancelled) applyProbeOutcome(control);
+      }
+    }
+    function applyProbeOutcome(control) {
+      if (control.error) { st.err = explain(control.error, 'probe'); setPhase('probeErr'); }
+      else { st.probe = control.result; st.fpOk = false; st.sudoIn = ''; setPhase('result'); }
+    }
+    async function cancelProbe() {
+      if (st.phase !== 'probing' || st.cancelling || !st.control) return;
+      var control = st.control;
+      st.cancelling = true; control.cancelled = true;
+      setFoot(true); st.card.set({ pct: null, msg: t('vps.cancel.running') });
+      try {
+        await control.whenReady;
+        if (control.job) await TP.helper('POST', '/api/vps/cancel', { form: { id: control.job } });
+        await control.whenFinished;
+        backToForm(); ui.toast(t('vps.cancel.done'), 'ok');
+      } catch (e) {
+        control.cancelled = false; st.cancelling = false;
+        // A failed cancel request must not hide a result that arrived meanwhile.
+        if (control.done) applyProbeOutcome(control); else setFoot(true);
+        ui.toast(TP.errMsg(e), 'err');
       }
     }
 

@@ -333,6 +333,23 @@ ep_vps_probe() {
   local cf; vps_form; cf=$(fp confirm_hostkey); case $cf in ''|0|1) ;; *) fail "参数无效" ;; esac
   vps_launch vps-probe '连接服务器|检测系统与环境|整理结果' '' pin 0 '' "${cf:-0}"
 }
+ep_vps_cancel() { # Only the read-only detection job is cancellable.
+  local id state pid; id=$(fp id)
+  case $id in *[!A-Za-z0-9_-]*|'') fail "任务编号无效" E_INVALID ;; vps-probe-*) ;; *) fail "只能取消服务器检测任务" E_INVALID ;; esac
+  [ -f "$H/jobs/$id.json" ] || fail "找不到该任务" E_NOT_FOUND
+  state=$(sed -n 's/.*"name":"vps-probe","state":"\([a-z]*\)".*/\1/p' "$H/jobs/$id.json")
+  if [ "$state" = running ]; then
+    ( umask 077; : > "$H/jobs/$id.cancel" )
+    pid=$(cat "$H/jobs/$id.started" 2>/dev/null)
+    case $pid in ''|*[!0-9]*) pid='' ;; esac
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$H/jobs/$id.cred"
+      job_write "$id" vps-probe error 0 100 "已取消服务器检测" '{"code":"E_CANCELLED"}'
+    fi
+    oplog dashboard "取消服务器检测" "$(kv id "$id")" ok
+  fi
+  okj '"requested":true'
+}
 ep_vps_provision() {
   local name role deps save; vps_form; name=$(fp name); role=$(fp role); deps=$(fp install_deps); save=$(fp save)
   case $save in ''|0|1) ;; *) fail "参数无效" ;; esac
@@ -757,6 +774,7 @@ case "$method $path" in
   "GET /api/sub/url")          ep_sub_url ;;
   "GET /api/export")           ep_export ;;
   "POST /api/vps/probe")       ep_vps_probe ;;
+  "POST /api/vps/cancel")      ep_vps_cancel ;;
   "POST /api/vps/provision")   ep_vps_provision ;;
   "POST /api/vps/redetect")    ep_vps_redetect ;;
   "POST /api/vps/forget")      ep_vps_forget ;;

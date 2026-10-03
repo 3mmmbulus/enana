@@ -147,7 +147,7 @@
    * 基于原生 <dialog>.showModal(): 背景不可操作; 另外自己处理 Tab 循环、ESC、点遮罩。 */
   var modalSeq = 0, FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
   ui.modal = function (o) {
-    var id = 'dlg' + (++modalSeq), opener = document.activeElement, closing = false, resolveClosed, state = { busy: false, actionPending: false }, downOnBackdrop = false;
+    var id = 'dlg' + (++modalSeq), opener = document.activeElement, closing = false, resolveClosed, state = { busy: false, actionPending: 0 }, downOnBackdrop = false;
     var closed = new Promise(function (r) { resolveClosed = r; });
     var dlg = h('dialog', { class: 'dlg ' + (o.size || 'md') + (o.cls ? ' ' + o.cls : ''), 'aria-labelledby': id + 't' });
     var titleEl = h('h2', { class: 'dlg-t', id: id + 't' }, o.title || '');
@@ -189,25 +189,26 @@
       var busy = state.busy || state.actionPending;
       dlg.classList.toggle('is-busy', busy); dlg.setAttribute('aria-busy', busy ? 'true' : 'false');
       if (xBtn) xBtn.disabled = busy;
-      Array.prototype.forEach.call(foot.querySelectorAll('button'), function (b) { b.disabled = busy || !!b._actionDisabled; });
+      Array.prototype.forEach.call(foot.querySelectorAll('button'), function (b) { b.disabled = !!b._busy || (busy && !b._allowBusy) || !!b._actionDisabled; });
     }
     function renderActions(list) {
       TP.clear(foot);
       (list || []).forEach(function (a) {
         var b = ui.btn(a.label, { kind: a.kind, icon: a.icon, cls: a.cls });
         b._actionDisabled = !!a.disabled;
+        b._allowBusy = !!a.allowBusy;
         if (a.id) b.setAttribute('data-id', a.id);
         if (a.autofocus) b.setAttribute('data-autofocus', '');
         if (a.unavail) ui.avail(b, a.unavail.reason, a.unavail.fix);
         b.addEventListener('click', async function () {
-          if (b._busy || state.busy || state.actionPending || b.disabled) return;
+          if (b._busy || ((state.busy || state.actionPending) && !a.allowBusy) || b.disabled) return;
           if (b._un) { ui.unavailable(b); return; }
           if (a.cancel) { api.request(); return; }
-          state.actionPending = true; ui.actionBusy(b, true); syncBusy();
+          state.actionPending++; ui.actionBusy(b, true); syncBusy();
           var r;
           try { r = a.onClick ? await a.onClick(api, b) : undefined; }
           catch (e) { fail(e); r = false; }
-          state.actionPending = false; ui.actionBusy(b, false); syncBusy();
+          state.actionPending--; ui.actionBusy(b, false); syncBusy();
           if (r === false || a.keep) return;
           api.close(a.value !== undefined ? a.value : true);
         });

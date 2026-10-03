@@ -11,7 +11,7 @@
     /* 可调常量 */
     CFG: {
       ALLOW_SKIP_CONFIRM: true,     // 低风险开关 (策略切换/监控) 的确认框是否提供「本次登录期间不再询问」
-      AUTO_LOCK_MIN: 30,            // 无操作多少分钟后自动锁定 (回到登录框)
+      AUTO_LOCK_MIN: 300,           // 无操作 5 小时后自动锁定 (回到登录框)
       UPDATE_CHECK_HOURS: 6         // 自动检查更新的间隔
     },
     /* 请求头名称 (只在这里定义一次; 后端过渡期内也接受旧名字 X-TProxy / X-TProxy-Token) */

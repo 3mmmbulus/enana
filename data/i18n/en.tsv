@@ -810,3 +810,24 @@ AI · 固定出口	AI · Fixed exit
   enana diag [小时数]   导出诊断文件 (操作记录 + 网站访问 + 代理日志 + 当前状态, 默认最近 24 小时; 接管道直接输出)	  enana diag [hours]   Export a diagnostics file (operations + site access + proxy log + current state; last 24 h by default; prints to stdout when piped)
 修复浏览器的默认设置	Fixed the default setting of browsers
 新配置没能让代理核心启动, 已回滚到原来的配置	The new configuration could not start the proxy core, so the previous one was restored
+后台任务启动失败: enana 没有执行权限, 请重新安装	Could not start the background task: enana is not executable; please reinstall
+正在读取 SSH 主机指纹	Reading the SSH host key
+正在建立 SSH 连接并验证登录	Connecting and authenticating SSH
+SSH 已连接, 正在读取系统和网络信息	SSH connected; reading system and network information
+连接暂时失败, 准备重试	Connection temporarily failed; preparing to retry
+服务器检测超时, 已停止本次连接	Server check timed out; this connection has been stopped
+已取消服务器检测	Server check cancelled
+服务器检测重试	Retrying the server check
+取消服务器检测	Cancel server check
+只能取消服务器检测任务	Only a server check can be cancelled
+自动识别: 撤销网站	Automatic detection: remove site
+切换流量接管模式	Switch traffic capture mode
+流量接管模式无效	Invalid traffic capture mode
+Enhanced/TUN 需要 sing-box 1.12 或更新版本	Enhanced/TUN requires sing-box 1.12 or newer
+核心未能重启 (Enhanced/TUN 需要管理员授权)	Core restart failed (Enhanced/TUN requires administrator authorization)
+规则已下载, 但未应用到核心 (Enhanced/TUN 需要管理员授权)	Rules downloaded but not applied (Enhanced/TUN requires administrator authorization)
+另一个配置任务正在运行	Another configuration task is running
+核心令牌尚未更新; Enhanced/TUN 需要管理员授权, 运行 enana doctor 查看原因	The core token has not been updated; Enhanced/TUN requires administrator authorization. Run enana doctor for details
+新版本未就绪, 已回退	New version not ready; rolled back
+新版本未能启动, 已回退到 *	New version failed to start; rolled back to *
+Enhanced/TUN: 保留现有系统代理设置	Enhanced/TUN: preserving existing System Proxy settings

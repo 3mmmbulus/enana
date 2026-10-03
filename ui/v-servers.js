@@ -169,23 +169,15 @@
     r.type = h('span', { class: 'chip' }); r.addr = h('span', { class: 'mono sm' });
     r.role = h('select', { class: 'sel sm' }, ROLES.map(function (k) { return TP.opt(k, TP.name.role(k)); }));
     r.lat = h('span', { class: 'lat' });
-    r.bInfo = ui.ibtn('info', t('servers.row.details'));
-    r.bTest = ui.ibtn('speed', t('servers.row.test'));
-    r.bUse = ui.ibtn('pin', t('servers.row.usePin'));
-    r.bPin = ui.ibtn('auto', t('servers.row.useAuto'));
-    r.bDel = TP.sudo.mark(ui.ibtn('delete', t('common.delete'), { cls: 'danger-t' }));
+    r.bInfo = ui.btn(t('servers.col.act'), { sm: true, icon: 'menu' });
     tr = h('tr', null,
       td('', 'c-name', h('div', { class: 'c-name-in' }, r.name, r.badges)),
       td('servers.col.type', 'c-type', r.type), td('servers.col.addr', 'c-addr', r.addr), td('servers.col.role', 'c-role', r.role), td('servers.col.lat', 'c-lat', r.lat),
-      td('', 'c-act', h('div', { class: 'acts' }, r.bInfo, r.bTest, r.bUse, r.bPin, r.bDel)));
+      td('', 'c-act', r.bInfo));
     tr._r = r;
     r.name.addEventListener('click', function () { openNode(tr._s.tag); });
     ui.act(r.bInfo, function () { openNode(tr._s.tag); });
     ui.selectAct(r.role, function () { return pendingRole[tr._s.tag] || tr._s.role; }, function (want) { return askRole(tr._s, want); });
-    ui.act(r.bTest, function () { return testOne(tr._s.tag); });
-    ui.act(r.bUse, function () { return switchTo('PIN', tr._s.tag); });
-    ui.act(r.bPin, function () { return switchTo('Global', tr._s.tag); });
-    ui.act(r.bDel, function () { return del(tr._s); });
     return tr;
   }
   function setTip(b, text) { b._tip = text; b.setAttribute('aria-label', text); if (!b._un) b.title = text; }
@@ -216,20 +208,9 @@
     var d = TP.delayOf(s.tag);
     setText(r.lat, !inP ? '—' : !d ? '—' : d.ms > 0 ? d.ms + ' ms' : t('common.timeout'));
     TP.setCls(r.lat, 'lat ' + (!d || !inP ? '' : d.ms < 0 ? 'bad' : d.ms < 150 ? 'good' : d.ms < 400 ? 'mid' : 'bad'));
-    // 操作按钮 (全部可点: 不可用时说明原因)
-    setTip(r.bInfo, t('servers.row.detailsOf', { tag: s.tag })); setTip(r.bTest, t('servers.row.test')); setTip(r.bUse, t('servers.row.usePin')); setTip(r.bPin, t('servers.row.useAuto')); setTip(r.bDel, t('servers.row.delete', { tag: s.tag }));
-    ui.avail(r.bTest, clashWhy || (!inP ? t('servers.row.notRouted') : '') || (test.running ? t('servers.test.runningShort') : ''));
-    var inPin = !!(P.PIN && P.PIN.all && P.PIN.all.indexOf(s.tag) >= 0), isPin = !!(P.PIN && P.PIN.now === s.tag);
-    if (clashWhy) ui.avail(r.bUse, clashWhy);
-    else if (isPin) ui.avail(r.bUse, t('servers.row.isPin'));
-    else if (!inPin) ui.avail(r.bUse, t('servers.row.notInPin'), { label: t('servers.row.makePinRole'), fn: function () { return askRole(tr._s, 'pin'); } });
-    else ui.avail(r.bUse, '');
-    var inGl = !!(P.Global && P.Global.all && P.Global.all.indexOf(s.tag) >= 0), isGl = !!(P.Global && P.Global.now === s.tag);
-    if (clashWhy) ui.avail(r.bPin, clashWhy);
-    else if (isGl) ui.avail(r.bPin, t('servers.row.isAuto'));
-    else if (!inGl) ui.avail(r.bPin, t('servers.row.notInAuto'), { label: t('servers.row.makeAutoRole'), fn: function () { return askRole(tr._s, 'auto'); } });
-    else ui.avail(r.bPin, '');
-    ui.avail(r.bDel, why || (s.official ? t('servers.row.officialDel') : '') || (s.derived ? t('servers.row.derived') : '') || (busy ? t('servers.row.busy') : ''));
+    // Keep the table compact; the dialog owns all node actions and their guards.
+    ui.setBtn(r.bInfo, t('servers.col.act'), 'menu');
+    setTip(r.bInfo, t('servers.row.actionsOf', { tag: s.tag }));
     tr.classList.toggle('is-off', role === 'off'); tr.classList.toggle('is-busy', busy);
   }
 
@@ -441,6 +422,16 @@
       box.appendChild(h('div', { class: 'nd-sec' },
         h('div', { class: 'nd-sec-h' }, ui.icon('lock', 15, 'ci'), h('b', null, t('servers.nd.cred')), ui.help('servers.reveal')),
         secret ? secretView() : h('p', { class: 'muted sm' }, t(s.official ? 'servers.secret.official' : 'servers.nd.credHint'))));
+      var why = TP.why.helper(), clashWhy = TP.why.clash(), busy = !!pendingDel[s.tag];
+      var inPin = !!(P.PIN && P.PIN.all && P.PIN.all.indexOf(s.tag) >= 0);
+      var inGl = !!(P.Global && P.Global.all && P.Global.all.indexOf(s.tag) >= 0);
+      ui.avail(dm.getBtn('test'), clashWhy || (!inP ? t('servers.row.notRouted') : '') || (test.running ? t('servers.test.runningShort') : ''));
+      ui.avail(dm.getBtn('pin'), clashWhy || (isPin ? t('servers.row.isPin') : !inPin ? t('servers.row.notInPin') : ''),
+        !inPin && !clashWhy ? { label: t('servers.row.makePinRole'), fn: function () { return askRole(cur(), 'pin'); } } : null);
+      ui.avail(dm.getBtn('auto'), clashWhy || (isGl ? t('servers.row.isAuto') : !inGl ? t('servers.row.notInAuto') : ''),
+        !inGl && !clashWhy ? { label: t('servers.row.makeAutoRole'), fn: function () { return askRole(cur(), 'auto'); } } : null);
+      ui.avail(dm.getBtn('rev'), why || (s.official ? t('servers.secret.official') : '') || (s.derived ? t('servers.row.derived') : ''));
+      ui.avail(dm.getBtn('del'), why || (s.official ? t('servers.row.officialDel') : '') || (s.derived ? t('servers.row.derived') : '') || (busy ? t('servers.row.busy') : ''));
     }
     function secretView() {
       var left = Math.max(0, Math.ceil((secret.until - Date.now()) / 1000));
@@ -466,6 +457,8 @@
       title: s0.tag, icon: 'server', size: 'md', cls: 'nddlg', body: box,
       onClose: function () { secret = null; stopTimer(); nodeDlg = null; },
       actions: [
+        { label: t('servers.row.usePin'), icon: 'pin', id: 'pin', keep: true, onClick: async function () { await switchTo('PIN', tag); render(); return false; } },
+        { label: t('servers.row.useAuto'), icon: 'auto', id: 'auto', keep: true, onClick: async function () { await switchTo('Global', tag); render(); return false; } },
         { label: t('servers.nd.test'), icon: 'speed', id: 'test', keep: true, onClick: function () { return testOne(tag).then(function () { render(); return false; }); } },
         { label: t('servers.nd.reveal'), icon: 'eye', id: 'rev', keep: true, onClick: reveal, unavail: s0.official ? { reason: t('servers.secret.official') } : null },
         { label: t('common.delete'), kind: 'danger', icon: 'delete', id: 'del', keep: true, unavail: s0.official ? { reason: t('servers.row.officialDel') } : null, onClick: function () { var s = cur(); dm.close('del'); return del(s).then(function () { return false; }); } },

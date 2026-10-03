@@ -266,7 +266,7 @@
   function renderAccount() {
     var A = TP.auth;
     setText(el.accWho, A.email() || t('set.acc.unknown'));
-    setText(el.accNote, t('set.acc.note', { n: TP.CFG.AUTO_LOCK_MIN }));
+    setText(el.accNote, t('set.acc.note', { n: TP.CFG.AUTO_LOCK_MIN / 60 }));
     var why = TP.why.helper();
     ui.avail(el.btnSwitch, why); ui.avail(el.btnOut, why); ui.avail(el.btnPw, why);
   }

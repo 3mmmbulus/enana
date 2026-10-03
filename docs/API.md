@@ -255,6 +255,7 @@
 
 ### `POST /api/vps/probe` (通用凭据 + 可选 `hostkey` + 可选 `confirm_hostkey=1`) → `{"ok":true,"job":"…"}`
 只读检测, 不改动服务器。任务步骤: `连接服务器` → `检测系统与环境` → `整理结果`。
+- 运行时 `job.result.connection` 为 `{"stage":"hostkey|ssh|inspect|retry","attempt":1,"max_attempts":3,"elapsed":2,"timeout":45}`。取得远端脚本输出后才显示 SSH 已连接; 进度不冒充连接成功。主机指纹阶段最多 20 秒, 每次 SSH 检测最多 45 秒, 临时连接失败最多 3 次尝试。认证、密钥、指纹或远端脚本错误不自动重试; 失败结果附 `attempt` / `max_attempts`。任务入口不可执行返回 `E_JOB_LAUNCH`, 不会永久停在准备中。
 - **推荐流程 (先确认指纹再登录)**: 第一次带 `confirm_hostkey=1` 且不带 `hostkey` → 任务**只取指纹, 不用密码 / 私钥登录**, 完成时 `job.result = {"host","port","hostkey":"SHA256:…","need_confirm":true}`; 前端弹窗让用户确认指纹 (可以和服务器商面板 / `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` 对照), 确认后带着 `hostkey` 再调一次探测。
 - 不带 `confirm_hostkey` 且不带 `hostkey` (首次信任): 以扫描到的密钥为准继续探测, 结果里返回看到的 `hostkey` 供之后固定; 如果本机已保存过这个 host:port 而指纹不同 → `hostkey_changed:true` (前端要醒目提示)。
 任务完成时 `job.result` 为:
@@ -273,6 +274,9 @@
 `deps` 固定检查 `curl ca-certificates tar iproute2 gzip`; `deployed:true` = 这台服务器上已经有 enana 的部署 (可以重新识别出口 IP); `ips` = 服务器上所有可用的公网 IPv4 出口 (云厂商的内网 IP + 一对一 NAT 的会绑定源地址问外部服务得到各自的公网 IP; 同一公网 IP 只算一次, 最多 16 个; `ipv6` 只列出, 不建节点); **`actions` = 将要执行的操作清单** (按服务器当前状态生成: 已经具备的不列), 前端的「确认安装」弹窗逐条列出让用户确认。不支持的系统探测照样成功, 但 `supported:false`、`actions:[]`。
 失败 (`job.state=error`, 接口里的 `code` 在 `job.result.code`, `job.msg` 是已翻译的原因): `E_SSH_NO_CLIENT` (本机没有 ssh) · `E_SSH_UNREACHABLE` (连不上 / 超时 / 被拒 / 服务器没拿到主机密钥) · `E_SSH_AUTH` (用户名 / 密码 / 私钥不对) · `E_SSH_KEY` (私钥格式不对 / 口令不对) · `E_SSH_HOSTKEY` (指纹与固定的不一致) · `E_VPS_NO_PLAYBOOK` (云端还没有下发部署脚本; 这个错误在接口里就直接返回, 不进任务)。
 前端流程: (确认指纹) → 探测成功 → 弹窗展示「系统 / 依赖 / 出口 IP / 指纹」; `missing` 非空 → 问用户是否安装依赖; 要安装依赖或服务端时 → **二次弹窗** 逐条列出 `actions` 再让用户确认 → 调 provision。
+
+### `POST /api/vps/cancel` 表单 `id=vps-probe-…` → `{"ok":true,"requested":true}`
+仅接受只读检测任务, 其它任务或非法编号返回 `E_INVALID`, 不存在返回 `E_NOT_FOUND`。请求成功表示取消已提交, 前端仍等待任务结束; worker 停止该任务创建的 SSH / keyscan 子进程并清除临时凭据, 最终结果为 `E_CANCELLED`。尚未启动或已失去 worker 的检测立即结束。已结束任务可重复调用, 不改动结果。部署 / 重新识别任务涉及远端变更, 不提供这个取消接口或自动重试。
 
 ### `POST /api/vps/provision` (通用凭据 + `hostkey` 必填 + `name` + `role=pin|auto` (默认 pin) + `install_deps=0|1` + `save=0|1`★ (同 `servers/import`)) → `{"ok":true,"job":"…"}`
 任务步骤 (9 步): `连接服务器` → `检测系统与环境` → `安装依赖` (apt-get: curl, ca-certificates, tar, iproute2, gzip; 只在 `install_deps=1` 时, 否则缺依赖 → `E_VPS_DEPS`) → `安装服务端` (sing-box, 固定版本 + SHA-256 校验, 装到 `/usr/local/bin/enana-sing-box`, 不覆盖用户已有的 sing-box) → `生成配置与密钥` (VLESS + Reality, 无需域名; 每个公网出口 IP 一个入站, 出口 IP = 入站 IP; 密钥 / 端口 / 伪装域名保存在服务器 `/etc/enana/state.json`, **重复部署沿用它们, 已有节点不会失效**) → `开放端口并启动` (专用系统用户 + systemd 服务 `enana-singbox`, 开机自启; ufw 活跃时放行端口; 云厂商安全组需用户自己放行) → `验证连通` (本机起一个**临时核心**, 逐个节点真实访问一次, 对比出口 IP; 全部不通 → `E_VPS_VERIFY` + 提示放行 `端口/tcp`) → `识别出口 IP` → `保存到本机` (走和导入服务器一样的事务: 校验 → 应用 → 失败自动回滚)。

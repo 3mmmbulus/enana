@@ -76,6 +76,7 @@ ts<TAB>who<TAB>action<TAB>detail<TAB>result      ← tsv 的第一行是列名, 
 | `更新规则集` `升级核心` `更新 enana` `自动更新` `重启服务` `应用配置` `更新云端内容` | 版本 / 结果 | 更新与重启 |
 | `登录` `登录失败` `退出账号` `下线设备` `二次验证` … | — | 账号 (不含密码或令牌) |
 | `导出诊断日志` / `清除日志` | `hours=24 sections=ops,access,proxy,snapshot bytes=…` / `type=all before=… freed=…` | 日志本身的操作也会留痕 |
+| `服务器检测重试` / `取消服务器检测` | `attempt=1 max=3 code=E_SSH_UNREACHABLE` / `id=vps-probe-…` | 只读检测的重试与取消; 实时阶段和耗时见任务接口 `result.connection`, 不包含 SSH 凭据 |
 
 - 排查「为什么昨晚突然不走代理了」: 先看 `ops` 里的时间线 (**谁、什么时候、把什么从什么改成了什么**), 再对照 `access` 里同一时间之后的 `route` / `reason`。
 - `result=error` 的操作, `detail` 里会带原因。

@@ -29,7 +29,7 @@
   A.touch = function () { lastActive = Date.now(); };
   ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(function (ev) { document.addEventListener(ev, A.touch, { passive: true, capture: true }); });
   setInterval(function () {
-    if (!S.locked && A.required && Date.now() - lastActive > TP.CFG.AUTO_LOCK_MIN * 60000) A.lock(A.msg('auth.autoLock', { n: TP.CFG.AUTO_LOCK_MIN }));
+    if (!S.locked && A.required && Date.now() - lastActive > TP.CFG.AUTO_LOCK_MIN * 60000) A.lock(A.msg('auth.autoLock', { n: TP.CFG.AUTO_LOCK_MIN / 60 }));
   }, 15000);
 
   function unlock(relogin) {

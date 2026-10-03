@@ -52,6 +52,11 @@ job_get() { # id -> JSON (找不到时返回错误 JSON)
 
 job_launch() { # job_launch 名称 id [参数…]  在后台启动 `<主脚本> _job 名称 id 参数…`
   local name=$1 id=$2; shift 2
+  if [ ! -x "$H/enana" ]; then
+    job_write "$id" "$name" error 0 100 "后台任务启动失败: enana 没有执行权限, 请重新安装" '{"code":"E_JOB_LAUNCH"}'
+    rm -f "$H/jobs/$id.cred"
+    return 1
+  fi
   ( ENANA_LANG="${I18N_LANG:-${LANG_UI:-}}" OP_WHO="${OP_WHO:-}" nohup "$H/enana" _job "$name" "$id" "$@" >>"$H/api.log" 2>&1 & ) >/dev/null 2>&1
 }
 job_spawn() { # job_spawn 名称 "步骤…" [参数…]  创建并启动, 打印 id

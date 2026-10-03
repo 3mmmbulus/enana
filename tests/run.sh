@@ -1370,9 +1370,11 @@ _i=0; while [ "$_i" -lt "${UP:-0}" ]; do echo p >> "$W/.pass"; _i=$((_i+1)); don
 echo "== 19. Enhanced/TUN isolated regressions"
 if SINGBOX="$SB" bash "$HERE/enhanced.sh" > "$W/enhanced.out" 2>&1; then tpass "System/TUN schema, exclusions, PIN priority and socket evidence"; else tfail "Enhanced config regression"; cat "$W/enhanced.out"; fi
 if bash "$HERE/tun-service.sh" > "$W/tun-service.out" 2>&1; then tpass "Root snapshot rollback and route ownership"; else tfail "TUN service regression"; cat "$W/tun-service.out"; fi
+if bash "$HERE/vps-probe.sh" > "$W/vps-probe.out" 2>&1; then tpass "Read-only SSH retries, cancellation and launch failure"; else tfail "SSH detection lifecycle regression"; cat "$W/vps-probe.out"; fi
 if command -v node >/dev/null; then
   if node "$HERE/ui-busy.test.js" > "$W/ui-busy.out" 2>&1; then tpass "Async UI buttons and modal duplicate submissions"; else tfail "UI busy regression"; cat "$W/ui-busy.out"; fi
   if node "$HERE/network-mode-ui.test.js" > "$W/network-mode-ui.out" 2>&1; then tpass "App capture onboarding, cancellation and readiness"; else tfail "Capture onboarding regression"; cat "$W/network-mode-ui.out"; fi
+  if node "$HERE/vps-ui.test.js" > "$W/vps-ui.out" 2>&1; then tpass "SSH wizard cancellation and failed-cancel races"; else tfail "SSH wizard lifecycle regression"; cat "$W/vps-ui.out"; fi
 fi
 
 PASSES=$(cat "$W/.pass" 2>/dev/null | wc -l | tr -d ' '); FAILS=$(cat "$W/.fail" 2>/dev/null | wc -l | tr -d ' ')

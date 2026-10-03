@@ -17,6 +17,31 @@
 VPS_FILE=${VPS_FILE:-$H/vps.jsonl}
 VPS_ERR=''; VPS_CODE=''
 VPS_TIMEOUT=900          # 一次部署最长 15 分钟
+VPS_PROBE_TIMEOUT=45     # 只读检测每次最多 45 秒, 最多三次尝试
+VPS_HOSTKEY_TIMEOUT=20
+
+vps_cancel_requested() { [ "${JOB_NAME:-}" = vps-probe ] && [ -f "$H/jobs/${JOB_ID:-}.cancel" ]; }
+vps_check_cancel() {
+  if vps_cancel_requested; then VPS_CODE=E_CANCELLED; VPS_ERR="已取消服务器检测"; return 1; fi
+  return 0
+}
+# Terminate only the child tree started by this task, including ssh/keyscan.
+vps_stop_child() {
+  local p=$1 child
+  for child in $(pgrep -P "$p" 2>/dev/null); do vps_stop_child "$child"; done
+  kill "$p" 2>/dev/null || true
+}
+vps_probe_progress() { # stage, step, percent, start time, timeout
+  local stage=$1 idx=$2 pct=$3 elapsed=$(( $(now) - $4 )) limit=$5 label
+  case $stage in
+    hostkey) label="正在读取 SSH 主机指纹" ;;
+    ssh) label="正在建立 SSH 连接并验证登录" ;;
+    inspect) label="SSH 已连接, 正在读取系统和网络信息" ;;
+    retry) label="连接暂时失败, 准备重试" ;;
+  esac
+  job_write "$JOB_ID" "$JOB_NAME" running "$idx" "$pct" "$(_t "$label") · ${VPS_ATTEMPT:-1}/${VPS_ATTEMPTS:-3} · $elapsed/$limit s" \
+    "{\"connection\":{\"stage\":\"$stage\",\"attempt\":${VPS_ATTEMPT:-1},\"max_attempts\":${VPS_ATTEMPTS:-3},\"elapsed\":$elapsed,\"timeout\":$limit}}"
+}
 
 vps_ssh_bin() { printf '%s' "${ENANA_SSH:-ssh}"; }
 vps_playbook_ok() { [ -s "$(content_file vps/lib.sh)" ] && [ -s "$(content_file vps/probe.sh)" ] && [ -s "$(content_file vps/provision.sh)" ] && [ -s "$(content_file vps/redetect.sh)" ]; }
@@ -89,7 +114,12 @@ case "$1" in *assphrase*) cat "$d/passphrase" ;; *) cat "$d/pass" ;; esac
 EOF
   chmod 700 "$VD/askpass"
 }
-vps_cleanup() { [ -n "${VD:-}" ] && rm -rf "$VD"; [ -n "${JOB_ID:-}" ] && rm -f "$H/jobs/$JOB_ID.cred"; VD=''; return 0; }
+vps_cleanup() {
+  [ -n "${VPS_CHILD_PID:-}" ] && { vps_stop_child "$VPS_CHILD_PID"; wait "$VPS_CHILD_PID" 2>/dev/null || true; }
+  [ -n "${VD:-}" ] && rm -rf "$VD"
+  [ -n "${JOB_ID:-}" ] && rm -f "$H/jobs/$JOB_ID.cred"
+  VD=''; VPS_CHILD_PID=''; return 0
+}
 
 # vps_fingerprints <host> <port>  用 ssh-keyscan 取服务器公开的主机密钥 -> 每行 "指纹<TAB>类型<TAB>known_hosts 行"
 vps_fingerprints() {
@@ -108,8 +138,18 @@ vps_fingerprints() {
 # vps_hostkey_setup  设置 SSH_HK_OPTS (固定校验 / 首次信任) 与 VPS_HOSTKEY (实际使用的指纹)
 #   返回: 0 = 可以连  1 = 连不上 (没拿到主机密钥)  2 = 指纹与固定的不一致
 vps_hostkey_setup() {
-  local fps pick
-  fps=$(vps_fingerprints "$V_HOST" "$V_PORT")
+  local fps pick start
+  vps_fingerprints "$V_HOST" "$V_PORT" > "$VD/fingerprints" & VPS_CHILD_PID=$!
+  start=$(now)
+  while kill -0 "$VPS_CHILD_PID" 2>/dev/null; do
+    if ! vps_check_cancel; then vps_stop_child "$VPS_CHILD_PID"; wait "$VPS_CHILD_PID" 2>/dev/null; VPS_CHILD_PID=''; return 3; fi
+    if [ $(( $(now) - start )) -ge "$VPS_HOSTKEY_TIMEOUT" ]; then vps_stop_child "$VPS_CHILD_PID"; wait "$VPS_CHILD_PID" 2>/dev/null; VPS_CHILD_PID=''; VPS_HOSTKEY=''; return 1; fi
+    [ "${JOB_NAME:-}" != vps-probe ] || vps_probe_progress hostkey 0 5 "$start" "$VPS_HOSTKEY_TIMEOUT"
+    sleep 0.5
+  done
+  wait "$VPS_CHILD_PID" 2>/dev/null || true; VPS_CHILD_PID=''
+  vps_check_cancel || return 3
+  fps=$(cat "$VD/fingerprints")
   [ -n "$fps" ] || { VPS_HOSTKEY=''; SSH_HK_OPTS=(-o StrictHostKeyChecking=no -o "UserKnownHostsFile=$VD/known_hosts"); return 1; }
   if [ -n "$V_HOSTKEY" ]; then
     pick=$(printf '%s\n' "$fps" | awk -F'\t' -v h="$V_HOSTKEY" '$1 == h { print; exit }')
@@ -151,19 +191,31 @@ vps_classify_ssh() {
 # vps_run <probe|provision|redetect> <root|user|sudo_nopass|sudo_password> [远端脚本参数…]  -> 0 = 脚本成功结束  1 = 失败 (VPS_CODE VPS_ERR 已设置)
 #   远端脚本 = 云端的 vps/lib.sh + vps/<名称>.sh; 输出在 $VD/out (后台运行, 边跑边由 vps_watch 推进进度)
 vps_run() {
-  local what=$1 priv=$2 a cmd='' q rc pid t0
+  local what=$1 priv=$2 a cmd='' q rc pid t0 limit=$VPS_TIMEOUT stage
   shift 2
   for a in "$@"; do printf '%s\n' "$a" | LC_ALL=C grep -Eq '^[A-Za-z0-9._=-]{1,64}$' || { VPS_CODE=E_INVALID; VPS_ERR="参数不合法"; return 1; }; cmd="$cmd '$a'"; done
   q="bash -c 'eval \"\$(cat)\"' enana-vps$cmd"
   case $priv in sudo_nopass) q="sudo -n $q" ;; sudo_password) q="sudo -S -p '' $q" ;; esac
   { [ "$priv" = sudo_password ] && printf '%s\n' "${V_SUDOPW:-$V_PASSWORD}"; cat "$(content_file vps/lib.sh)" "$(content_file vps/$what.sh)"; } | vps_ssh "$q" &
   pid=$!; t0=$(now)
+  VPS_CHILD_PID=$pid
+  [ "${JOB_NAME:-}" != vps-probe ] || limit=$VPS_PROBE_TIMEOUT
   while kill -0 "$pid" 2>/dev/null; do
+    if ! vps_check_cancel; then vps_stop_child "$pid"; wait "$pid" 2>/dev/null; VPS_CHILD_PID=''; return 1; fi
     vps_watch
-    if [ $(( $(now) - t0 )) -gt "$VPS_TIMEOUT" ]; then kill "$pid" 2>/dev/null; VPS_CODE=E_SSH_UNREACHABLE; VPS_ERR="部署超时 (超过 $((VPS_TIMEOUT / 60)) 分钟), 已中止"; wait "$pid" 2>/dev/null; return 1; fi
+    if [ $(( $(now) - t0 )) -ge "$limit" ]; then
+      vps_stop_child "$pid"; wait "$pid" 2>/dev/null; VPS_CHILD_PID=''; VPS_CODE=E_SSH_UNREACHABLE
+      if [ "${JOB_NAME:-}" = vps-probe ]; then VPS_ERR="服务器检测超时, 已停止本次连接"; else VPS_ERR="部署超时 (超过 $((VPS_TIMEOUT / 60)) 分钟), 已中止"; fi
+      return 1
+    fi
+    if [ "${JOB_NAME:-}" = vps-probe ]; then
+      if grep -q '^##' "$VD/out" 2>/dev/null; then stage=inspect; vps_probe_progress "$stage" 1 40 "$t0" "$limit"
+      else stage=ssh; vps_probe_progress "$stage" 0 15 "$t0" "$limit"; fi
+    fi
     sleep 0.5
   done
-  wait "$pid"; rc=$?
+  wait "$pid"; rc=$?; VPS_CHILD_PID=''
+  vps_check_cancel || return 1
   vps_watch
   vps_parse_out
   if [ -n "$(vps_kv_all err)" ]; then vps_remote_error; return 1; fi
@@ -230,16 +282,22 @@ vps_probe_json() {
 
 # 任务出错: 写进度 + 错误码 (前端从 job.result.code 取)
 vps_job_error() { # [步骤序号]
-  oplog "${OP_WHO:-dashboard}" "添加自己的服务器" "$V_HOST ${VPS_CODE:-}" error
-  job_write "$JOB_ID" "$JOB_NAME" error "${1:-0}" 100 "${VPS_ERR:-失败}" "{\"code\":\"${VPS_CODE:-E_VPS_VERIFY}\"}"
+  local extra=''
+  [ "$JOB_NAME" != vps-probe ] || extra=",\"attempt\":${VPS_ATTEMPT:-1},\"max_attempts\":${VPS_ATTEMPTS:-3}"
+  oplog "${OP_WHO:-dashboard}" "添加自己的服务器" "${V_HOST:-} ${VPS_CODE:-}" error
+  job_write "$JOB_ID" "$JOB_NAME" error "${1:-0}" 100 "${VPS_ERR:-失败}" "{\"code\":\"${VPS_CODE:-E_VPS_VERIFY}\"$extra}"
 }
 
 # vps_connect  公共前半段: 读凭据 → 校验 → 准备 → 主机指纹; 失败时已写好任务错误并返回 1
-vps_connect() { # <凭据文件>
+vps_prepare_connection() { # <凭据文件>
+  vps_check_cancel || { vps_job_error; return 1; }
   vps_cred_load "$1" || { VPS_CODE=E_INVALID; VPS_ERR="没有找到本次任务的凭据"; vps_job_error; return 1; }
   if ! vps_cred_check "$V_HOST" "$V_PORT" "$V_USER" "$V_MODE" "$V_PASSWORD" "$V_KEY" "$V_PASSPHRASE" "$V_SUDOPW" "$V_HOSTKEY"; then VPS_CODE=E_INVALID; VPS_ERR=$VPS_ERR; vps_job_error; return 1; fi
   vps_prepare || { VPS_CODE=E_INVALID; VPS_ERR="无法创建临时目录"; vps_job_error; return 1; }
   command -v "$(vps_ssh_bin)" >/dev/null 2>&1 || { VPS_CODE=E_SSH_NO_CLIENT; VPS_ERR="这台电脑上找不到 ssh 命令"; vps_job_error; return 1; }
+}
+vps_connect() { # <凭据文件>
+  vps_prepare_connection "$1" || return 1
   job_step 0 5 "连接服务器"
   vps_hostkey_setup; case $? in
     0) ;;
@@ -251,15 +309,39 @@ vps_connect() { # <凭据文件>
 
 # ---------- 任务: 探测 (只读) ----------
 vps_probe_job() { # <凭据文件>
+  local rc attempt retry_start
   trap 'vps_cleanup' EXIT
-  vps_connect "$1" || return 1
+  printf '%s\n' "$$" > "$H/jobs/$JOB_ID.started"
+  vps_prepare_connection "$1" || return 1
   vps_playbook_ok || { VPS_CODE=E_VPS_NO_PLAYBOOK; VPS_ERR="部署脚本由 enana 云端下发: 请先登录, 并等「云端内容」同步完成后再试"; vps_job_error; return 1; }
-  if [ "$V_CONFIRM" = 1 ] && [ -z "$V_HOSTKEY" ]; then      # 只取指纹让用户先确认, 还没有用密码 / 私钥登录
-    oplog "${OP_WHO:-dashboard}" "探测服务器主机指纹" "$V_HOST" ok
-    job_ok "请确认主机指纹" "{\"host\":\"$(jesc "$V_HOST")\",\"port\":$V_PORT,\"hostkey\":\"$(jesc "$VPS_HOSTKEY")\",\"need_confirm\":true}"; return 0
-  fi
-  job_step 1 30 "检测系统与环境"
-  if ! vps_run probe user; then vps_job_error 1; return 1; fi
+  VPS_ATTEMPTS=3
+  for attempt in 1 2 3; do
+    VPS_ATTEMPT=$attempt; VPS_CODE=''; VPS_ERR=''; VPS_SEEN=0
+    vps_check_cancel || { vps_job_error; return 1; }
+    vps_hostkey_setup; rc=$?
+    case $rc in
+      0)
+        if [ "$V_CONFIRM" = 1 ] && [ -z "$V_HOSTKEY" ]; then
+          vps_check_cancel || { vps_job_error; return 1; }
+          oplog "${OP_WHO:-dashboard}" "探测服务器主机指纹" "$V_HOST" ok
+          job_ok "请确认主机指纹" "{\"host\":\"$(jesc "$V_HOST")\",\"port\":$V_PORT,\"hostkey\":\"$(jesc "$VPS_HOSTKEY")\",\"need_confirm\":true}"; return 0
+        fi
+        : > "$VD/out"; : > "$VD/err"
+        if vps_run probe user; then break; fi ;;
+      2) VPS_CODE=E_SSH_HOSTKEY; VPS_ERR="服务器的主机指纹与之前固定的不一致 (可能被中间人攻击, 或服务器重装过系统)" ;;
+      3) VPS_CODE=E_CANCELLED; VPS_ERR="已取消服务器检测" ;;
+      *) VPS_CODE=E_SSH_UNREACHABLE; VPS_ERR="连不上这台服务器 (地址 / 端口不对, 服务器没开机, 或防火墙挡住了 SSH 端口)" ;;
+    esac
+    # Retry only transient connection failures, never rejected credentials or keys.
+    if [ "$VPS_CODE" != E_SSH_UNREACHABLE ] || [ "$attempt" = 3 ]; then vps_job_error 1; return 1; fi
+    oplog "${OP_WHO:-dashboard}" "服务器检测重试" "$(kv attempt "$attempt" max 3 code "$VPS_CODE")" error
+    retry_start=$(now)
+    while [ $(( $(now) - retry_start )) -lt 2 ]; do
+      vps_check_cancel || { vps_job_error; return 1; }
+      vps_probe_progress retry 0 5 "$retry_start" 2; sleep 0.5
+    done
+  done
+  vps_check_cancel || { vps_job_error; return 1; }
   job_step 2 90 "整理结果"
   oplog "${OP_WHO:-dashboard}" "探测服务器" "$V_HOST ($(vps_kv os_pretty))" ok
   job_ok "探测完成" "$(vps_probe_json)"

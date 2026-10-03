@@ -38,5 +38,8 @@ const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return{p
  const m=u.modal({title:'Export',actions:[{id:'export',label:'Export',keep:true,onClick:async()=>{count++;await d.promise;return false;}},{id:'cancel',label:'Cancel',cancel:true}]});
  m.setBusy(true);assert(m.foot.children.every(b=>b.disabled));m.setActions([{label:'Replacement',keep:true}]);assert(m.foot.children[0].disabled);m.setBusy(false);assert(!m.foot.children[0].disabled);
  d=deferred();m.setActions([{label:'Deploy',keep:true,onClick:async api=>{count++;api.setActions([{label:'Next',keep:true,onClick:()=>{throw Error('duplicate');}}]);await d.promise;return false;}}]);const old=m.foot.children[0];old.fire('click');old.fire('click');await tick();assert.equal(count,3);assert(m.foot.children[0].disabled);assert.equal(m.el.getAttribute('aria-busy'),'true');await m.request();assert(m.el.open);d.resolve();await tick();assert(!m.foot.children[0].disabled);m.close();
- console.log('PASS: async double-submit prevention, visible busy state, error recovery, select state, export modal, footer replacement during provisioning');
+ const c=u.modal({title:'Probe',actions:[]});c.setBusy(true);let cancelled=0;
+ c.setActions([{id:'stop',label:'Cancel check',keep:true,allowBusy:true,onClick:async()=>{cancelled++;await d.promise;return false;}},{label:'Next',keep:true}]);
+ assert(!c.foot.children[0].disabled);assert(c.foot.children[1].disabled);d=deferred();c.foot.children[0].fire('click');c.foot.children[0].fire('click');await tick();assert.equal(cancelled,1);assert(c.foot.children[0].disabled);d.resolve();await tick();assert(!c.foot.children[0].disabled);assert(c.foot.children[1].disabled);c.close();
+ console.log('PASS: async double-submit prevention, busy/error recovery, footer replacement and a guarded cancel action during a running task');
 })().catch(e=>{console.error(e);process.exitCode=1;});
