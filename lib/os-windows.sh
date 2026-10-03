@@ -61,3 +61,4 @@ stat() {
   else command stat "$@"; fi
 }
 nc() { [ "${1:-}" = -z ] && [ "${2:-}" = 127.0.0.1 ] || return 1; windows_node probe "$2" "$3"; }
+shasum() { [ "${1:-}" = -a ] && [ "${2:-}" = 256 ] || return 1; shift 2; command sha256sum "$@"; }

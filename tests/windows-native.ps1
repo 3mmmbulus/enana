@@ -35,6 +35,7 @@ try{
     Assert $auth.ok 'real Bash API responds through Windows TCP bridge'
     try{Invoke-WebRequest -UseBasicParsing -Uri "$url/api/auth/status" -TimeoutSec 15|Out-Null;throw 'Missing-header request was accepted'}catch{Assert ($_.Exception.Response.StatusCode.value__ -eq 403) 'missing X-Enana header is rejected'}
     & "$HomeDir\sing-box.exe" check -c "$HomeDir\config.json";Assert ($LASTEXITCODE -eq 0) 'native Windows sing-box validates installed configuration'
+    Invoke-EnanaBash $HomeDir "$repo\tests\windows-schema.sh" @()
     $config=Read-JsonFile "$HomeDir\config.json";Assert (!($config.inbounds|Where-Object{$_.type -eq 'tun'})) 'fresh install defaults to System Proxy'
     Assert (@($config.route.rule_set|Where-Object{$_.path -notmatch '^[A-Za-z]:/'}).Count -eq 0) 'filesystem paths are native Windows paths'
     $portsBefore=@($s.PORT,$s.UI_PORT,$s.API_PORT,$s.SPEED_PORT) -join ','

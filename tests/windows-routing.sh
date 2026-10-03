@@ -7,7 +7,7 @@ work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 export ENANA_HOME="$work/home" ENANA_LANG=en
 mkdir -p "$ENANA_HOME/rules"
 . "$repo/lib/common.sh"; init_paths "$repo/install.sh"
-for f in i18n jobs servers apps sites fetch enhanced auth dns config; do . "$LIB/$f.sh"; done
+for f in i18n jobs servers apps sites fetch enhanced auth dns config update; do . "$LIB/$f.sh"; done
 load_settings; ENANA_PLATFORM=windows
 set -e
 windows_node() { node "$repo/windows/helper.js" "$@"; }
@@ -33,4 +33,19 @@ const app=JSON.parse(fs.readFileSync(home+'/rules/ovr-apppin.json')).rules.flatM
 for(const exe of ['C:/Program Files/Gemini/helper.exe','C:/Program Files/WindowsApps/OpenAI.ChatGPT_1.0/ChatGPT.exe','C:/Users/Test User/AppData/Local/AnthropicClaude/app-2.0/helper.exe'])assert(app.some(rx=>new RegExp(rx.slice(4),'i').test(exe)));
 assert(!app.some(rx=>new RegExp(rx.slice(4),'i').test('C:/Program Files/Unrelated/Other.exe')));
 console.log('Windows shared routing, PIN helpers, browser precedence, dual-stack exclusions and native paths passed.');
+JS
+# The Windows release channel must not consult a macOS VERSION or advertise an
+# unreviewed upstream core that the privileged snapshot cannot accept.
+mkdir -p "$H/windows"; cp "$repo/windows/runtime-pins.json" "$H/windows/runtime-pins.json"
+_update_get() {
+  case $1 in
+    windows-manifest.json) printf '%s\n' '{"platform":"windows","version":"2.3.1","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":123,"url":"/dl/enana-2.3.1-windows.zip"}' > "$3"; "$2" "$3" ;;
+    CHANGELOG.md) return 1 ;;
+    *) echo "Wrong platform update source: $1" >&2; exit 1 ;;
+  esac
+}
+core_latest_version() { echo 'Unreviewed upstream core queried' >&2; exit 1; }
+update_check force || exit 1
+node - "$H/update.json" <<'JS'
+const fs=require('fs'),assert=require('assert');const j=JSON.parse(fs.readFileSync(process.argv[2]));assert.equal(j.latest,'2.3.1');assert.equal(j.core_latest,'1.14.2');console.log('Windows update channel and reviewed core version passed.');
 JS

@@ -27,7 +27,7 @@ enhanced_remove() { win_bridge tun-remove; }
 enhanced_system_log() { :; }
 enhanced_ready() { enhanced_configured || return 0; win_bridge tun-ready; }
 enhanced_fingerprint() {
-  { printf 'autostart=%s\n' "${AUTOSTART:-1}"; shasum -a 256 "$SB" "$H/config.json"; find "$H/rules" "$H/certs" -type f -exec shasum -a 256 {} \; 2>/dev/null;
+  { printf 'autostart=%s\n' "${AUTOSTART:-1}"; shasum -a 256 "$SB" "$H/config.json"; find "$H/rules" "$H/certs" -type f -exec sha256sum {} \; 2>/dev/null;
     shasum -a 256 "$H/windows/tun.ps1" "$H/windows/common.ps1"; } | LC_ALL=C sort | shasum -a 256 | awk '{print $1}'
 }
 network_socket_diagnostics() { win_bridge diagnostics; }
