@@ -1,5 +1,18 @@
 # Changelog / 更新日志
 
+## 2.3.6 (2026-10-04)
+
+### 中文
+- Mac 与 Windows 终端菜单统一为每行一个操作, 输入完整选项后按 Enter 执行; 卸载项标红, 移除菜单底部冗长的命令列表。返回操作也改为按 Enter。
+- 完整卸载删除全部本机安装数据, 包括账号缓存、节点、订阅、设置、日志、证书、备份与私有运行时; 取消保留数据选项。Mac 同步检查删除结果, Windows 在 Bash 退出、文件释放后删除; 清理失败明确报错。
+- Mac 保存系统代理配置快照, 卸载时还原 enana 修改的代理字段与绕过列表, 保留后来改成的其它代理、PAC 和 DNS; 老版本没有完整快照时清除属于 enana 的 localhost 代理字段。两端清理没有任务记录的 TUN 残留目录, Windows 同时清理自己的 `.next` / `.previous` 快照。
+- Mac 停止当前安装拥有的后台任务及子进程, 防止卸载后任务重建数据; 保留其它程序与 shell 设置。增加真实终端输入、独立 SystemConfiguration 试验文件、进程归属和完整删除验收。
+
+### English
+- Share a vertical terminal menu across macOS and Windows, require Enter after the complete option, color uninstall red and remove the long command footer.
+- Fully remove local installation/user data, caches, backups, certificates and private runtimes. Report cleanup failures instead of delayed, unchecked success; remove the keep-data option.
+- Restore owned macOS proxy fields and bypass lists from a receipt while retaining foreign endpoints, PAC and DNS. Clean orphaned TUN snapshots on both platforms and stop detached installation jobs without touching unrelated programs.
+
 ## 2.3.5 (2026-10-04)
 
 ### 中文

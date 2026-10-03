@@ -12,6 +12,7 @@ case $action in
   stop) launchctl disable "system/$label"; launchctl bootout "system/$label" 2>/dev/null || true; exit 0 ;;
   remove)
     launchctl bootout "system/$label" 2>/dev/null || true
+    launchctl enable "system/$label" 2>/dev/null || true
     rm -f "$plist"; rm -rf "$root"; exit 0 ;;
   install) ;;
   *) exit 2 ;;

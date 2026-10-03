@@ -134,12 +134,16 @@ Start-Sleep 120
     $orphan=Start-Process -FilePath "$HomeDir\runtime\node\node.exe" -ArgumentList '-e','setTimeout(()=>{},120000)' -WindowStyle Hidden -PassThru
     $foreign=Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList '-NoProfile','-Command','Start-Sleep 120' -WindowStyle Hidden -PassThru
     try{
+        [IO.Directory]::CreateDirectory("$HomeDir\backups\user-fixture")|Out-Null
+        Write-Utf8 "$HomeDir\backups\user-fixture\private.txt" 'placeholder account and server data'
         & "$HomeDir\windows\cli.ps1" -Arguments @('uninstall','--yes')
         $orphan.Refresh();$foreign.Refresh()
         Assert $orphan.HasExited 'uninstall stops detached processes in its private runtime'
         Assert (!$foreign.HasExited) 'uninstall retains unrelated processes outside its runtime'
     }finally{if(!$foreign.HasExited){$foreign.Kill()};if(!$orphan.HasExited){$orphan.Kill()}}
     Assert (!(Test-Path -LiteralPath $HomeDir)) 'native uninstall removes the private runtime after Bash exits'
+    Assert (!(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) 'uninstall removes the owned dashboard task'
+    Assert (!([Environment]::GetEnvironmentVariable('Path','User').Split(';') -contains "$HomeDir\bin")) 'uninstall removes the owned persistent PATH entry'
     Write-Host 'Native acceptance completed. Interactive UAC/TUN and native-app OAuth require separate on-device acceptance.'
 } finally {
     if(Test-Path -LiteralPath "$HomeDir\windows\platform.ps1"){

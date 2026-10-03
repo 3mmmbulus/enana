@@ -56,4 +56,8 @@ printf '#!/bin/sh\necho "inet 10.0.0.1 netmask 0xffffff00"\n' > "$W/bin/ifconfig
 if bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1; then echo 'FAIL: route mismatch accepted'; exit 1; fi
 grep -q first "$W/runtime/config.json"
 [ -z "$(find "$W/runtime" -name '.prepare.*' -o -name '.rollback.*')" ]
+rm -f "$W/daemon.plist"
+bash "$W/helper.sh" remove 501
+[ ! -e "$W/runtime" ] && [ ! -e "$W/daemon.plist" ]
+grep -q 'enable system/com.enana.proxy.tun.501' "$W/calls"
 echo 'PASS: root snapshot install, bootstrap rollback, GUI recovery, symlink rejection, foreign VPN route rollback, staging cleanup'

@@ -1,0 +1,21 @@
+name: macOS console and uninstall acceptance
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  local-state:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise SystemConfiguration using private preferences files only
+        run: sudo "$(command -v python3)" tests/mac-proxy-state.py
+      - name: Verify terminal waits for Enter and renders one action per line
+        run: python3 tests/console-pty.py
+      - name: Check protected TUN cleanup and rollback
+        run: bash tests/tun-service.sh
+      - name: Stop owned detached jobs while preserving unrelated processes
+        run: python3 tests/stop-jobs.py

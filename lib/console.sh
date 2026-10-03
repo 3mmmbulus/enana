@@ -49,15 +49,23 @@ console_draw() {
   if [ "$CS_srv" -eq 0 ]; then pf '\n  %s提示%s 还没有添加服务器 → 按 1 打开仪表盘, 在「服务器」页添加\n' "$Y" "$N"
   elif [ "$CS_new" -gt 0 ]; then pf '\n  %s提示%s 发现 %s 个新应用 (默认关闭) → 按 1 到仪表盘「应用」页处理\n' "$Y" "$N" "$CS_new"; fi
   _cs_rule
-  pf '  [1] 打开仪表盘     [2] 重启服务        [3] %s\n' "$([ "$CS_mode" = Direct ] && _t '开启代理' || _t '关闭代理(全部直连)')"
-  pf '  [4] 更新规则/订阅  [5] 查看日志        [6] 诊断\n'
-  pf '  [7] 退出账号 (关闭代理并清除登录)   [8] 更新 enana   [9] 卸载\n'
-  pf '  [s] %s   [l] 语言 / Language   [r] 刷新   [q] 退出\n' "$([ "$CS_sp" = 1 ] && _t '关闭系统代理' || _t '开启系统代理')"
+  pf '  [1] 打开仪表盘\n'
+  pf '  [2] 重启服务\n'
+  pf '  [3] %s\n' "$([ "$CS_mode" = Direct ] && _t '开启代理' || _t '关闭代理(全部直连)')"
+  pf '  [4] 更新规则/订阅\n'
+  pf '  [5] 查看日志\n'
+  pf '  [6] 诊断\n'
+  pf '  [7] 退出账号 (关闭代理并清除登录)\n'
+  pf '  [8] 更新 enana\n'
+  pf '%s  [9] 卸载%s\n' "$R" "$N"
+  pf '  [s] %s\n' "$([ "$CS_sp" = 1 ] && _t '关闭系统代理' || _t '开启系统代理')"
+  pf '  [l] 语言 / Language\n'
+  pf '  [r] 刷新\n'
+  pf '  [q] 退出\n'
   _cs_rule
-  pf '  命令行: %senana%s status | restart | on | off | update | self-update | logout | lang | doctor | logs | uninstall | help\n' "$C" "$N"
 }
 
-console_pause() { printf '\n  %s%s%s' "$DIM" "$(_t '按任意键返回…')" "$N"; IFS= read -rsn1 _k || true; }
+console_pause() { printf '\n  %s%s%s' "$DIM" "$(_t '按 Enter 返回…')" "$N"; IFS= read -r _k || true; }
 
 console_main() {
   local key
@@ -66,8 +74,9 @@ console_main() {
   console_gather
   while :; do
     console_draw
-    printf '\n  %s: ' "$(_t 请选择)"
-    IFS= read -rsn1 key || break
+    printf '\033[?25h\n  %s: ' "$(_t '请选择 (输入选项后按 Enter)')"
+    IFS= read -r key || break
+    printf '\033[?25l'
     case $key in
       1) os_open "$UI_URL" ;;
       2) printf '\033[?25h\n'; cmd_restart; console_pause; printf '\033[?25l'; console_gather ;;

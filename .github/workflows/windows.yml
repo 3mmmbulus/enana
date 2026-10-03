@@ -26,6 +26,8 @@ jobs:
       - name: Check directory ACL in PowerShell Core
         shell: pwsh
         run: ./tests/windows-acl.ps1
+      - name: Remove protected orphaned snapshots without affecting other users
+        run: ./tests/windows-snapshot-remove.ps1
       - name: Install and exercise the real Windows client
         run: ./tests/windows-native.ps1 -HomeDir '${{ runner.temp }}/enana-native-acceptance'
       - name: Retain failure diagnostics without account or server credentials

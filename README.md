@@ -114,7 +114,7 @@ enana self-update    升级 enana 本体    enana logout      退出账号 (自�
 enana doctor         诊断信息(不含密码,反馈问题时贴出来)
 enana diag [小时]     导出诊断文件(操作记录 + 网站访问 + 代理日志 + 当前状态,同仪表盘「导出」)
 enana env            终端代理变量:eval "$(enana env)"   (命令行工具不读系统代理)
-enana uninstall      卸载 (--keep-data 保留数据)
+enana uninstall      完整卸载 (删除全部本机数据)
 ```
 
 ## 安全与隐私

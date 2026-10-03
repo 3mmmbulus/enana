@@ -20,7 +20,7 @@ for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device s
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 load_settings
 
-FORCE=''; KEEP=''; QUIET=${QUIET:-}; UPGRADE=''; CMD=''; ARG1=''; ARG2=''
+FORCE=''; QUIET=${QUIET:-}; UPGRADE=''; CMD=''; ARG1=''; ARG2=''
 parse_args() {
   local a n=0 want_lang=0
   for a in "$@"; do
@@ -28,7 +28,7 @@ parse_args() {
     case $a in
       --yes|-y) ENANA_YES=1; export ENANA_YES ;;
       --force) FORCE=1 ;;
-      --keep-data) KEEP=1 ;;
+      --keep-data) die "完整卸载会删除全部本机数据; 请先导出需要保留的数据, 再执行 enana uninstall" ;;
       --quiet) QUIET=1 ;;
       --upgrade) UPGRADE=1; ENANA_YES=1; export ENANA_YES ;;
       --lang) want_lang=1 ;;
@@ -429,23 +429,23 @@ _doctor_body() { # 诊断信息 (不含任何密码/订阅链接), 出问题时�
 
 cmd_uninstall() {
   [ -f "$H/.enana-home" ] || { warn "没有找到安装目录 ($H)"; return 1; }
-  local msg="确认卸载? 将关闭系统代理、停止服务、删除快捷命令"
-  [ -n "$KEEP" ] && msg="$msg (保留 $H 里的数据)" || msg="$msg, 并删除 $H (含你的服务器 / 订阅配置)"
+  [ -n "$H" ] && [ "$H" != / ] && [ "$H" != "$HOME" ] && [ ! -L "$H" ] || { warn "安装目录不安全, 未执行卸载"; return 1; }
+  local msg="确认完整卸载? 将还原系统代理、停止服务、删除快捷命令和全部本机数据 (账号、服务器、订阅、设置、日志与缓存)"
   confirm "$msg" n || { info "已取消"; return 1; }
-  os_sysproxy_mine && os_sysproxy_set off
+  os_sysproxy_uninstall || return 1
   os_service_stop || return 1; enhanced_remove || return 1; os_aux_unload || return 1
-  rm -f "$PLIST" "$PLIST_API" "$PLIST_UPD" "$PLIST_TICK"
-  shortcut_remove
+  os_stop_owned_jobs || return 1
+  rm -f "$PLIST" "$PLIST_API" "$PLIST_UPD" "$PLIST_TICK" || return 1
+  shortcut_remove || return 1
   if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then
     # A Windows executable cannot delete its own loaded PortableGit runtime.
     # The native CLI finishes removal after this Bash process has returned.
-    printf '%s\n' "${KEEP:+keep}" > "$H/.windows-uninstall"
+    printf '\n' > "$H/.windows-uninstall"
     return 0
   fi
-  if [ -z "$KEEP" ] && [ -n "$H" ] && [ "$H" != / ] && [ "$H" != "$HOME" ]; then
-    nohup sh -c 'sleep 2; rm -rf "$1"' _ "$H" >/dev/null 2>&1 &    # 稍后删除 (脚本自己就在该目录里)
-  fi
-  ok "已卸载$([ -n "$KEEP" ] && echo " (数据保留在 $H)")"
+  rm -rf "$H" || { warn "删除安装数据失败, 卸载未完成"; return 1; }
+  [ ! -e "$H" ] || { warn "删除安装数据失败, 卸载未完成"; return 1; }
+  ok "已完整卸载, 本机数据已删除"
   return 0
 }
 
@@ -469,7 +469,7 @@ $(_t "  enana logs [行数]     查看日志")
 $(_t "  enana diag [小时数]   导出诊断文件 (操作记录 + 网站访问 + 代理日志 + 当前状态, 默认最近 24 小时; 接管道直接输出)")
 $(_t "  enana open           打开仪表盘")
 $(_t "  enana env            打印终端代理变量 (命令行工具不读系统代理): eval \"\$(enana env)\"")
-$(_t "  enana uninstall      卸载 (--keep-data 保留数据目录)")
+$(_t "  enana uninstall      完整卸载 (删除全部本机数据)")
 $(_t "选项: --yes 全部采用推荐值 · --force 强制重装环境 · --quiet 静默 · --lang zh|en 指定语言")
 EOF
 }

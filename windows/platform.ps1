@@ -184,7 +184,7 @@ switch ($Action) {
             Remove-Item -LiteralPath "$HomeDir\.core-version" -ErrorAction SilentlyContinue
         }finally{Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue}
     }
-    'worker-remove' { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue }
+    'worker-remove' { if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop } }
     'shortcut-install' {
         $bin=Join-Path $HomeDir 'bin';$old=[Environment]::GetEnvironmentVariable('Path','User');if(!$old){$old=''}
         if(!($old.Split(';') -contains $bin)){[Environment]::SetEnvironmentVariable('Path',($old.TrimEnd(';')+';'+$bin).TrimStart(';'),'User')}
@@ -266,8 +266,10 @@ public static class EnanaEnvironment {
     }
     {$_ -in 'tun-stop','tun-remove'} {
         $task=Get-ScheduledTask -TaskName $tunName -ErrorAction SilentlyContinue
-        if (!$task -or ($Action -eq 'tun-stop' -and $task.State -ne 'Running')) { break }
+        if ($Action -eq 'tun-stop' -and (!$task -or $task.State -ne 'Running')) { break }
+        if ($Action -eq 'tun-remove' -and !$task -and !(Test-Path -LiteralPath $root) -and !(Test-Path -LiteralPath ($root+'.next')) -and !(Test-Path -LiteralPath ($root+'.previous'))) { break }
         $helper = Join-Path $root 'tun.ps1'
+        if (!(Test-Path -LiteralPath $helper)) { $helper = Join-Path $PSScriptRoot 'tun.ps1' }
         $arg = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Action {1} -Sid "{2}"' -f $helper,$Action.Substring(4),$sid
         $p = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Verb RunAs -ArgumentList $arg -PassThru -Wait
         if ($p.ExitCode -ne 0) { throw 'Enhanced/TUN could not stop. The previous configuration was retained.' }

@@ -23,7 +23,7 @@ export ENANA_MOCK_CTL=$W/vpsctl ENANA_VERIFY_IP_URL=http://127.0.0.1:$N_PORT/ipr
 mkdir -p "$W"/{state,home/Library/LaunchAgents,shortcut,h/rules,h/lib}
 export ENANA_NO_MDFIND=1 ENANA_APPS_ROOTS="$W/home/Applications"            # 应用扫描只看测试夹具里的目录 (不碰这台电脑上真实的应用)
 export PATH="$HERE/fakebin:$PATH"
-for c in launchctl networksetup sudo open; do
+for c in launchctl networksetup sudo open osascript; do
   case "$(command -v $c)" in "$HERE"/fakebin/*) ;; *) echo "REFUSING: 真实的 $c 出现在 PATH 中, 为防止改动系统已中止"; exit 1 ;; esac
 done
 cleanup() { for f in "$FAKE_STATE"/pid-* "$W"/pid-*; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; done; sleep 0.3; pkill -f "$W/" 2>/dev/null; if [ -n "${KEEP_W:-}" ]; then echo "(保留测试目录 $W)"; else rm -rf "$W"; fi; }
@@ -1347,10 +1347,16 @@ expect "保留期 30 天 (720 小时): 20 天前的日志被保留, 40 天前的
 
 echo "== 16. 卸载"
 cp -R "$W/h/rules" "$W/rules-keep"
+mkdir -p "$W/h/user-fixture" "$W/h/backups/old" "$W/h/certs" "$W/h/logs"
+printf 'placeholder user data\n' > "$W/h/user-fixture/private"
+printf 'keep this unrelated setting\n# enana 快捷命令\nexport PATH="$HOME/.local/bin:$PATH"\n' > "$HOME/.zshrc"
 "$W/shortcut/enana" uninstall --yes >/dev/null 2>&1; sleep 3.5
 expect "快捷命令已移除" test ! -e "$W/shortcut/enana"
 expect "系统代理已(假)关闭" test ! -f "$FAKE_STATE/sysproxy-on"
 expect "安装目录已删除" test ! -d "$W/h"
+expect "本机账号、节点、设置、备份与证书目录全部随安装目录删除" test ! -e "$W/h/user-fixture" -a ! -e "$W/h/backups" -a ! -e "$W/h/certs" -a ! -e "$W/h/settings.env"
+expect "shell 配置只清除 enana 标记, 保留其它设置" sh -c "grep -q 'unrelated setting' '$HOME/.zshrc' && ! grep -q 'enana 快捷命令' '$HOME/.zshrc'"
+expect "全部用户 launchd plist 已移除" test ! -e "$ENANA_PLIST_DIR/com.enana.proxy.plist" -a ! -e "$ENANA_PLIST_DIR/com.enana.proxy.api.plist" -a ! -e "$ENANA_PLIST_DIR/com.enana.proxy.update.plist" -a ! -e "$ENANA_PLIST_DIR/com.enana.proxy.tick.plist"
 
 echo "== 17. 旧版迁移 (~/.tokyo-proxy + launchd 标签 local.tokyo-proxy*) → ~/.enana"
 mkdir -p "$HOME/.tokyo-proxy/certs" "$HOME/.local/bin"

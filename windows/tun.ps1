@@ -17,7 +17,11 @@ function Stop-Tun {
 }
 if ($Action -eq 'stop' -or $Action -eq 'remove') {
     Stop-Tun
-    if ($Action -eq 'remove') { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue; if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force } }
+    if ($Action -eq 'remove') {
+        if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop }
+        foreach ($dir in @($root,$root+'.next',$root+'.previous')) { Assert-NoReparse $dir; if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force } }
+        if ((Test-Path -LiteralPath $base) -and !(Get-ChildItem -LiteralPath $base -Force)) { Remove-Item -LiteralPath $base }
+    }
     exit 0
 }
 if ($Action -eq 'run') {
