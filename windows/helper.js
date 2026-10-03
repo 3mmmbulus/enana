@@ -127,7 +127,20 @@ async function control(home, action) {
   const ack=path.join(dir,id+'.reply');
   try {
     for(let i=0;i<300;i++){await new Promise(r=>setTimeout(r,100));
-      if(fs.existsSync(ack)){const r=JSON.parse(fs.readFileSync(ack,'utf8'));if(!r.ok)throw Error(r.error);return;}
+      if(fs.existsSync(ack)){
+        const r=JSON.parse(fs.readFileSync(ack,'utf8'));if(!r.ok)throw Error(r.error);
+        // A shutdown reply acknowledges the request before the supervisor
+        // closes its sockets and children. Upgrades/uninstall must wait for
+        // the acknowledged worker itself to exit, not just its state file.
+        if(action==='shutdown'){
+          for(let n=0;n<300;n++){
+            try{process.kill(s.pid,0);}catch(e){if(e.code==='ESRCH')return;throw e;}
+            await new Promise(resolve=>setTimeout(resolve,100));
+          }
+          throw Error('Dashboard worker did not finish shutting down');
+        }
+        return;
+      }
       if(!state(home))throw Error('Dashboard worker stopped');
     }
     throw Error('Proxy command timed out');

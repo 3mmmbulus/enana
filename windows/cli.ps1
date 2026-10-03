@@ -11,6 +11,7 @@ if(Test-Path -LiteralPath $plan){
     $keep=[IO.File]::ReadAllText($plan,$Utf8).Trim();if($keep -notin @('','keep')){throw 'Invalid uninstall plan'}
     Assert-NoReparse $HomeDir
     if($HomeDir -eq [IO.Path]::GetPathRoot($HomeDir) -or $HomeDir -eq [Environment]::GetFolderPath('UserProfile')){throw 'Unsafe uninstall directory'}
+    Stop-EnanaRuntime $HomeDir
     Remove-Item -LiteralPath $plan
     if($keep -eq 'keep'){Write-Host "enana services and command removed; data kept at $HomeDir"}
     else{

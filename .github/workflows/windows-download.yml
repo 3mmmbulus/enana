@@ -2,7 +2,7 @@ name: Windows published installer acceptance
 on:
   push:
     branches: [main]
-    paths: [get.ps1, tests/windows-bootstrap.ps1, tests/windows-bootstrap-language.ps1, .github/workflows/windows-download.yml]
+    paths: [VERSION, get.ps1, 'windows/**', tests/windows-bootstrap.ps1, tests/windows-bootstrap-language.ps1, .github/workflows/windows-download.yml]
   workflow_dispatch:
 permissions:
   contents: read
@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check no-argument bootstrap language selection
         run: ./tests/windows-bootstrap-language.ps1
-      - name: Verify the official download in a Restricted shell
+      - name: Install and reinstall the official download in Restricted and Bypass shells
         run: ./tests/windows-bootstrap.ps1 -HomeDir '${{ runner.temp }}/enana-download-acceptance'
       - name: Retain failure diagnostics
         if: failure()

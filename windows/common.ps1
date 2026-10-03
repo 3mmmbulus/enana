@@ -107,3 +107,35 @@ function Invoke-EnanaBash([string]$HomeDir, [string]$Script, [string[]]$Argument
     & $bash $posix @Arguments
     if ($LASTEXITCODE -ne 0) { throw "enana command failed (exit $LASTEXITCODE)." }
 }
+function Stop-EnanaRuntime([string]$HomeDir) {
+    # Detached Bash jobs can outlive their API parent. After the command/worker
+    # exits, release this installation's private runtime before replacement or
+    # removal. Never kill by process name or a caller-supplied PID alone.
+    Assert-NoReparse $HomeDir
+    $root=[IO.Path]::GetFullPath($HomeDir).TrimEnd('\')
+    if(!$root -or $root -eq [IO.Path]::GetPathRoot($root).TrimEnd('\') -or $root -eq [Environment]::GetFolderPath('UserProfile')){throw 'Unsafe runtime directory'}
+    $prefix=$root+'\runtime\'; $core=$root+'\sing-box.exe'; $ownerSid=Get-EnanaSid
+    for($attempt=0;$attempt -lt 20;$attempt++){
+        $owned=@(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+            $_.ProcessId -ne $PID -and $_.ExecutablePath -and
+            ($_.ExecutablePath.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase) -or $_.ExecutablePath -eq $core)
+        } | Where-Object {
+            (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction SilentlyContinue).Sid -eq $ownerSid
+        })
+        if(!$owned.Count){return}
+        foreach($proc in $owned){
+            # Recheck identity before terminating a tree; PID reuse must not
+            # make an unrelated program eligible for runtime cleanup.
+            $fresh=Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.ProcessId)" -ErrorAction SilentlyContinue
+            if($fresh -and $fresh.CreationDate -eq $proc.CreationDate -and $fresh.ExecutablePath -eq $proc.ExecutablePath -and
+                (Invoke-CimMethod -InputObject $fresh -MethodName GetOwnerSid -ErrorAction SilentlyContinue).Sid -eq $ownerSid){
+                # A child can exit between the recheck and taskkill. Retry
+                # only still-owned processes; a persistent failure retains
+                # the files and reports an error after the bounded wait.
+                try{& "$env:SystemRoot\System32\taskkill.exe" /PID $proc.ProcessId /T /F 2>$null | Out-Null}catch{}
+            }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    throw 'Private enana runtime processes did not stop; files were retained.'
+}

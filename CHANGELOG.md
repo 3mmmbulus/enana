@@ -1,5 +1,15 @@
 # Changelog / 更新日志
 
+## 2.3.2 (2026-10-03)
+
+### 中文
+- 修复 Windows 重复安装后卸载时, 后台分离的 Bash 任务仍占用私有运行时的问题。关闭命令等待核心管理进程真正退出, 升级与卸载按安装目录和用户 SID 清理残留运行时进程; 不按进程名关闭其它项目。
+- 补充真实进程关闭等待、分离进程清理和其它进程保留验收。完整官网命令验收开启了浏览器自动访问, 暴露出之前 `-NoOpen` 安装测试没有覆盖的后台任务生命周期。
+
+### English
+- Fix detached Bash jobs retaining private runtime executables after Windows reinstall. Shutdown waits for the acknowledged supervisor to exit; upgrade/uninstall clean up remaining processes by installation path and owner SID, retaining unrelated programs.
+- Verify real process-exit waiting and native detached-process cleanup with an unrelated-process preservation check. Published-command acceptance opens the dashboard, exercising a job lifecycle omitted by earlier `-NoOpen` installs.
+
 ## 2.3.1 (2026-10-03)
 
 ### 中文

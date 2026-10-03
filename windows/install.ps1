@@ -25,10 +25,12 @@ try {
     $env:ENANA_WINDOWS_ARCH=$arch; $env:ENANA_WINDOWS_SID=$sid
     $pins=Read-JsonFile "$SourceDir\windows\runtime-pins.json"
     if (Test-Path -LiteralPath "$HomeDir\runtime\node\node.exe") {
-        & "$HomeDir\runtime\node\node.exe" "$HomeDir\windows\helper.js" control $HomeDir shutdown
+        # Use the verified new helper to wait for exit even when upgrading a
+        # version whose installed helper returned on acknowledgement alone.
+        & "$HomeDir\runtime\node\node.exe" "$SourceDir\windows\helper.js" control $HomeDir shutdown
         if ($LASTEXITCODE -ne 0) { throw 'Could not stop the installed dashboard for upgrade.' }
         $workerStopped=$true
-        Start-Sleep -Milliseconds 750
+        Stop-EnanaRuntime $HomeDir
     }
     foreach ($component in @('git','node','core')) {
         $pin=$pins.$component.$arch; $stamp=Join-Path $HomeDir "runtime\$component.pin"
@@ -98,7 +100,7 @@ try {
 } catch {
     $failure=$_
     if($installed -and ($changed -or $workerStopped)){
-        if(Test-Path -LiteralPath "$HomeDir\runtime\node\node.exe") { & "$HomeDir\runtime\node\node.exe" "$HomeDir\windows\helper.js" control $HomeDir shutdown 2>$null }
+        if(Test-Path -LiteralPath "$HomeDir\runtime\node\node.exe") { & "$HomeDir\runtime\node\node.exe" "$SourceDir\windows\helper.js" control $HomeDir shutdown 2>$null }
         if($changed){foreach($name in $programs){if(Test-Path -LiteralPath "$backup\$name"){
             Remove-Item -LiteralPath "$HomeDir\$name" -Recurse -Force -ErrorAction SilentlyContinue
             Copy-Item -LiteralPath "$backup\$name" -Destination "$HomeDir\$name" -Recurse
@@ -110,7 +112,7 @@ try {
         }}
         if($taskExisted){& "$HomeDir\windows\platform.ps1" -Action task-register -HomeDir $HomeDir; & "$HomeDir\windows\platform.ps1" -Action worker-start -HomeDir $HomeDir}
     } elseif(!$installed){
-        if(Test-Path -LiteralPath "$HomeDir\runtime\node\node.exe"){& "$HomeDir\runtime\node\node.exe" "$HomeDir\windows\helper.js" control $HomeDir shutdown 2>$null}
+        if(Test-Path -LiteralPath "$HomeDir\runtime\node\node.exe"){& "$HomeDir\runtime\node\node.exe" "$SourceDir\windows\helper.js" control $HomeDir shutdown 2>$null}
         Unregister-ScheduledTask -TaskName "Enana Dashboard $sid" -Confirm:$false -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath "$HomeDir\.enana-home" -ErrorAction SilentlyContinue
     }

@@ -71,7 +71,16 @@ try{
     Invoke-EnanaBash $HomeDir "$HomeDir\enana" @('doctor')
     & "$HomeDir\runtime\node\node.exe" "$HomeDir\windows\helper.js" control $HomeDir shutdown
     Assert ($LASTEXITCODE -eq 0) 'owned worker and core stop cleanly'
-    & "$HomeDir\windows\cli.ps1" -Arguments @('uninstall','--yes')
+    # A detached API job may outlive its supervisor. Cleanup must release its
+    # private executable while retaining an unrelated process outside HomeDir.
+    $orphan=Start-Process -FilePath "$HomeDir\runtime\node\node.exe" -ArgumentList '-e','setTimeout(()=>{},120000)' -WindowStyle Hidden -PassThru
+    $foreign=Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList '-NoProfile','-Command','Start-Sleep 120' -WindowStyle Hidden -PassThru
+    try{
+        & "$HomeDir\windows\cli.ps1" -Arguments @('uninstall','--yes')
+        $orphan.Refresh();$foreign.Refresh()
+        Assert $orphan.HasExited 'uninstall stops detached processes in its private runtime'
+        Assert (!$foreign.HasExited) 'uninstall retains unrelated processes outside its runtime'
+    }finally{if(!$foreign.HasExited){$foreign.Kill()};if(!$orphan.HasExited){$orphan.Kill()}}
     Assert (!(Test-Path -LiteralPath $HomeDir)) 'native uninstall removes the private runtime after Bash exits'
     Write-Host 'Native acceptance completed. Interactive UAC/TUN and native-app OAuth require separate on-device acceptance.'
 } finally {
