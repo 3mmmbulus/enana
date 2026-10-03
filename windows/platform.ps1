@@ -130,11 +130,11 @@ switch ($Action) {
         $spec = "$HomeDir|$((Get-FileHash -LiteralPath $worker).Hash)|$((Get-FileHash -LiteralPath $node).Hash)"
         $file = Join-Path $HomeDir 'runtime\task.spec'
         if ((Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $file) -and [IO.File]::ReadAllText($file) -eq $spec) { 'unchanged'; break }
-        $action = New-ScheduledTaskAction -Execute $node -Argument ('"{0}" "{1}"' -f $worker,$HomeDir) -WorkingDirectory $HomeDir
+        $taskAction = New-ScheduledTaskAction -Execute $node -Argument ('"{0}" "{1}"' -f $worker,$HomeDir) -WorkingDirectory $HomeDir
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $sid
         $principal = New-ScheduledTaskPrincipal -UserId $sid -LogonType Interactive -RunLevel Limited
         $opts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $opts -Force | Out-Null
+        Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $trigger -Principal $principal -Settings $opts -Force | Out-Null
         Write-Utf8 $file $spec; 'changed'
     }
     'worker-start' { Start-ScheduledTask -TaskName $taskName }
