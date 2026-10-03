@@ -57,7 +57,7 @@ progress() { [ "${ENANA_PROGRESS:-}" = 1 ] && printf '##job %s %s %s\n' "$1" "$2
 case "$(uname -s 2>/dev/null)" in
   Darwin) ;;
   Linux) die "Linux 版暂未提供 (规划中); 目前支持 macOS, Windows 请用 PowerShell 命令: irm https://install.enana.cc | iex" "The Linux edition is not available yet (planned). enana supports macOS today; on Windows use the PowerShell command: irm https://install.enana.cc | iex" ;;
-  MINGW*|MSYS*|CYGWIN*) die "这里是 Windows 上的 bash (Git Bash / MSYS)。请改用 PowerShell: irm https://install.enana.cc | iex (Windows 版即将支持)" "This is a bash on Windows (Git Bash / MSYS). Please use PowerShell instead: irm https://install.enana.cc | iex (the Windows edition is coming soon)" ;;
+  MINGW*|MSYS*|CYGWIN*) die "这里是 Windows 上的 bash (Git Bash / MSYS)。请改用 PowerShell: irm https://install.enana.cc | iex" "This is a bash on Windows (Git Bash / MSYS). Please use PowerShell instead: irm https://install.enana.cc | iex" ;;
   *) die "不支持的系统: $(uname -s); 目前只支持 macOS" "Unsupported system: $(uname -s); enana currently supports macOS only" ;;
 esac
 [ "$(id -u)" -ne 0 ] || die "请不要用 sudo 运行 (需要管理员权限的步骤会自己要密码)" "Do not run this with sudo (steps that need admin rights will ask for your password)"

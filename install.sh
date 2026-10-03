@@ -16,7 +16,8 @@ while [ -L "$_p" ]; do _l=$(readlink "$_p"); case $_l in /*) _p=$_l ;; *) _p=$(d
 _d=$(cd "$(dirname "$_p")" && pwd -P)
 . "$_d/lib/common.sh"
 init_paths "$_p"
-for _f in i18n jobs servers apps autosites sites fetch os-darwin enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps menu detect console; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps menu detect console; do . "$LIB/$_f.sh"; done
+[ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 load_settings
 
 FORCE=''; KEEP=''; QUIET=${QUIET:-}; UPGRADE=''; CMD=''; ARG1=''; ARG2=''
@@ -67,7 +68,8 @@ install_files() { # 把程序文件复制到 $H (源码目录与 $H 相同时跳
   if [ "$SRC" != "$H" ]; then
     rm -rf "$H/lib" "$H/data"; cp -R "$SRC/lib" "$H/lib"; cp -R "$SRC/data" "$H/data"
     cp -R "$SRC/ui/." "$H/ui/"
-    local f; for f in VERSION CHANGELOG.md get.sh; do [ -f "$SRC/$f" ] && cp "$SRC/$f" "$H/$f"; done
+    [ ! -d "$SRC/windows" ] || { mkdir -p "$H/windows"; cp -R "$SRC/windows/." "$H/windows/"; }
+    local f; for f in VERSION CHANGELOG.md get.sh get.ps1; do [ -f "$SRC/$f" ] && cp "$SRC/$f" "$H/$f"; done
     cp "$SRC/install.sh" "$H/enana.new" && chmod 755 "$H/enana.new" && mv -f "$H/enana.new" "$H/enana"   # 原子替换: 正在运行的旧进程不受影响
   fi
   : > "$H/.enana-home"
@@ -121,7 +123,7 @@ pick_ports() {
     # A root TUN core owns the same ports but has no GUI LaunchAgent.
     # Treating it as foreign silently changes ports during an upgrade.
     [ "$lbl" != "$LABEL" ] || ! os_service_loaded || continue
-    launchctl print "$GUI/$lbl" >/dev/null 2>&1 && continue
+    os_label_loaded "$lbl" && continue
     port_busy "$cur" || continue
     new=$(port_random "$used") || die "找不到空闲的本地端口" "请先关闭一些占用端口的程序, 再重新运行安装命令"
     warn "本地端口 $cur 已被其它程序占用, 已自动改用 $new"
@@ -197,7 +199,7 @@ st_service() {
   proxy_sync_mode
   [ "$n" -gt 0 ] && os_aux_load
   os_service_running && ok "代理服务运行中 (127.0.0.1:$PORT)$([ "${AUTOSTART:-1}" = 1 ] && echo ' · 开机自启')"
-  launchctl print "$GUI/$LABEL_API" >/dev/null 2>&1 || os_aux_load
+  os_api_loaded || os_aux_load
   ok "本地辅助服务就绪 (127.0.0.1:$API_PORT, 仪表盘用)"
 }
 
@@ -237,6 +239,7 @@ st_verify() {
 
 cmd_install() {
   os_detect
+  [ "$OS" != Windows ] || { cmd_install_windows; return; }
   [ "$OS" = Darwin ] || die "目前只支持 macOS" "Windows 请用 PowerShell 一行命令安装 (见 README); Linux 计划见 docs/ROADMAP.md"
   [ "$(id -u)" -ne 0 ] || die "请不要用 sudo 运行" "直接: bash install.sh  (需要管理员权限的步骤会自己要密码)"
   migrate_legacy
@@ -291,6 +294,20 @@ cmd_install() {
   [ -n "${SHORTCUT_RC:-}" ] && pf '                 注意: 要先重新打开终端 (或在当前终端运行 %sexport PATH="$HOME/.local/bin:$PATH"%s); 现在也可以直接运行 %s%s/enana%s\n' "$B" "$N" "$B" "$H" "$N"
   pf '\n'
   os_open "$UI_URL"
+}
+
+# Native PowerShell stages verified dependencies before entering shared logic.
+cmd_install_windows() {
+  [ -x "$SB" ] && core_ok || die 'Windows core is missing' 'Run the PowerShell installer, not install.sh directly.'
+  STEPS=4; mkdir -p "$H"; install_files
+  settings_set LANG_UI "${ENANA_LANG:-${LANG_UI:-zh}}"; load_settings
+  [ "${ENANA_SKIP_RULES:-0}" = 1 ] || st_rules
+  st_config; st_service
+  step '验证'
+  wait_port "$API_PORT" 15 || die 'Windows dashboard did not start' "$H/api.log"
+  local code; code=$(curl -s --noproxy '*' -m 8 -o /dev/null -w '%{http_code}' "$UI_URL" || true)
+  [ "$code" = 200 ] || die 'Windows dashboard health check failed' "$H/api.log"
+  ok "enana $VERSION · Windows · $ARCH"; info "$UI_URL"
 }
 
 # ============================== 日常命令 ==============================
@@ -360,6 +377,7 @@ cmd_upgrade() { # 升级核心: 先下载, 用新核心校验现有配置, 通�
   op_core_upgrade "${ARG1:-latest}"
 }
 cmd_self_update() { # 升级 enana 本体: 交给 get.sh (下载 → SHA-256 校验 → 替换 → 重新生成配置); 会先询问确认
+  if [ "$ENANA_PLATFORM" = windows ]; then win_bridge self-update; return; fi
   [ -f "$H/get.sh" ] || die "找不到升级脚本" "重新运行安装命令: curl -fsSL https://enana.cc/get.sh | bash"
   update_check force >/dev/null 2>&1 || true
   if ! update_has_new && [ -z "$FORCE" ]; then ok "已经是最新版本 (v$VERSION)"; return 0; fi
@@ -387,12 +405,12 @@ cmd_lang() { # enana lang [zh|en]
 
 cmd_doctor() { _doctor_body 2>&1 | i18n_filter; }      # 整段输出逐行翻译 (诊断信息里的系统命令输出本来就是英文, 原样保留)
 _doctor_body() { # 诊断信息 (不含任何密码/订阅链接), 出问题时把输出发给开发者
-  echo "== 环境 =="; echo "enana $VERSION · macOS $(sw_vers -productVersion) $(uname -m) · bash $BASH_VERSION · 安装目录 $H · 语言 $LANG_UI"
+  echo "== 环境 =="; echo "enana $VERSION · $(os_name) $(os_version) $(os_arch) · bash $BASH_VERSION · 安装目录 $H · 语言 $LANG_UI"
   echo "核心: $(core_version) $(core_ok && echo OK || echo 无法运行)"
   echo "== 服务 =="; os_service_info
   printf 'service.loaded=%s\nservice.running=%s\nservice.pid=%s\n' "$SVC_LOADED" "$SVC_RUNNING" "$SVC_PID"
-  launchctl print "$GUI/$LABEL_API" >/dev/null 2>&1 && echo "辅助服务: 已加载" || echo "辅助服务: 未加载"
-  launchctl print "$GUI/$LABEL_UPD" >/dev/null 2>&1 && echo "每日维护: 已加载" || echo "每日维护: 未加载"
+  os_api_loaded && echo "辅助服务: 已加载" || echo "辅助服务: 未加载"
+  os_maintenance_loaded && echo "每日维护: 已加载" || echo "每日维护: 未加载"
   for _p in $PORT $UI_PORT $API_PORT $SPEED_PORT; do nc -z 127.0.0.1 "$_p" 2>/dev/null && echo "端口 $_p: 监听中" || echo "端口 $_p: 未监听"; done
   echo "后台地址: $UI_URL"
   echo "== 账号 =="; if auth_logged_in; then echo "已登录 $(auth_mask_email "$(auth_current_email)")"; else echo "未登录"; fi; echo "离线登录缓存: $(auth_cache_has && echo "有 ($(auth_hint))" || echo 无) · 代理总开关: $([ "${PROXY_ENABLED:-0}" = 1 ] && echo 开启 || echo 关闭)"
@@ -402,7 +420,8 @@ _doctor_body() { # 诊断信息 (不含任何密码/订阅链接), 出问题时�
   echo "规则集缺失: $(rules_missing | paste -sd, -)"
   echo "== 更新 =="; echo "$(update_available)"
   echo "== Capture =="; network_diagnostics
-  echo "== 系统代理 =="; while IFS= read -r _s; do printf '%s: ' "$_s"; networksetup -getsecurewebproxy "$_s" | tr '\n' ' '; echo; done < <(os_sysproxy_services)
+  echo "== 系统代理 =="; if [ "$ENANA_PLATFORM" = windows ]; then win_bridge sysproxy-diagnostics
+  else while IFS= read -r _s; do printf '%s: ' "$_s"; networksetup -getsecurewebproxy "$_s" | tr '\n' ' '; echo; done < <(os_sysproxy_services); fi
   echo "== 网络 =="; probe_net; echo "GitHub ${NET_GITHUB}ms · jsDelivr ${NET_JSD}ms · Google ${NET_GOOGLE}ms · 百度 ${NET_BAIDU}ms → $NET_REGION"
   date "+系统时间: %F %T %Z"
   echo "== 日志最后 20 行 =="; tail -n 20 "$H/sing-box.log" 2>/dev/null || echo "(无日志)"
@@ -414,9 +433,15 @@ cmd_uninstall() {
   [ -n "$KEEP" ] && msg="$msg (保留 $H 里的数据)" || msg="$msg, 并删除 $H (含你的服务器 / 订阅配置)"
   confirm "$msg" n || { info "已取消"; return 1; }
   os_sysproxy_mine && os_sysproxy_set off
-  os_service_stop || return 1; enhanced_remove || return 1; os_aux_unload
+  os_service_stop || return 1; enhanced_remove || return 1; os_aux_unload || return 1
   rm -f "$PLIST" "$PLIST_API" "$PLIST_UPD" "$PLIST_TICK"
   shortcut_remove
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then
+    # A Windows executable cannot delete its own loaded PortableGit runtime.
+    # The native CLI finishes removal after this Bash process has returned.
+    printf '%s\n' "${KEEP:+keep}" > "$H/.windows-uninstall"
+    return 0
+  fi
   if [ -z "$KEEP" ] && [ -n "$H" ] && [ "$H" != / ] && [ "$H" != "$HOME" ]; then
     nohup sh -c 'sleep 2; rm -rf "$1"' _ "$H" >/dev/null 2>&1 &    # 稍后删除 (脚本自己就在该目录里)
   fi

@@ -72,6 +72,7 @@ load_settings() { # 可调项: 环境变量 > $H/settings.env > 默认值
   [ -n "$SPEED_PORT" ] || SPEED_PORT=$((PORT + 2))
   set_ui_url                                          # 仪表盘 (后台) 地址; UI_PORT 现在只是代理核心的控制端口
   SB="$H/sing-box"
+  case "$(uname -s)" in MINGW*|MSYS*) SB="$H/sing-box.exe" ;; esac
   GUI="gui/$(id -u)"
   PLIST_DIR="${ENANA_PLIST_DIR:-$HOME/Library/LaunchAgents}"
   PLIST="$PLIST_DIR/$LABEL.plist"
@@ -111,4 +112,15 @@ human_age() { # 秒 -> "N 秒/分钟/小时/天" (经 _t 翻译)
 
 pf() { # printf, 但格式串先翻译 (译文里的 %s 个数必须与原文一致; 用于带变量的整行输出)
   local f; f=$(_t "$1"); shift; printf "$f" "$@"
+}
+
+os_version() { if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then win_bridge version; else sw_vers -productVersion; fi; }
+os_arch() { if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then printf '%s' "${ENANA_WINDOWS_ARCH:-amd64}"; else uname -m; fi; }
+os_name() { if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then printf Windows; else printf macOS; fi; }
+os_api_loaded() { if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then windows_worker_alive; else launchctl print "$GUI/$LABEL_API" >/dev/null 2>&1; fi; }
+os_maintenance_loaded() { if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then windows_worker_alive; else launchctl print "$GUI/$LABEL_UPD" >/dev/null 2>&1; fi; }
+os_label_loaded() { if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then windows_worker_alive; else launchctl print "$GUI/$1" >/dev/null 2>&1; fi; }
+os_import_subscription() {
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then windows_node import "$SRC/ui/importer.js" "$1" "${2:-auto}" "${3:-}"
+  else osascript -l JavaScript "$LIB/importer-cli.js" "$SRC/ui/importer.js" "$1" "${2:-auto}" "${3:-}"; fi
 }

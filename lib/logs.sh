@@ -254,12 +254,12 @@ _b_sec() { # <名称> <格式 kv|tsv|raw|text> <函数> [参数…]  一个分�
 
 _b_meta() {
   local osv arch core tz clash_mode role_pin role_auto role_other
-  osv=$(sw_vers -productVersion 2>/dev/null); arch=$(uname -m); core=$(core_version 2>/dev/null); tz=$(date +%z)
+  osv=$(os_version 2>/dev/null); arch=$(os_arch); core=$(core_version 2>/dev/null); tz=$(date +%z)
   os_service_info
   clash_mode=$(clash GET /configs 2>/dev/null | sed -n 's/.*"mode":"\([A-Za-z]*\)".*/\1/p' | head -1)
   role_pin=$(srv_list | awk -F'\t' '$5=="pin"' | wc -l | tr -d ' '); role_auto=$(srv_list | awk -F'\t' '$5=="auto"' | wc -l | tr -d ' ')
   role_other=$(( $(srv_count) - role_pin - role_auto ))
-  printf 'app=enana\nversion=%s\ncore=%s\nos=macOS %s\narch=%s\nlang=%s\ntimezone=%s\nnow=%s\nepoch=%s\n' "$VERSION" "$core" "$osv" "$arch" "${LANG_UI:-zh}" "$tz" "$(date '+%F %T')" "$(now)"
+  printf 'app=enana\nversion=%s\ncore=%s\nos=%s %s\narch=%s\nlang=%s\ntimezone=%s\nnow=%s\nepoch=%s\n' "$VERSION" "$core" "$(os_name)" "$osv" "$arch" "${LANG_UI:-zh}" "$tz" "$(date '+%F %T')" "$(now)"
   printf 'service.loaded=%s\nservice.running=%s\nservice.pid=%s\n' "${SVC_LOADED:-0}" "${SVC_RUNNING:-0}" "${SVC_PID:-}"
   printf 'capture.mode=%s\n' "${NETWORK_MODE:-system}"
   printf 'proxy.enabled=%s\nproxy.mode=%s\nclash.mode=%s\n' "${PROXY_ENABLED:-0}" "${PROXY_MODE:-auto}" "${clash_mode:-unknown}"
@@ -270,6 +270,7 @@ _b_meta() {
 }
 
 _b_env() {
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then network_diagnostics | _b_mask_user; return; fi
   local p pid out
   network_diagnostics | _b_mask_user
   scutil --proxy 2>/dev/null | awk '/^[[:space:]]+(HTTP|HTTPS|SOCKS|ProxyAutoConfig|ProxyAutoDiscovery|Exclude|FTP|RTSP|Gopher)[A-Za-z]* :/ { k = $1; $1 = ""; $2 = ""; sub(/^  */, ""); print "sysproxy." k "=" $0 }'
@@ -372,7 +373,10 @@ _b_probes() { # --noproxy bypasses an explicit proxy, but never bypasses TUN.
   _b_probe baidu "$native" https://www.baidu.com/ --noproxy '*' > "$d/7" &
   wait
   for i in 1 2 3 4 5 6 7; do [ -f "$d/$i" ] && cat "$d/$i"; done
-  printf 'dns_system\tsystem\twww.google.com\t-\t-\t-\t%s\t\n' "$(dscacheutil -q host -a name www.google.com 2>/dev/null | awk '/^(ip_address|ipv6_address):/ {print $2}' | head -4 | paste -sd' ' -)"
+  local system_dns
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then system_dns=$(win_bridge dns-system www.google.com 2>/dev/null)
+  else system_dns=$(dscacheutil -q host -a name www.google.com 2>/dev/null | awk '/^(ip_address|ipv6_address):/ {print $2}' | head -4 | paste -sd' ' -); fi
+  printf 'dns_system\tsystem\twww.google.com\t-\t-\t-\t%s\t\n' "$system_dns"
   n=$(clash GET "/dns/query?name=www.google.com&type=A" 2>/dev/null | perl -MJSON::PP -e 'local $/; my $j = eval { decode_json(<STDIN>) } or exit 0; print join(" ", map { $_->{data} // "" } @{ $j->{Answer} || [] })')
   printf 'dns_core\tcore\twww.google.com\t-\t-\t-\t%s\t%s\n' "$n" "$([ -n "$n" ] || echo no-answer)"
   rm -rf "$d"
@@ -381,7 +385,7 @@ _b_live() { # 此刻核心里还开着的连接 (最多 60 条, 按下载量): �
   printf 'start\tnet\thost\tport\tapp\tchain\trule\tup\tdown\n'
   clash GET /connections 2>/dev/null | perl -MJSON::PP -e '
     local $/; my $j = eval { decode_json(<STDIN>) } or exit 0; my @c = sort { ($b->{download} // 0) <=> ($a->{download} // 0) } @{ $j->{connections} || [] }; @c = @c[0 .. 59] if @c > 60;
-    for my $c (@c) { my $m = $c->{metadata} || {}; my $pp = $m->{processPath} // ""; my $app = $pp =~ m{([^/]+)\.app/} ? $1 : ($pp =~ m{([^/ ]+)(?: \(|$)} ? $1 : "");
+    for my $c (@c) { my $m = $c->{metadata} || {}; my $pp = $m->{processPath} // ""; $pp =~ s{\\}{/}g; my $app = $pp =~ m{([^/]+)\.app/} ? $1 : ($pp =~ m{([^/]+)$} ? $1 : "");
       my $r = join(" ", grep { length } ($c->{rule} // "", $c->{rulePayload} // ""));
       print join("\t", ($c->{start} // ""), ($m->{network} // ""), ($m->{host} || $m->{destinationIP} || ""), ($m->{destinationPort} // ""), $app, join(">", reverse @{ $c->{chains} || [] }), $r, ($c->{upload} // 0), ($c->{download} // 0)), "\n" }'
 }

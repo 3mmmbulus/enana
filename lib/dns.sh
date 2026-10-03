@@ -120,6 +120,7 @@ dns_bench_one() { # <url> <查询的域名> [代理 URL]  -> 打印毫秒; 不�
       out=$(curl -s $k -o /dev/null -o /dev/null -H 'accept: application/dns-message' --connect-timeout 3 --max-time 6 ${px:+-x "$px"} -w '%{http_code} %{time_total}\n' "$url?dns=$q" "$url?dns=$q" 2>/dev/null | tail -1)
       [ "${out%% *}" = 200 ] && awk -v t="${out#* }" 'BEGIN { printf "%d", t * 1000 + 0.5 }' ;;
     udp)
+      if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then windows_node dns-probe "$host" "${port:-53}" "$name" 2>/dev/null; return 0; fi
       out=$(/usr/bin/dig +time=2 +tries=1 +noall +stats -p "${port:-53}" "@$host" "$name" A 2>/dev/null | sed -n 's/.*Query time: \([0-9]*\) msec.*/\1/p' | head -1)
       [ -z "$out" ] || printf '%s' "$out" ;;
     tls)      # 只要 TCP 连接耗时 (≈ 网络往返); 用 perl 在进程内计时 (curl 的 time_connect 在 macOS 上对 TLS 连接不准)

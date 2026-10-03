@@ -42,11 +42,12 @@ function hostport(hp,   h, p) {                      # "域名:端口" / "[IPv6]
   if (p ~ /^[0-9]+$/) { HOST_ = h; PORT_ = p } else { HOST_ = hp }
 }
 function appname(pp,   n, parts) {                   # /Applications/Google Chrome.app/Contents/... -> Google Chrome (取最外层 .app); 其它取文件名
+  gsub(/\\/, "/", pp)
   if (match(pp, /[^\/]+\.app\//)) return substr(pp, RSTART, RLENGTH - 5)
   n = split(pp, parts, "/"); return parts[n]
 }
 function mkid(id) { if (!(id in seen)) { seen[id] = 1; ord[++n] = id } }
-function maskp(s) { gsub(/\/Users\/[^\/]+/, "/Users/<user>", s); return s }
+function maskp(s) { gsub(/\\/, "/", s); gsub(/\/Users\/[^\/]+/, "/Users/<user>", s); return s }
 function masku(u) { if (u == "" || u == "root" || substr(u, 1, 1) == "_") return u; return "<user>" }
 
 /^@@PINS$/ { mode_ = 1; next }

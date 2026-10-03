@@ -1,0 +1,3 @@
+# Bash, catalogs and VERSION are consumed as bytes on every platform.
+# Prevent Windows checkout defaults from introducing CR into JSON/scalars.
+* text=auto eol=lf

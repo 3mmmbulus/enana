@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1318" media="(prefers-color-scheme: dark)">
+<meta name="referrer" content="no-referrer">
+<title>enana · 一条命令安装 sing-box 代理环境 | macOS / Windows 分应用分流</title>
+<meta name="description" content="enana 一条命令在 macOS / Windows 上装好 sing-box 代理环境, 自带本机浏览器仪表盘: 按应用、按网站分流, DNS 测速与解析策略, 订阅和分享链接一键导入, SSH 一键部署自己的服务器。数据只保存在你的电脑上。">
+<meta name="keywords" content="enana,sing-box,代理环境,一键安装,macOS,分应用分流,分网站分流,本机仪表盘,订阅导入,DNS 防泄漏,SSH 一键部署,VLESS,Reality">
+<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1">
+<link rel="canonical" href="https://enana.cc/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="enana">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:locale:alternate" content="en_US">
+<meta property="og:url" content="https://enana.cc/">
+<meta property="og:title" content="enana · 一条命令安装 sing-box 代理环境 | macOS / Windows 分应用分流">
+<meta property="og:description" content="enana 一条命令在 macOS / Windows 上装好 sing-box 代理环境, 自带本机浏览器仪表盘: 按应用、按网站分流, DNS 测速与解析策略, 订阅和分享链接一键导入, SSH 一键部署自己的服务器。数据只保存在你的电脑上。">
+<meta property="og:image" content="https://enana.cc/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="enana: one-command sing-box proxy setup">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="enana · 一条命令安装 sing-box 代理环境 | macOS / Windows 分应用分流">
+<meta name="twitter:description" content="enana 一条命令在 macOS / Windows 上装好 sing-box 代理环境, 自带本机浏览器仪表盘: 按应用、按网站分流, DNS 测速与解析策略, 订阅和分享链接一键导入, SSH 一键部署自己的服务器。数据只保存在你的电脑上。">
+<meta name="twitter:image" content="https://enana.cc/og.jpg">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/site.css">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"enana","url":"https://enana.cc/","inLanguage":"zh-CN"}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"enana","url":"https://enana.cc/","applicationCategory":"UtilitiesApplication","operatingSystem":"macOS, Windows 10/11 (preview)","description":"enana 一条命令在 macOS / Windows 上装好 sing-box 代理环境, 自带本机浏览器仪表盘: 按应用、按网站分流, DNS 测速与解析策略, 订阅和分享链接一键导入, SSH 一键部署自己的服务器。数据只保存在你的电脑上。","installUrl":"https://install.enana.cc","downloadUrl":"https://install.enana.cc","inLanguage":["zh-CN","en"],"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"featureList":["一条命令安装, 自动检查环境","本机浏览器仪表盘","按应用、按网站分流","订阅、分享链接、Clash 配置一键导入","SSH 一键部署自己的服务器","DNS、测速和流量统计","隐私与安全"]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","inLanguage":"zh-CN","mainEntity":[{"@type":"Question","name":"enana 是什么?","acceptedAnswer":{"@type":"Answer","text":"enana 是基于 sing-box 的代理环境一键安装器和本机浏览器仪表盘: 终端只负责安装环境, 服务器、订阅、应用和网站分流、DNS、测速等设置都在仪表盘里完成。"}},{"@type":"Question","name":"支持哪些系统?","acceptedAnswer":{"@type":"Answer","text":"支持 macOS (Apple 芯片和 Intel); Windows 10 2004+ / Windows 11 (x64、ARM64) 提供预览版。两种系统共用仪表盘, 保留 System Proxy 和可选 Enhanced/TUN; Windows TUN 与原生应用登录仍需实机验收。"}},{"@type":"Question","name":"怎么安装和升级?","acceptedAnswer":{"@type":"Answer","text":"在终端运行上面的一行安装命令即可; 升级时再运行一遍, 或在终端输入 enana self-update。没有 curl 时用 wget 的那条命令。"}},{"@type":"Question","name":"我的服务器和订阅会上传到云端吗?","acceptedAnswer":{"@type":"Answer","text":"不会。它们只保存在你的电脑上。如果你打开云端同步, 数据会先在本机端到端加密再上传, enana.cc 只保存密文, 看不到服务器地址和密码。"}},{"@type":"Question","name":"和直接使用 sing-box 或 Clash 有什么区别?","acceptedAnswer":{"@type":"Answer","text":"enana 帮你装好并管理 sing-box, 不需要手写配置: 导入订阅、按应用和网站分流、DNS 和测速都在图形界面里完成, 改动先校验再应用, 失败自动回滚。"}},{"@type":"Question","name":"怎么卸载?","acceptedAnswer":{"@type":"Answer","text":"在终端输入 enana uninstall (加 --keep-data 可以保留你的数据)。"}}]}</script>
+</head>
+<body>
+<a class="skip" href="#main" data-i18n="skip">跳到主要内容</a>
+<header class="bar">
+  <div class="wrap bar-in">
+    <a class="brand" href="/" aria-label="enana"><img src="/favicon.svg" width="26" height="26" alt=""><b>enana</b></a>
+    <div class="seg" role="group" aria-label="语言" data-i18n-aria="lang.label">
+      <button type="button" data-lang="zh" lang="zh-CN" aria-pressed="false">中文</button>
+      <button type="button" data-lang="en" lang="en" aria-pressed="false">English</button>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="wrap" tabindex="-1">
+  <section class="hero">
+    <p class="eyebrow" data-i18n="eyebrow">macOS / Windows 预览版 · sing-box · 本机浏览器仪表盘</p>
+    <h1 data-i18n="h1">一条命令安装 sing-box 代理环境</h1>
+    <p class="lead" data-i18n="lead">enana 在 macOS / Windows 上一条命令装好 sing-box 代理环境 (含规则集、开机自启、系统代理和 enana 命令)。之后所有设置都在浏览器里的本机仪表盘完成: 导入订阅和分享链接、按应用和网站分流、DNS 测速、SSH 一键部署自己的服务器。你的服务器、订阅、规则和流量只保存在自己的电脑上。</p>
+  </section>
+
+  <section class="card" id="install" aria-labelledby="h-install">
+    <h2 id="h-install" data-i18n="inst.h">安装 enana</h2>
+
+    <div class="seg" id="os-switch" role="group" aria-label="系统" data-i18n-aria="os.label" hidden>
+      <button type="button" data-os="unix" aria-pressed="true">macOS</button>
+      <button type="button" data-os="win" aria-pressed="false">Windows</button>
+    </div>
+
+    <div class="cmd-block" data-cmd="unix">
+      <p class="cmd-label" data-i18n="os.unix">macOS (终端)</p>
+      <div class="cmd">
+        <code id="cmd-unix">curl -fsSL https://install.enana.cc | bash</code>
+        <button class="btn" type="button" data-copy="cmd-unix" data-i18n="copy">复制</button>
+      </div>
+      <p class="cmd-label cmd-alt" data-i18n="alt.wget">没有 curl? 用 wget:</p>
+      <div class="cmd">
+        <code id="cmd-unix2">wget -qO- https://install.enana.cc | bash</code>
+        <button class="btn" type="button" data-copy="cmd-unix2" data-i18n="copy">复制</button>
+      </div>
+    </div>
+    <div class="cmd-block" data-cmd="win">
+      <p class="cmd-label" data-i18n="os.win">Windows (64 位 PowerShell) · 预览版</p>
+      <div class="cmd">
+        <code id="cmd-win">irm https://install.enana.cc/get.ps1 | iex</code>
+        <button class="btn" type="button" data-copy="cmd-win" data-i18n="copy">复制</button>
+      </div>
+      <p class="cmd-label cmd-alt" data-i18n="alt.cmd">在命令提示符 (cmd) 里用:</p>
+      <div class="cmd">
+        <code id="cmd-win2">powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://install.enana.cc/get.ps1 | iex"</code>
+        <button class="btn" type="button" data-copy="cmd-win2" data-i18n="copy">复制</button>
+      </div>
+    </div>
+
+    <p class="hint" data-i18n="inst.hint">在任意终端执行即可安装。</p>
+    <p class="status" id="copy-status" role="status" aria-live="polite"></p>
+
+    <p class="muted"><span data-i18n="latest.a">每次安装的都是 enana 的最新版本: 安装脚本会先读取</span> <code class="inline" id="release-manifest">https://install.enana.cc/dl/manifest.json</code><span data-i18n="latest.b"> 获知最新版本号和校验值。</span></p>
+    <p class="muted"><span data-i18n="dash.a">安装完成后会自动打开本机后台</span> <code class="inline">http://127.0.0.1:9091/enana/admin/</code><span data-i18n="dash.b"> (端口被占用时会自动换一个, 安装结束时会打印实际地址); 在后台里注册或登录 enana 账号即可开始使用。</span></p>
+  </section>
+
+  <section class="sec" id="features" aria-labelledby="h-feat">
+    <h2 id="h-feat" data-i18n="feat.h">功能特点</h2>
+    <ul class="feat">
+      <li>
+        <h3 data-i18n="f1.t">一条命令安装, 自动检查环境</h3>
+        <p data-i18n="f1.d">安装脚本先识别系统版本、芯片、管理员权限和网络, 缺什么补什么; 端口被占用会自动换一个; 下载的安装包经过 SHA-256 校验; 重复运行是安全的, 已就绪的部分会自动跳过。</p>
+      </li>
+      <li>
+        <h3 data-i18n="f2.t">本机浏览器仪表盘</h3>
+        <p data-i18n="f2.d">安装完成后自动打开本机后台, 中英文界面, 手机和窄屏也能正常使用; 所有设置都先确认再生效, 配置出错会自动回滚。</p>
+      </li>
+      <li>
+        <h3 data-i18n="f3.t">按应用、按网站分流</h3>
+        <p data-i18n="f3.d">给每个应用和网站选择: 跟随规则、固定出口、自动线路或直连。System Proxy 处理遵守代理的连接, Enhanced/TUN 可接管其它公网 TCP/UDP (需管理员授权), 本机回调与局域网保持直连。AI 和账号类服务可以固定出口, 避免因为 IP 变化触发风控; Google、YouTube 等走自动线路, 国内网站直连。</p>
+      </li>
+      <li>
+        <h3 data-i18n="f4.t">订阅、分享链接、Clash 配置一键导入</h3>
+        <p data-i18n="f4.d">粘贴订阅链接、trojan / hysteria2 / tuic / vless / vmess / ss 分享链接, 或 Clash、sing-box 配置, 自动识别格式并先预览再导入。</p>
+      </li>
+      <li>
+        <h3 data-i18n="f5.t">SSH 一键部署自己的服务器</h3>
+        <p data-i18n="f5.d">输入 IP 和密码或密钥, 在 Debian / Ubuntu 服务器上自动安装并生成 VLESS + Reality 节点, 识别全部出口 IP 并在本机验证; SSH 密码和私钥只在任务期间使用, 不会保存。</p>
+      </li>
+      <li>
+        <h3 data-i18n="f6.t">DNS、测速和流量统计</h3>
+        <p data-i18n="f6.d">DoH / DoT 预设和自定义解析、DNS 测速与解析策略、100 个内置测速目标 (可自定义)、按线路和节点统计流量, 数据只保存在本机。</p>
+      </li>
+      <li>
+        <h3 data-i18n="f7.t">隐私与安全</h3>
+        <p data-i18n="f7.d">服务器、订阅和流量只在你的电脑上; 可选的云端同步先在本机端到端加密, enana.cc 只看到密文; 删除服务器、查看凭据等敏感操作需要再次输入密码。</p>
+      </li>
+    </ul>
+  </section>
+
+  <section class="sec" id="start" aria-labelledby="h-how">
+    <h2 id="h-how" data-i18n="how.h">三步开始使用</h2>
+    <ol class="how">
+      <li data-i18n="how1">在终端运行上面的安装命令, 等它装好环境并打开后台。</li>
+      <li data-i18n="how2">在后台注册或登录 enana 账号 (只需要邮箱和密码)。</li>
+      <li data-i18n="how3">添加或导入服务器, 选择自动模式或全局代理, 打开代理总开关。</li>
+    </ol>
+  </section>
+
+  <section class="sec faq" id="faq" aria-labelledby="h-faq">
+    <h2 id="h-faq" data-i18n="faq.h">常见问题</h2>
+      <details>
+        <summary data-i18n="q1">enana 是什么?</summary>
+        <p data-i18n="a1">enana 是基于 sing-box 的代理环境一键安装器和本机浏览器仪表盘: 终端只负责安装环境, 服务器、订阅、应用和网站分流、DNS、测速等设置都在仪表盘里完成。</p>
+      </details>
+      <details>
+        <summary data-i18n="q2">支持哪些系统?</summary>
+        <p data-i18n="a2">支持 macOS (Apple 芯片和 Intel); Windows 10 2004+ / Windows 11 (x64、ARM64) 提供预览版。两种系统共用仪表盘, 保留 System Proxy 和可选 Enhanced/TUN; Windows TUN 与原生应用登录仍需实机验收。</p>
+      </details>
+      <details>
+        <summary data-i18n="q3">怎么安装和升级?</summary>
+        <p data-i18n="a3">在终端运行上面的一行安装命令即可; 升级时再运行一遍, 或在终端输入 enana self-update。没有 curl 时用 wget 的那条命令。</p>
+      </details>
+      <details>
+        <summary data-i18n="q4">我的服务器和订阅会上传到云端吗?</summary>
+        <p data-i18n="a4">不会。它们只保存在你的电脑上。如果你打开云端同步, 数据会先在本机端到端加密再上传, enana.cc 只保存密文, 看不到服务器地址和密码。</p>
+      </details>
+      <details>
+        <summary data-i18n="q5">和直接使用 sing-box 或 Clash 有什么区别?</summary>
+        <p data-i18n="a5">enana 帮你装好并管理 sing-box, 不需要手写配置: 导入订阅、按应用和网站分流、DNS 和测速都在图形界面里完成, 改动先校验再应用, 失败自动回滚。</p>
+      </details>
+      <details>
+        <summary data-i18n="q6">怎么卸载?</summary>
+        <p data-i18n="a6">在终端输入 enana uninstall (加 --keep-data 可以保留你的数据)。</p>
+      </details>
+  </section>
+</main>
+
+<footer class="wrap foot">
+  <a href="https://github.com/3mmmbulus/enana" target="_blank" rel="noopener noreferrer">GitHub</a>
+</footer>
+<script src="/site.js"></script>
+</body>
+</html>

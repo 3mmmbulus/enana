@@ -8,7 +8,7 @@
 #       ④ CORS 只放行仪表盘自己的来源  ⑤ 所有参数先白名单校验再使用  ⑥ 请求体 ≤ 4 MB  ⑦ 密码只从请求体读取, 不进 URL/日志
 # launchd 的 inetd 模式: fd 0 是已连接的套接字 (可读可写)。真机实测写到原来的 stdout 客户端收不到响应,
 # 所以先把 stdout 显式指向 fd 0 (在 launchd 与测试里的 inetd 模拟器下都成立)。
-exec 1>&0
+[ "${ENANA_API_PIPE:-0}" = 1 ] || exec 1>&0
 export LC_ALL=C
 _self="${BASH_SOURCE[0]}"; _dir=$(cd "$(dirname "$_self")" && pwd -P)
 . "$_dir/common.sh"; init_paths "$_self"
@@ -95,7 +95,8 @@ case $path in /favicon.ico) path="$ADMIN_PATH/favicon.png" ;; esac      # 浏览
 case $path in /|"$ADMIN_PATH"|"$ADMIN_PATH"/*) serve_static ;; esac
 
 # ---------- 以下是 JSON 接口: 到这里才加载其余模块 ----------
-for _f in i18n jobs servers apps autosites sites fetch os-darwin enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps; do . "$LIB/$_f.sh"; done
+[ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 i18n_init
 OP_WHO=dashboard; export OP_WHO
 BODY=$(mktemp "${TMPDIR:-/tmp}/enana-body.XXXXXX"); trap 'rm -f "$BODY" "$BODY".*' EXIT
@@ -389,8 +390,8 @@ ep_state() {
   sc=$(shortcut_path 2>/dev/null || true)
   if [ -n "$sc" ]; then scmd=enana; else scmd="$H/enana"; fi              # 在终端里能直接运行、打开控制台的完整命令: 装了快捷命令就是 enana, 没装就是脚本的完整路径
   for t in $(rules_missing); do missing="$missing${missing:+,}\"$t\""; rs=0; done
-  [ -s "$H/.osver" ] || sw_vers -productVersion > "$H/.osver" 2>/dev/null; IFS= read -r osver < "$H/.osver"; arch=$(uname -m)
-  json "{\"ok\":true,\"version\":\"$VERSION\",\"prefs_version\":$(prefs_version),\"core\":\"${core:-}\",\"lang\":\"${LANG_UI:-zh}\",\"platform\":{\"os\":\"darwin\",\"osver\":\"${osver:-}\",\"arch\":\"$arch\"},\"ports\":{\"proxy\":$PORT,\"ui\":$UI_PORT,\"api\":$API_PORT,\"speed\":$SPEED_PORT},\"env\":{\"core\":$([ -n "$core" ] && echo true || echo false),\"rules\":$(bool $rs),\"service\":$(bool $svc),\"sysproxy\":$(bool $sp),\"shortcut\":$([ -n "$sc" ] && printf '"%s"' "$sc" || printf null),\"shortcut_cmd\":\"$(jesc "$scmd")\",\"rules_updated\":$(rules_updated_at),\"rules_missing\":[$missing]},\"update\":$(update_available),\"proxy\":{\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\",\"network_mode\":\"${NETWORK_MODE:-system}\",\"tun_ready\":$(enhanced_ready && enhanced_configured && echo true || echo false)},\"account\":{\"email\":\"$(jesc "$(auth_current_email)")\"},\"servers\":$(servers_json),\"subs\":$(subs_json),\"overrides\":$(overrides_json),\"first_run\":$([ "$(srv_count)" = 0 ] && echo true || echo false)}"
+  [ -s "$H/.osver" ] || os_version > "$H/.osver" 2>/dev/null; IFS= read -r osver < "$H/.osver"; arch=$(os_arch)
+  json "{\"ok\":true,\"version\":\"$VERSION\",\"prefs_version\":$(prefs_version),\"core\":\"${core:-}\",\"lang\":\"${LANG_UI:-zh}\",\"platform\":{\"os\":\"${ENANA_PLATFORM:-darwin}\",\"osver\":\"${osver:-}\",\"arch\":\"$arch\"},\"ports\":{\"proxy\":$PORT,\"ui\":$UI_PORT,\"api\":$API_PORT,\"speed\":$SPEED_PORT},\"env\":{\"core\":$([ -n "$core" ] && echo true || echo false),\"rules\":$(bool $rs),\"service\":$(bool $svc),\"sysproxy\":$(bool $sp),\"shortcut\":$([ -n "$sc" ] && printf '"%s"' "$sc" || printf null),\"shortcut_cmd\":\"$(jesc "$scmd")\",\"rules_updated\":$(rules_updated_at),\"rules_missing\":[$missing]},\"update\":$(update_available),\"proxy\":{\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\",\"network_mode\":\"${NETWORK_MODE:-system}\",\"tun_ready\":$(enhanced_ready && enhanced_configured && echo true || echo false)},\"account\":{\"email\":\"$(jesc "$(auth_current_email)")\"},\"servers\":$(servers_json),\"subs\":$(subs_json),\"overrides\":$(overrides_json),\"first_run\":$([ "$(srv_count)" = 0 ] && echo true || echo false)}"
 }
 apps_resp() {
   [ -f "$H/ui/appicons/index.tsv" ] || ( apps_icons >/dev/null 2>&1 & )          # 第一次: 后台提取应用图标

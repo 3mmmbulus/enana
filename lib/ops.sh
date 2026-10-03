@@ -221,7 +221,7 @@ op_subs_refresh() {
     out=$(mktemp); hdr=$(mktemp); jsonl=''
     for ua in auto clash v2ray; do
       sub_fetch "$url" "$ua" "$out" "$hdr" || continue
-      jsonl=$(osascript -l JavaScript "$LIB/importer-cli.js" "$SRC/ui/importer.js" "$out" auto "$name" 2>/dev/null || true)
+      jsonl=$(os_import_subscription "$out" auto "$name" 2>/dev/null || true)
       [ -n "$jsonl" ] && break
     done
     if [ -n "$jsonl" ]; then
@@ -291,6 +291,12 @@ op_self_update() {
   update_check force >/dev/null 2>&1 || true
   if ! update_has_new; then _txn_end ok "已经是最新版本 ($VERSION)"; return 0; fi
   [ -f "$H/get.sh" ] || { _txn_end fail "缺少升级脚本 get.sh, 请重新运行安装命令" 1; return 1; }
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then
+    job_step 1 30 "下载并校验新版本"
+    if win_bridge self-update >> "$H/api.log" 2>&1; then
+      IFS= read -r new < "$H/VERSION"; _txn_end ok "已更新到 v$new"; return 0
+    else _txn_end fail "Windows 更新失败, 已保留当前版本 (详情见 api.log)" 2; return 1; fi
+  fi
   # get.sh 在 ENANA_PROGRESS=1 时打印「##job 步骤序号 百分比 文字」, 这里转成任务进度
   ENANA_PROGRESS=1 ENANA_LANG="${I18N_LANG:-}" bash "$H/get.sh" --upgrade --yes 2>>"$H/api.log" | while IFS= read -r line; do
     case $line in '##job '*) set -- ${line#\#\#job }; job_step "$1" "$2" "${line#\#\#job $1 $2 }" ;; esac

@@ -15,7 +15,7 @@
     "set.network.system": "System Proxy · 轻量模式",
     "set.network.tun": "Enhanced / TUN · 增强模式",
     "set.network.confirm": "切换流量接管方式会重启代理服务。",
-    "set.network.note": "System Proxy 只处理主动使用系统代理的连接。Enhanced/TUN 可捕获绕过系统代理的 TCP/UDP，需要 Mac 管理员授权; 修改应用/网站规则和节点时也需授权应用新配置。本机与局域网直连，现有系统代理设置保留，PIN 需有可用固定出口。",
+    "set.network.note": "System Proxy 只处理主动使用系统代理的连接。Enhanced/TUN 可捕获绕过系统代理的 TCP/UDP，需要 系统管理员授权; 修改应用/网站规则和节点时也需授权应用新配置。本机与局域网直连，现有系统代理设置保留，PIN 需有可用固定出口。",
     "set.network.ready": "TUN 服务与 IPv4/IPv6 路由已就绪。",
     "set.network.notReady": "TUN 尚未就绪：请运行 enana doctor，检查授权、路由和其它 VPN。",
     "set.network.systemScope": "当前为轻量模式：应用策略只对进入 enana 的连接生效。",

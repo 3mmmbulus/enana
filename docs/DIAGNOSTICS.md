@@ -1,4 +1,4 @@
-# 诊断导出文件 (v2.2.1)
+# 诊断导出文件 (v2.3.0)
 
 「日志 → 导出」(仪表盘) 和 `enana diag` (终端) 生成的是**同一份**自描述文本文件, 目的是: 用户遇到「网站打不开 / 走错出口 / 应用没识别 / 代理时好时坏」时, 把这一个文件发给开发者 (或任何会读它的人 / 工具), 不需要再来回追问「你当时怎么设置的、哪个应用、哪个节点」。
 
@@ -160,3 +160,7 @@ python3 tools/diag-summary.py <文件> --app "Google Chrome" --host google.com
 - `tun-unobserved`: TUN 下没匹配到活跃连接, **不是已确认泄漏**; 检查服务、实际路由和入口日志。共享服务、进程归属与采样时机也可能影响匹配。
 
 localhost 回调、局域网 socket 和核心自身出口不计入绕过系统代理。只读取当前用户的连接, 不要求 root; 目标 IP 脱敏。没有访问记录不能证明 App 没发请求或已被代理。旧版文件缺少 socket 快照时, 无法追溯证明某次 OAuth token 请求的接管情况。
+
+## Windows 预览版
+
+诊断与 Mac 使用同一导出入口与格式, 增加 Windows 版本/架构、用户任务和 TUN 任务、双栈与 localhost 接口归属、WinINet 代理状态和 PIN 主/辅助 EXE 的 TCP 连接快照。`possible_system_proxy_bypass` 仅为候选; `tun_os_socket_observed` 表示 TUN 模式下观察到 OS socket, 不单独证明出口。UDP 远端不可见时明确标记 `unavailable-on-Windows`。详见 [Windows 验收](WINDOWS.md)。
