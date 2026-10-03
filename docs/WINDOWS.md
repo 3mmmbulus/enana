@@ -70,6 +70,8 @@ Windows 诊断包含模式、任务/接口归属、代理状态和 PIN 主程序
 
 ## 下载站发布
 
-`tools/build-release.sh OUTPUT_DIR` 从明确允许的程序文件构建包, 不包含本机账号、节点、缓存、SSH 密钥或服务器项目。Windows ZIP、清单和更新日志独立发布; macOS 稳定渠道继续保留 2.2.2, 避免 Windows 预览触发 Mac 自动升级。
+`tools/build-release.sh OUTPUT_DIR` 从明确允许的程序文件构建包, 不包含本机账号、节点、缓存、SSH 密钥或服务器项目。Windows ZIP、清单和更新日志独立发布; 共享终端与卸载修复同时发布到 macOS 稳定渠道 2.3.6, Windows 仍保持独立预览渠道。
 
 Windows 独立发布使用 `tools/deploy-windows-release.sh RELEASE_DIR WEBSITE_DIR 2.3.6`: 先验证包的大小、哈希、版本和入口, 只替换 Windows 下载文件及官网 `index.html` / `site.js`, 清单最后发布。脚本保存回滚备份, 对比稳定 macOS 文件、全部运行服务的 PID/启动时间及 nginx/systemd 配置, 发生变化则撤回本次发布。无需重载 nginx 或修改其它项目。
+
+共享修复发布到 macOS 时使用 `tools/deploy-macos-release.sh RELEASE_DIR 2.3.6`, 只更新稳定 Mac 的程序包、入口和清单; 独立核验 Windows 下载、旧包、所有服务 PID 和共享配置不变。客户端升级保留账号、节点和已有接管模式, 卸载才删除全部本机安装数据。

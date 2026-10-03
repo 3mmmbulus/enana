@@ -41,7 +41,11 @@ snapshot_services() {
   done
 }
 snapshot_config() { find /etc/nginx /etc/systemd/system -type f -exec sha256sum {} + | sort; }
-snapshot_macos() { (cd "$dl"; sha256sum manifest.json VERSION CHANGELOG.md get.sh enana-2.2.2.tar.gz); }
+snapshot_macos() {
+  local stable; stable=$(python3 -c 'import json,sys; print("enana-"+json.load(open(sys.argv[1]))["version"]+".tar.gz")' "$dl/manifest.json")
+  [[ $stable =~ ^enana-[0-9]+\.[0-9]+\.[0-9]+\.tar\.gz$ ]] || return 1
+  (cd "$dl"; sha256sum manifest.json VERSION CHANGELOG.md get.sh "$stable")
+}
 snapshot_services > "$backup/services.before"
 snapshot_config > "$backup/config.before"
 snapshot_macos > "$backup/macos.before"
