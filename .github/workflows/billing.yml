@@ -1,0 +1,35 @@
+name: Cloud billing foundation
+on:
+  push:
+    branches: [main]
+    paths: ['server/**', 'tests/billing-*.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
+  pull_request:
+    paths: ['server/**', 'tests/billing-*.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pocketbase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Fetch pinned PocketBase test runtime
+        run: |
+          mkdir -p "$RUNNER_TEMP/enana-pb-test"
+          cd "$RUNNER_TEMP/enana-pb-test"
+          curl -fsSL --retry 3 https://github.com/pocketbase/pocketbase/releases/download/v0.40.4/pocketbase_0.40.4_linux_amd64.zip -o pocketbase.zip
+          echo '9042ec818570e79c3628dadcd0a756c1496d9e1173918ec409d133c02f82e5fa  pocketbase.zip' | sha256sum -c -
+          unzip -q pocketbase.zip pocketbase
+          chmod +x pocketbase
+      - name: Test real database transactions and local SMTP activation
+        env:
+          PB_BIN: ${{ runner.temp }}/enana-pb-test/pocketbase
+        run: node --test tests/billing-domain.test.js tests/billing-pocketbase.test.js tests/email-verification-ui.test.js
+      - name: Check deployment syntax
+        run: |
+          bash -n server/deploy-billing.sh
+          python3 -m py_compile server/update-nginx.py
