@@ -157,7 +157,12 @@ apps_installed() { # 每行: 名称<TAB>路径  (自动识别的 + 用户手动�
 }
 
 app_is_browser() { # <.app 路径>  声明自己能打开 http / https 链接的应用 = 浏览器
-  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then win_bridge app-browser "$1"; return; fi
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then
+    # Native scanning already returned EXE paths; avoid starting PowerShell for
+    # each application just to compare a known browser executable filename.
+    local exe=${1##*/}; exe=${exe##*\\}; exe=$(printf '%s' "$exe" | tr '[:upper:]' '[:lower:]')
+    case $exe in chrome.exe|msedge.exe|firefox.exe|brave.exe|opera.exe|vivaldi.exe|arc.exe) return 0 ;; *) return 1 ;; esac
+  fi
   local plist="$1/Contents/Info.plist" name group
   name=$(basename "$1" .app)
   # Known native apps can register http/https for OAuth or deep links too.

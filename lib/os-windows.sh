@@ -4,7 +4,19 @@ win_bridge() {
   MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$H/windows/platform.ps1")" -Action "$action" -HomeDir "$(cygpath -w "$H")" -Value "$value" | tr -d '\r'
   return "${PIPESTATUS[0]}"
 }
-windows_node() { "$H/runtime/node/node.exe" "$H/windows/helper.js" "$@"; }
+windows_node() {
+  # Do not let MSYS rewrite semantic strings (notably the POSIX prefix in the
+  # config rewriter). Convert only arguments known to be filesystem paths.
+  local cmd=$1; shift
+  local -a args
+  case $cmd in
+    state|control|regex-map|rules) args=("$(cygpath -m "$1")" "${@:2}") ;;
+    paths) args=("$(cygpath -m "$1")" "$2" "$3") ;;
+    import) args=("$(cygpath -m "$1")" "$(cygpath -m "$2")" "${@:3}") ;;
+    *) args=("$@") ;;
+  esac
+  MSYS2_ARG_CONV_EXCL='*' "$H/runtime/node/node.exe" "$(cygpath -m "$H/windows/helper.js")" "$cmd" "${args[@]}"
+}
 windows_worker_alive() { local s; s=$(windows_node state "$H"); case $s in '1 '*) return 0 ;; *) return 1 ;; esac; }
 windows_control() { windows_node control "$H" "$1"; }
 os_detect() {
