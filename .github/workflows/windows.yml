@@ -1,0 +1,30 @@
+name: Windows client acceptance
+on:
+  push:
+    branches: [main, 'codex/windows-support']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install and exercise the real Windows client
+        run: ./tests/windows-native.ps1 -HomeDir '${{ runner.temp }}/enana-native-acceptance'
+      - name: Retain failure diagnostics without account or server credentials
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-acceptance-logs
+          path: |
+            ${{ runner.temp }}/enana-native-acceptance/api.log
+            ${{ runner.temp }}/enana-native-acceptance/check.log
+            ${{ runner.temp }}/enana-native-acceptance/sing-box.log
+          if-no-files-found: ignore
+          retention-days: 7

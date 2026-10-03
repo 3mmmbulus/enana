@@ -58,6 +58,10 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
       tun_in="${tun_in%\}},\"stack\":\"gvisor\"}"
     fi
     tun_route=',"auto_detect_interface":true'
+    if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then
+      enhanced_paths
+      tun_in="${tun_in%\}},\"interface_name\":\"enana-${TUN_UID##*-}\",\"strict_route\":true}"
+    fi
   fi
   T=$(mktemp -d)
   : > "$T/ob"; : > "$T/pins"; : > "$T/autos"; : > "$T/have"; : > "$T/cust"
@@ -189,6 +193,9 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
     printf '"experimental":{"cache_file":{"enabled":true,"path":"%s/cache.db"},"clash_api":{"external_controller":"127.0.0.1:%s","default_mode":"%s"%s,"access_control_allow_origin":["http://127.0.0.1:%s","http://localhost:%s"]}}\n}\n' \
       "$H" "$UI_PORT" "$(proxy_clash_mode)" "${secret:+,\"secret\":\"$secret\"}" "$API_PORT" "$API_PORT"
   } > "$H/config.json.new"
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then
+    windows_node paths "$H/config.json.new" "$H" "$(cygpath -m "$H")" || { rm -rf "$T"; return 1; }
+  fi
   chmod 600 "$H/config.json.new"
   gen_catalog_json "$T"
   rm -rf "$T"

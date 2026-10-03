@@ -7,7 +7,7 @@
 
 ## 安装
 
-在任意终端执行(会安装**最新版本**):
+macOS 在终端执行(会安装**最新版本**):
 
 ```bash
 curl -fsSL https://install.enana.cc | bash
@@ -15,7 +15,15 @@ curl -fsSL https://install.enana.cc | bash
 
 没有 curl? 用 wget:`wget -qO- https://install.enana.cc | bash`。安装脚本会自己检测下载工具(curl → wget)和校验工具,缺什么说清楚怎么办。
 
-> **macOS** 现已支持。**Windows** 正在适配中(PowerShell:`irm https://install.enana.cc | iex`,目前只会提示「即将支持」)。
+Windows 10 2004+ / Windows 11 (x64、ARM64) 在 **64 位 PowerShell 5.1+** 执行:
+
+```powershell
+irm https://install.enana.cc/get.ps1 | iex
+```
+
+Windows 当前为预览版, 使用同一仪表盘和分流规则。安装在 `%LocalAppData%\enana`, 自动下载并校验私有运行时, 不要求预装 Git / Node 或使用 WSL。普通窗口即可安装; 只有 Enhanced/TUN 需要 UAC 管理员授权。原生安装、后台和 System Proxy 由 Windows CI 验证; 交互 UAC、TUN、原生 App 登录仍需 Windows 实机验收, 详见 [Windows 说明](docs/WINDOWS.md)。
+
+下面的交互安装菜单适用于 macOS。
 
 安装器会先**识别你的系统和网络**(macOS 版本、芯片、管理员权限、能否直连 GitHub、是否已有其它代理软件),给出推荐,你用键盘改选项:
 
@@ -44,13 +52,13 @@ curl -fsSL https://install.enana.cc | bash
 - 删除服务器、查看凭据、导出备份、清日志、下线设备这类敏感操作,即使已登录也要**再输入一次账号密码**。
 
 
-## macOS 流量接管模式
+## 流量接管模式 (macOS / Windows)
 
-默认及升级继续使用 **System Proxy**: mixed 入站监听 `127.0.0.1`, 轻量, 只处理遵守 macOS HTTP/HTTPS/SOCKS 代理的连接。应用的 `process_path_regex` 只决定已进入核心的连接怎么分流, 不能让忽略系统代理的 App 自动进入核心。
+默认及升级继续使用 **System Proxy**: mixed 入站监听 `127.0.0.1`, 轻量, 只处理遵守系统代理的连接 (macOS HTTP/HTTPS/SOCKS, Windows 当前用户 WinINet HTTP/HTTPS)。应用的 `process_path_regex` 只决定已进入核心的连接怎么分流, 不能让忽略系统代理的 App 自动进入核心。
 
 「设置 → 流量接管」可选择 **Enhanced/TUN** (sing-box ≥ 1.12), 或运行 `enana network-mode tun`; `enana network-mode system` 切回轻量模式。增强模式由 sing-box TUN 接管公网 TCP/UDP, 包括原本直接拨号的 App, 使用同一套应用/网站 PIN、Global、direct 规则。模式选择不改写当前系统代理配置, 不会在升级时自动开启 TUN。
 
-TUN 核心需要 macOS 管理员授权。后台使用系统授权弹窗, 终端使用 sudo; 可取消, 失败则恢复原配置与服务。核心、规则和证书复制到 root 拥有的 `/Library/Application Support/enana-<UID>`, 不安装 sudoers 规则。更改规则、节点或证书时需要再次授权更新该快照; 切回轻量模式/停止增强服务也需要授权。启动会验证 IPv4/IPv6 路由属于该核心的 TUN, 而不只检查 mixed 端口。
+TUN 核心需要管理员授权。macOS 后台使用系统授权弹窗, 终端使用 sudo; Windows 使用 UAC 和管理员保护的 SYSTEM 计划任务; 可取消, 失败则恢复原配置与服务。核心、规则和证书复制到 root 拥有的 `/Library/Application Support/enana-<UID>`, Windows 使用 `%ProgramData%\enana\<SID>` 的独立保护快照, 普通仪表盘不以管理员身份运行。不安装 sudoers 规则。更改规则、节点或证书时需要再次授权更新该快照; 切回轻量模式/停止增强服务也需要授权。启动会验证 IPv4/IPv6 路由属于该核心的 TUN, 而不只检查 mixed 端口。
 
 本机 `localhost`、`127.0.0.0/8`、`::1`、局域网/私网/链路本地地址在系统路由和核心规则中排除; OAuth localhost 回调保留直连。`route.auto_detect_interface` 让核心出口绑定默认网络接口, 防止出口重新进入 TUN。与其他 VPN 共用时需检查诊断中的路由归属, 无法建立正确路由会回滚。
 
@@ -146,13 +154,21 @@ bash tests/get-test.sh [发布目录]    # 一行安装命令 (get.sh) 的整条
 
 ## English summary
 
-**enana** installs a [sing-box](https://github.com/SagerNet/sing-box) proxy environment with one command and gives you a local browser dashboard for everything else (per-app / per-site routing, DNS, speed tests, traffic statistics, sync, one-click SSH provisioning of your own VPS). Install (macOS now, Windows in progress):
+**enana** installs a [sing-box](https://github.com/SagerNet/sing-box) proxy environment with one command and gives you a local browser dashboard for everything else (per-app / per-site routing, DNS, speed tests, traffic statistics, sync, one-click SSH provisioning of your own VPS). Install on macOS:
 
 ```bash
 curl -fsSL https://install.enana.cc | bash
 ```
 
-- System Proxy remains the default after upgrades and captures only connections honoring OS proxy settings. Opt into Enhanced/TUN in Settings (or `enana network-mode tun`) to capture public TCP/UDP that bypasses System Proxy. It needs macOS administrator authorization, keeps local callbacks/LAN direct, and reuses app/website PIN rules. Shared system processes still require attribution checks. Switch back with `enana network-mode system`; mode selection preserves existing System Proxy settings.
+Windows preview (64-bit PowerShell 5.1+, Windows 10 2004+ / 11, x64 or ARM64):
+
+```powershell
+irm https://install.enana.cc/get.ps1 | iex
+```
+
+The dashboard and routing rules are shared. See [Windows acceptance and architecture](docs/WINDOWS.md); interactive UAC/TUN and native-app OAuth remain subject to on-device acceptance.
+
+- System Proxy remains the default after upgrades and captures only connections honoring OS proxy settings. Opt into Enhanced/TUN in Settings (or `enana network-mode tun`) to capture public TCP/UDP that bypasses System Proxy. It needs administrator authorization (macOS authorization / Windows UAC), keeps local callbacks/LAN direct, and reuses app/website PIN rules. Shared system processes still require attribution checks. Switch back with `enana network-mode system`; mode selection preserves existing System Proxy settings.
 - All browser policies now act as a fallback after website policies; explicit native app PIN remains higher priority.
 - Sign in with an enana account (at most 2 devices per platform). The proxy is **off by default**; turn it on in the dashboard, choose Auto (rule-based) or Global mode. Signing out turns it off.
 - Server addresses, passwords, subscription links and SSH credentials **never leave your computer**; optional cloud sync is end-to-end encrypted (the key is derived from your password locally), and SSH passwords / private keys are never stored or synced.

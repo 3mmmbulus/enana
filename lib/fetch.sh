@@ -128,6 +128,7 @@ core_from_local() { # SINGBOX_TGZ 指定, 或在源码目录/下载目录里找
 }
 
 core_install() { # core_install chain|brew|local  -> 安装/替换 $H/sing-box
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then win_bridge core-upgrade "${SINGBOX_VERSION:-$CORE_PIN}"; return; fi
   local src=${1:-chain}
   rm -f "$H/sing-box.new"
   case $src in

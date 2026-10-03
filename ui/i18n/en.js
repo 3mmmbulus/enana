@@ -7,7 +7,7 @@
   window.I18N.register('en', {
     "apps.capture.title": "Make app fixed exits work",
     "apps.capture.warning": "Lightweight mode misses some app connections, so fixed exits may cover only part of their traffic. Enhanced capture also handles their direct public connections.",
-    "apps.capture.choose": "Set {name} to a fixed exit: enhanced capture is recommended so login and other app requests do not bypass the proxy. macOS will request administrator authorization; local callbacks and LAN remain direct.",
+    "apps.capture.choose": "Set {name} to a fixed exit: enhanced capture is recommended so login and other app requests do not bypass the proxy. Your OS will request administrator authorization; local callbacks and LAN remain direct.",
     "apps.capture.enable": "Enable enhanced capture (recommended)",
     "apps.capture.limited": "Keep lightweight mode (limited coverage)",
     "apps.capture.check": "Check capture status",
@@ -15,7 +15,7 @@
     "set.network.system": "System Proxy · Lightweight",
     "set.network.tun": "Enhanced / TUN",
     "set.network.confirm": "Switching traffic capture restarts the proxy service.",
-    "set.network.note": "System Proxy covers connections honoring OS proxy settings. Enhanced/TUN captures bypassing TCP/UDP and needs Mac administrator authorization, including when applying changed app/site rules or nodes. Localhost/LAN stay direct; existing OS proxy settings are preserved. PIN requires an available fixed exit.",
+    "set.network.note": "System Proxy covers connections honoring OS proxy settings. Enhanced/TUN captures bypassing TCP/UDP and needs administrator authorization, including when applying changed app/site rules or nodes. Localhost/LAN stay direct; existing OS proxy settings are preserved. PIN requires an available fixed exit.",
     "set.network.ready": "The TUN service and IPv4/IPv6 routes are ready.",
     "set.network.notReady": "TUN is not ready. Run enana doctor to check authorization, routes and other VPNs.",
     "set.network.systemScope": "Lightweight mode: app policies apply only to connections entering enana.",

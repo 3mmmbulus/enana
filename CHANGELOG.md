@@ -1,5 +1,23 @@
 # Changelog / 更新日志
 
+## 2.3.0 (2026-10-03)
+
+### 中文
+- 增加 Windows 10 2004+ / Windows 11 x64、ARM64 预览版: PowerShell 安装、SHA-256 下载校验、私有 PortableGit/Node 运行时、计划任务、快捷命令、升级失败恢复和本机后台。
+- 复用现有仪表盘、API、事务和分流规则, 避免两套平台实现行为分叉。默认保留 System Proxy, 可选择 UAC Enhanced/TUN; localhost/局域网排除与出口网卡绑定保持一致。
+- Windows 应用通过原生 EXE 路径匹配, 覆盖应用目录中的辅助进程与版本更新; 普通共享目录仅匹配该 EXE。PIN、网站优先于浏览器兜底的规则体系复用现有实现。
+- 增加 WinINet 原配置备份/恢复与外部修改保留, 管理员保护的 TUN 快照和固定官方核心验证, 防止普通用户可写程序作为 SYSTEM 常驻。
+- 增加 Windows 原生 CI 和规则、HTTP 请求边界、DNS、ZIP 安全测试。Windows 交互 UAC/TUN、原生应用 OAuth 与 VPN 共存仍需实机验收; 预览标记不声明已完成这些测试。
+- 官网 Windows 命令改为可执行 PowerShell 安装入口, 独立 Windows 发布清单与 ZIP; 官网源代码纳入仓库, 便于审计安装说明与产品声明。
+
+### English
+- Add the Windows 10 2004+ / Windows 11 x64 and ARM64 preview with PowerShell installation, SHA-256 pinned private PortableGit/Node runtimes, scheduled tasks, native commands, upgrade recovery and the local dashboard.
+- Share the existing dashboard, Bash API, transactions and routing generator to prevent platform drift. Keep System Proxy as the default and offer UAC-authorized Enhanced/TUN with local/LAN exclusions and physical-interface egress.
+- Match Windows applications by executable paths, including app-directory helpers and version updates; shared directories match only the selected executable. Reuse PIN and website-before-browser routing precedence.
+- Restore owned WinINet settings while retaining foreign edits, and run TUN from an administrator-protected snapshot with a reverified official core rather than mutable user code.
+- Add native Windows CI and routing, request framing, DNS and safe ZIP regressions. Interactive UAC/TUN, native-app OAuth and VPN coexistence still require Windows device acceptance; this release remains a preview.
+- Replace the website's placeholder with the PowerShell bootstrap and independent Windows ZIP/manifest; track website source with the client for reviewable installation claims.
+
 ## 2.2.2 (2026-10-03)
 
 ### 中文

@@ -33,7 +33,7 @@ detect_others() { # 其它正在运行的代理软件 -> OTHER_PROXY (逗号分�
 detect_state() { # 当前安装状态 -> ST_core ST_service ST_helper ST_sysproxy ST_shortcut ST_rules ST_servers ST_v1
   ST_core=0; core_ok && ST_core=1
   ST_service=0; os_service_running && ST_service=1
-  ST_helper=0; launchctl print "$GUI/$LABEL_API" >/dev/null 2>&1 && ST_helper=1
+  ST_helper=0; os_api_loaded && ST_helper=1
   ST_sysproxy=0; os_sysproxy_ok && ST_sysproxy=1
   ST_shortcut=0; shortcut_path >/dev/null 2>&1 && ST_shortcut=1
   ST_rules=0; [ -d "$H/rules" ] && [ -z "$(rules_missing)" ] && ST_rules=1

@@ -22,24 +22,13 @@
 - ✅ 套餐 / 权益接口 (为以后的会员收费预留), 中英文界面, 更新检测与提示
 - ✅ 事务式改配置: 校验失败 / 启动失败自动回滚
 
-## 🔜 Windows
+## Windows 预览版 (2.3.0)
 
-安装器把系统相关的部分隔离在 `lib/os-<系统>.sh` (服务注册、系统代理、快捷命令、系统识别)。新增平台只需实现同名函数:
+已实现 PowerShell 安装器、私有运行时、用户计划任务、本机 TCP API 桥、WinINet 系统代理和可选 UAC Enhanced/TUN。仪表盘、API、事务回滚和分流规则复用 macOS 实现。Windows 安装包和清单与 macOS 分开发布, 不改变 macOS 升级格式。
 
-| 平台 | 服务 | 系统代理 | 本地辅助服务 |
-|---|---|---|---|
-| Windows | 计划任务 / 服务; 核心用 `sing-box-*-windows-*.zip` | 注册表 `Internet Settings` (WinINet) | PowerShell `HttpListener` 实现同一份 HTTP 接口 (见 `docs/API.md`) |
-| Linux | systemd `--user` 单元 (`loginctl enable-linger`) | GNOME `gsettings` / KDE `kwriteconfig`; 其余用环境变量或 TUN | `systemd.socket` 做 inetd 式激活, 复用 `lib/api.sh` |
+自动化验收与实机验收边界、管理员快照、升级和诊断见 [WINDOWS.md](WINDOWS.md)。Windows 原生 TUN/IPv6/UDP/QUIC、VPN 共存和 Gemini/Claude/ChatGPT 登录仍需在真实 Windows 上验收, 不能用 Mac 的测试结果替代。
 
-仪表盘与 `importer.js` 与系统无关, 可直接复用。目前 `get.ps1` 只是占位 (提示「即将支持」); 实现前网站上的 Windows 命令也只会给出这个提示。
-
-Windows 版要和 macOS 版达到同样的体验 (需要在真机上逐项测试):
-
-- **一行命令**: `irm https://install.enana.cc | iex`; 先检测 PowerShell 版本 / Windows 版本 / 架构 / 是否能访问下载服务, 缺什么说清楚; 下载 `manifest.json` + 安装包并用 `Get-FileHash` 校验 SHA-256 (与 `get.sh` 同一套两线路交叉校验)。
-- **终端快捷命令 `enana`**: 安装 `enana.cmd` / `enana.ps1` 到用户目录下的 `bin`, 并把它加进用户 PATH (写 `HKCU\Environment` 后广播 `WM_SETTINGCHANGE`), 新开的 PowerShell / cmd 里输入 `enana` 就能打开控制台; 这一步不需要管理员权限。
-- **后台地址**: 和 macOS 一样固定为 `http://127.0.0.1:<端口>/enana/admin/`, 默认端口被占用时自动换随机空闲端口, 安装结束时打印。
-- **开机自启 / 崩溃重启**: 计划任务 (用户登录时启动, 失败自动重启); **系统代理**: 注册表 `Internet Settings` + 通知 WinINet。
-- **本地辅助服务**: 在 PowerShell `HttpListener` 重写同一份接口, 还是复用现有脚本 (需要 Git for Windows 的 bash) 要在真机上评估后决定。
+Linux 尚未实现: 可用 systemd 用户服务和 socket 接口, 需要独立系统适配器与验收。
 
 ## 🔜 会员 (收费) 功能
 
@@ -47,7 +36,7 @@ Windows 版要和 macOS 版达到同样的体验 (需要在真机上逐项测试
 
 ## 💡 其它设想
 
-- **TUN 模式**: 接管不读系统代理的程序, 需要 root; 与按应用路由、QUIC 处理一起设计。
+- **TUN 扩展验收**: 持续验证 VPN 共存、UDP/QUIC 和跨平台进程归属; 不将共享系统进程的连接直接归属给某个应用。
 - **更多协议 / 部署选项**: AnyTLS、Hysteria2 的一键部署; 服务器端 BBR 等内核优化 (默认不改动用户的系统)。
 - **VPS 部署的本机上传兜底**: 服务器连不上 GitHub 时, 由本机下载并校验安装包后经 SSH 上传。
 - **菜单栏小工具**: 状态灯 + 一键暂停; Homebrew tap; 签名公证的 `.pkg`。

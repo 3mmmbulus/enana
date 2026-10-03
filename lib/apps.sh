@@ -60,6 +60,8 @@ ovr_sync() {
   local T bset f body name path
   mkdir -p "$H/rules"; T=$(mktemp -d); touch "$H/overrides.tsv"
   bset="|$(awk -F'|' '$2=="bin" {printf "%s|", $1}' "$H/custom-apps.tsv" 2>/dev/null)"        # 自定义的命令行工具 (按可执行文件名匹配, 不是 .app 路径)
+  [ "${ENANA_PLATFORM:-darwin}" != windows ] || bset='|'
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then windows_node regex-map "$H" > "$T/regexes" || { rm -rf "$T"; return 1; }; fi
   ovr_pins > "$T.pins"
   : > "$T.browsers"
   while IFS=$'\t' read -r name path; do
@@ -67,7 +69,7 @@ ovr_sync() {
       printf '%s\n' "$name" >> "$T.browsers"
     fi
   done < "$H/.apps.now" 2>/dev/null
-  LC_ALL=C awk -F'|' -v dir="$T" -v bset="$bset" -v bf="$T.browsers" -v pf="$T.pins" '
+  LC_ALL=C awk -F'|' -v dir="$T" -v bset="$bset" -v bf="$T.browsers" -v pf="$T.pins" -v rf="$T/regexes" '
     function js(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
     function rx(n,   t) { t = n; gsub(/[][\\.*^$+?(){}|\/]/, "\\\\&", t); return "(?i)/" t "\\.app/" }          # 应用名里的正则符号转义, 再整体当 JSON 字符串写
     function key(st, kind, tg, name) {
@@ -87,20 +89,22 @@ ovr_sync() {
       if (tg in pidx) return "pin-" pidx[tg]
       return "pin"                                                                                           # 指定的出口已经不存在: 退回默认固定出口
     }
-    BEGIN { while ((getline l < bf) > 0) browsers[l] = 1; np = 0; while ((getline l < pf) > 0) if (l != "") { P[++np] = l; pidx[l] = np }
+    function appjson(n) { return (n in winrx) ? winrx[n] : "\"" js(rx(n)) "\"" }
+    BEGIN { while ((getline l < rf) > 0) { split(l, wr, "\t"); winrx[wr[1]]=wr[2] }
+            while ((getline l < bf) > 0) browsers[l] = 1; np = 0; while ((getline l < pf) > 0) if (l != "") { P[++np] = l; pidx[l] = np }
             nk = split("direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto auto", K, " "); for (i = 1; i <= np; i++) { K[++nk] = "pin-" i; K[++nk] = "apppin-" i; K[++nk] = "browserpin-" i }
             for (i = 1; i <= nk; i++) known[K[i]] = 1 }
     ($1 == "site" || $1 == "app") && $3 != "follow" && $3 != "" {
       k = key($3, $1, $5, $2)
       if ($1 == "site") S[k] = S[k] (S[k] == "" ? "" : ",") "\"" js($2) "\""
       else if (index(bset, "|" $2 "|") > 0) B[k] = B[k] (B[k] == "" ? "" : ",") "\"" js($2) "\""
-      else A[k] = A[k] (A[k] == "" ? "" : ",") "\"" js(rx($2)) "\""
+      else A[k] = A[k] (A[k] == "" ? "" : ",") appjson($2)
       # App PIN must precede EVERY website PIN, including a site-specific node.
       # Keep combined files for compatibility and add app-only precedence files.
       if ($1 == "app" && $3 == "pin" && !($2 in browsers)) {
         ak = "app" k
         if (index(bset, "|" $2 "|") > 0) B[ak] = B[ak] (B[ak] == "" ? "" : ",") "\"" js($2) "\""
-        else A[ak] = A[ak] (A[ak] == "" ? "" : ",") "\"" js(rx($2)) "\""
+        else A[ak] = A[ak] (A[ak] == "" ? "" : ",") appjson($2)
       }
     }
     END {
@@ -125,6 +129,7 @@ ovr_sync() {
 # ---------- 应用扫描 ----------
 APPS_ROOTS_PRIO="/Applications /System/Applications /System/Cryptexes/App/System/Applications /System/Library/CoreServices/Applications"          # 重名时靠前的优先
 _apps_find() { # 每行: 名称<TAB>路径 (按目录优先级); 不进入 .app 里面, 所以应用内嵌的辅助程序 (Helper.app 等) 不会出现。ENANA_APPS_ROOTS (空格分隔) 可替换扫描目录 (测试用)
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then win_bridge apps; return; fi
   local r
   for r in ${ENANA_APPS_ROOTS:-$APPS_ROOTS_PRIO "$HOME/Applications"}; do
     [ -d "$r" ] || continue
@@ -132,6 +137,7 @@ _apps_find() { # 每行: 名称<TAB>路径 (按目录优先级); 不进入 .app 
   done | LC_ALL=C awk -F/ '{ n = $NF; sub(/\.app$/, "", n); if (n != "" && substr(n,1,1) != ".") print n "\t" $0 }'
 }
 _apps_mdfind() { # Spotlight 能找到、但不在上面这些目录里的应用 (装在别处的); 结果缓存 10 分钟, 最多等 10 秒 (Spotlight 在重建索引时可能很慢)
+  [ "${ENANA_PLATFORM:-darwin}" != windows ] || return 0
   local c="$H/.apps.md" t p i=0
   [ "${ENANA_NO_MDFIND:-}" = 1 ] && return 0
   if [ ! -s "$c" ] || [ -n "$(find "$c" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
@@ -151,6 +157,7 @@ apps_installed() { # 每行: 名称<TAB>路径  (自动识别的 + 用户手动�
 }
 
 app_is_browser() { # <.app 路径>  声明自己能打开 http / https 链接的应用 = 浏览器
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then win_bridge app-browser "$1"; return; fi
   local plist="$1/Contents/Info.plist" name group
   name=$(basename "$1" .app)
   # Known native apps can register http/https for OAuth or deep links too.
@@ -296,10 +303,13 @@ apps_icons() { # 为还没有图标的应用提取图标并重建索引 (一次�
   if ! mkdir "$H/.icons.lock" 2>/dev/null; then [ -n "$(find "$H/.icons.lock" -maxdepth 0 -mmin +3 2>/dev/null)" ] && rmdir "$H/.icons.lock" 2>/dev/null; return 0; fi
   lst=$(mktemp)
   while IFS=$'\t' read -r name path; do
-    [ -n "$name" ] && [ -d "$path" ] || continue
+    [ -n "$name" ] && { [ -d "$path" ] || { [ "${ENANA_PLATFORM:-darwin}" = windows ] && [ -f "$path" ]; }; } || continue
     slug=$(app_icon_slug "$name"); [ -s "$d/$slug.png" ] || printf '%s\t%s\n' "$slug" "$path" >> "$lst"
   done < <([ -s "$H/.apps.now" ] && cat "$H/.apps.now" || apps_installed)
-  [ -s "$lst" ] && { osascript -l JavaScript "$LIB/appicon.js" "$d" "$lst" >/dev/null 2>&1 || true; }
+  if [ -s "$lst" ]; then
+    if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then win_bridge icons "$(cygpath -w "$lst")" >/dev/null 2>&1 || true
+    else osascript -l JavaScript "$LIB/appicon.js" "$d" "$lst" >/dev/null 2>&1 || true; fi
+  fi
   : > "$d/index.tsv.new"
   while IFS=$'\t' read -r name path; do
     [ -n "$name" ] || continue
@@ -315,6 +325,7 @@ app_exists_name() { # 这个名称是否已在应用列表里 (自动识别的 +
   { apps_installed | cut -f1; awk -F'|' '$1=="app" {print $2}' "$H/overrides.tsv" 2>/dev/null; } | grep -Fxq -- "$1"
 }
 apps_inspect_path() { # 绝对路径 -> 打印一个候选对象 (JSON); 路径只读, 绝不执行
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then win_bridge app-inspect "$1"; return; fi
   local p=$1 dir real name='' bid='' ver='' exe='' kind='' signed=false auth='' team='' reason='' sig plist icon='' ex=false
   case $p in /*) ;; *) printf '{"valid":false,"path":"%s","reason":"%s"}' "$(_ja "$p")" "$(_ja "$(_t "请输入绝对路径 (以 / 开头), 或者输入软件名称")")"; return ;; esac
   printf '%s' "$p" | LC_ALL=C grep -q '[|"\\[:cntrl:]]' && { printf '{"valid":false,"path":"%s","reason":"%s"}' "$(_ja "$p")" "$(_ja "$(_t "路径里有不支持的字符")")"; return; }
@@ -346,6 +357,7 @@ apps_inspect_path() { # 绝对路径 -> 打印一个候选对象 (JSON); 路径�
     "$kind" "$(_ja "$name")" "$(_ja "$bid")" "$(_ja "$ver")" "$(_ja "$real")" "$(_ja "$exe")" "$signed" "$(_ja "$auth")" "$(_ja "$team")" "$icon" "$ex" "$(pgrep -f -- "$real" >/dev/null 2>&1 && echo true || echo false)"
 }
 apps_icon_one() { # <名称> <路径>  提取单个图标 (0 = 成功/已有)
+  [ "${ENANA_PLATFORM:-darwin}" != windows ] || return 1
   local d="$H/ui/appicons" slug lst; slug=$(app_icon_slug "$1"); mkdir -p "$d"
   [ -s "$d/$slug.png" ] && return 0
   lst=$(mktemp); printf '%s\t%s\n' "$slug" "$2" > "$lst"; osascript -l JavaScript "$LIB/appicon.js" "$d" "$lst" >/dev/null 2>&1; rm -f "$lst"
@@ -353,6 +365,11 @@ apps_icon_one() { # <名称> <路径>  提取单个图标 (0 = 成功/已有)
 }
 apps_inspect() { # <输入: 绝对路径 或 软件名称> -> 候选数组 JSON 的内容 (不含方括号); 名称最多 8 个候选
   local in=$1 f out='' n=0 p
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then
+    case $1 in [A-Za-z]:*|\\\\*) apps_inspect_path "$1"; return ;; esac
+    local candidate; candidate=$(apps_installed | awk -F'\t' -v n="$1" 'tolower($1)==tolower(n){print $2;exit}')
+    apps_inspect_path "${candidate:-$1}"; return
+  fi
   in=$(printf '%s' "$in" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^["'"'"']//; s/["'"'"']$//'); [ ${#in} -le 300 ] || in=${in:0:300}
   case $in in
     '') printf '{"valid":false,"path":"","reason":"%s"}' "$(_ja "$(_t "请输入软件的路径或名称")")"; return ;;

@@ -120,6 +120,7 @@ speed_ip_json() { # 把 IPL_* 变成 JSON 对象的字段 (不含花括号)
   else printf '"ok":false,"reason":"%s"' "$(_ip_clean "$IPL_REASON")"; fi
 }
 speed_lan_json() {
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then printf '{"ip":"%s","iface":"Windows"}' "$(win_bridge local-ip)"; return; fi
   local iface ip=''; iface=$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')
   [ -n "$iface" ] && ip=$(ipconfig getifaddr "$iface" 2>/dev/null || true)
   printf '{"ip":"%s","iface":"%s"}' "$(_ip_clean "$ip")" "$(_ip_clean "$iface")"

@@ -5,6 +5,8 @@
 - **sing-box** (<https://github.com/SagerNet/sing-box>): 代理核心。安装器在你的电脑上从它的官方发布页下载并校验 SHA-256, 作为独立进程运行; 它采用 GPL-3.0 (附加条款见其仓库的 LICENSE)。本仓库不分发它的二进制。
 - **社区规则集** (如 SagerNet 的 sing-geosite / sing-geoip 等): 在安装时从各自的发布渠道 (GitHub / jsDelivr 镜像) 下载, 不属于本仓库; 请参阅各自的许可证。
 - **云端下发的内容** (服务目录、规则库清单、服务器部署脚本等) 属于 enana 云端服务, 登录后下发并验签, 不属于本仓库。
+- **Git for Windows PortableGit** (<https://gitforwindows.org/>): Windows 安装器从官方发布下载并校验 SHA-256, 安装在 enana 私有目录。Git、Bash、Perl、OpenSSL、OpenSSH 等组件各有自己的许可证; 保留完整上游包中的 LICENSE 与声明, 不裁剪许可证。
+- **Node.js** (<https://nodejs.org/>): Windows 本机 HTTP 桥与辅助程序的私有运行时, 从官方分发下载并校验 SHA-256, 保留上游 LICENSE (Node.js MIT 及依赖声明)。
 - 本机使用的系统自带工具 (`curl`、`openssl` (LibreSSL)、`ssh` / `ssh-keyscan`、`perl`、`dig` 等) 来自 macOS, 不随本仓库分发。
 
 
