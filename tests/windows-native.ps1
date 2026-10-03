@@ -44,6 +44,33 @@ try{
     & "$repo\windows\install.ps1" -SourceDir $repo -HomeDir $HomeDir -NoOpen -NoRules -Upgrade -Lang en
     $after=Read-EnanaSettings $HomeDir;Assert (($portsBefore -eq (@($after.PORT,$after.UI_PORT,$after.API_PORT,$after.SPEED_PORT) -join ','))) 'upgrade retains saved ports'
     Assert ($after.NETWORK_MODE -eq 'system') 'upgrade retains capture mode'
+    # A broken proxy must leave a usable dashboard so the user can read logs
+    # and repair settings. Exercise the actual task and failed Windows core.
+    $savedConfig = [IO.File]::ReadAllText("$HomeDir\config.json",$Utf8)
+    try {
+        & "$HomeDir\runtime\node\node.exe" "$HomeDir\windows\helper.js" control $HomeDir shutdown
+        Assert ($LASTEXITCODE -eq 0) 'worker stops before the failed-start recovery test'
+        $broken = $savedConfig | ConvertFrom-Json
+        $broken.inbounds[0].listen_port = -1
+        Write-Utf8 "$HomeDir\config.json" ($broken | ConvertTo-Json -Depth 40)
+        & "$HomeDir\windows\platform.ps1" -Action worker-start -HomeDir $HomeDir
+        $failure = $null
+        for ($attempt=0; $attempt -lt 40; $attempt++) {
+            Start-Sleep -Milliseconds 500
+            try { $failure=Read-JsonFile "$HomeDir\runtime\service.json" } catch {}
+            if ($failure.coreError) { break }
+        }
+        Assert ([bool]$failure.coreError -and !$failure.corePid) 'failed native core records an error without a running proxy'
+        Assert ((Invoke-WebRequest -UseBasicParsing -Uri "$url/enana/admin/" -TimeoutSec 30).StatusCode -eq 200) 'dashboard remains available after proxy startup fails'
+        Assert ((Get-Content "$HomeDir\worker.log" -Raw) -match 'core.failed') 'scheduled task failure is available in the startup log'
+    } finally { Write-Utf8 "$HomeDir\config.json" $savedConfig }
+    & "$HomeDir\runtime\node\node.exe" "$HomeDir\windows\helper.js" control $HomeDir start
+    Assert ($LASTEXITCODE -eq 0) 'restored configuration can start through the surviving worker'
+    $recovered = Read-JsonFile "$HomeDir\runtime\service.json"
+    Assert ($recovered.corePid -and !$recovered.coreError) 'successful recovery clears the previous startup error'
+    $consoleOutput = (& "$HomeDir\windows\cli.ps1" | Out-String)
+    Assert ($consoleOutput -match 'sing-box') 'redirected no-argument CLI prints shared terminal status'
+    & "$HomeDir\windows\diagnostics.ps1" -HomeDir $HomeDir
     # Exercise native proxy restoration in finally, so the CI host is restored
     # even when an assertion fails. No external traffic is sent in this section.
     & "$repo\windows\platform.ps1" -Action sysproxy-on -HomeDir $HomeDir

@@ -3,8 +3,23 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),dgram=require('node:dgram');
 const {applicationRegex,nativePaths,requestSize,regexMap,dnsProbe,control}=require('../windows/helper.js');
 const {spawn}=require('node:child_process');
+const {workerLog}=require('../windows/worker.js');
 function match(rx,file){return new RegExp(rx.slice(4),'i').test(file);}
 function temporary(fn){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'enana-windows-test-'));try{return fn(dir);}finally{fs.rmSync(dir,{recursive:true,force:true});}}
+test('scheduled worker startup errors persist with timestamps and redact URL/token values',()=>temporary(dir=>{
+ const token='eyJtest.payload.signature';
+ workerLog(dir,'worker.fatal',Error('Request failed https://example.test/private?secret=abc '+token));
+ const row=JSON.parse(fs.readFileSync(path.join(dir,'worker.log'),'utf8'));
+ assert.equal(row.event,'worker.fatal');assert.ok(Number.isFinite(Date.parse(row.at)));
+ assert.ok(!row.error.includes('example.test'));assert.ok(!row.error.includes(token));
+ assert.ok(row.error.includes('[URL redacted]'));assert.ok(row.error.includes('[token redacted]'));
+ workerLog(dir,'core.failed',new SyntaxError('Invalid JSON near {"password":"test-private-value"}'));
+ assert.ok(!fs.readFileSync(path.join(dir,'worker.log'),'utf8').includes('test-private-value'));
+ fs.writeFileSync(path.join(dir,'worker.log'),'x'.repeat(1048577));
+ workerLog(dir,'worker.start');
+ assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'worker.log'),'utf8')).event,'worker.start');
+ assert.ok(fs.existsSync(path.join(dir,'worker.log.previous')));
+}));
 test('Windows PIN matches main exe, nested helpers, both separators and Squirrel versions',()=>{
  const rx=applicationRegex('Claude','C:/Users/Tester/AppData/Local/AnthropicClaude/app-1.2.3/Claude.exe');
  for(const p of ['C:/Users/Tester/AppData/Local/AnthropicClaude/app-1.2.3/Claude.exe','c:/users/tester/appdata/local/anthropicclaude/app-2.0.0/helpers/utility.exe']){
