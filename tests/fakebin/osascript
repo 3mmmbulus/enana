@@ -2,6 +2,7 @@
 # Never allow native administrator scripting to change the real Mac in tests.
 echo "osascript $*" >> "$FAKE_STATE/calls.log"
 case ${3:-} in
+  */appicon.js) exec /usr/bin/osascript "$@" ;; # Read/render fixture icons only.
   */proxy-state.js)
     case ${4:-} in
       snapshot) printf '{"schema":1,"services":{}}\n' ;;
