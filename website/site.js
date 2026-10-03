@@ -89,7 +89,7 @@
       'f2.t': 'A local browser dashboard',
       'f2.d': 'The local dashboard opens automatically after installation, in Chinese or English, and works on narrow screens too. Every change is confirmed before it applies, and a bad configuration is rolled back automatically.',
       'f3.t': 'Per-app and per-site routing',
-      'f3.d': 'Choose for each app and site: follow the rules, a fixed exit, an automatic route, or direct. Keep AI and account services on a fixed exit to avoid risk checks caused by IP changes, send sites like Google and YouTube through the automatic route, and keep local sites direct.',
+      'f3.d': 'Choose for each app and site: follow the rules, a fixed exit, an automatic route, or direct. System Proxy captures proxy-aware connections; optional administrator-authorized Enhanced/TUN captures other public TCP/UDP, keeping local callbacks and LAN direct. Keep AI and account services on a fixed exit to avoid risk checks caused by IP changes, send sites like Google and YouTube through the automatic route, and keep local sites direct.',
       'f4.t': 'Import subscriptions, share links and Clash configs',
       'f4.d': 'Paste a subscription URL, trojan / hysteria2 / tuic / vless / vmess / ss share links, or a Clash / sing-box config. The format is detected automatically and previewed before anything is imported.',
       'f5.t': 'Deploy your own server over SSH',

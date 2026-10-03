@@ -56,5 +56,12 @@ try {
     } finally { $zip.Dispose() }
     $source=Join-Path $target "enana-$($m.version)"
     if (!(Test-Path -LiteralPath "$source\windows\install.ps1") -or [IO.File]::ReadAllText("$source\VERSION").Trim() -ne $m.version) { throw 'Package version/entry point mismatch.' }
-    & "$source\windows\install.ps1" -SourceDir $source -HomeDir $HomeDir -Upgrade:$Upgrade -NoOpen:$NoOpen -Lang $Lang
+    # irm | iex works in a default Restricted shell, but invoking a saved .ps1
+    # from that shell does not. Bypass only this verified installer process;
+    # never alter the user's persistent execution policy.
+    $installerArgs=@('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',"$source\windows\install.ps1",'-SourceDir',$source,'-HomeDir',$HomeDir,'-Lang',$Lang)
+    if($Upgrade){$installerArgs+='-Upgrade'};if($NoOpen){$installerArgs+='-NoOpen'}
+    & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" @installerArgs
+    if($LASTEXITCODE -ne 0){throw "Windows installation failed (exit $LASTEXITCODE)."}
+    $env:Path="$(Join-Path $HomeDir 'bin');$env:Path"
 } finally { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }

@@ -72,9 +72,7 @@ try {
     $changed=$true
     [IO.Directory]::CreateDirectory("$HomeDir\windows")|Out-Null
     Copy-Item -Path "$SourceDir\windows\*" -Destination "$HomeDir\windows" -Recurse -Force
-    $bash=Set-EnanaEnvironment $HomeDir
-    & $bash -c 'for tool in perl curl openssl ssh ssh-keyscan tar sha256sum awk sed stat; do command -v "$tool" >/dev/null || { printf "Missing runtime tool: %s\n" "$tool" >&2; exit 1; }; done; perl -MJSON::PP -MDigest::SHA -e "print qq(runtime.ready\n)"'
-    if($LASTEXITCODE -ne 0){throw 'Portable runtime is incomplete.'}
+    Invoke-EnanaBash $HomeDir "$HomeDir\windows\preflight.sh" @()
     & "$HomeDir\sing-box.exe" version; if($LASTEXITCODE -ne 0){throw 'Windows core cannot execute.'}
     if(!$installed){
         $selected=@{}; foreach($key in @('PORT','UI_PORT','API_PORT','SPEED_PORT')){
