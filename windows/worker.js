@@ -10,7 +10,7 @@ async function serve(home) {
   const bash=path.join(runtime,'git','bin','bash.exe'), cygpath=path.join(runtime,'git','usr','bin','cygpath.exe');
   const posix=p=>execFileSync(cygpath,['-u',p],{encoding:'utf8',windowsHide:true}).trim();
   const sid=execFileSync('powershell.exe',['-NoProfile','-Command','[Security.Principal.WindowsIdentity]::GetCurrent().User.Value'],{encoding:'utf8',windowsHide:true}).trim();
-  const env={...process.env,ENANA_HOME:posix(home),ENANA_WINDOWS_HOME:home,ENANA_API_PIPE:'1',ENANA_WINDOWS_SID:sid,ENANA_WINDOWS_ARCH:process.arch==='arm64'?'arm64':'amd64',
+  const env={...process.env,ENANA_HOME:posix(home),ENANA_WINDOWS_HOME:home,ENANA_API_PIPE:'1',ENANA_WINDOWS_SID:sid,ENANA_WINDOWS_PROGRAMDATA:process.env.ProgramData||process.env.PROGRAMDATA,ENANA_WINDOWS_ARCH:process.arch==='arm64'?'arm64':'amd64',
     PATH:[path.join(runtime,'node'),path.join(runtime,'git','usr','bin'),...['ucrt64','mingw64','mingw32','clangarm64'].map(d=>path.join(runtime,'git',d,'bin')),process.env.PATH].join(path.delimiter)};
   const api=posix(path.join(home,'lib','api.sh')),entry=posix(path.join(home,'enana'));
   execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(home,'windows','platform.ps1'),'-Action','cleanup-core','-HomeDir',home],{windowsHide:true,stdio:['ignore','ignore','inherit']});

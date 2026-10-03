@@ -31,6 +31,8 @@ try{
     $installed=$true
     $s=Read-EnanaSettings $HomeDir;$url="http://127.0.0.1:$($s.API_PORT)"
     Assert ((Invoke-WebRequest -UseBasicParsing -Uri "$url/enana/admin/servers" -TimeoutSec 15).StatusCode -eq 200) 'dashboard deep navigation loads'
+    $uiEnv=Invoke-RestMethod -Uri "$url/enana/admin/env.json" -TimeoutSec 15
+    Assert ($uiEnv.version -eq [IO.File]::ReadAllText("$repo\VERSION").Trim()) 'dashboard metadata is valid JSON with a clean version scalar'
     $auth=Invoke-RestMethod -Uri "$url/api/auth/status" -Headers @{'X-Enana'='1'} -TimeoutSec 15
     Assert $auth.ok 'real Bash API responds through Windows TCP bridge'
     try{Invoke-WebRequest -UseBasicParsing -Uri "$url/api/auth/status" -TimeoutSec 15|Out-Null;throw 'Missing-header request was accepted'}catch{Assert ($_.Exception.Response.StatusCode.value__ -eq 403) 'missing X-Enana header is rejected'}
@@ -55,6 +57,11 @@ try{
     $baseline=(Get-ProxySnapshot|ConvertTo-Json -Depth 8|ConvertFrom-Json)
     try{
         & "$repo\windows\platform.ps1" -Action sysproxy-on -HomeDir $HomeDir
+        $blob=(Get-ItemProperty -LiteralPath $connectionKey).DefaultConnectionSettings
+        if($blob.Length -ge 8){$blob[4]=($blob[4]+1)%256;Set-ItemProperty -LiteralPath $connectionKey -Name DefaultConnectionSettings -Value $blob}
+        & "$repo\windows\platform.ps1" -Action sysproxy-off -HomeDir $HomeDir
+        Assert (!(Test-Path -LiteralPath "$HomeDir\windows-proxy-backup.json")) 'OS connection bookkeeping does not prevent owned proxy restoration'
+        & "$repo\windows\platform.ps1" -Action sysproxy-on -HomeDir $HomeDir
         Set-ItemProperty -LiteralPath $proxyKey -Name ProxyServer -Value 'http=127.0.0.1:32109;https=127.0.0.1:32109'
         & "$repo\windows\platform.ps1" -Action sysproxy-off -HomeDir $HomeDir
         Assert ((Get-ItemProperty -LiteralPath $proxyKey).ProxyServer -like '*32109*') 'foreign proxy edits are retained on disconnect'
@@ -64,6 +71,8 @@ try{
     Invoke-EnanaBash $HomeDir "$HomeDir\enana" @('doctor')
     & "$HomeDir\runtime\node\node.exe" "$HomeDir\windows\helper.js" control $HomeDir shutdown
     Assert ($LASTEXITCODE -eq 0) 'owned worker and core stop cleanly'
+    & "$HomeDir\windows\cli.ps1" -Arguments @('uninstall','--yes')
+    Assert (!(Test-Path -LiteralPath $HomeDir)) 'native uninstall removes the private runtime after Bash exits'
     Write-Host 'Native acceptance completed. Interactive UAC/TUN and native-app OAuth require separate on-device acceptance.'
 } finally {
     if(Test-Path -LiteralPath "$HomeDir\windows\platform.ps1"){

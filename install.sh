@@ -433,9 +433,15 @@ cmd_uninstall() {
   [ -n "$KEEP" ] && msg="$msg (保留 $H 里的数据)" || msg="$msg, 并删除 $H (含你的服务器 / 订阅配置)"
   confirm "$msg" n || { info "已取消"; return 1; }
   os_sysproxy_mine && os_sysproxy_set off
-  os_service_stop || return 1; enhanced_remove || return 1; os_aux_unload
+  os_service_stop || return 1; enhanced_remove || return 1; os_aux_unload || return 1
   rm -f "$PLIST" "$PLIST_API" "$PLIST_UPD" "$PLIST_TICK"
   shortcut_remove
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then
+    # A Windows executable cannot delete its own loaded PortableGit runtime.
+    # The native CLI finishes removal after this Bash process has returned.
+    printf '%s\n' "${KEEP:+keep}" > "$H/.windows-uninstall"
+    return 0
+  fi
   if [ -z "$KEEP" ] && [ -n "$H" ] && [ "$H" != / ] && [ "$H" != "$HOME" ]; then
     nohup sh -c 'sleep 2; rm -rf "$1"' _ "$H" >/dev/null 2>&1 &    # 稍后删除 (脚本自己就在该目录里)
   fi

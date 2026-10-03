@@ -18,6 +18,17 @@ public static class EnanaWinInet {
  [StructLayout(LayoutKind.Sequential)] struct Option { public int key; public IntPtr value; }
  [StructLayout(LayoutKind.Sequential)] struct List { public int size; public IntPtr connection; public int count; public int error; public IntPtr options; }
  [DllImport("wininet.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern bool InternetSetOption(IntPtr h, int n, IntPtr p, int size);
+ [DllImport("wininet.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern bool InternetQueryOption(IntPtr h, int n, IntPtr p, ref int size);
+ public static long Flags() {
+   int optionSize=Marshal.SizeOf(typeof(Option)), length=Marshal.SizeOf(typeof(List));
+   IntPtr option=Marshal.AllocHGlobal(optionSize), list=Marshal.AllocHGlobal(length);
+   try {
+     Marshal.StructureToPtr(new Option {key=1,value=IntPtr.Zero},option,false);
+     Marshal.StructureToPtr(new List {size=length,count=1,options=option},list,false);
+     if(!InternetQueryOption(IntPtr.Zero,75,list,ref length)) throw new System.ComponentModel.Win32Exception();
+     return ((Option)Marshal.PtrToStructure(option,typeof(Option))).value.ToInt64();
+   } finally { Marshal.FreeHGlobal(option);Marshal.FreeHGlobal(list); }
+ }
  public static void Notify() {
    if (!InternetSetOption(IntPtr.Zero,39,IntPtr.Zero,0) || !InternetSetOption(IntPtr.Zero,37,IntPtr.Zero,0)) throw new System.ComponentModel.Win32Exception();
  }
@@ -53,11 +64,18 @@ function Restore-ProxySnapshot($Snapshot) {
     foreach ($prop in $Snapshot.PSObject.Properties) {
         $parts = $prop.Name.Split('|'); $v = $prop.Value
         if ($null -eq $v) { Remove-ItemProperty -LiteralPath $parts[0] -Name $parts[1] -ErrorAction SilentlyContinue; continue }
-        New-Item -Path $parts[0] -Force | Out-Null
+        if (!(Test-Path -LiteralPath $parts[0])) { New-Item -Path $parts[0] | Out-Null }
         $value = $v.value; if ($v.kind -eq 'Binary') { $value = [Convert]::FromBase64String($value) }
         New-ItemProperty -LiteralPath $parts[0] -Name $parts[1] -PropertyType $v.kind -Value $value -Force | Out-Null
     }
     Initialize-WinInet; [EnanaWinInet]::Notify()
+}
+function Get-ProxyFingerprint {
+    # Connection blobs contain OS-maintained counters. Compare supported active
+    # WinINet flags and user settings, not those changing bookkeeping bytes.
+    Initialize-WinInet
+    $p=Get-ItemProperty -LiteralPath $proxyKey -ErrorAction SilentlyContinue
+    return ([ordered]@{flags=[EnanaWinInet]::Flags();enabled=$p.ProxyEnable;server=$p.ProxyServer;bypass=$p.ProxyOverride;pac=$p.AutoConfigURL}|ConvertTo-Json -Compress)
 }
 function Test-ProxyMine {
     $p = Get-ItemProperty -LiteralPath $proxyKey -ErrorAction SilentlyContinue
@@ -124,6 +142,7 @@ function Inspect-App([string]$Path) {
 }
 switch ($Action) {
     'version' { [Environment]::OSVersion.Version.ToString() }
+    'program-data' { [Environment]::GetFolderPath('CommonApplicationData') }
     'admin' { if (Test-EnanaAdmin) {'1'} else {'0'} }
     'task-register' {
         $node = Join-Path $HomeDir 'runtime\node\node.exe'; $worker = Join-Path $HomeDir 'windows\worker.js'
@@ -189,17 +208,18 @@ public static class EnanaEnvironment {
         if ($policy -and $policy.ProxySettingsPerUser -eq 0) { throw 'Proxy settings are controlled by machine policy. Use Enhanced/TUN or contact your administrator.' }
         $file = Join-Path $HomeDir 'windows-proxy-backup.json'; $before = Get-ProxySnapshot
         $backup = $null; if (Test-Path -LiteralPath $file) { $backup = Read-JsonFile $file }
-        if ($backup -and ($before | ConvertTo-Json -Depth 8 -Compress) -eq ($backup.expected | ConvertTo-Json -Depth 8 -Compress)) { break }
+        if ($backup -and $backup.fingerprint -and (Get-ProxyFingerprint) -eq $backup.fingerprint) { break }
         $bypass = '<local>;localhost;127.*;[::1];10.*;192.168.*;169.254.*;' + ((16..31 | ForEach-Object {"172.$_.*"}) -join ';')
         try { Initialize-WinInet; [EnanaWinInet]::Set("http=127.0.0.1:$($s.PORT);https=127.0.0.1:$($s.PORT)",$bypass)
-            Write-Utf8 $file (@{original=$before; expected=(Get-ProxySnapshot)} | ConvertTo-Json -Depth 8 -Compress)
+            Write-Utf8 $file (@{original=$before; expected=(Get-ProxySnapshot);fingerprint=(Get-ProxyFingerprint)} | ConvertTo-Json -Depth 8 -Compress)
         } catch { Restore-ProxySnapshot ($before | ConvertTo-Json -Depth 8 | ConvertFrom-Json); throw }
     }
     'sysproxy-off' {
         $file = Join-Path $HomeDir 'windows-proxy-backup.json'
         if (!(Test-Path -LiteralPath $file)) { break }
         $b = Read-JsonFile $file
-        if (((Get-ProxySnapshot) | ConvertTo-Json -Depth 8 -Compress) -ne ($b.expected | ConvertTo-Json -Depth 8 -Compress)) { Write-Warning 'Proxy settings changed outside enana; they were preserved.'; break }
+        $mine=if($b.fingerprint){(Get-ProxyFingerprint) -eq $b.fingerprint}else{((Get-ProxySnapshot)|ConvertTo-Json -Depth 8 -Compress) -eq ($b.expected|ConvertTo-Json -Depth 8 -Compress)}
+        if (!$mine) { Write-Warning 'Proxy settings changed outside enana; they were preserved.'; break }
         Restore-ProxySnapshot $b.original; Remove-Item -LiteralPath $file
     }
     'sysproxy-diagnostics' { $p = Get-ItemProperty -LiteralPath $proxyKey -ErrorAction SilentlyContinue; "sysproxy.enabled=$($p.ProxyEnable)"; "sysproxy.server=$($p.ProxyServer)"; "sysproxy.pac_present=$([bool]$p.AutoConfigURL)" }

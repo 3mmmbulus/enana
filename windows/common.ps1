@@ -93,6 +93,7 @@ function Set-EnanaEnvironment([string]$HomeDir) {
     $env:ENANA_WINDOWS_HOME = $HomeDir
     $env:ENANA_API_PIPE = '1'
     $env:ENANA_WINDOWS_SID = Get-EnanaSid
+    $env:ENANA_WINDOWS_PROGRAMDATA = [Environment]::GetFolderPath('CommonApplicationData')
     $env:ENANA_WINDOWS_ARCH = if (($env:PROCESSOR_ARCHITEW6432,$env:PROCESSOR_ARCHITECTURE) -contains 'ARM64') {'arm64'} else {'amd64'}
     $git = Join-Path $HomeDir 'runtime\git'
     $env:PATH = "$HomeDir\runtime\node;$git\usr\bin;$git\ucrt64\bin;$git\mingw64\bin;$git\mingw32\bin;$git\clangarm64\bin;$env:PATH"

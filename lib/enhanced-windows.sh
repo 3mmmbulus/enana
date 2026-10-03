@@ -1,7 +1,9 @@
 # Loaded after enhanced.sh, replacing only macOS lifecycle/OS diagnostics.
 enhanced_paths() {
   local sid=${ENANA_WINDOWS_SID:-}; [ -n "$sid" ] || sid=$(powershell.exe -NoProfile -Command '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value' | tr -d '\r')
-  TUN_UID=$sid; TUN_LABEL="Enana Enhanced $sid"; TUN_ROOT="$(cygpath -u "$PROGRAMDATA")/enana/$sid"; TUN_PLIST="$TUN_ROOT/config.json"
+  local program_data=${ENANA_WINDOWS_PROGRAMDATA:-${ProgramData:-${PROGRAMDATA:-}}}
+  [ -n "$program_data" ] || program_data=$(win_bridge program-data) || return 1
+  TUN_UID=$sid; TUN_LABEL="Enana Enhanced $sid"; TUN_ROOT="$(cygpath -u "$program_data")/enana/$sid"; TUN_PLIST="$TUN_ROOT/config.json"
 }
 enhanced_loaded() { local s; s=$(win_bridge tun-info); case $s in '1 1 '*) return 0 ;; *) return 1 ;; esac; }
 enhanced_start() {
