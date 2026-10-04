@@ -2185,7 +2185,7 @@
     "logs.exp.sec.proxy": "代理日志",
     "logs.exp.sec.proxy.d": "代理核心的原始运行日志",
     "logs.exp.sec.snapshot": "环境与策略快照",
-    "logs.exp.sec.snapshot.d": "版本、系统代理和 DNS、应用与网站的策略、路由规则、服务器列表 (已打码), 以及一次实时网络自检; 不含密码和令牌",
+    "logs.exp.sec.snapshot.d": "自动判定 (连不上是服务器、出口 IP、系统代理还是被退出登录)、每分钟的服务器端口与状态变化记录、版本、系统代理和 DNS、应用与网站的策略、路由规则、服务器列表 (已打码), 以及一次实时网络自检; 不含密码和令牌",
     "logs.exp.rangeAria": "时间范围",
     "logs.exp.range.6": "最近 6 小时",
     "logs.exp.range.24": "最近 24 小时",

@@ -1348,13 +1348,17 @@ expect "升级不会重新打开用户关掉的系统代理" test "$(grep -c 'ne
 touch "$FAKE_STATE/sysproxy-on"
 
 echo "== 15. 每日维护: 日志切分 / 压缩 / 按保留期清理"
+"$W/shortcut/enana" tick --quiet >/dev/null 2>&1
+expect "enana tick 写连接健康记录: state 基线行 (核心 / 总开关 / 系统代理 / 登录 / 接管方式)" sh -c "grep -q '	state	capture	ok	0	core=' '$W'/h/logs/health-*.log"
+expect "健康记录不含密码 / 令牌" sh -c "! grep -q \"\$(cat '$W/h/secret')\" '$W'/h/logs/health-*.log"
 mkdir -p "$W/h/logs"; OLDD=$(date -v-100d +%F); MID=$(date -v-10d +%F)
 printf '%s 00:00:00\tdashboard\t旧记录\t.\tok\n' "$OLDD" > "$W/h/logs/ops-$OLDD.log"; printf '%s 00:00:00\tdashboard\t较新记录\t.\tok\n' "$MID" > "$W/h/logs/ops-$MID.log"
+printf '%s 00:00:00\tnode\tOld-Node\tok\t10\trole=pin\n' "$OLDD" > "$W/h/logs/health-$OLDD.log"; printf '%s 00:00:00\tnode\tMid-Node\tok\t10\trole=pin\n' "$MID" > "$W/h/logs/health-$MID.log"
 printf '+0800 %s 01:02:03 INFO [1 0ms] inbound/mixed[in]: inbound connection to a.example:443\n' "$OLDD" > "$W/h/logs/proxy-$OLDD.log"
 api -X POST "$A/api/settings" -d 'log_hours=720' >/dev/null
 "$W/shortcut/enana" maintain --quiet >/dev/null 2>&1
-expect "超过保留期 (100 天前) 的日志被清理" test ! -e "$W/h/logs/ops-$OLDD.log" -a ! -e "$W/h/logs/proxy-$OLDD.log"
-expect "保留期内 (10 天前) 的日志被压缩保留" test -e "$W/h/logs/ops-$MID.log.gz"
+expect "超过保留期 (100 天前) 的日志被清理 (含健康记录)" test ! -e "$W/h/logs/ops-$OLDD.log" -a ! -e "$W/h/logs/proxy-$OLDD.log" -a ! -e "$W/h/logs/health-$OLDD.log"
+expect "保留期内 (10 天前) 的日志被压缩保留 (含健康记录)" test -e "$W/h/logs/ops-$MID.log.gz" -a -e "$W/h/logs/health-$MID.log.gz"
 api "$A/api/logs?type=ops&day=$MID" | chk "压缩过的日志仍可在仪表盘查询" 'assert d["total"]==1 and d["rows"][0]["action"]=="较新记录"'
 api -X POST "$A/api/settings" -d 'log_hours=720' >/dev/null; printf '%s 00:00:00\tdashboard\t二十天前\t.\tok\n' "$(date -v-20d +%F)" > "$W/h/logs/ops-$(date -v-20d +%F).log"; printf '%s 00:00:00\tdashboard\t四十天前\t.\tok\n' "$(date -v-40d +%F)" > "$W/h/logs/ops-$(date -v-40d +%F).log"; "$W/shortcut/enana" maintain --quiet >/dev/null 2>&1
 expect "保留期 30 天 (720 小时): 20 天前的日志被保留, 40 天前的被清理" sh -c "{ test -e '$W/h/logs/ops-$(date -v-20d +%F).log.gz' -o -e '$W/h/logs/ops-$(date -v-20d +%F).log'; } && test ! -e '$W/h/logs/ops-$(date -v-40d +%F).log' -a ! -e '$W/h/logs/ops-$(date -v-40d +%F).log.gz'"

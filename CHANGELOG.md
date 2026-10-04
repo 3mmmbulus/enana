@@ -1,5 +1,17 @@
 # Changelog / 更新日志
 
+## 2.3.8 (2026-10-04)
+
+### 中文
+- **仪表盘可以直接开启系统代理, 不再需要终端**: 以前总开关只切换核心的分流模式, 系统代理只能靠终端 `enana on` (要在终端里输入管理员密码); 退出账号、`enana off` 之后用仪表盘重新开启代理, 浏览器和 ChatGPT 等 App 仍然是直连。现在打开总开关会一并让系统代理指向 enana (后台任务; macOS 可能弹出「输入 Mac 登录密码」的原生窗口, 和 Enhanced/TUN 授权用的是同一种), 失败或被取消时顶部提示条和概览里都有「一键开启系统代理」按钮。系统里正在使用别的代理设置 (其它代理软件) 时不会擅自覆盖, 由你确认后接管; Enhanced/TUN 模式不使用也不改动系统代理。每次修改都会回读确认并写进操作记录 (授权方式 / 失败原因)。
+- **日志系统补全, 一份导出就能判断「是服务器不稳还是 enana / 本机设置的问题」**: 新增 `verdict` 自动判定 (原因 + 归因 client / node / exit-ip / network + 证据)、`health` 连接健康记录 (每分钟本机直连服务器端口的 TCP 探测; 约每 5 分钟经本机代理访问 Google / chatgpt.com / api.openai.com, 403 = 出口 IP 被 OpenAI 限制, 以及不经代理的苹果对照站点)、`health_summary` 分桶统计和 `outages` 故障时段。系统代理 / 核心进程 / 总开关 / 登录 / 网络接口的变化 (含「什么时候开始不对的」)、核心崩溃重启、休眠间隔、会话心跳失败与恢复、被云端退出登录 (原因、HTTP 状态、当时总开关) 都会写进操作记录; 终端 / 控制台里改总开关也不再没有记录。导出里增加 launchd 退出码 / 重启次数和会话状态。`tools/diag-summary.py` 先输出自动判定。
+- 健康记录只存在本机, 不含服务器地址、凭据或访问过的网站; 随「操作记录」开关和保留时长一起管理; 仅 macOS (Windows 之后跟进)。详见 `docs/DIAGNOSTICS.md`。
+
+### English
+- **Turn the system proxy on from the dashboard, no terminal needed.** The master switch used to flip only the core's routing mode; the system proxy could be set only by `enana on` in a terminal with an administrator password, so after logging out or `enana off` the dashboard switch left browsers and apps such as ChatGPT connecting directly. The master switch now points the system proxy at enana too (a background job; macOS may show its native password window, the same mechanism as Enhanced/TUN). A banner and the Overview offer a one-click button when it fails or is cancelled. Another tool's proxy settings are never overwritten silently, and Enhanced/TUN neither uses nor changes the system proxy. Every change is read back and logged with the authorization method and failure reason.
+- **A complete diagnostics trail: one export tells whether the server, the exit IP or the local setup is at fault.** New `verdict` (cause, blame client/node/exit-ip/network, evidence), `health` (per-minute direct TCP probes of your server ports; about every 5 minutes probes through the local proxy to Google, chatgpt.com and api.openai.com — 403 means the exit IP is restricted by OpenAI — plus an Apple control site that bypasses the proxy), `health_summary` and `outages`. State changes (system proxy, core process, master switch, login, network interface), core restarts, sleep gaps, heartbeat failures and recoveries, and cloud-ended sessions (reason, HTTP status, master-switch state) go into the operation log; terminal changes of the master switch are logged too. `tools/diag-summary.py` prints the verdict first.
+- Health records stay on the computer, contain no server addresses, credentials or visited sites, follow the operation-log switch and retention, and run on macOS only for now. See `docs/DIAGNOSTICS.md`.
+
 ## 2.3.7 (2026-10-04)
 
 ### 中文

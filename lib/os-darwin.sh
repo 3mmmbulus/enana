@@ -304,6 +304,7 @@ shortcut_remove() {
 os_open() { open "$1" >/dev/null 2>&1 || true; }
 
 os_date_minus_days() { date -v-"${1:-0}"d +%F; }      # N 天前的日期 (YYYY-MM-DD); macOS 的 BSD date
+os_date_at() { date -r "$1" "+%F %T"; }                  # epoch 秒 -> 本地时间 (BSD date)
 os_date_minus_hours() { date -v-"${1:-0}"H "+%F %T"; }  # N 小时前的本地时间 (YYYY-MM-DD HH:MM:SS)
 
 # 品牌更名前的安装 (v1 / v2 早期: ~/.tokyo-proxy, launchd 标签 local.tokyo-proxy*, 命令 tproxy / ereldaili) -> 迁移到 ~/.enana

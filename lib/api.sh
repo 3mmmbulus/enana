@@ -95,7 +95,7 @@ case $path in /favicon.ico) path="$ADMIN_PATH/favicon.png" ;; esac      # 浏览
 case $path in /|"$ADMIN_PATH"|"$ADMIN_PATH"/*) serve_static ;; esac
 
 # ---------- 以下是 JSON 接口: 到这里才加载其余模块 ----------
-for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan billing sync vps; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan billing sync vps; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 i18n_init
 OP_WHO=dashboard; export OP_WHO

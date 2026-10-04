@@ -865,3 +865,7 @@ macOS 没有允许 enana 弹出授权窗口。请在「系统设置 → 隐私�
 没有找到已启用的网络服务, 请先连接网络。	No enabled network service was found. Connect to a network first.
 系统代理没有改成功 (原因代码: *), 可以重试; 仍然失败请在「日志 → 导出」里导出诊断文件。	The system proxy was not changed (reason code: *). You can retry; if it keeps failing, export the diagnostics file from Logs → Export.
 系统代理没有*成功 (原因: *); 可以在仪表盘概览里再试一次	The system proxy was not turned * successfully (reason: *); you can retry from the dashboard Overview
+环境状态变化	Environment state changed
+核心进程已重启	Core process restarted
+会话心跳失败	Session heartbeat failed
+会话心跳恢复	Session heartbeat recovered

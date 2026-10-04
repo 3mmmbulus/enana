@@ -81,8 +81,8 @@ console_main() {
       1) os_open "$UI_URL" ;;
       2) printf '\033[?25h\n'; cmd_restart; console_pause; printf '\033[?25l'; console_gather ;;
       3) if [ "$CS_mode" = Direct ]; then
-           if auth_logged_in; then proxy_set_enabled 1; else printf '\033[?25h\n'; warn "还没有登录: 请先打开仪表盘用 enana.cc 账号登录, 再开启代理"; console_pause; printf '\033[?25l'; fi
-         else proxy_set_enabled 0; fi
+           if auth_logged_in; then proxy_set_enabled 1; oplog terminal "开启代理" "$(kv enabled 1 via console)" ok; else printf '\033[?25h\n'; warn "还没有登录: 请先打开仪表盘用 enana.cc 账号登录, 再开启代理"; console_pause; printf '\033[?25l'; fi
+         else proxy_set_enabled 0; oplog terminal "关闭代理" "$(kv enabled 0 via console)" ok; fi
          console_gather ;;
       4) printf '\033[?25h\n'; cmd_update; console_pause; printf '\033[?25l'; console_gather ;;
       5) printf '\033[2J\033[H'; tail -n 60 "$H/sing-box.log" 2>/dev/null || _t "(暂无日志)"; console_pause ;;

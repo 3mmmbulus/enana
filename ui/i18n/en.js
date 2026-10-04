@@ -2185,7 +2185,7 @@
     "logs.exp.sec.proxy": "Proxy log",
     "logs.exp.sec.proxy.d": "The raw log of the proxy core",
     "logs.exp.sec.snapshot": "Environment and policy snapshot",
-    "logs.exp.sec.snapshot.d": "Versions, system proxy and DNS, app and site policies, routing rules, servers (masked) and a live network self-check; no passwords or tokens",
+    "logs.exp.sec.snapshot.d": "An automatic verdict (is it the server, the exit IP, the system proxy or being signed out?), per-minute server-port and state-change records, versions, system proxy and DNS, app and site policies, routing rules, servers (masked) and a live network self-check; no passwords or tokens",
     "logs.exp.rangeAria": "Time range",
     "logs.exp.range.6": "Last 6 hours",
     "logs.exp.range.24": "Last 24 hours",
