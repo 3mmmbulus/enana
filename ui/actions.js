@@ -173,23 +173,54 @@
     return { enabled: en, mode: mode };
   }
   function proxyDone() { proxyBusy = null; pendingMode = ''; TP.emit('proxy', A.proxyOn()); TP.syncBtns(); TP.loadState(); setTimeout(TP.loadProxies, 400); }
+  /* ---------- 系统代理 ----------
+   * 浏览器和多数 App 只有走「系统代理」才会进入 enana (System Proxy 接管方式)。以前总开关打开后系统代理仍然没开, 必须去终端输入 enana on (还要输密码) ——
+   * 现在: 打开总开关会一并开启系统代理 (后台任务, macOS 可能弹出「输入 Mac 登录密码」的原生窗口); 没开成功 / 被其它软件占用时, 顶部提示条和概览里都有「一键开启」按钮。 */
+  var sysproxyBusy = false;
+  A.sysproxyBusy = function () { return sysproxyBusy; };
+  A.sysproxyNeeded = function () {        // 总开关开着、用的是 System Proxy 接管方式、核心在运行, 但系统代理没有指向 enana
+    var st = S.state;
+    return !!(st && st.proxy && st.env && st.proxy.enabled === true && st.proxy.network_mode !== 'tun' && st.env.sysproxy === false && st.env.service !== false);
+  };
+  async function runSysproxyJob(start) {
+    sysproxyBusy = true; TP.emit('proxy', A.proxyOn()); TP.syncBtns();
+    try { return await TP.jobs.runInDock(t('sysproxy.job'), start); }
+    finally { sysproxyBusy = false; try { await TP.loadState(); } catch (e) { /* 状态稍后会自己刷新 */ } TP.emit('proxy', A.proxyOn()); TP.syncBtns(); }
+  }
+  A.fixSysproxy = async function (confirmed) {
+    if (sysproxyBusy) { ui.toast(t('sysproxy.busy'), 'warn'); return; }
+    var why = TP.why.helper(); if (why) { ui.toast(why, 'warn'); return; }
+    if (!confirmed && !await ui.confirmDialog({ title: t('sysproxy.fix.title'), message: t('sysproxy.fix.msg'), detail: [t('sysproxy.fix.d1'), t('sysproxy.fix.d2'), t('sysproxy.fix.d3')], confirmText: t('sysproxy.fix.go'), kind: 'success', confirmIcon: 'power' })) return;
+    await runSysproxyJob(function () { return TP.helper('POST', '/api/sysproxy', { form: { on: 1 } }); });
+  };
+  /* POST /api/proxy 的 sysproxy 字段: on = 已经指向 enana · foreign = 系统里正用着别的代理设置 (不擅自覆盖) · pending = 已在后台开启 (job) */
+  A.followSysproxy = async function (sp) {
+    if (!sp) return;
+    if (sp.state === 'foreign') { ui.toast(t('sysproxy.foreign'), 'warn', 14000, { action: { label: t('sysproxy.takeover'), fn: TP.safe(function () { return A.fixSysproxy(false); }) } }); return; }
+    if (sp.state === 'pending' && sp.job) await runSysproxyJob(function () { return Promise.resolve({ job: sp.job }); });
+  };
   A.setProxy = async function (on) {
     if (proxyBusy) { ui.toast(t('proxy.busyReason'), 'warn'); return; }
     var why = TP.why.helper(); if (why) { ui.toast(why, 'warn'); return; }
     var cur = A.proxyOn();
     if (cur === on) { ui.toast(t(on ? 'proxy.alreadyOn' : 'proxy.alreadyOff'), ''); return; }
+    var onDetail = [t('proxy.on.d1'), t('proxy.on.d2')];
+    if (on && S.state && S.state.proxy && S.state.proxy.network_mode !== 'tun' && S.state.env && S.state.env.sysproxy === false) onDetail.push(t('proxy.on.d3'));      // 系统代理还没指向 enana: 说明会一并开启, 以及 macOS 可能弹出密码窗口
     var ok = await ui.confirmDialog(on
-      ? { title: t('proxy.on.title'), message: t('proxy.on.msg'), detail: [t('proxy.on.d1'), t('proxy.on.d2')], confirmText: t('proxy.on.go'), kind: 'success', confirmIcon: 'power' }
+      ? { title: t('proxy.on.title'), message: t('proxy.on.msg'), detail: onDetail, confirmText: t('proxy.on.go'), kind: 'success', confirmIcon: 'power' }
       : { title: t('proxy.off.title'), message: t('proxy.off.msg'), detail: [t('proxy.off.d1'), t('proxy.off.d2'), t('proxy.off.d3')], confirmText: t('proxy.off.go'), danger: true, confirmIcon: 'power' });
     if (!ok) return;
     proxyBusy = on ? 'on' : 'off'; TP.emit('proxy', cur); TP.syncBtns();
+    var sp = null;
     try {
-      var st = keepState(await TP.helper('POST', '/api/proxy', { form: { on: on ? 1 : 0 }, timeout: 25000 }), on);
+      var r = await TP.helper('POST', '/api/proxy', { form: { on: on ? 1 : 0 }, timeout: 25000 }), st = keepState(r, on);
+      sp = r && r.sysproxy || null;
       ui.toast(t(st.enabled ? 'proxy.onDone' : 'proxy.offDone'), 'ok', 4200);
     } catch (e) {
       if (e && e.code === 'E_NOT_RUNNING') ui.toast(t('proxy.err.notRunning'), 'warn', 8000, { action: { label: t('act.restart.start'), fn: TP.safe(A.restart) } });
       else throw e;
     } finally { proxyDone(); }
+    if (sp) await A.followSysproxy(sp);       // 总开关已经打开了; 系统代理这一步失败不会撤销它, 只是提示 + 留下一键重试
   };
   /* 切换代理模式 (自动模式 <-> 全局代理): 先确认, 说明两种模式的区别; 代理关闭时也允许先选好 (保存, 开启后生效) */
   A.setProxyMode = async function (m) {

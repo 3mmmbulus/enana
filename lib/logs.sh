@@ -34,6 +34,9 @@ oplog() { # oplog <来源 dashboard|terminal|auto> <动作> <详情 (用 kv 生�
   [ "${LOG_OPS:-1}" = 1 ] || return 0
   oplog_force "$@"
 }
+sysproxy_record() { # <来源> <on|off> <返回码>  把「开启 / 关闭系统代理」的结果写进操作记录: 用了哪种授权方式 (method) 和失败原因 (err) —— 以前系统代理没开成功时不留任何痕迹
+  oplog "$1" "$([ "$2" = on ] && echo 开启系统代理 || echo 关闭系统代理)" "$(kv method "${SYSPROXY_METHOD:-}" err "${SYSPROXY_ERR:-}" port "${PORT:-}" mode "${NETWORK_MODE:-system}")" "$([ "$3" = 0 ] && echo ok || echo error)"
+}
 oplog_force() {
   local f ts; mkdir -p "$LOGS"
   ts=$(date '+%F %T'); f="$LOGS/ops-${ts%% *}.log"

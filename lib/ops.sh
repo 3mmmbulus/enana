@@ -198,6 +198,29 @@ op_restart() {
   if wait_port "$PORT" 15 && enhanced_ready; then proxy_sync_mode; oplog "${OP_WHO:-terminal}" "重启服务" "" ok; job_ok "服务已重启"; else oplog "${OP_WHO:-terminal}" "重启服务" "" error; job_fail "服务没有在 15 秒内启动, 运行 enana doctor 查看原因" 1; return 1; fi
 }
 
+# 开启 / 关闭系统代理 (仪表盘「开启系统代理」按钮和总开关共用): 后台任务 —— macOS 可能弹出管理员密码窗口, 等用户输入时不能卡住 HTTP 请求。
+# 系统代理只在「System Proxy」接管方式下使用; Enhanced/TUN 保留用户现有的系统代理设置, 不会改动它。
+op_sysproxy() { # on|off
+  local want=${1:-on} rc msg
+  case $want in on|off) ;; *) job_fail "参数无效" 0; return 1 ;; esac
+  if [ "$want" = on ] && [ "${NETWORK_MODE:-system}" = tun ]; then job_ok "Enhanced/TUN 模式不使用系统代理" '{"method":"tun"}'; return 0; fi
+  job_step 0 25 "修改系统代理"
+  os_sysproxy_apply "$want"; rc=$?
+  sysproxy_record "${OP_WHO:-dashboard}" "$want" "$rc"
+  job_step 1 90 "确认结果"
+  if [ "$rc" = 0 ]; then job_ok "$([ "$want" = on ] && echo '系统代理已指向 enana' || echo '系统代理已关闭')" "{\"method\":\"${SYSPROXY_METHOD:-}\"}"; return 0; fi
+  case ${SYSPROXY_ERR:-} in
+    user-canceled)   msg="已取消授权, 系统代理没有改动。需要时再点一次「开启系统代理」。" ;;
+    wrong-password)  msg="管理员密码不正确, 系统代理没有改动。请再试一次。" ;;
+    not-admin)       msg="当前 macOS 账户不是管理员, 无法修改系统代理。请用管理员账户登录 macOS 后再试。" ;;
+    no-gui-session)  msg="找不到可以弹出密码窗口的桌面会话。请在这台 Mac 的桌面上打开仪表盘再试。" ;;
+    not-authorized)  msg="macOS 没有允许 enana 弹出授权窗口。请在「系统设置 → 隐私与安全性 → 自动化」里允许后再试。" ;;
+    no-network-service) msg="没有找到已启用的网络服务, 请先连接网络。" ;;
+    *)               msg="系统代理没有改成功 (原因代码: ${SYSPROXY_ERR:-unknown}), 可以重试; 仍然失败请在「日志 → 导出」里导出诊断文件。" ;;
+  esac
+  job_fail "$msg" 0; return 1
+}
+
 op_update_rules() { # 规则集 (本地规则集文件变化后 sing-box 自动重载, 无需重启)
   job_step 0 5 "准备"
   QUIET=1
@@ -338,6 +361,7 @@ job_dispatch() {
     apps-scan)      op_txn "识别已安装的应用" txn_apps_scan ;;
     autosites-clear) op_txn "自动识别: 全部撤销" txn_autosites_clear ;;
     restart)        op_restart ;;
+    sysproxy)       op_sysproxy "$@" ;;
     update-rules)   op_update_rules ;;
     servers-import) TXN_INTERVAL=${3:-}; TXN_USED=${4:-}; TXN_TOTAL=${5:-}; TXN_EXPIRE=${6:-}; TXN_SAVE=${7:-}; op_txn "导入服务器" txn_import "${1:-}" "${2:-merge}" ;;
     servers-delete) op_txn "删除服务器" txn_delete "$1" ;;

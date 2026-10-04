@@ -1,6 +1,20 @@
 #!/bin/bash
 # Never allow native administrator scripting to change the real Mac in tests.
+#   「do shell script … with administrator privileges」(原生管理员密码框) 用 FAKE_DIALOG 模拟:
+#     (默认) 用户输入了密码 → 在管理员环境 (FAKE_ADMIN=1) 里执行命令   cancel → 用户点了取消 (真实错误文字)   denied → 当前账户不是管理员
 echo "osascript $*" >> "$FAKE_STATE/calls.log"
+if [ "${1:-}" = -e ]; then
+  case ${2:-} in
+    "do shell script \""*"\" with administrator privileges")
+      case ${FAKE_DIALOG:-ok} in
+        cancel) echo "execution error: User canceled. (-128)" >&2; exit 1 ;;
+        denied) echo "execution error: Not authorized to send Apple events to System Events. (-1743)" >&2; exit 1 ;;
+      esac
+      s=${2#"do shell script \""}; s=${s%"\" with administrator privileges"}
+      cmd=$(printf '%s' "$s" | perl -pe 's/\\([\\"])/$1/g')      # 还原 AppleScript 字符串转义 (一次遍历: \\ → \, \" → ")
+      FAKE_ADMIN=1 bash -c "$cmd"; exit $? ;;
+  esac
+fi
 case ${3:-} in
   */appicon.js) exec /usr/bin/osascript "$@" ;; # Read/render fixture icons only.
   */proxy-state.js)

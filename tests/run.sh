@@ -199,6 +199,20 @@ api -X POST "$A/api/proxy" -d 'on=maybe' | chk "代理开关: 参数无效 → �
 api -X POST "$A/api/proxy" -d 'on=1' | chk "手动开启代理 → enabled" 'assert d["ok"] and d["enabled"] is True'
 cl "$U/configs" | chk "开启后核心切到规则分流 (Rule)" 'assert d["mode"]=="Rule"'
 api "$A/api/state" | chk "state.proxy.enabled = true" 'assert d["proxy"]["enabled"] is True'
+api -X POST "$A/api/proxy" -d 'on=1' | chk "总开关开启时系统代理已经指向 enana: 不再改动它 (sysproxy.state=on)" 'assert d["ok"] and d["sysproxy"]["state"]=="on"'
+rm -f "$FAKE_STATE/sysproxy-on"; : > "$FAKE_STATE/calls.log"
+SPJ=$(api -X POST "$A/api/proxy" -d 'on=1' | tee "$W/sp.json" | jp 'print(d["sysproxy"].get("job",""))')
+chk "总开关开启时系统代理没有指向 enana: 自动在后台任务里开启 (state=pending + job), 不再必须去终端输入 enana on" 'assert d["ok"] and d["sysproxy"]["state"]=="pending" and d["sysproxy"]["job"]' < "$W/sp.json"
+[ "$(job_wait "$SPJ")" = done ] && tpass "系统代理后台任务完成" || tfail "系统代理后台任务完成"
+expect "系统代理已被后台任务重新指向 enana (不需要终端 / 管理员密码输入)" test -f "$FAKE_STATE/sysproxy-on"
+expect "这一步没有向标准输出污染 HTTP 响应, 也没有 sudo -v (仪表盘里没有终端可输入密码)" test "$(grep -c '^sudo -v' "$FAKE_STATE/calls.log")" = 0
+expect "操作记录里有「开启系统代理」(方式 direct, 结果 ok)" sh -c "grep -h '开启系统代理' '$W'/h/logs/ops-*.log | grep -q 'method=direct.*ok$'"
+SPJ=$(api -X POST "$A/api/sysproxy" -d 'on=0' | jp 'print(d["job"])'); [ "$(job_wait "$SPJ")" = done ] && tpass "POST /api/sysproxy on=0 → 后台任务完成" || tfail "POST /api/sysproxy on=0 → 后台任务完成"
+expect "单独关闭系统代理后不再指向 enana" test ! -f "$FAKE_STATE/sysproxy-on"
+api -X POST "$A/api/sysproxy" -d 'on=maybe' | chk "POST /api/sysproxy 参数无效 → 被拒" 'assert not d["ok"]'
+SPJ=$(api -X POST "$A/api/sysproxy" -d 'on=1' | jp 'print(d["job"])'); [ "$(job_wait "$SPJ")" = done ] && tpass "POST /api/sysproxy on=1 → 后台任务完成" || tfail "POST /api/sysproxy on=1 → 后台任务完成"
+expect "单独开启系统代理后指向 enana" test -f "$FAKE_STATE/sysproxy-on"
+api "$A/api/state" | chk "state.env.sysproxy 反映最新状态 (清掉 20 秒缓存)" 'assert d["env"]["sysproxy"] is True'
 expect "开关已写进设置与磁盘配置 (重启后保持)" sh -c "grep -q '^PROXY_ENABLED=1' '$W/h/settings.env' && grep -q '\"default_mode\":\"Rule\"' '$W/h/config.json'"
 login user2@example.test 'Another-Pass1' | chk "换另一个账号登录也可以 (没有绑定限制)" 'assert d["ok"] and d["account"]=="user2@example.test"'
 login user1@example.test 'Passw0rd!' >/dev/null

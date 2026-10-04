@@ -1,9 +1,18 @@
 #!/bin/bash
+# 测试用的假 networksetup (不改真实系统)。
+#   FAKE_SERVICES      换行分隔的网络服务名 (默认 Wi-Fi / Ethernet; 用来测带空格 / 引号的服务名)
+#   FAKE_NS_NEEDS_ADMIN=1  修改命令必须在「管理员环境」(FAKE_ADMIN=1, 由假 sudo / 假的管理员密码框设置) 下才成功, 否则像真的一样报错退出
 echo "networksetup $*" >> "$FAKE_STATE/calls.log"
 case $1 in
-  -listallnetworkservices) echo "An asterisk (*) denotes that a network service is disabled."; echo "Wi-Fi"; echo "Ethernet" ;;
+  -listallnetworkservices)
+    echo "An asterisk (*) denotes that a network service is disabled."
+    if [ -n "${FAKE_SERVICES:-}" ]; then printf '%s\n' "$FAKE_SERVICES"; else echo "Wi-Fi"; echo "Ethernet"; fi ;;
   -get*) if [ -f "$FAKE_STATE/sysproxy-on" ]; then echo "Enabled: Yes"; echo "Server: 127.0.0.1"; echo "Port: ${FAKE_PORT:-17890}"; else echo "Enabled: No"; echo "Server: "; echo "Port: 0"; fi ;;
-  -setwebproxy|-setsecurewebproxy|-setsocksfirewallproxy) touch "$FAKE_STATE/sysproxy-on" ;;
-  -set*state) rm -f "$FAKE_STATE/sysproxy-on" ;;
+  -setwebproxy|-setsecurewebproxy|-setsocksfirewallproxy|-setproxybypassdomains|-set*state)
+    if [ -n "${FAKE_NS_NEEDS_ADMIN:-}" ] && [ -z "${FAKE_ADMIN:-}" ]; then echo "** Error: Unable to obtain authorization. You must be root to change network settings." >&2; exit 14; fi
+    case $1 in
+      -setwebproxy|-setsecurewebproxy|-setsocksfirewallproxy) touch "$FAKE_STATE/sysproxy-on" ;;
+      -set*state) rm -f "$FAKE_STATE/sysproxy-on" ;;
+    esac ;;
 esac
 exit 0

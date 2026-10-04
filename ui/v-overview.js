@@ -81,7 +81,7 @@
     TP.on('update', function () { if (active()) renderEnv(); });
     TP.on('lang', function () { V.render(); paintDescs(); });
     TP.on('proxy', paintDescs); TP.on('state', paintDescs); paintDescs();
-    TP.on('proxy', function () { if (active()) renderWizard(); });
+    TP.on('proxy', function () { if (active()) { renderWizard(); renderEnv(); } });
     TP.on('prefs', function (d) { if (d && (d.all || /^ui\.welcome/.test(d.key)) && active()) renderWizard(); });
     setInterval(function () { if (active() && !document.hidden) updateSpeed(); }, 2000);
     TP.poll(testLatency, 10000, { delay: 1500 });
@@ -403,20 +403,22 @@
   function renderEnv() {
     var st = S.state;
     if (!st) { memo(el.env, 'none' + TP.noHelper(), function () { return h('p', { class: 'muted' }, t(TP.noHelper() ? 'ov.env.noHelper' : 'ov.env.loading')); }); return; }
-    var e = st.env || {}, p = st.platform || {}, u = S.update;
-    memo(el.env, JSON.stringify([e, Math.floor(Date.now() / 60000), st.version, S.core, p, u.available, u.latest, S.clash]), function () {
+    var e = st.env || {}, p = st.platform || {}, u = S.update, tun = !!(st.proxy && st.proxy.network_mode === 'tun'), spBusy = TP.actions.sysproxyBusy();
+    memo(el.env, JSON.stringify([e, Math.floor(Date.now() / 60000), st.version, S.core, p, u.available, u.latest, S.clash, tun, spBusy]), function () {
       var rows = [
         ['ov.env.core', !!e.core, S.core ? S.core.replace(/^sing-box\s*/i, '') : ''],
         ['ov.env.rules', !!e.rules, ''],
         ['ov.env.service', !!e.service, ''],
-        ['ov.env.sysproxy', !!e.sysproxy, e.sysproxy ? '' : t('ov.env.sysproxyOff')],
+        ['ov.env.sysproxy', tun || !!e.sysproxy, tun ? t('ov.env.sysproxyTun') : e.sysproxy ? '' : t('ov.env.sysproxyOff')],       // Enhanced/TUN 不使用系统代理, 不算问题
         ['ov.env.shortcut', !!e.shortcut, e.shortcut_cmd || (e.shortcut ? 'enana' : ''), e.shortcut ? t('ov.env.shortcutTip', { path: e.shortcut }) : t('ov.env.shortcutMissing')]       // 值 = 在终端里直接可运行的完整命令 (不是文件路径)
       ];
       var bad = rows.some(function (r) { return !r[1]; }), miss = (e.missing || e.rules_missing || []);
       var upd = +e.rules_updated || 0, stale = upd > 0 && (Date.now() / 1000 - upd) > 14 * 86400;
       return h('div', null,
         h('ul', { class: 'chk' }, rows.map(function (r) {
-          return h('li', { class: r[1] ? 'ok' : 'bad' }, h('span', { class: 'ck', 'aria-label': t(r[1] ? 'ov.env.ok' : 'ov.env.problem') }, ui.icon(r[1] ? 'check' : 'x', 13)), h('span', { class: 'chk-n' }, t(r[0])), r[2] ? h('span', { class: 'muted sm mono chk-d', title: r[3] || null }, r[2]) : null, r[2] && r[3] ? copyBtn(r[2]) : null);
+          var spFix = null;      // 系统代理没指向 enana: 这一行直接给「一键开启」按钮 (不用去终端)
+          if (r[0] === 'ov.env.sysproxy' && !r[1]) { spFix = ui.btn(t(spBusy ? 'sysproxy.row.busy' : 'sysproxy.row.go'), { sm: true, icon: 'power', kind: 'success' }); spFix.disabled = spBusy; ui.act(spFix, function () { return TP.actions.fixSysproxy(false); }); }
+          return h('li', { class: r[1] ? 'ok' : 'bad' }, h('span', { class: 'ck', 'aria-label': t(r[1] ? 'ov.env.ok' : 'ov.env.problem') }, ui.icon(r[1] ? 'check' : 'x', 13)), h('span', { class: 'chk-n' }, t(r[0])), r[2] ? h('span', { class: 'muted sm mono chk-d', title: r[3] || null }, r[2]) : null, r[2] && r[3] ? copyBtn(r[2]) : null, spFix);
         })),
         h('div', { class: 'kv-row rules-row' },
           h('span', { class: 'kv-k' }, t('ov.env.rulesUpdated')),

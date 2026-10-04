@@ -173,22 +173,62 @@ os_sysproxy_backup() {
     for k in webproxy securewebproxy socksfirewallproxy; do printf '[%s %s]\n%s\n' "$s" "$k" "$(networksetup -get$k "$s" 2>/dev/null)" >> "$H/proxy-backup.txt"; done
   done < <(os_sysproxy_services)
 }
-os_sysproxy_set() { # on|off  (需要管理员密码)
-  local s k v; [ "$1" = on ] && v=开启 || v=关闭
-  rm -f "$H/.cache-sysproxy"
-  sudo -v || return 1
-  [ "$1" != on ] || os_sysproxy_backup || return 1
+os_sysproxy_chain() { # on|off -> 打印要执行的 networksetup 命令串 (每个服务名都做了 shell 引用; 用绝对路径, 因为提权后 PATH 会被换掉); 任何一条命令失败, 整串的退出码就是 1
+  local s k c='r=0; ' q ns; ns=$(command -v networksetup 2>/dev/null || true); [ -n "$ns" ] || ns=/usr/sbin/networksetup
   while IFS= read -r s; do
+    q=$(enhanced_quote "$s")
     if [ "$1" = on ]; then
-      sudo networksetup -setwebproxy "$s" 127.0.0.1 "$PORT"
-      sudo networksetup -setsecurewebproxy "$s" 127.0.0.1 "$PORT"
-      sudo networksetup -setsocksfirewallproxy "$s" 127.0.0.1 "$PORT"
-      sudo networksetup -setproxybypassdomains "$s" localhost 127.0.0.1 '*.local' 169.254/16 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+      c="$c$ns -setwebproxy $q 127.0.0.1 $PORT || r=1; $ns -setsecurewebproxy $q 127.0.0.1 $PORT || r=1; $ns -setsocksfirewallproxy $q 127.0.0.1 $PORT || r=1; $ns -setproxybypassdomains $q localhost 127.0.0.1 '*.local' 169.254/16 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 || r=1; "
     else
-      for k in webproxy securewebproxy socksfirewallproxy; do sudo networksetup -set${k}state "$s" off; done
+      for k in webproxy securewebproxy socksfirewallproxy; do c="$c$ns -set${k}state $q off || r=1; "; done
     fi
-    ok "$s: 系统代理已$v"
   done < <(os_sysproxy_services)
+  printf '%sexit $r' "$c"
+}
+os_sysproxy_verify() { if [ "$1" = on ]; then os_sysproxy_ok; else ! os_sysproxy_mine; fi; }   # 修改之后回读确认: 开 = 所有网络服务都指向本程序; 关 = 没有任何服务还指向本程序
+os_admin_dialog() { # <命令串>  弹出 macOS 原生的管理员密码框 (仪表盘的后台服务没有终端); 写法与 enhanced_admin 的对话框分支完全相同 (真机验证过)
+  local cmd; cmd=$(enhanced_quote /bin/bash)' -c '$(enhanced_quote "$1")
+  cmd=$(printf '%s' "$cmd" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  osascript -e "do shell script \"$cmd\" with administrator privileges"
+}
+# 修改系统代理 (所有已启用的网络服务)。打开 / 关闭系统代理都不再要求「必须在终端里输入密码」:
+#   ① 当前用户直接修改 (管理员账户多数不需要密码)  ② 终端里用 sudo  ③ 已有免密 sudo  ④ 弹出 macOS 原生管理员密码框 (仪表盘用)
+# 每次修改后回读确认, 结果记在 SYSPROXY_METHOD (already|direct|sudo|sudo-nopass|dialog) 与 SYSPROXY_ERR (失败原因, 英文短码)。
+# 这个函数不向标准输出打印任何内容: 仪表盘的辅助服务里标准输出就是 HTTP 响应。
+os_sysproxy_apply() { # on|off [force]  -> 0 = 已是想要的状态 · 1 = 没有改成功; force = 已经是想要的状态也重新写一遍 (修复被改过的绕过列表)
+  local want=$1 c errf msg rc
+  SYSPROXY_METHOD=''; SYSPROXY_ERR=''
+  rm -f "$H/.cache-sysproxy"
+  if [ "${2:-}" != force ] && os_sysproxy_verify "$want"; then SYSPROXY_METHOD=already; return 0; fi
+  if [ "$want" = on ]; then os_sysproxy_backup >/dev/null 2>&1 || { SYSPROXY_ERR=backup-failed; return 1; }; fi
+  c=$(os_sysproxy_chain "$want"); [ "$c" != 'r=0; exit $r' ] || { SYSPROXY_ERR=no-network-service; return 1; }
+  errf=$(mktemp)
+  /bin/bash -c "$c" >/dev/null 2>"$errf"; rc=$?                                       # ① 直接修改
+  # 成功 = 所有命令都成功, 或回读确认所有网络服务都已是想要的状态 (个别服务读取出错时, 命令都成功了也不能判失败, 否则会反复要密码)
+  if [ "$rc" = 0 ] || os_sysproxy_verify "$want"; then SYSPROXY_METHOD=direct; rm -f "$errf" "$H/.cache-sysproxy"; return 0; fi
+  if [ -t 0 ] && [ -t 1 ]; then SYSPROXY_METHOD=sudo; sudo /bin/bash -c "$c" 2>"$errf" >/dev/null; rc=$?     # ② 终端: 密码提示走 /dev/tty
+  elif sudo -n true >/dev/null 2>&1; then SYSPROXY_METHOD=sudo-nopass; sudo -n /bin/bash -c "$c" >/dev/null 2>"$errf"; rc=$?   # ③
+  else SYSPROXY_METHOD=dialog; os_admin_dialog "$c" >/dev/null 2>"$errf"; rc=$?; fi                      # ④
+  rm -f "$H/.cache-sysproxy"
+  if [ "$rc" = 0 ] || os_sysproxy_verify "$want"; then rm -f "$errf"; return 0; fi
+  msg=$(head -c 300 "$errf" 2>/dev/null | tr '\n\t' '  '); rm -f "$errf"
+  case $msg in
+    *"-128"*|*"User canceled"*|*"user canceled"*) SYSPROXY_ERR=user-canceled ;;
+    *"-1743"*|*"not allowed"*|*"Not authorized"*|*"not authorized"*) SYSPROXY_ERR=not-authorized ;;
+    *"incorrect password"*|*"Sorry, try again"*) SYSPROXY_ERR=wrong-password ;;
+    *"not in the sudoers"*|*"not allowed to"*) SYSPROXY_ERR=not-admin ;;
+    *"window server"*|*"WindowServer"*|*"-1708"*) SYSPROXY_ERR=no-gui-session ;;
+    '') SYSPROXY_ERR=not-applied ;;
+    *) SYSPROXY_ERR=failed ;;
+  esac
+  return 1
+}
+os_sysproxy_set() { # on|off  终端里使用: 逐项打印结果; 同样会记入操作记录
+  local s v rc; [ "$1" = on ] && v=开启 || v=关闭
+  os_sysproxy_apply "$1" force; rc=$?
+  sysproxy_record "${OP_WHO:-terminal}" "$1" "$rc"
+  if [ "$rc" != 0 ]; then warn "系统代理没有${v}成功 (原因: ${SYSPROXY_ERR:-unknown}); 可以在仪表盘概览里再试一次"; return 1; fi
+  while IFS= read -r s; do ok "$s: 系统代理已$v"; done < <(os_sysproxy_services)
 }
 os_sysproxy_uninstall() {
   # Restore proxy fields/bypass lists, not just Enable=off with localhost still

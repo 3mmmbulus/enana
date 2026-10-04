@@ -276,6 +276,7 @@ const S = {
   /* 任务: 步骤名 / 完成消息 */
   'js.gen': ['生成配置', 'Generate config'], 'js.check': ['校验配置', 'Validate config'], 'js.apply': ['应用并重启', 'Apply and restart'], 'js.ready': ['等待就绪', 'Wait until ready'],
   'js.restart': ['重启服务', 'Restart service'], 'js.waitSvc': ['等待服务就绪', 'Wait for the service to be ready'],
+  'js.sysproxy': ['修改系统代理', 'Change the system proxy'], 'js.sysproxyCheck': ['确认结果', 'Verify the result'],
   'js.prep': ['准备', 'Prepare'], 'js.dlRules': ['下载规则集', 'Download rule sets'], 'js.applyRules': ['应用规则集', 'Apply rule sets'], 'js.finish': ['完成', 'Finish'],
   'js.dlCustom': ['下载规则集文件', 'Download the rule set file'], 'js.validateSrs': ['校验规则集格式', 'Validate the rule set format'],
   'js.netDirect': ['查询本机直连出口 IP', 'Look up the direct exit IP'], 'js.netPin': ['查询固定出口 IP', 'Look up the pinned exit IP'], 'js.netAuto': ['查询自动线路出口 IP', 'Look up the auto route exit IP'],
@@ -293,7 +294,7 @@ const S = {
   'jd.vpsProbe': ['检测完成', 'Detection finished'], 'jd.vpsProvision': ['服务器已部署, 已添加 {n} 个节点', 'The server is deployed and {n} node(s) were added'],
   'jd.vpsRedetect': ['已重新识别出口 IP (新增 {n} 个节点)', 'Exit IPs re-detected ({n} new node(s))'], 'jd.syncPush': ['已上传到云端 (版本 {v})', 'Uploaded to the cloud (version {v})'],
   'jd.syncPull': ['已从云端同步 (版本 {v})', 'Synced from the cloud (version {v})'],
-  'jd.restart': ['服务已重启', 'Service restarted'], 'jd.rules': ['规则集已更新 ({n} 个有变化, 0 个失败)', 'Rule sets updated ({n} changed, 0 failed)'], 'jd.net': ['已更新', 'Updated'],
+  'jd.restart': ['服务已重启', 'Service restarted'], 'jd.sysproxy': ['系统代理已指向 enana', 'The system proxy now points to enana'], 'jd.sysproxyCancel': ['已取消授权, 系统代理没有改动。需要时再点一次「开启系统代理」。', 'Authorization cancelled; the system proxy was not changed. Try again whenever you like.'], 'jd.rules': ['规则集已更新 ({n} 个有变化, 0 个失败)', 'Rule sets updated ({n} changed, 0 failed)'], 'jd.net': ['已更新', 'Updated'],
   'jd.updApp': ['已更新到 {v}, 辅助服务已重启', 'Updated to {v}; the helper service was restarted.'], 'jd.updCore': ['核心已更新到 {v}', 'Core updated to {v}.'],
   'jd.fail': ['配置未通过校验, 已撤销本次更改: sing-box check 报错 (模拟的失败)', 'The config did not pass validation and the change was rolled back: sing-box check reported an error (simulated failure).'],
   /* 测速 / 本机 IP */
@@ -939,7 +940,22 @@ route('POST', '/api/proxy', async (c) => {
   if (M.proxyOn !== wasOn || (M.proxyOn && M.proxyMode !== wasMode)) M.conns = [];     // 切换后现有连接会断开重连 (走新的路由)
   if (hasMode && M.proxyMode !== wasMode) oplog('dashboard', 'proxy.mode', kv({ mode: M.proxyMode, enabled: M.proxyOn ? 1 : 0 }));
   if (hasOn && M.proxyOn !== wasOn) oplog('dashboard', M.proxyOn ? 'proxy.on' : 'proxy.off', '');
-  return { ok: true, enabled: M.proxyOn, mode: M.proxyMode };
+  const out = { ok: true, enabled: M.proxyOn, mode: M.proxyMode };
+  if (hasOn && on === '1' && M.network !== 'tun') {                        // 打开总开关时系统代理一并指向 enana: 已经指向 → on · 被别的软件占用 → foreign (不擅自覆盖) · 否则后台任务开启 (pending + job)
+    if (M.env.sysproxy) out.sysproxy = { state: 'on' };
+    else if (M.sysproxyForeign) out.sysproxy = { state: 'foreign' };
+    else out.sysproxy = { state: 'pending', job: sysproxyJob(true) };
+  }
+  return out;
+});
+function sysproxyJob(want) {                                              // 开启 / 关闭系统代理的后台任务; M.sysproxyCancel = true 时模拟用户在 macOS 密码框里点了取消
+  const cancel = want && !!M.sysproxyCancel;
+  return newJob('sysproxy', ['js.sysproxy', 'js.sysproxyCheck'], 2600, { outage: false, noFail: true, fail: cancel, failAt: 0.7, failMsg: 'jd.sysproxyCancel', msg: 'jd.sysproxy', done: () => { M.env.sysproxy = want; M.sysproxyForeign = false; } });
+}
+route('POST', '/api/sysproxy', (c) => {
+  const on = c.p('on'); if (on !== '0' && on !== '1') throw E('E_INVALID', 'e.badBool');
+  oplog('dashboard', on === '1' ? 'sysproxy.on' : 'sysproxy.off', kv({ method: 'dialog' }));
+  return { ok: true, job: sysproxyJob(on === '1') };
 });
 route('POST', '/api/password', async (c) => {                            // 本机修改密码 (不需要 sudo: 旧密码就是验证); 成功后这台设备保持登录, 账号下的其它设备全部被退出
   const oldPw = String(c.form.old || ''), nw = String(c.form.new || '');   // 密码只读请求体, 绝不看 URL, 也不写进日志

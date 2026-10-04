@@ -1,11 +1,12 @@
 #!/bin/bash
 # 测试用的假 sudo: 记录调用并直接执行 (不提权)。支持 -v / -n / -S / -p <提示>; -S 时从标准输入读一行密码, 与 $FAKE_SUDO_PW (没设就是 ctl 里的 sudopw=) 比较, 不对就像真的 sudo 一样失败。
+#   FAKE_SUDO_NOPASS=0  模拟「需要密码」: sudo -n 失败 (和真的 sudo 一样提示需要密码)
 echo "sudo $*" >> "$FAKE_STATE/calls.log"
 [ "$1" = "-v" ] && exit 0
 S=0
 while [ $# -gt 0 ]; do
   case $1 in
-    -n) shift ;;
+    -n) [ "${FAKE_SUDO_NOPASS:-1}" = 0 ] && { echo "sudo: a password is required" >&2; exit 1; }; shift ;;
     -S) S=1; shift ;;
     -p) shift 2 ;;
     --) shift; break ;;
@@ -20,4 +21,4 @@ if [ "$S" = 1 ]; then
 fi
 # Root TUN installation must never escape the fixture, including CI as root.
 for arg in "$@"; do case $arg in */enhanced-root.sh) echo 'Simulated administrator cancellation' >&2; exit 1 ;; esac; done
-exec "$@"
+FAKE_ADMIN=1 exec "$@"
