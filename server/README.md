@@ -9,9 +9,11 @@ settlement, opt-in renewal, SMTP verification and a confirmation page. It has
 real PocketBase integration tests. Deployment deliberately leaves receiving
 disabled. The shared Mac/Windows dashboard now includes catalog checkout,
 exact-amount invoices, wallet purchase, renewal consent and verification mail.
-Official-node lease delivery and server-sharing controls remain separate work;
-this is not a complete Pro launch. Official lines still show coming soon, with
-an explicitly empty dedicated Claude pool.
+Official-node delivery is gated by a verified email, live device session and
+active Pro subscription. Independent server-sharing consent, operator review,
+private upstream refresh and one-hour client leases are implemented. Receiving
+remains disabled pending real email and receipt acceptance; the dedicated Claude
+pool remains empty. See [OFFICIAL_NODES.md](../docs/OFFICIAL_NODES.md).
 
 The ordinary account service sources are now tracked here for reproducible
 testing. User databases, SMTP passwords, provider keys, and upstream subscription

@@ -37,6 +37,7 @@
     if (names.indexOf(curTab) < 0) curTab = 'nodes';
     names.forEach(function (k) { panels[k] = h('div', { class: 'servers-pane', role: 'tabpanel', id: 'servers-panel-' + k }); panels[k].hidden = k !== curTab; });
     var tabs = ui.tabs(L('servers.tabs.aria'), names.map(function (k) { return { id: k, label: L('servers.tab.' + k), icon: k === 'vps' ? 'server' : k === 'subs' ? 'refresh' : k === 'official' ? 'pro' : 'nav-servers' }; }), function (k) {
+      if (k === 'official') TP.official.load();
       tabs.set(k); names.forEach(function (n) { panels[n].hidden = n !== k; }); TP.prefs.set('servers.tab', k);
     });
     names.forEach(function (k) { panels[k].setAttribute('aria-labelledby', tabs.btn(k).id); tabs.btn(k).setAttribute('aria-controls', panels[k].id); });
@@ -67,8 +68,9 @@
         el.tbody)),
       el.empty.el, el.pg.el));
 
-    /* enana 官方线路 (会员): 以后订阅用户登录后自动出现; 现在是「即将推出」占位卡片 (读 GET /api/plan 的 features.official_proxy) */
-    panels.official.appendChild(officialCard());
+    /* Authenticated official delivery; page navigation only reads status. */
+    panels.official.appendChild(TP.official.mount());
+    if (curTab === 'official') TP.official.load();
     panels.official.appendChild(h('section', { class: 'card srv-off' }, h('div', { class: 'card-h' }, ui.icon('pro', 20, 'ci'), h('h3', null, L('billing.dedicatedTitle')), ui.badge(L('billing.none'), 'neutral')), h('p', { class: 'muted' }, L('billing.dedicatedNote'))));
 
     /* 订阅 */
@@ -85,7 +87,6 @@
     TP.on('helper', function () { if (active()) V.render(); });
     TP.on('clash', function () { if (active()) V.render(); });
     TP.on('lang', function () { el.pinSel._sig = null; el.autoSel._sig = null; V.render(); });
-    TP.on('plan', function () { paintOfficial(); });
     TP.on('auth', function (ok) { if (ok && active()) V.render(); });
     setInterval(function () { if (active() && !document.hidden) paintTest(); }, 1000);
     V.render();
@@ -93,7 +94,7 @@
   V.show = function () { V.render(); TP.plan.load(false); };
 
   V.render = function () {
-    renderStrip(); renderTable(); renderSubs(); paintTest(); paintOfficial();
+    renderStrip(); renderTable(); renderSubs(); paintTest();
     if (nodeDlg) nodeDlg.render();
   };
 
@@ -190,10 +191,11 @@
     var role = pendingRole[s.tag] || s.role;
     if (r.role.value !== role) r.role.value = role;
     Array.prototype.forEach.call(r.role.options, function (o) {
+      o.disabled = !!(s.official && o.value === 'dl');
       var base = TP.name.role(o.value), txt = o.value === 'dl' && !canDl(s.type) ? t('servers.role.dlSuffix', { name: base }) : base;
       if (o.textContent !== txt) o.textContent = txt;
     });
-    ui.avail(r.role, why || (s.official ? t('servers.row.officialRole') : '') || (s.derived ? t('servers.row.derived') : '') || (busy ? t('servers.row.busy') : ''));
+    ui.avail(r.role, why || (s.derived ? t('servers.row.derived') : '') || (busy ? t('servers.row.busy') : ''));
     r.role.setAttribute('aria-label', t('servers.row.roleAria', { tag: s.tag }));
     // 徽章
     var b = [];
@@ -461,6 +463,7 @@
         { label: t('servers.row.usePin'), icon: 'pin', id: 'pin', keep: true, onClick: async function () { await switchTo('PIN', tag); render(); return false; } },
         { label: t('servers.row.useAuto'), icon: 'auto', id: 'auto', keep: true, onClick: async function () { await switchTo('Global', tag); render(); return false; } },
         { label: t('servers.nd.test'), icon: 'speed', id: 'test', keep: true, onClick: function () { return testOne(tag).then(function () { render(); return false; }); } },
+        { label: t('sharing.title'), icon: 'server', id: 'share', keep: true, unavail: s0.official || s0.sub || s0.derived ? { reason: t('sharing.ownedOnly') } : null, onClick: function () { return TP.official.share(cur()).then(function () { return false; }); } },
         { label: t('servers.nd.reveal'), icon: 'eye', id: 'rev', keep: true, onClick: reveal, unavail: s0.official ? { reason: t('servers.secret.official') } : null },
         { label: t('common.delete'), kind: 'danger', icon: 'delete', id: 'del', keep: true, unavail: s0.official ? { reason: t('servers.row.officialDel') } : null, onClick: function () { var s = cur(); dm.close('del'); return del(s).then(function () { return false; }); } },
         { label: t('common.close'), cancel: true, autofocus: true }
@@ -486,21 +489,5 @@
   }
 
   /* ================= enana 官方线路 (会员) 占位卡片 ================= */
-  function officialCard() {
-    el.offBadge = h('span', { class: 'srv-off-b' }); el.offDesc = h('p', { class: 'muted' });
-    el.offBtn = ui.btn(L('servers.off.more'), { sm: true, kind: 'ghost', icon: 'help-i' });
-    ui.act(el.offBtn, function () { TP.plan.explain('official_proxy'); });
-    el.off = h('section', { class: 'card srv-off is-soon' }, h('div', { class: 'card-h' }, ui.icon('pro', 20, 'ci pro-ic'), h('h3', null, L('servers.off.title'), ui.help('servers.official')), el.offBadge, el.offBtn), el.offDesc);
-    return el.off;
-  }
-  function paintOfficial() {
-    if (!el.off) return;
-    var d = TP.plan.get(), f = TP.plan.feature('official_proxy');
-    el.off.hidden = !!(d && !f.known);                                     // 云端没有这一项权益: 不显示占位卡片
-    var on = !!(f.enabled && d && d.official && d.official.available);
-    el.off.classList.toggle('is-soon', !on);
-    TP.clear(el.offBadge);
-    el.offBadge.appendChild(on ? ui.badge(t('servers.off.on', { n: (d.official && d.official.nodes) || 0 }), 'ok', 'success') : (f.comingSoon || !d) ? ui.badge(L('plan.soon'), 'info', 'clock') : ui.badge(L(f.reason === 'expired' ? 'plan.f.expired' : 'plan.f.upgrade'), 'warn', 'lock'));
-    setText(el.offDesc, t(on ? 'servers.off.descOn' : 'servers.off.desc'));
-  }
+
 })();

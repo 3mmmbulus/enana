@@ -31,7 +31,7 @@ const FEATURES = {
   core:           { tier: 'free' },
   sync:           { tier: 'free' },
   vps_deploy:     { tier: 'free' },
-  official_proxy: { tier: 'pro', coming_soon: true },
+  official_proxy: { tier: 'pro' },
 }
 
 // ---------------------------------------------------------------- 基础工具
@@ -549,23 +549,20 @@ function plan(e) {
   const g = needSession(e)
   if (g.res) return g.res
   const p = planFor($app, g.user, nowSec())
+  const ns = require(__hooks + '/enana_nodes.js'), compatible = ns.clientReady(e), features = entitlements(p)
+  if (!compatible) features.official_proxy = { enabled: false, tier: 'pro', coming_soon: true }
   return reply(e, 200, {
     plan: { code: p.code, title: p.title, max_devices_per_platform: p.limit },
     expires_at: p.expires_at,
     limits: { devices_per_platform: p.limit },
-    features: entitlements(p),
-    official: { available: false, nodes: 0 },
+    features: features,
+    official: compatible ? ns.summary($app, g.user, p, nowSec()) : { available: false, nodes: 0 },
   })
 }
 
 // 官方线路节点 (以后的会员功能) 的占位接口: 现在永远是空列表。
 // 上线后也只会在 official_proxy.enabled (套餐包含且功能已上线) 时才下发节点 —— 免费套餐永远拿不到。
-function nodes(e) {
-  const g = needSession(e)
-  if (g.res) return g.res
-  const ent = entitlements(planFor($app, g.user, nowSec()))
-  return reply(e, 200, { nodes: [], entitled: ent.official_proxy.enabled })
-}
+function nodes(e) { return require(__hooks + '/enana_nodes.js').nodes(e) }
 
 // ---------------------------------------------------------------- POST /account/password
 

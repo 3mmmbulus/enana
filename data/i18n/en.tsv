@@ -852,3 +852,13 @@ Enhanced/TUN 需要 sing-box 1.12 或更新版本	Enhanced/TUN requires sing-box
 新版本未就绪, 已回退	New version not ready; rolled back
 新版本未能启动, 已回退到 *	New version failed to start; rolled back to *
 Enhanced/TUN: 保留现有系统代理设置	Enhanced/TUN: preserving existing System Proxy settings
+官方线路暂时无法刷新，请稍后重试	Official nodes could not refresh. Try again later.
+官方线路授权已失效，已暂停代理	Official access expired; proxy use is paused.
+请刷新官方线路后重新开启；自建节点和设置已保留	Refresh official nodes before re-enabling; your own nodes and settings are preserved.
+刷新官方线路	Refresh official nodes
+官方线路不能删除	Official nodes cannot be deleted
+暂时无法更新服务器共享，请稍后重试	Server sharing could not update. Try again later.
+官方线路授权已失效，请先刷新官方线路	Official access expired. Refresh official nodes first.
+请先联网撤销该服务器的共享授权，再删除服务器	Connect and revoke this server’s sharing consent before deleting it.
+Windows 更新失败, 已保留当前版本 (详情见 api.log)	Windows update failed; the current version is retained (see api.log).
+enana * · * * * · bash * · 安装目录 * · 语言 *	enana * · * * * · bash * · install dir * · language *

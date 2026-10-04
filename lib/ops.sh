@@ -4,7 +4,7 @@
 # 因此连续快速的操作不会互相覆盖备份, 坏配置绝不会留在磁盘上。每次操作都会写一条「操作记录」(不含任何密码/令牌)。
 
 APPLY_STEPS='生成配置|校验配置|应用并重启|等待就绪'
-TXN_FILES="servers.jsonl subs.tsv dns.conf rules.state custom-rulesets.tsv settings.env overrides.tsv autosites.tsv autosites.dismissed custom-apps.tsv site-domains.tsv hosts.tsv speedtest-custom.tsv prefs.json vps.jsonl"
+TXN_FILES="servers.jsonl subs.tsv dns.conf rules.state custom-rulesets.tsv settings.env overrides.tsv autosites.tsv autosites.dismissed custom-apps.tsv site-domains.tsv hosts.tsv speedtest-custom.tsv prefs.json vps.jsonl official.json official.pending.json official.roles.json"
 TXN_ERR=''; TXN_RESULT=''
 
 op_wait_turn() { # 轮到我了吗? 等所有「更早创建且还在运行」的排队任务结束 (任务进程已死/卡住超过 5 分钟的忽略)
@@ -136,8 +136,8 @@ txn_import() { # sub mode   (内容来自 $JOB_BODY; 订阅信息来自 TXN_* �
   if [ "${TXN_SAVE:-}" = 1 ]; then sync_after_save; fi                    # 勾选了「保存到云端」: 第一次用会自动打开云端同步, 马上上传
   return 0
 }
-txn_delete() { srv_delete "$1"; }
-txn_role()   { srv_set_role "$1" "$2"; }
+txn_delete() { sharing_revoke_on_delete "$1" || return 1; srv_delete "$1"; }
+txn_role()   { if official_tag "$1"; then official_cache role "" "$1" "$2"; else srv_set_role "$1" "$2"; fi; }
 txn_subdel() { sub_delete "$1"; }
 
 txn_rules_toggle() { # tag 0|1
@@ -333,6 +333,7 @@ job_dispatch() {
   JOB_BODY="$H/jobs/$JOB_ID.body"
   case $JOB_NAME in
     apply)          op_apply ;;
+    official-refresh) op_txn "刷新官方线路" txn_official ;;
     override)       op_txn "修改应用/网站策略" txn_override "$@" ;;
     apps-adopt)     op_txn "采用推荐设置" txn_apps_adopt "$@" ;;
     apps-scan)      op_txn "识别已安装的应用" txn_apps_scan ;;

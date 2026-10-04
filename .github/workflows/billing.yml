@@ -2,9 +2,9 @@ name: Cloud billing foundation
 on:
   push:
     branches: [main]
-    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'ui/billing.js', 'tests/billing-*', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
+    paths: ['server/**', 'lib/billing.sh', 'lib/official*', 'lib/session.sh', 'lib/servers.sh', 'lib/snapshot.pl', 'ui/official.js', 'ui/plan.js', 'tests/nodes-*', 'tests/official-*', 'lib/api.sh', 'ui/billing.js', 'tests/billing-*', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
   pull_request:
-    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'ui/billing.js', 'tests/billing-*', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
+    paths: ['server/**', 'lib/billing.sh', 'lib/official*', 'lib/session.sh', 'lib/servers.sh', 'lib/snapshot.pl', 'ui/official.js', 'ui/plan.js', 'tests/nodes-*', 'tests/official-*', 'lib/api.sh', 'ui/billing.js', 'tests/billing-*', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
   workflow_dispatch:
 permissions:
   contents: read
@@ -28,10 +28,12 @@ jobs:
       - name: Test real database transactions and local SMTP activation
         env:
           PB_BIN: ${{ runner.temp }}/enana-pb-test/pocketbase
-        run: node --test tests/billing-domain.test.js tests/billing-pocketbase.test.js tests/email-verification-ui.test.js tests/billing-ui.test.js tests/billing-smtp-admin.test.js
+        run: node --test tests/billing-domain.test.js tests/billing-pocketbase.test.js tests/email-verification-ui.test.js tests/billing-ui.test.js tests/billing-smtp-admin.test.js tests/nodes-domain.test.js tests/nodes-catalog.test.js tests/nodes-pocketbase.test.js tests/official-ui.test.js
       - name: Check authenticated local bridge and exact amounts
-        run: python3 tests/billing-bridge.py
+        run: |
+          python3 tests/billing-bridge.py
+          python3 tests/nodes-client.py
       - name: Check deployment syntax
         run: |
-          bash -n server/deploy-billing.sh
-          python3 -m py_compile server/update-nginx.py
+          bash -n server/deploy-billing.sh server/deploy-nodes.sh
+          python3 -m py_compile server/update-nginx.py server/update-nodes-nginx.py

@@ -271,7 +271,7 @@ proxy_locked() { # <函数> [参数…]
   if [ "${OP_LOCK_HELD:-0}" = 1 ] || ! op_lock; then "$@"; return $?; fi
   "$@"; rc=$?; op_unlock; return $rc
 }
-_proxy_set() { settings_set "$1" "$2"; eval "$1=\$2"; proxy_apply_mode; }
+_proxy_set() { if [ "$1" = PROXY_ENABLED ] && [ "$2" = 1 ] && type official_blocked >/dev/null 2>&1 && official_blocked; then return 1; fi; settings_set "$1" "$2"; eval "$1=\$2"; proxy_apply_mode; }
 proxy_set_enabled() { proxy_locked _proxy_set PROXY_ENABLED "$1"; }                                           # 0|1
 proxy_set_mode() { case $1 in auto|global) ;; *) return 1 ;; esac; proxy_locked _proxy_set PROXY_MODE "$1"; }   # auto|global
 proxy_sync_mode() { # 核心刚(重新)启动后调用: 让运行时的模式与设置一致 (缓存文件里可能留着旧模式)

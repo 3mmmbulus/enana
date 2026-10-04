@@ -11,7 +11,7 @@ RESERVED_TAGS="direct AUTO PIN Global Final SPEEDTEST"
 
 srv_file() { printf '%s\n' "$H/servers.jsonl"; }
 
-srv_list() { # TSV: tag<TAB>type<TAB>server<TAB>port<TAB>role<TAB>sub
+srv_user_list() { # TSV: tag<TAB>type<TAB>server<TAB>port<TAB>role<TAB>sub
   [ -s "$H/servers.jsonl" ] || return 0
   LC_ALL=C awk '
     function str(s, key,   k, p) { k = "\"" key "\":\""; p = index(s, k); if (!p) return ""; s = substr(s, p + length(k)); return substr(s, 1, index(s, "\"") - 1) }
@@ -27,7 +27,7 @@ srv_list() { # TSV: tag<TAB>type<TAB>server<TAB>port<TAB>role<TAB>sub
     }' "$H/servers.jsonl"
 }
 
-srv_emit() { # TSV: role<TAB>tag<TAB>outbound_json (已替换 @CERTS@); 供配置生成器使用
+srv_user_emit() { # TSV: role<TAB>tag<TAB>outbound_json (已替换 @CERTS@); 供配置生成器使用
   [ -s "$H/servers.jsonl" ] || return 0
   LC_ALL=C awk -v certs="$H/certs" '
     {
@@ -41,7 +41,11 @@ srv_emit() { # TSV: role<TAB>tag<TAB>outbound_json (已替换 @CERTS@); 供配�
     }' "$H/servers.jsonl"
 }
 
+srv_list() { srv_user_list; type official_cache >/dev/null 2>&1 && official_cache list; return 0; }
+srv_emit() { srv_user_emit; type official_cache >/dev/null 2>&1 && official_cache emit; return 0; }
+
 srv_secret_fields() { # <tag> -> 打印 JSON 数组 [{name,value}] (只含凭据类字段); 0 = 找到  1 = 没有这个服务器  3 = 官方线路 (永远不显示)
+  case $1 in enana-official-*) return 3 ;; esac
   /usr/bin/perl -MJSON::PP -e '
     my ($tag, $file) = @ARGV; my $j = JSON::PP->new->utf8; open my $fh, "<", $file or exit 1;
     while (my $l = <$fh>) {
@@ -70,7 +74,7 @@ sync_list_batch() { # <srv|sub> 0|1 <名称文件 (每行一个)>   批量 (导�
   mv "$f.new" "$f"; chmod 600 "$f"
 }
 sync_list_all() { # 把现有的全部服务器和订阅都标成「同步」(用户在设置里明确打开云端同步时, 和以前「全部同步」的行为一致)
-  local t; t=$(mktemp); srv_list | cut -f1 | awk 'NF' > "$t"; sync_list_batch srv 1 "$t"
+  local t; t=$(mktemp); srv_user_list | cut -f1 | awk 'NF' > "$t"; sync_list_batch srv 1 "$t"
   awk -F'|' 'NF {print $1}' "$H/subs.tsv" 2>/dev/null > "$t"; sync_list_batch sub 1 "$t"; rm -f "$t"
 }
 
@@ -94,7 +98,7 @@ srv_check_line() { # 仪表盘提交的一行是否合法 (正则闸门; 真正�
   case $l in *'"detour"'*) return 1 ;; esac
   tag=$(printf '%s\n' "$l" | LC_ALL=C sed -n 's/^.*,"outbound":{"type":"[a-z0-9]*","tag":"\([^"]*\)".*/\1/p')
   case " $RESERVED_TAGS " in *" $tag "*) return 1 ;; esac
-  case $tag in svc-*|'') return 1 ;; esac
+  case $tag in svc-*|enana-official-*|'') return 1 ;; esac
   return 0
 }
 

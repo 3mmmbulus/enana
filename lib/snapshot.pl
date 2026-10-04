@@ -67,6 +67,7 @@ sub server_tag {    # servers.jsonl 一行 -> 节点名 (不是合法的节点�
     my ($l) = @_;
     my $d = eval { $JSON->decode(Encode::encode('UTF-8', $l)) };
     return undef unless ref $d eq 'HASH' && ref $d->{outbound} eq 'HASH';
+    return undef if $d->{official} || ($d->{outbound}{tag}//'') =~ /^enana-official-/;
     my $o = $d->{outbound};
     return undef unless defined $o->{tag} && !ref $o->{tag} && length $o->{tag} && !$RESERVED{ $o->{tag} };
     return undef unless defined $o->{type} && $o->{type} =~ /^[a-z0-9_]+$/;
@@ -101,6 +102,10 @@ sub collect {    # 读取家目录里可同步的内容 -> (文件 hash 引用, 
     for my $f (@FILES) {
         my $c = slurp("$home/$f");
         next unless defined $c && length $c;
+        if ($f eq 'servers.jsonl') {
+            my @safe = grep { my $d=eval{$JSON->decode(Encode::encode('UTF-8',$_))}; !(ref $d eq 'HASH' && ($d->{official} || (ref $d->{outbound} eq 'HASH' && ($d->{outbound}{tag}//'') =~ /^enana-official-/))) } lines($c);
+            $c = join("\n", @safe) . "\n";
+        }
         unless ($all) {
             if ($f eq 'servers.jsonl') {          # 只带「保存到云端」的节点 (节点名在清单里, 或它所属的订阅在清单里)
                 my @keep = grep { my $t = server_tag($_); my $s = server_sub($_); defined $t && ($st{$t} || (defined $s && $sb{$s})) } lines($c);
