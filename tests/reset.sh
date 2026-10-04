@@ -18,7 +18,7 @@ gone()  { if [ ! -e "$H/$2" ]; then tpass "$1"; else tfail "$1" "$2 还在"; fi;
 kept()  { if [ -s "$H/$2" ]; then tpass "$1"; else tfail "$1" "$2 没了"; fi; }
 
 command -v perl >/dev/null && command -v python3 >/dev/null && [ -x /usr/bin/openssl ] || { echo "跳过: 需要 perl / python3 / openssl"; exit 77; }
-export HOME=$W/home ENANA_HOME=$W/h LC_ALL=C ENANA_LANG=zh PORT=37890 UI_PORT=37891 API_PORT=37892 SPEED_PORT=37893 ENANA_PLATFORM=darwin ENANA_CLOUD_PUBKEY=$W/cpub.pem
+export ENANA_NO_DIAG=1 HOME=$W/home ENANA_HOME=$W/h LC_ALL=C ENANA_LANG=zh PORT=37890 UI_PORT=37891 API_PORT=37892 SPEED_PORT=37893 ENANA_PLATFORM=darwin ENANA_CLOUD_PUBKEY=$W/cpub.pem
 mkdir -p "$HOME" "$ENANA_HOME"
 . "$REPO/lib/common.sh"; init_paths "$REPO/install.sh"
 LIB=$REPO/lib; DATA=$REPO/data

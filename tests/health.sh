@@ -127,7 +127,16 @@ auth_logout_local() { :; }; op_sync_secret() { :; }
 session_call() { printf '401'; printf '{"reason":"limit"}' > "$1"; }
 session_heartbeat; rc=$?
 eq "云端撤销会话: 返回 1" "$rc" "1"
-has "「已被退出登录」: 来源 auto, 详情 reason=limit http=401 proxy_was=1 (以前是 terminal 且详情不是 key=value)" "auto	已被退出登录	reason=limit http=401 proxy_was=1	ok" "$(ops)"
+OPS4=$(ops)
+has "「已被退出登录」: 来源 auto, 详情 reason=limit http=401 proxy_was=1 (以前是 terminal 且详情不是 key=value)" "auto	已被退出登录	reason=limit http=401 proxy_was=1 " "$OPS4"
+has "…带上距上次心跳成功的秒数 since_ok_s (判断「一直正常后被撤销」还是「早就连不上」)" "已被退出登录.*since_ok_s=[0-9][0-9]*" "$OPS4"
+has "…带上会话尾号和调用链 (session=… via=session_heartbeat)" "session=id-1 via=session_heartbeat" "$OPS4"
+has "…云端没给 code 时只记 raw_reason, 不凭空编 resp_code" "raw_reason=limit	ok" "$OPS4"
+session_call() { printf '401'; printf '{"code":"unauthorized"}' > "$1"; }
+session_heartbeat >/dev/null
+has "令牌被云端直接拒绝 (没有 reason, resp_code=unauthorized): 登录框仍记 kicked, 日志里能和「真被踢」区分" "reason=kicked http=401 .*resp_code=unauthorized" "$(ops)"
+eq "心跳状态文件记下最近一次结果 (code=401)" "$(session_hb_get code)" "401"
+eq "…并保留最近一次成功的时间 (ok 不被失败覆盖)" "$([ -n "$(session_hb_get ok)" ] && echo kept || echo lost)" "kept"
 
 echo "== H5. 自动判定 (verdict): 每种原因都用合成数据验证"
 SP=$W/v; mkdir -p "$SP"
@@ -223,6 +232,144 @@ V=$(perl "$LIB/health.pl" outages < "$SP/F")
 has "outages: 找出 10 分钟的间歇故障时段" "node	Tokyo-Fix	timeout	10" "$V"
 V=$(perl "$LIB/health.pl" summary 30 < "$SP/F" | head -3)
 has "summary: 分桶统计带列名和 fail 次数" "^bucket	kind	target	n	ok	fail" "$V"
+
+
+echo "== H6. 自动判定 (新): 固定出口为空 · 节点按角色判断 · TUN 下 DNS 绕过 · 总开关是被谁关的"
+python3 - "$SP" "$NOW" <<'PY'
+import sys, os, datetime as dt
+sp, now = sys.argv[1], int(sys.argv[2])
+def t(m): return dt.datetime.fromtimestamp(now - m * 60).strftime('%Y-%m-%d %H:%M:%S')
+def L(m, kind, target, result, ms, det=''): return f"{t(m)}\t{kind}\t{target}\t{result}\t{ms}\t{det}\n"
+def w(name, txt): open(f'{sp}/{name}', 'w').write(txt)
+def build(down, ai=False):
+    rows = []
+    for m in range(60, 0, -1):
+        for n in ('Auto-1', 'Auto-2', 'Auto-3', 'Auto-4', 'Tokyo-Fix'):
+            bad = n in down and m <= 40
+            rows.append(L(m, 'node', n, 'timeout' if bad else 'ok', 0 if bad else 40))
+        if m % 5 == 0:
+            rows += [L(m, 'canary', 'google_204', 'ok', 200), L(m, 'canary', 'cn_direct', 'ok', 60)]
+            if ai: rows += [L(m, 'canary', 'chatgpt_web', 'timeout', 0), L(m, 'canary', 'openai_api', 'timeout', 0)]
+    return ''.join(rows)
+w('P1', build({'Auto-4'}, ai=True))                 # 4 台自动节点坏 1 台, 同时 AI 站点全部超时 (真实案例: 38 台里坏 1 台)
+w('N1', build({'Auto-1', 'Auto-2', 'Auto-3'}))      # 一半以上的自动节点不可达
+w('N2', build({'Tokyo-Fix'}))                       # 固定出口节点不可达
+w('N3', build({'Auto-4'}))                          # 只有 1 个自动节点不可达, 没有别的问题
+acc = "ts\tid\tnet\thost\tport\tapp\tuser\troute\tnode\treason\tresult\terr\tdur\tips\terrmsg\tpath\tcapture\n"
+for i in range(9): acc += f"{t(2 + i)}\t{i}\ttcp\tchatgpt.com\t443\tChatGPT\t<user>\tdirect\tdirect\tpolicy\terror\ttimeout\t10000\t\t\t\tmixed\n"
+w('accp', acc)
+base = f"sysproxy.HTTPEnable=1\nsysproxy.HTTPProxy=127.0.0.1\nsysproxy.HTTPPort={os.environ['PORT']}\nsysproxy.points_to_enana=yes\n"
+w('env.pin0', base + 'pin.servers=0\npin.app_policies=1\npin.selectors_on_pin=7\n')
+w('env.pin1', base + 'pin.servers=1\npin.app_policies=1\npin.selectors_on_pin=7\n')
+w('env.pinnone', base + 'pin.servers=0\npin.app_policies=0\npin.selectors_on_pin=0\n')
+w('env.old', base)
+w('env.tun', 'capture.tun.ready=yes\ndns.system=192.168.10.1 fe80::10%en0\n')
+w('meta.tun', 'proxy.enabled=1\nservice.running=1\ncapture.mode=tun\nports.proxy=9\naccount.logged_in=yes\n')
+hdr = "probe\tvia\turl\thttp\tconnect_ms\ttotal_ms\tremote_ip\tnote\n"
+def probes(tun_http, sysans, coreans):
+    return (hdr + "google_204\tproxy\thttp://www.gstatic.com/generate_204\t204\t0\t400\t127.0.0.1\tok\n"
+        "google_page\tproxy\thttps://www.google.com/\t200\t0\t600\t127.0.0.1\tok\n"
+        f"google_page\ttun\thttps://www.google.com/\t{tun_http}\t0\t0\t\t{'ok' if tun_http != '000' else 'curl-exit-28'}\n"
+        f"dns_system\tsystem\twww.google.com\t-\t-\t-\t{sysans}\t\n"
+        f"dns_core\tcore\twww.google.com\t-\t-\t-\t{coreans}\t\n")
+w('pr.bad', probes('000', '2001::1 104.244.42.197', '142.251.155.119 142.251.153.119'))
+w('pr.overlap', probes('000', '142.251.155.119', '142.251.155.119 142.251.153.119'))
+w('pr.ok', probes('200', '2001::1 104.244.42.197', '142.251.155.119 142.251.153.119'))
+# ops: 8 分钟前总开关被关 (调用链 via 记在「总开关变更」里), 随后记「已被退出登录」
+w('ops.sw', f"ts\twho\taction\tdetail\tresult\n{t(8)}\tauto\t总开关变更\tkey=PROXY_ENABLED from=1 to=0 via=_proxy_set<auth_logout_local<session_local_end<session_heartbeat pid=4242\tok\n{t(8)}\tauto\t已被退出登录\treason=kicked http=401 proxy_was=1\tok\n")
+PY
+V2() { perl "$LIB/health.pl" verdict "$NOW" "$SP/$1" "${2:-/dev/null}" "${3:-/dev/null}" "$4" "$5" "$6" "${7:-/dev/null}"; }
+AUTO4="Auto-1:auto,Auto-2:auto,Auto-3:auto,Auto-4:auto"
+V=$(V2 P1 /dev/null "$SP/accp" "$SP/meta" "$SP/env.pin0" "$AUTO4")
+has "P1 固定出口为空 (总开关开着, 4 台自动节点坏 1 台): 主因是 pin-empty, 而不是那台坏节点" "^verdict.cause=pin-empty" "$V"
+has "P1: 归因 client" "^verdict.blame=client" "$V"; has "P1: 有 policy 直连连接 → 高置信" "^verdict.confidence=high" "$V"
+has "P1: 摘要点明 unsupported_country_region_territory 不是线路不稳定" "unsupported_country_region_territory 就是这个原因" "$V"
+has "P1: 证据里有 pin.servers=0 和 policy 直连条数" "pin.servers=0 pin.app_policies=1 pin.selectors_on_pin=7 policy_direct_30m=9" "$V"
+hasnt "P1: 只坏了 1 台自动节点, 不再被判成 node-down" "^verdict.cause=node-down" "$V"
+has "P1: 那台坏节点只作为附带说明 (note.node_degraded)" "^note.node_degraded=" "$V"
+has "P1: ChatGPT 直连仍作为附带结论列出" "chatgpt-direct" "$V"
+has "P1: verdict.pin 汇总" "^verdict.pin=servers=0 app_policies=1 selectors_on_pin=7 policy_direct_30m=9" "$V"
+V=$(V2 P1 /dev/null "$SP/accp" "$SP/meta.off" "$SP/env.pin0" "$AUTO4")
+has "P2 总开关关着 + 固定出口为空: 主因仍是 proxy-disabled (最直接)" "^verdict.cause=proxy-disabled" "$V"; has "P2: pin-empty 在 also 里" "verdict.also.*pin-empty" "$V"
+V=$(V2 P1 /dev/null "$SP/accp" "$SP/meta" "$SP/env.pin1" "$AUTO4")
+hasnt "P3 已经有固定出口服务器: 不报 pin-empty" "pin-empty" "$V"
+V=$(V2 P1 /dev/null "$SP/accp" "$SP/meta" "$SP/env.pinnone" "$AUTO4")
+hasnt "P4 没有任何应用 / 服务选「固定出口」: 固定出口为空无所谓, 不报" "pin-empty" "$V"
+V=$(V2 P1 /dev/null "$SP/accp" "$SP/meta" "$SP/env.old" "$AUTO4")
+hasnt "P5 旧版导出 (env 里没有 pin.*): 不凭空下结论" "pin-empty" "$V"
+V=$(V2 N1 /dev/null /dev/null "$SP/meta" "$SP/env.old" "$AUTO4")
+has "N1 一半以上自动节点不可达: 仍判 node-down" "^verdict.cause=node-down" "$V"
+V=$(V2 N2 /dev/null /dev/null "$SP/meta" "$SP/env.old" "Tokyo-Fix:pin,Auto-1:auto,Auto-2:auto,Auto-3:auto,Auto-4:auto")
+has "N2 固定出口节点不可达: 判 node-down (固定出口不会漂移, 真的会影响使用)" "^verdict.cause=node-down" "$V"
+V=$(V2 N3 /dev/null /dev/null "$SP/meta" "$SP/env.old" "Tokyo-Fix:pin,Auto-1:auto,Auto-2:auto,Auto-3:auto,Auto-4:auto")
+hasnt "N3 只有 1 台自动节点不可达、没有别的问题: 不是 node-down" "^verdict.cause=node-down" "$V"
+has "N3: 结论是没发现明确故障" "^verdict.cause=no-issue-found" "$V"; has "N3: 坏节点只在 note 里" "^note.node_degraded=" "$V"
+V=$(V2 N3 /dev/null /dev/null "$SP/meta" "$SP/env.old" "")
+has "没有角色信息 (旧导出): 按原来的方式, 坏节点算 node-down" "^verdict.cause=node-down" "$V"
+V=$(V2 E /dev/null /dev/null "$SP/meta.tun" "$SP/env.tun" "Tokyo-Fix:pin" "$SP/pr.bad")
+has "T1 TUN + 系统 DNS 是局域网地址 + 答案和核心完全不同 + 走 TUN 的探测失败: tun-dns-bypass" "^verdict.cause=tun-dns-bypass" "$V"
+has "T1: 摘要写明系统 DNS 和两边的答案" "192[.]168[.]10[.]1.*104[.]244[.]42[.]197.*142[.]251[.]155[.]119" "$V"
+V=$(V2 E /dev/null /dev/null "$SP/meta.tun" "$SP/env.tun" "Tokyo-Fix:pin" "$SP/pr.overlap")
+hasnt "T2 答案有交集 (只是 CDN 差异): 不报" "tun-dns-bypass" "$V"
+V=$(V2 E /dev/null /dev/null "$SP/meta.tun" "$SP/env.tun" "Tokyo-Fix:pin" "$SP/pr.ok")
+hasnt "T3 走 TUN 的探测是通的: 不报 (DNS 不一样但没造成问题)" "tun-dns-bypass" "$V"
+V=$(V2 E /dev/null /dev/null "$SP/meta" "$SP/env.tun" "Tokyo-Fix:pin" "$SP/pr.bad")
+hasnt "T4 不是 TUN 模式: 不报 (系统代理模式下解析在代理端完成)" "tun-dns-bypass" "$V"
+V=$(V2 E "$SP/ops.sw" /dev/null "$SP/meta.off" "$SP/env.old" "Tokyo-Fix:pin")
+has "S1 总开关是被谁关的: 摘要里带调用链 via=…session_local_end<session_heartbeat" "via=_proxy_set<auth_logout_local<session_local_end<session_heartbeat" "$V"
+
+echo "== H7. 埋点: 总开关变更 · 核心重启 · 心跳状态 · 固定出口 / 会话事实"
+reset; PROXY_ENABLED=0
+caller_a() { proxy_set_enabled "$1"; }; caller_b() { caller_a "$1"; }
+caller_b 1
+O7=$(ops)
+has "总开关 0→1: 记「总开关变更」, 带来源 key / from / to" "auto	总开关变更	key=PROXY_ENABLED from=0 to=1 " "$O7"
+has "…调用链说明是谁改的" "via=_proxy_set<proxy_locked<proxy_set_enabled<caller_a<caller_b" "$O7"
+caller_b 1
+eq "值没有变化 (1→1) 不重复记录" "$(ops | grep -c 总开关变更)" "1"
+OP_WHO=dashboard caller_b 0
+has "来源取 OP_WHO (dashboard): 1→0 时再记一条" "dashboard	总开关变更	key=PROXY_ENABLED from=1 to=0 " "$(ops)"
+os_service_pid() { printf '4321'; }
+restart_via() { core_restart_note; }; restart_via2() { restart_via; }
+OP_WHO=terminal restart_via2
+has "核心重启前记「重启核心」: 带调用链和当时的核心 pid / 总开关" "terminal	重启核心	via=restart_via<restart_via2 pid=4321 proxy=0	ok" "$(ops)"
+reset; printf 'sid-9999\n' > "$H/session"; printf 'tok\n' > "$H/cloud.token"; printf 'a@b.c 1\n' > "$H/loggedin"
+session_hb_note 200; sleep 1; session_hb_note 000
+eq "心跳状态: code 取最近一次, ok 保留最近一次成功" "$(session_hb_get code)/$([ -n "$(session_hb_get ok)" ] && echo ok-kept)" "000/ok-kept"
+device_uid() { printf 'abcd1234-aaaa-bbbb-cccc-dddddddddddd'; }
+STUB_LOGIN=1; S7=$(_b_sessionfacts)
+has "会话事实: state=logged-in" "session.state=logged-in" "$S7"; has "…会话尾号 session.id_tail=9999" "session.id_tail=9999" "$S7"; has "…设备尾号 (和云端 device_uid 前 8 位对得上)" "session.device_tail=abcd1234" "$S7"
+has "…最近一次心跳的结果" "session.last_heartbeat_code=000" "$S7"; has "…最近一次成功距现在多久" "session.last_heartbeat_ok_age_s=[0-9][0-9]*" "$S7"
+STUB_LOGIN=0; eq "没登录: 只报 logged-out" "$(_b_sessionfacts)" "session.state=logged-out"
+srv_list() { printf 'N1\tvless\t1.2.3.4\t443\tauto\t\nN2\tvless\t1.2.3.5\t443\tauto\t\n'; }
+clash() { printf '{"proxies":{"PIN":{"type":"Selector","now":"direct","all":["direct"]},"svc-chatgpt":{"type":"Selector","now":"PIN","all":["PIN","Global","direct"]},"svc-claude":{"type":"Selector","now":"PIN","all":["PIN","Global","direct"]},"Global":{"type":"Selector","now":"AUTO","all":["AUTO"]}}}'; }
+apps_json() { printf '[{"name":"ChatGPT","state":"pin"},{"name":"Safari","state":"direct"}]'; }; apps_installed() { :; }
+PF=$(_b_pinfacts)
+has "固定出口事实: 没有 pin 角色的服务器 → pin.servers=0" "^pin.servers=0$" "$PF"; has "…PIN 组里只有 direct" "^pin.group_members=direct$" "$PF"
+has "…有几个选择器当前选的是 PIN (svc-chatgpt / svc-claude)" "^pin.selectors_on_pin=2$" "$PF"; has "…选了固定出口的应用数" "^pin.app_policies=1$" "$PF"
+unset -f apps_json apps_installed device_uid; . "$LIB/servers.sh"; . "$LIB/config.sh"; . "$LIB/os-darwin.sh"      # 还原上面为 H7 临时替换的函数, 不影响后面的测试
+
+
+echo "== H8. 固定出口为空: 状态里的 pin=… · 状态变化事件 · 第一次观察就为空也记一笔"
+reset; setsrv "$OPEN"; printf '{"outbounds":[{"type":"selector","tag":"svc-chatgpt","default":"PIN"}]}' > "$H/config.json"
+health_tick
+has "有固定出口服务器: state 行里 pin=ok" "pin=ok" "$(hf)"
+printf '{"role":"auto","outbound":{"type":"socks","tag":"Auto-A","server":"127.0.0.1","server_port":%s}}\n' "$OPEN" > "$H/servers.jsonl"
+health_tick
+has "固定出口服务器没了 + 有服务默认走固定出口: pin=empty" "pin=empty" "$(hf)"
+has "状态变化记一笔: item=pin from=ok to=empty (带依赖数)" "环境状态变化	item=pin from=ok to=empty pin_servers=0 dependents=1" "$(ops)"
+reset; printf '{"role":"auto","outbound":{"type":"socks","tag":"Auto-A","server":"127.0.0.1","server_port":%s}}\n' "$OPEN" > "$H/servers.jsonl"; printf '{"outbounds":[{"type":"selector","tag":"svc-claude","default":"PIN"}]}' > "$H/config.json"
+health_tick
+has "第一次观察就是空的 (例如重装后): 也记一笔 (from=-)" "item=pin from=- to=empty" "$(ops)"
+reset; printf '{"role":"auto","outbound":{"type":"socks","tag":"Auto-A","server":"127.0.0.1","server_port":%s}}\n' "$OPEN" > "$H/servers.jsonl"; printf '{"outbounds":[]}' > "$H/config.json"; rm -rf "$H/rules"
+health_tick
+has "没有任何服务 / 应用 / 网站依赖固定出口: pin=ok (空也无所谓)" "pin=ok" "$(hf)"
+hasnt "…也不记事件" "item=pin" "$(ops)"
+mkdir -p "$H/rules"; printf '{"version":2,"rules":[{"process_name":["ChatGPT"]}]}' > "$H/rules/ovr-apppin.json"
+eq "应用选了固定出口 (ovr-apppin 规则集有内容): 算一个依赖" "$(pin_dependents)" "1"
+printf '{"outbounds":[{"tag":"a","default":"PIN"},{"tag":"b","default":"PIN"}]}' > "$H/config.json"
+eq "再加 2 个默认走固定出口的服务: 共 3 个依赖" "$(pin_dependents)" "3"
+rm -rf "$H/rules" "$H/config.json"
 
 P=$(grep -c . "$W/.pass"); F=$(grep -c . "$W/.fail")
 echo; echo "健康记录测试: $P 通过, $F 失败"

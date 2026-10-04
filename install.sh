@@ -16,7 +16,7 @@ while [ -L "$_p" ]; do _l=$(readlink "$_p"); case $_l in /*) _p=$_l ;; *) _p=$(d
 _d=$(cd "$(dirname "$_p")" && pwd -P)
 . "$_d/lib/common.sh"
 init_paths "$_p"
-for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan sync vps menu detect console; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan sync vps diag menu detect console; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 load_settings
 
@@ -331,6 +331,23 @@ cmd_off() { proxy_set_enabled 0; oplog terminal "关闭代理" "$(kv enabled 0 v
 cmd_open() { os_open "$UI_URL"; echo "$UI_URL"; }
 cmd_env() { echo "export http_proxy=http://127.0.0.1:$PORT https_proxy=http://127.0.0.1:$PORT all_proxy=socks5://127.0.0.1:$PORT no_proxy=localhost,127.0.0.1,::1"; }
 cmd_logs() { tail -n "${ARG1:-100}" "$H/sing-box.log" 2>/dev/null || _t "(暂无日志)"; }
+cmd_diag_preview() { diag_summary_json; }      # 打印下一份「诊断摘要」(自动上传的内容): 只有结构化的状态 / 判定 / 操作记录, 没有网站、应用名、IP、服务器地址
+cmd_diag_upload() { # 立刻传一份诊断摘要 (不管设置里的自动上传开关, 但需要已登录)
+  local DIAG_UPLOAD=1
+  diag_enabled || die "没有登录, 或者不是 macOS" "先登录账号 (enana 里按 1 打开仪表盘)"
+  if diag_upload manual; then ok "已上传诊断摘要 (enana diag-preview 可以看到传了什么)"; else die "上传失败" "看操作记录里的「诊断上传」: enana logs"; fi
+}
+cmd_diag_send() { # 把完整诊断 (含访问过的域名 / 应用名) 发给 enana 开发者: enana diag-send [小时数]; 成功后给一个报告编号
+  local hours=${ARG1:-24}
+  case $hours in ''|*[!0-9]*) die "时间范围无效" "用法: enana diag-send [小时数]" ;; esac
+  info "完整诊断包含你访问过的域名和应用名, 只发给 enana 开发者, 云端 7 天后自动删除; 不含密码和令牌。"
+  confirm "确认发送?" n || { info "已取消"; return 1; }
+  if diag_send_full "$hours"; then ok "已发送。报告编号: $DIAG_ID (把它告诉开发者)"; else die "发送失败 (${DIAG_ERR:-unknown})" "没有登录就先登录; 太大就缩短时间范围; 看操作记录: enana logs"; fi
+}
+cmd_diag_delete() { # 删除自己已经上传的全部诊断
+  local n; n=$(diag_delete) || die "没能删除" "没有登录, 或者联系不上云端"
+  ok "已删除云端上你的 $n 份诊断"
+}
 cmd_diag() { # 诊断导出 (和仪表盘「日志 → 导出」同一份文件, 格式见 docs/DIAGNOSTICS.md): enana diag [小时数|all]; 终端里保存成文件, 接管道时直接输出
   local hours=${ARG1:-24} out
   case $hours in all) ;; ''|*[!0-9]*) die "时间范围无效" "用法: enana diag [小时数 1-$LOG_HOURS_MAX | all]" ;; esac
@@ -370,6 +387,7 @@ cmd_tick() { # 每分钟一次 (launchd): 流量统计采样; 每 ~2 分钟一�
   sync_auto_tick || true                       # 自动同步 (打开了才工作; 每 10 分钟检查一次)
   autosite_tick || true                        # 自动识别无法访问的网站 (设置里打开了才工作); 必须排在日志切分之前
   logs_tick || true                            # 日志: 每小时切分 / 压缩 / 按保留期 (最短 12 小时) 清理
+  diag_tick || true                            # 诊断摘要: 操作记录里有「值得上报」的新事件才上传一次 (见 lib/diag.sh; 设置里可关)
   return 0
 }
 
@@ -433,6 +451,10 @@ cmd_uninstall() {
   [ -n "$H" ] && [ "$H" != / ] && [ "$H" != "$HOME" ] && [ ! -L "$H" ] || { warn "安装目录不安全, 未执行卸载"; return 1; }
   local msg="确认完整卸载? 将还原系统代理、停止服务、删除快捷命令和全部本机数据 (账号、服务器、订阅、设置、日志与缓存)"
   confirm "$msg" n || { info "已取消"; return 1; }
+  # 本机数据 (包括设备编号) 马上要删除, 重装后会被云端当成一台新设备: 先同步告诉云端释放这台设备占用的名额, 否则要等 10 分钟没有心跳才会释放 (同账号每个平台最多 2 台)
+  if auth_logged_in && [ -n "$(session_id)" ]; then
+    if session_logout_wait; then info "已通知云端释放这台设备的在线名额"; else warn "没能联系上云端: 这台设备的在线名额会在 10 分钟没有心跳后自动释放"; fi
+  fi
   os_sysproxy_uninstall || return 1
   os_service_stop || return 1; enhanced_remove || return 1; os_aux_unload || return 1
   os_stop_owned_jobs || return 1
@@ -468,6 +490,8 @@ $(_t "  enana lang [zh|en]   切换界面语言 (终端与仪表盘)")
 $(_t "  enana doctor         诊断信息 (不含密码, 反馈问题时贴出来)")
 $(_t "  enana logs [行数]     查看日志")
 $(_t "  enana diag [小时数]   导出诊断文件 (操作记录 + 网站访问 + 代理日志 + 当前状态, 默认最近 24 小时; 接管道直接输出)")
+$(_t "  enana diag-preview   看下一份自动上传的诊断摘要 (没有网站 / 应用名 / IP / 服务器地址); diag-upload 立刻传一份")
+$(_t "  enana diag-send [小时数] 发送完整诊断给开发者 (含域名和应用名, 7 天后自动删除), 给一个报告编号; diag-delete 删除已上传的")
 $(_t "  enana open           打开仪表盘")
 $(_t "  enana env            打印终端代理变量 (命令行工具不读系统代理): eval \"\$(enana env)\"")
 $(_t "  enana uninstall      完整卸载 (删除全部本机数据)")
@@ -498,6 +522,10 @@ case ${CMD:-auto} in
   doctor)    cmd_doctor ;;
   logs)      cmd_logs ;;
   diag|diagnostics) cmd_diag ;;
+  diag-preview) cmd_diag_preview ;;
+  diag-upload) cmd_diag_upload ;;
+  diag-send) cmd_diag_send ;;
+  diag-delete) cmd_diag_delete ;;
   open)      cmd_open ;;
   env)       cmd_env ;;
   network-mode) cmd_network_mode ;;

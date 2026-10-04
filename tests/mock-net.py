@@ -99,6 +99,11 @@ class H(BaseHTTPRequestHandler):
             return self._reply(200, b'9.9.9\n')
         if p == '/dl/CHANGELOG.md':
             return self._reply(200, '# Changelog\n\n## 9.9.9 (2099-01-01)\n\n### 中文\n- 测试更新说明\n- 第二条\n\n### English\n- Test release notes\n\n## 2.1.0\n\n### 中文\n- 旧版本\n'.encode('utf-8'))
+        if p.startswith('/dl/core/') and os.environ.get('MOCK_CORE_DIR'):     # sing-box 兼容清单 + 签名 (tests/run.sh 用测试私钥生成)
+            f = os.path.join(os.environ['MOCK_CORE_DIR'], os.path.basename(p))
+            if os.path.isfile(f):
+                with open(f, 'rb') as fh:
+                    return self._reply(200, fh.read(), 'application/octet-stream')
         if p == '/file':
             return self._reply(200, b'x' * 3000000, 'application/octet-stream')
         self._reply(404, b'not found')

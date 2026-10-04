@@ -3,15 +3,18 @@
 
 CURL_BASE="-fL --connect-timeout 8 --speed-limit 10240 --speed-time 15 --max-time 900"
 
+# DL_SPEED (字节/秒, 可选): 比 CURL_BASE 更严的最低速度, 连续 DL_SPEED_TIME 秒低于它就放弃当前源换下一个。
+# 用在「还有备用源」的下载上: GitHub 在国内常常只有十几 KB/s, 高于 10 KB/s 的默认下限, 会白白等满 900 秒。
 _dl() { # url out [代理URL] [user:pass]
-  local url=$1 out=$2 px=${3:-} auth=${4:-} bar=-sS ms=''
+  local url=$1 out=$2 px=${3:-} auth=${4:-} bar=-sS ms='' sp=''
   if [ -t 2 ] && [ -z "${QUIET:-}" ]; then bar=--progress-bar; fi
   [ -n "${DL_MAXSIZE:-}" ] && ms="--max-filesize $DL_MAXSIZE"
+  [ -n "${DL_SPEED:-}" ] && sp="--speed-limit $DL_SPEED --speed-time ${DL_SPEED_TIME:-20}"
   if [ -n "$px" ]; then
-    if [ -n "$auth" ]; then curl $CURL_BASE $ms $bar -x "$px" --proxy-user "$auth" -o "$out" "$url"
-    else curl $CURL_BASE $ms $bar -x "$px" -o "$out" "$url"; fi
+    if [ -n "$auth" ]; then curl $CURL_BASE $sp $ms $bar -x "$px" --proxy-user "$auth" -o "$out" "$url"
+    else curl $CURL_BASE $sp $ms $bar -x "$px" -o "$out" "$url"; fi
   else
-    curl $CURL_BASE $ms $bar --noproxy '*' -o "$out" "$url"
+    curl $CURL_BASE $sp $ms $bar --noproxy '*' -o "$out" "$url"
   fi
 }
 
@@ -57,7 +60,60 @@ core_version() { # 带缓存: 只在二进制更新后才真正运行它 (每次
   printf '%s\n' "$v"
 }
 core_ok() { [ -x "$SB" ] && [ -n "$(core_version)" ]; }
-core_pin_sha() { awk -F'|' -v v="$1" -v s="$2" '$1==v && $2==s {print $3; exit}' "$DATA/core-pins.conf" 2>/dev/null; }
+
+# ---------- 核心备用下载源 + 签名的兼容清单 ----------
+# CORE_BASE: 项目自己的核心下载目录, 官方 GitHub 下不动 (太慢 / 连不上) 时作为第二个源。只放有 SHA-256 钉死的版本, 客户端逐个校验, 所以这个目录不需要被信任。
+# 兼容清单 core-manifest.conf: 项目测试过、和某段 enana 版本兼容的核心版本, 用云端内容同一把私钥签名 (core-manifest.sig, 内置公钥验签)。
+#   后台只会提示清单里「和当前 enana 兼容」的核心更新, 不再直接跟着 GitHub 的 latest 走 (tools/build-core-manifest.sh 生成并签名)。
+#   行格式  版本|名称|SHA-256|最低 enana|最高 enana (空 = 不限)    另有一行 seq|N: 只增不减, 防止被换回旧清单。
+CORE_BASE=${ENANA_CORE_BASE:-https://install.enana.cc/dl/core}
+
+core_names() { # 这台电脑要找的构建名称 (按优先顺序)。ARCH / MACOS_MAJOR 只在安装时由 os_detect 设置; 仪表盘接口 / 后台任务 / 每日维护进程里没有, 所以缺了就自己判断
+  local arch=${ARCH:-} major=${MACOS_MAJOR:-} n
+  if [ -z "$arch" ]; then arch=amd64; [ "$(uname -m)" = arm64 ] && arch=arm64; [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ] && arch=arm64; fi      # Rosetta 终端里也选原生版 (同 os_detect)
+  if [ -z "$major" ]; then major=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1); case $major in ''|*[!0-9]*) major=14 ;; esac; fi
+  n="darwin-$arch"
+  if [ "$arch" = amd64 ] && [ "$major" -lt 11 ]; then n="darwin-amd64-legacy-macos-10.13 darwin-amd64"; fi
+  printf '%s' "$n"
+}
+valid_nonempty() { [ -s "$1" ]; }
+valid_core_manifest() { [ -s "$1" ] && ! LC_ALL=C grep -q '<html' "$1" && grep -Eq '^seq\|[0-9]+$' "$1"; }
+core_manifest_seq() { sed -n 's/^seq|\([0-9][0-9]*\)$/\1/p' "$1" 2>/dev/null | head -1; }
+core_manifest_rows() { # 本机保存的、验签通过的清单里的版本行 (没有清单 / 验签失败 = 什么都不输出)
+  local f="$H/core-manifest.conf" s="$H/core-manifest.sig"
+  [ -s "$f" ] && [ -s "$s" ] && cloud_verify "$f" "$s" || return 0
+  grep -E '^[0-9]+(\.[0-9]+)+\|[A-Za-z0-9._-]+\|[0-9a-f]{64}\|' "$f" || true
+}
+core_manifest_refresh() { # 下载 + 验签 + 防回滚; 拿到了有效且不比本机旧的清单就返回 0
+  local t new old
+  t=$(mktemp -d)
+  if ! { QUIET=1 fetch_any "$t/c" valid_core_manifest "$CORE_BASE/core-manifest.conf" \
+      && QUIET=1 fetch_any "$t/s" valid_nonempty "$CORE_BASE/core-manifest.sig"; } >/dev/null 2>&1; then rm -rf "$t"; return 1; fi
+  cloud_verify "$t/c" "$t/s" || { rm -rf "$t"; return 1; }
+  new=$(core_manifest_seq "$t/c"); old=$(core_manifest_seq "$H/core-manifest.conf")
+  if [ -n "$old" ] && [ "${new:-0}" -lt "$old" ]; then rm -rf "$t"; return 1; fi
+  mkdir -p "$H"
+  cp "$t/c" "$H/core-manifest.conf.new" && cp "$t/s" "$H/core-manifest.sig.new" \
+    && mv "$H/core-manifest.sig.new" "$H/core-manifest.sig" && mv "$H/core-manifest.conf.new" "$H/core-manifest.conf"
+  local rc=$?; rm -rf "$t"; return $rc
+}
+core_latest_compat() { # 清单里「适用于这台电脑、且和当前 enana 版本兼容」的最新核心版本 (没有清单 = 空)
+  local names best='' v nm min max
+  names=$(core_names)
+  while IFS='|' read -r v nm _ min max; do
+    case " $names " in *" $nm "*) ;; *) continue ;; esac
+    if [ -n "$min" ] && version_gt "$min" "$VERSION"; then continue; fi
+    if [ -n "$max" ] && version_gt "$VERSION" "$max"; then continue; fi
+    if [ -z "$best" ] || version_gt "$v" "$best"; then best=$v; fi
+  done < <(core_manifest_rows)
+  printf '%s\n' "$best"
+}
+core_pin_sha() { # <版本> <名称> -> SHA-256: 先查随程序发布的 core-pins.conf (清单不能覆盖它), 再查本机验过签的兼容清单
+  local s
+  s=$(awk -F'|' -v v="$1" -v s="$2" '$1==v && $2==s {print $3; exit}' "$DATA/core-pins.conf" 2>/dev/null)
+  [ -n "$s" ] || s=$(core_manifest_rows | awk -F'|' -v v="$1" -v s="$2" '$1==v && $2==s {print $3; exit}')
+  printf '%s\n' "$s"
+}
 core_latest_version() { # 用 /releases/latest 的跳转拿版本号 (不走 API, 没有限流)
   local r px auth label u
   [ -n "${ENANA_CORE_LATEST:-}" ] && { printf '%s\n' "$ENANA_CORE_LATEST"; return 0; }      # 测试用
@@ -73,37 +129,52 @@ core_latest_version() { # 用 /releases/latest 的跳转拿版本号 (不走 API
   printf '%s\n' "$r" | sed -n 's#.*/tag/v\([0-9][0-9.]*\)$#\1#p'
 }
 
-core_urls() { # 名称 版本 是否带镜像(1/0): 每行一个 URL
-  local name=$1 ver=$2 mirrors=$3 tpl gh m
+core_urls() { # 名称 版本 有无 SHA-256 钉死(1/0) [fast|all]: 每行一个 URL, 顺序 = 官方发布页 → 项目自己的下载目录 → 第三方 GitHub 镜像
+  # 项目自己的目录和第三方镜像都不是官方源: 只在有 SHA-256 钉死时才用, 所以换不成别的文件。fast = 只要前两类 (第一轮快速切换用)。
+  local name=$1 ver=$2 pinned=$3 mode=${4:-all} tpl gh m
   while IFS= read -r tpl; do
     case $tpl in ''|'#'*) continue ;; esac
     gh=${tpl//\{ver\}/$ver}; gh=${gh//\{name\}/$name}
     printf '%s\n' "$gh"
-    if [ "$mirrors" = 1 ]; then
-      while IFS= read -r m; do
-        case $m in ''|'#'*) continue ;; esac
-        printf '%s%s\n' "$m" "$gh"
-      done < "$DATA/mirrors.conf"
-    fi
+  done < "$DATA/core-sources.conf"
+  [ "$pinned" = 1 ] || return 0
+  printf '%s/%s/sing-box-%s-%s.tar.gz\n' "$CORE_BASE" "$ver" "$ver" "$name"
+  [ "$mode" = fast ] && return 0
+  while IFS= read -r tpl; do
+    case $tpl in ''|'#'*) continue ;; esac
+    gh=${tpl//\{ver\}/$ver}; gh=${gh//\{name\}/$name}
+    while IFS= read -r m; do
+      case $m in ''|'#'*) continue ;; esac
+      printf '%s%s\n' "$m" "$gh"
+    done < "$DATA/mirrors.conf"
   done < "$DATA/core-sources.conf"
 }
 
+_core_try() { # <临时目录> <版本> <名称> <SHA-256|空> <fast|all>  -> 0 = 下载并解出了 $H/sing-box.new
+  local tmp=$1 ver=$2 nm=$3 expect=$4 mode=$5 u
+  set --; while IFS= read -r u; do set -- "$@" "$u"; done < <(core_urls "$nm" "$ver" "$([ -n "$expect" ] && echo 1 || echo 0)" "$mode")
+  if [ "$mode" = fast ]; then
+    DL_SPEED=${ENANA_DL_FAST_SPEED:-204800} DL_SPEED_TIME=${ENANA_DL_FAST_TIME:-20} EXPECT_SHA=$expect fetch_any "$tmp/sb.tgz" valid_core "$@" || return 1
+  else
+    EXPECT_SHA=$expect fetch_any "$tmp/sb.tgz" valid_core "$@" || return 1
+  fi
+  ok "下载完成 (线路: $DL_VIA)${expect:+, SHA-256 校验通过}"
+  tar -xzf "$tmp/sb.tgz" -C "$tmp" || return 1
+  cp "$tmp"/sing-box-*/sing-box "$H/sing-box.new" && chmod +x "$H/sing-box.new"
+}
+
 core_from_chain() { # -> $H/sing-box.new
-  local ver=${SINGBOX_VERSION:-$CORE_PIN} names nm expect tmp u
+  local ver=${SINGBOX_VERSION:-$CORE_PIN} nm expect tmp
   if [ "$ver" = latest ]; then
     ver=$(core_latest_version); [ -n "$ver" ] || { warn "查不到最新版本, 使用已测试版本 $CORE_PIN"; ver=$CORE_PIN; }
   fi
-  names="darwin-$ARCH"
-  if [ "$ARCH" = amd64 ] && [ "${MACOS_MAJOR:-14}" -lt 11 ]; then names="darwin-amd64-legacy-macos-10.13 darwin-amd64"; fi
   tmp=$(mktemp -d)
-  for nm in $names; do
+  for nm in $(core_names); do
     expect=$(core_pin_sha "$ver" "$nm")
-    set --; while IFS= read -r u; do set -- "$@" "$u"; done < <(core_urls "$nm" "$ver" "$([ -n "$expect" ] && echo 1 || echo 0)")
     info "下载 sing-box $ver ($nm)${expect:+, 将校验 SHA-256}"
-    if EXPECT_SHA=$expect fetch_any "$tmp/sb.tgz" valid_core "$@"; then
-      ok "下载完成 (线路: $DL_VIA)${expect:+, SHA-256 校验通过}"
-      tar -xzf "$tmp/sb.tgz" -C "$tmp" || { rm -rf "$tmp"; return 1; }
-      cp "$tmp"/sing-box-*/sing-box "$H/sing-box.new" && chmod +x "$H/sing-box.new"
+    # 有 SHA-256 钉死才有备用源可换。第一轮只试「官方 + 项目自己的目录」, 速度太低 (GitHub 在国内常常只有十几 KB/s) 就立刻换下一个源;
+    # 都不行再放宽速度要求, 把全部源 (含第三方镜像) 按慢速也试一遍。
+    if { [ -n "$expect" ] && _core_try "$tmp" "$ver" "$nm" "$expect" fast; } || _core_try "$tmp" "$ver" "$nm" "$expect" all; then
       rm -rf "$tmp"; return 0
     fi
   done

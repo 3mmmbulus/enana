@@ -4,7 +4,7 @@
 #   health.pl probe [超时秒数]                      标准输入每行  标签<TAB>主机<TAB>端口  → 每行  标签<TAB>结果<TAB>毫秒<TAB>说明  (并行, 每个目标一个子进程)
 #   health.pl summary <分钟数/桶> < health.tsv      → 分桶统计 (时间 种类 目标 次数 成功 失败 平均ms 最大ms 错误分布)
 #   health.pl outages < health.tsv                  → 连续失败的时段 (开始 结束 分钟 种类 目标 结果)
-#   health.pl verdict <现在 epoch> <health> <ops> <access> <meta> <env> <节点标签:角色,…>   → 自动判定 (kv 行)
+#   health.pl verdict <现在 epoch> <health> <ops> <access> <meta> <env> <节点标签:角色,…> [probes]   → 自动判定 (kv 行)
 #
 # 健康记录一行 (lib/health.sh 写入, 制表符分隔):  时间  种类  目标  结果  毫秒  说明(键=值)
 #   node    <服务器标签>  ok|timeout|refused|unreachable|dns|other   本机直接连服务器端口的 TCP 连接耗时 (每分钟)
@@ -132,9 +132,9 @@ sub cmd_outages {
 
 # ------------------------------------------------------------------ verdict
 sub cmd_verdict {
-  my ($now, $hf, $of, $af, $mf, $ef, $nodes) = @ARGV;
+  my ($now, $hf, $of, $af, $mf, $ef, $nodes, $pf) = @ARGV;
   $now = time unless defined $now && $now =~ /^\d+$/;
-  my $H = load_health_file($hf); my $ops = read_tsv($of); my $acc = read_tsv($af); my $meta = read_kv($mf); my $env = read_kv($ef);
+  my $H = load_health_file($hf); my $ops = read_tsv($of); my $acc = read_tsv($af); my $meta = read_kv($mf); my $env = read_kv($ef); my $P = read_tsv($pf);
   my %role; for my $p (split /,/, $nodes // '') { my ($t, $r) = split /:/, $p, 2; $role{$t} = $r // '' if length($t // ''); }
   my @L; my $add = sub { push @L, join('=', @_); };
   my $RECENT = 1800; my $recent_from = $now - $RECENT;
@@ -162,7 +162,9 @@ sub cmd_verdict {
   # ---- 操作记录里和「为什么代理没在工作」有关的事件
   my @events; for my $o (@$ops) { next if @$o < 5; my ($ts, $who, $act, $det, $res) = @$o; next if $ts eq 'ts';
     push @events, { ts => $ts, e => epoch_of($ts) // 0, who => $who, act => $act, det => $det, res => $res, d => detail_kv($det) }; }
-  my $last_off; for my $ev (reverse @events) { if ($ev->{act} =~ /^(关闭代理|退出账号|已被退出登录)$/ || ($ev->{act} eq '环境状态变化' && ($ev->{d}{item} // '') eq 'proxy' && ($ev->{d}{to} // '') eq '0')) { $last_off = $ev; last; } }
+  my $last_off; for my $ev (reverse @events) { if ($ev->{act} =~ /^(关闭代理|退出账号|已被退出登录)$/ || ($ev->{act} eq '总开关变更' && ($ev->{d}{key} // '') eq 'PROXY_ENABLED' && ($ev->{d}{to} // '') eq '0') || ($ev->{act} eq '环境状态变化' && ($ev->{d}{item} // '') eq 'proxy' && ($ev->{d}{to} // '') eq '0')) { $last_off = $ev; last; } }
+  # 总开关变更 (lib/config.sh _proxy_set 里记的) 带着调用链 via: 离「最近一次关闭」最近的那条, 用来说明是谁、通过什么路径关的
+  my $off_via = ''; if ($last_off) { for my $ev (reverse @events) { next unless $ev->{act} eq '总开关变更' && ($ev->{d}{key} // '') eq 'PROXY_ENABLED' && ($ev->{d}{to} // '') eq '0'; if (abs($ev->{e} - $last_off->{e}) <= 10) { $off_via = $ev->{d}{via} // ''; last; } } }
   my $last_on; for my $ev (reverse @events) { if ($ev->{act} eq '开启代理' || ($ev->{act} eq '环境状态变化' && ($ev->{d}{item} // '') eq 'proxy' && ($ev->{d}{to} // '') eq '1')) { $last_on = $ev; last; } }
 
   # ---- 节点 / 金丝雀统计
@@ -190,7 +192,7 @@ sub cmd_verdict {
   # ================= 判定 =================
   my @C;   # [code, blame, confidence, since, zh, en, evidence…]
   my $push = sub { push @C, [@_]; };
-  my $why_off = $last_off ? "$last_off->{ts} $last_off->{who} $last_off->{act}" . ($last_off->{d}{reason} ? " (reason=$last_off->{d}{reason})" : '') : '';
+  my $why_off = $last_off ? "$last_off->{ts} $last_off->{who} $last_off->{act}" . ($last_off->{d}{reason} ? " (reason=$last_off->{d}{reason})" : '') . ($off_via ? " via=$off_via" : '') : '';
 
   if (($meta->{'proxy.enabled'} // '') eq '0') {
     my $since = $state_since->('proxy', '0') // ($last_off ? $last_off->{ts} : '');
@@ -214,27 +216,61 @@ sub cmd_verdict {
   if ($cap eq 'tun' && $proxy_on && !$tun_ready) {
     $push->('tun-not-ready', 'client', 'high', '', "已选择 Enhanced/TUN, 但 TUN 服务还没有就绪 (没有建立 utun 路由), 流量没有被接管。", "Enhanced/TUN is selected but the TUN service is not ready (no utun route), so traffic is not captured.");
   }
+  # 固定出口为空: 选了「固定出口」的应用 / 服务没有任何服务器可用, 它们全部直连 (真实 IP 出口)。ChatGPT 返回 unsupported_country_region_territory 的典型原因,
+  # 而且从表面看「总开关开着、节点都正常」, 以前的判定完全看不出来。读 env 分区的 pin.* (lib/logs.sh _b_pinfacts) 和访问记录里 reason=policy 的直连。
+  my $pin_n = $env->{'pin.servers'}; my $pin_apps = $env->{'pin.app_policies'} // 0; my $pin_sel = $env->{'pin.selectors_on_pin'} // 0;
+  my $policy_direct = 0;
+  for my $a (@$acc) { next if @$a < 12 || $a->[0] eq 'ts'; next unless ($a->[7] // '') eq 'direct' && ($a->[9] // '') eq 'policy'; my $e = epoch_of($a->[0]) // 0; $policy_direct++ if $e >= $recent_from; }
+  if (defined $pin_n && $pin_n =~ /^\d+$/ && $pin_n == 0 && ($pin_apps > 0 || $pin_sel > 0)) {
+    $push->('pin-empty', 'client', ($policy_direct > 0 ? 'high' : 'medium'), ($state_since->('pin', 'empty') // ''),
+      "「固定出口」是空的: 没有任何服务器被设为固定出口, 但有 $pin_apps 个应用策略和 $pin_sel 个网站 / 服务策略 (如 ChatGPT / Claude 一类) 选了它 —— 它们现在全部直连 (用你的真实 IP 出口), 根本不会走代理" . ($policy_direct > 0 ? " (最近 30 分钟有 $policy_direct 条这样的连接)" : "") . "。OpenAI 返回 unsupported_country_region_territory 就是这个原因, 不是线路不稳定。到仪表盘「服务器」页把一台服务器设为「固定出口」。",
+      "The Fixed exit is empty: no server is set as the fixed exit, yet $pin_apps app polic" . ($pin_apps == 1 ? 'y' : 'ies') . " and $pin_sel site/service polic" . ($pin_sel == 1 ? 'y' : 'ies') . " (e.g. ChatGPT / Claude) point to it, so they connect directly with your real IP and never use the proxy" . ($policy_direct > 0 ? " ($policy_direct such connections in the last 30 minutes)" : "") . ". OpenAI's unsupported_country_region_territory comes from exactly this — it is not an unstable line. Set one server as the Fixed exit on the Servers page.",
+      "pin.servers=0 pin.app_policies=$pin_apps pin.selectors_on_pin=$pin_sel policy_direct_30m=$policy_direct");
+  }
+  # TUN: 系统 DNS 指向局域网地址 (路由器) 时, 这类地址在 TUN 的 route_exclude_address 里, DNS 劫持看不到查询, 拿到被污染的结果; 表现为: 经代理端口访问正常, 走 TUN 的探测却失败
+  my %pr; for my $r (@$P) { next if @$r < 8 || $r->[0] eq 'probe'; $pr{"$r->[0]|$r->[1]"} = $r; }
+  if ($cap eq 'tun' && $proxy_on && $tun_ready) {
+    my ($gt, $gp, $ds, $dc) = @pr{'google_page|tun', 'google_page|proxy', 'dns_system|system', 'dns_core|core'};
+    my @sa = split ' ', ($ds ? ($ds->[6] // '') : ''); my @ca = split ' ', ($dc ? ($dc->[6] // '') : '');
+    my %cs = map { $_ => 1 } @ca; my $overlap = scalar grep { $cs{$_} } @sa;
+    my ($res1) = (($env->{'dns.system'} // '') =~ /^(\d+\.\d+\.\d+\.\d+)/);
+    my $priv = defined $res1 && ($res1 =~ /^(10\.|192\.168\.|169\.254\.)/ || $res1 =~ /^172\.(1[6-9]|2\d|3[01])\./);
+    if ($gt && ($gt->[3] // '') eq '000' && $gp && ($gp->[3] // '') =~ /^[23]/ && @sa && @ca && !$overlap && $priv) {
+      $push->('tun-dns-bypass', 'client', 'medium', '',
+        "TUN 模式下, 系统 DNS (" . ($res1) . ", 局域网地址) 对 www.google.com 返回的结果 (" . join(' ', @sa[0 .. ($#sa > 3 ? 3 : $#sa)]) . ") 和核心的解析结果 (" . join(' ', @ca[0 .. ($#ca > 3 ? 3 : $#ca)]) . ") 完全不同, 而且走 TUN 的 Google 探测失败 (经代理端口访问是正常的)。局域网地址被排除在 TUN 之外, DNS 劫持没有生效, 系统 DNS 很可能返回了被污染的地址; 依赖系统 DNS 的应用会连到错误的 IP。",
+        "In TUN mode the system DNS ($res1, a LAN address) answers for www.google.com (" . join(' ', @sa[0 .. ($#sa > 3 ? 3 : $#sa)]) . ") differ completely from the core's (" . join(' ', @ca[0 .. ($#ca > 3 ? 3 : $#ca)]) . "), and the Google probe through TUN fails while the proxy-port probe works. LAN addresses are excluded from TUN, so DNS hijack never sees these queries and the resolver most likely returns poisoned addresses; apps relying on system DNS connect to wrong IPs.",
+        "dns.system=" . ($env->{'dns.system'} // '') . " google_page_tun=" . ($gt->[7] // '') . " google_page_proxy_http=" . ($gp->[3] // ''));
+    }
+  }
   # 本机网络 / 节点
   my $ctl = $c_rec{cn_direct}; my $ctl_down = $ctl && $ctl->{n} >= 2 && $ctl->{ok} / $ctl->{n} < .5;
   my @node_down; my @node_flaky;
   for my $t (sort keys %n_rec) { my $y = $n_rec{$t}; my $a = $n_all{$t};
     if ($y->{n} >= 3 && $y->{ok} / $y->{n} < .5) { push @node_down, $t; }
     elsif ($a->{n} >= 20 && ($a->{n} - $a->{ok}) >= 5 && ($a->{n} - $a->{ok}) / $a->{n} >= .03) { push @node_flaky, $t; } }
+  # 「自动线路」(role=auto) 里个别节点坏了不是故障: 自动选线会避开它们。只有固定出口 / 其它角色的节点不可达, 或者一半以上的自动节点都不可达, 才算服务器的问题;
+  # 否则只作为 node-degraded (低优先级) 附带提一句 —— 以前 38 台里坏 1 台就会被判成主因, 把真正的原因 (例如固定出口为空) 盖住了。没有角色信息 (旧导出) 时按原来的方式全部算。
+  my $is_auto = sub { ($role{ $_[0] } // '') eq 'auto' };
+  my @auto_all = grep { $is_auto->($_) } keys %n_rec; my @auto_down = grep { $is_auto->($_) } @node_down;
+  my $auto_majority_down = (@auto_all && @auto_down / @auto_all >= .5) ? 1 : 0;
+  my @node_down_rel = grep { !$is_auto->($_) || $auto_majority_down } @node_down;
+  my @node_degraded = grep { $is_auto->($_) && !$auto_majority_down } @node_down;
+  my @node_flaky_rel = grep { !$is_auto->($_) } @node_flaky;
   if (@node_down && $ctl_down) {
     $push->('local-network-down', 'network', 'medium', '', "最近 30 分钟本机网络本身不通 (连苹果的对照站点都访问失败, 同时所有服务器端口也不通), 先检查 Wi-Fi / 网线 / 路由器 —— 不是服务器或 enana 的问题。", "In the last 30 minutes the local network itself was down (even Apple's control site failed along with every server port). Check Wi-Fi / cable / router — not the server or enana.");
-  } elsif (@node_down) {
-    my $d = join(', ', map { my $y = $n_rec{$_}; "$_ (" . pct($y->{ok}, $y->{n}) . ")" } @node_down);
-    $push->('node-down', 'node', ($ctl ? 'high' : 'medium'), '', "服务器端口当前不可达 (最近 30 分钟可达率): $d。" . ($ctl ? "本机网络正常 (对照站点可访问), 说明是这台服务器 / 机房线路的问题" : "(没有本机网络的对照数据, 无法排除是本机断网; 看 health 分区里 cn_direct 是否同时失败)") . " —— 不是 enana 代码。", "Server port(s) currently unreachable (reachability over the last 30 minutes): $d. " . ($ctl ? "The local network is fine (the control site works), so the server or its network is at fault" : "There is no local-network control data, so a local outage cannot be ruled out — check whether cn_direct fails at the same time in the health section") . " — not enana.", map { "node=$_ recent=$n_rec{$_}{ok}/$n_rec{$_}{n}" } @node_down);
+  } elsif (@node_down_rel) {
+    my $d = join(', ', map { my $y = $n_rec{$_}; "$_ (" . pct($y->{ok}, $y->{n}) . ")" } @node_down_rel);
+    $push->('node-down', 'node', ($ctl ? 'high' : 'medium'), '', "服务器端口当前不可达 (最近 30 分钟可达率): $d。" . ($ctl ? "本机网络正常 (对照站点可访问), 说明是这台服务器 / 机房线路的问题" : "(没有本机网络的对照数据, 无法排除是本机断网; 看 health 分区里 cn_direct 是否同时失败)") . " —— 不是 enana 代码。", "Server port(s) currently unreachable (reachability over the last 30 minutes): $d. " . ($ctl ? "The local network is fine (the control site works), so the server or its network is at fault" : "There is no local-network control data, so a local outage cannot be ruled out — check whether cn_direct fails at the same time in the health section") . " — not enana.", map { "node=$_ recent=$n_rec{$_}{ok}/$n_rec{$_}{n}" } @node_down_rel);
   }
-  if (!@node_down) {
+  if (!@node_down_rel) {
     my $g = $c_rec{google_204};
     if ($g && $g->{n} >= 2 && $g->{ok} / $g->{n} < .5 && !$ctl_down) {
       my $res = join(',', map { "$_×$g->{res}{$_}" } sort keys %{ $g->{res} });
       $push->('proxy-path-failing', 'node', 'medium', '', "服务器端口是通的, 但经过代理访问 Google 的探测连续失败 ($res): 服务器上的代理程序可能故障 / 配置被改 / 握手被干扰。到服务器上检查代理服务是否在运行。", "The server port is reachable but probes through the proxy keep failing ($res): the proxy program on the server may be down, reconfigured or interfered with. Check the service on the server.");
     }
   }
-  if (@node_flaky && !@node_down) {
-    my $d = join(', ', map { my $a = $n_all{$_}; "$_ (" . pct($a->{ok}, $a->{n}) . ", " . ($a->{n} - $a->{ok}) . " failures)" } @node_flaky);
+  if (@node_flaky_rel && !@node_down_rel) {
+    my $d = join(', ', map { my $a = $n_all{$_}; "$_ (" . pct($a->{ok}, $a->{n}) . ", " . ($a->{n} - $a->{ok}) . " failures)" } @node_flaky_rel);
     $push->('node-unstable', 'node', 'medium', '', "服务器端口间歇性不可达 (可达率, 失败次数): $d。见 health 分区的故障时段; 现在可能已恢复。", "Server port intermittently unreachable (reachability, failures): $d. See the outage windows in the health section; it may have recovered.");
   }
   # OpenAI
@@ -253,6 +289,10 @@ sub cmd_verdict {
     $push->('chatgpt-proxied-but-failing', 'node', 'medium', '', "最近 30 分钟里 ChatGPT / OpenAI 的 $g{rn} 条连接有 $g{rerr} 条失败, 它们走了代理 (出口: " . $list->(\%g_node) . "; 失败类型: " . $list->(\%g_err) . ")。对照 health 分区: 节点是否可达 / 经代理的探测是否正常。", "In the last 30 minutes $g{rerr} of $g{rn} ChatGPT/OpenAI connections failed although they used the proxy (exits: " . $list->(\%g_node) . "; errors: " . $list->(\%g_err) . "). Compare with the health section.");
   }
 
+  if (@node_degraded) {   # 附带说明, 不是故障 (见上面 node_down_rel 的注释): 自动选线会避开它们
+    my $d = join(', ', map { my $y = $n_rec{$_}; "$_ (" . pct($y->{ok}, $y->{n}) . ")" } @node_degraded);
+    push @L, "note.node_degraded=" . scalar(@node_degraded) . " 台「自动线路」里的服务器端口不可达 ($d), 自动选线会避开它们, 通常不影响使用; 想清理可以在仪表盘「服务器」页删掉";
+  }
   # ---- 输出
   $add->('verdict.version', 1); $add->('verdict.generated_epoch', $now); $add->('verdict.generated', ts_of($now));
   $add->('verdict.data', ($have_samples ? "health_samples=$have_samples" : 'health_samples=0') . " state_lines=$have_state span=" . dur($span) . " access_rows=" . scalar(@$acc) . " ops_rows=" . scalar(@$ops));
@@ -286,5 +326,7 @@ sub cmd_verdict {
   my $i = 0; for my $o (@$outs) { last if ++$i > 12; $add->("verdict.outage.$i", ts_of($o->{start}) . ' ~ ' . ts_of($o->{end}) . sprintf(' %.0fmin %s/%s %s%s', $o->{minutes}, $o->{kind}, $o->{target}, $o->{result}, $o->{ongoing} ? ' ONGOING' : '')); }
   $add->('verdict.chatgpt', "conns=$g{n} direct=$g{direct} proxy=$g{proxy} errors=$g{err}" . ($g{n} ? " reasons=[" . $list->(\%g_reason) . "] apps=[" . $list->(\%g_app) . "] nodes=[" . $list->(\%g_node) . "] error_types=[" . $list->(\%g_err) . "]" : '') . ($g_last_ok ? " last_ok=$g_last_ok" : '') . ($g_last_err ? " last_error=$g_last_err" : ''));
   $add->('verdict.chatgpt.recent30m', "conns=$g{rn} direct=$g{rdirect} proxy=$g{rproxy} errors=$g{rerr}");
+  $add->('verdict.pin', "servers=" . ($env->{'pin.servers'} // 'unknown') . " app_policies=$pin_apps selectors_on_pin=$pin_sel policy_direct_30m=$policy_direct");
+  $add->('verdict.session', join(' ', map { my $v = $env->{"session.$_"}; defined $v ? "$_=$v" : () } qw(state last_heartbeat_age_s last_heartbeat_code last_heartbeat_ok_age_s token_age_s last_end_reason heartbeat_failing_since)));
   print join("\n", @L), "\n";
 }

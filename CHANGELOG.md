@@ -1,5 +1,25 @@
 # Changelog / 更新日志
 
+## 2.3.9 (2026-10-05)
+
+### 中文
+- **修复: 「固定出口」是空的时, 选了固定出口的应用 / 网站 (如 ChatGPT、Claude) 其实一直在直连**, 用的是你的真实 IP, 所以即使总开关开着、节点都正常, OpenAI 也会报 `unsupported_country_region_territory` —— 以前整个系统都看不出来。现在: 状态里新增 `pin=ok|empty`, 变空时写进操作记录; 终端控制台的「固定出口」下面直接警告; 后台概览页的提示改成准确的说法 (会直连、用真实 IP); 自动判定新增 `pin-empty`。要解决: 在「服务器」页把一台服务器设为固定出口。
+- **系统代理: 授权一次, 之后不再弹密码框**。macOS 的管理员密码框每次调用都是新的授权, 以前每次要改系统代理 (比如新出现 `iPhone USB` 这类网络服务) 都会再弹一次。现在第一次授权时, 同一次授权里安装一个只做「改系统代理」的小程序 (root 所有、用户改不了、端口写死、只开放给你的账户免密调用, 写入前用 `visudo -cf` 校验), 之后打开 / 关闭系统代理都不再弹窗; 卸载时一并删除。已有免密 sudo 的用户不受影响。
+- **sing-box 核心: GitHub 慢或连不上时有官方备用下载渠道, 升级只提示和当前版本兼容的**。安装器先试 GitHub, 速度低于 200 KB/s 就立刻换 `install.enana.cc/dl/core/` (逐个校验 SHA-256, 所以这个目录不需要被信任) —— 以前 GitHub 只有十几 KB/s 时会白白等 15 分钟。后台的「核心可更新」不再直接跟 GitHub 的最新版走, 而是读一份项目签名的兼容清单 (`tools/build-core-manifest.sh` 生成, 防回滚), 只提示测试过、和当前 enana 兼容的版本。
+- **日志系统补强 (更容易判断「为什么」)**: 总开关每一次变化记录调用链 (`总开关变更`); 核心每一次重启记录是谁触发的 (`重启核心`); 会话心跳记录最近一次结果和最近一次成功的时间, 被退出登录时带上 `since_ok_s` / 云端原始原因 / 响应码, 能区分「真被踢」和「令牌被拒」; 自动判定的 `node-down` 改成按角色判断 (38 台里坏 1 台自动节点不再被当成主因), 新增 `pin-empty` 和 `tun-dns-bypass` (TUN 模式下系统 DNS 指向局域网地址、拿到被污染答案)。详见 `docs/DIAGNOSTICS.md`。
+- **诊断摘要上传 (可关闭)**: 登录后和出现异常时 (代理被自动关闭、系统代理被关、核心反复重启、固定出口变空) 自动向官方云端上传一份**不含网站、应用名、IP、服务器地址、密码和令牌**的摘要 (白名单生成, `enana diag-preview` 可以看到下一份传什么), 云端保留 7 天; 完整诊断 (含域名和应用名) 只在你点「发送完整诊断」时才上传并给一个报告编号; 设置 → 日志里可以关闭自动上传、随时删除已上传的内容。仅 macOS。
+- **卸载时释放云端设备名额**: 以前卸载不通知云端, 反复卸载重装会占满同账号每个平台 2 台的名额。
+- 已知问题 (已能诊断, 尚未修复): TUN 模式下, 系统 DNS 是局域网路由器地址时, DNS 劫持看不到这些查询, 可能拿到被污染的地址 —— 判定 `tun-dns-bypass` 会指出来。
+
+### English
+- **Fix: with an empty Fixed exit, apps and sites set to use it (e.g. ChatGPT, Claude) were actually connecting directly** with your real IP, so OpenAI answered `unsupported_country_region_territory` even though the master switch was on and every node was healthy — nothing in the system could tell. Now: the state carries `pin=ok|empty` and a change is written to the operation log; the terminal console warns under "Fixed exit"; the dashboard overview note now says what really happens (direct, real IP); the automatic verdict has `pin-empty`. To fix it, set one server as the Fixed exit on the Servers page.
+- **System proxy: authorise once, never see the password dialog again.** macOS's admin dialog is a new authorisation every time, so every system-proxy change (e.g. a newly appearing `iPhone USB` service) prompted again. Now the first authorisation also installs a tiny helper that does only "change the system proxy" (root-owned, not editable by you, port baked in, passwordless sudo for your account only, validated with `visudo -cf` before it is written); afterwards switching the system proxy never prompts. It is removed on uninstall. Users who already have passwordless sudo are unaffected.
+- **sing-box core: an official fallback download when GitHub is slow or unreachable; upgrades offer only compatible versions.** The installer tries GitHub first and switches to `install.enana.cc/dl/core/` as soon as the speed drops below 200 KB/s (every file is SHA-256-checked, so that directory need not be trusted) — previously a 15 KB/s GitHub made it wait 15 minutes. The dashboard's "core update" no longer follows GitHub's latest; it reads a project-signed compatibility manifest (`tools/build-core-manifest.sh`, rollback-protected) and offers only tested versions compatible with the running enana.
+- **A stronger log trail (easier to tell why):** every master-switch change records its call chain (`总开关变更`); every core restart records who triggered it (`重启核心`); the session heartbeat records its last result and last success, and a forced sign-out now carries `since_ok_s`, the cloud's raw reason and response code, which separates "really kicked" from "token rejected"; the automatic `node-down` verdict is now role-aware (one broken Auto node out of 38 is no longer the headline) and `pin-empty` and `tun-dns-bypass` (TUN mode where the system DNS is a LAN address and returns poisoned answers) are new. See `docs/DIAGNOSTICS.md`.
+- **Diagnostics summary upload (can be turned off):** after sign-in and when something goes wrong (proxy switched off automatically, system proxy turned off, core restarting, Fixed exit becoming empty) a summary with **no websites, app names, IPs, server addresses, passwords or tokens** is uploaded to the official cloud (built from an allow-list; `enana diag-preview` shows the next one) and kept for 7 days. Full diagnostics (with domains and app names) are uploaded only when you click "Send full diagnostics", and you get a report code. Settings → Logs lets you switch the automatic upload off and delete what was uploaded at any time. macOS only.
+- **Uninstall now frees the cloud device slot.** Before, reinstalling repeatedly could fill the account's 2 slots per platform.
+- Known issue (diagnosable, not yet fixed): in TUN mode, when the system DNS is the LAN router, DNS hijack never sees those queries and may get poisoned answers — the `tun-dns-bypass` verdict points it out.
+
 ## 2.3.8 (2026-10-04)
 
 ### 中文

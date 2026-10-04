@@ -171,12 +171,14 @@ python3 tools/diag-summary.py <文件> --app "Google Chrome" --host google.com
 
 | `cause` | `blame` | 判据 |
 |---|---|---|
-| `proxy-disabled` | client | `meta` 里 `proxy.enabled=0` (最近一次关闭是谁 / 为什么见 `verdict.last_proxy_off`; `reason=kicked` 等表示被云端退出登录) |
+| `proxy-disabled` | client | `meta` 里 `proxy.enabled=0` (最近一次关闭是谁 / 为什么见 `verdict.last_proxy_off`, 2.3.9 起带调用链 `via=`; `reason=kicked` 等表示被云端退出登录) |
 | `core-down` | client | `service.running=0` |
 | `sysproxy-off` | client | 接管方式 `system`、总开关开着、核心在运行, 但生效的系统代理没有指向 enana (`since` 来自 state 行) |
 | `tun-not-ready` | client | 接管方式 `tun` 但没有建立 utun 路由 |
+| `pin-empty` (2.3.9) | client | **固定出口是空的**: 没有任何服务器的角色是 `pin` (`env` 的 `pin.servers=0`), 但有应用 / 网站 / AI 服务选了「固定出口」(`pin.app_policies` / `pin.selectors_on_pin` > 0), 它们全部**直连** (真实 IP 出口)。OpenAI 返回 `unsupported_country_region_territory` 的典型原因, 而且表面上「总开关开着、节点都正常」。有 `policy` 直连连接时置信度 high |
+| `tun-dns-bypass` (2.3.9) | client | TUN 模式下系统 DNS 是局域网地址 (在 `route_exclude_address` 里, DNS 劫持看不到查询), 它对 `www.google.com` 的答案和核心完全不同, 且走 TUN 的 Google 探测失败而经代理端口的探测正常 |
 | `local-network-down` | network | 最近 30 分钟服务器端口不通, 同时对照站点 `cn_direct` 也失败 |
-| `node-down` | node | 最近 30 分钟某个服务器端口可达率 < 50% (且有对照数据正常; 没有对照数据时置信度降为 medium) |
+| `node-down` | node | 最近 30 分钟**固定出口 / 其它角色**的服务器端口可达率 < 50%, 或**一半以上的自动线路节点**都不可达 (且有对照数据正常; 没有对照数据时置信度降为 medium)。2.3.9 起个别自动线路节点坏了不算故障 (自动选线会避开它), 只作为 `note.node_degraded` 附带说明 —— 以前 38 台里坏 1 台就会被判成主因, 把真正的原因盖住 |
 | `proxy-path-failing` | node | 服务器端口是通的, 但经代理访问 `google_204` 最近 30 分钟失败过半 (服务端代理程序故障 / 配置被改 / 握手被干扰) |
 | `node-unstable` | node | 整个范围内服务器端口失败 ≥ 3% 且 ≥ 5 次 (现在可能已恢复; 见 `outages`) |
 | `openai-region-blocked` | exit-ip | 代理正常 (`google_204` ok), 但 `openai_api` 返回 403 过半 |
@@ -187,11 +189,48 @@ python3 tools/diag-summary.py <文件> --app "Google Chrome" --host google.com
 
 `verdict.blame` 直接回答「是服务器不稳还是 enana 的问题」: `node` = 服务器 / 机房; `client` = 本机设置或 enana 的行为; `exit-ip` = 服务器 IP 被目标网站限制; `network` = 本机网络。判定只是依据本机记录的**证据汇总**, 摘要里会写明依据; 数据不足时不会乱下结论。
 
+## 2.3.9 补强的日志 (为什么这些原来「看不出来」)
+
+排查「代理开着开着自己关了」「ChatGPT 报 unsupported_country_region_territory」时, 2.3.8 的日志有几处看不出原因, 2.3.9 补上:
+
+- **总开关每一次变化都留痕** (`ops` 的 `总开关变更`: `key=PROXY_ENABLED from=1 to=0 via=<调用链> pid=…`): 不管是谁改的 (仪表盘 / 终端 / 心跳被云端撤销后自动退出 / 同步 ...) 都经过同一个函数, 调用链 `via` 直接说明路径。
+- **核心每一次重启留痕** (`重启核心`: `via=…` 调用链 + 当时的核心 pid): 以前只能从 `核心进程已重启` 推测 (它是健康记录发现 pid 变了才写), 看不出是谁触发的。
+- **会话心跳状态** (`env` 的 `session.*`: 最近一次心跳的时间 / 状态码 / 最近一次成功距现在多久 / 令牌年龄 / 会话尾号和设备尾号): 被退出登录的 `已被退出登录` 里多了 `since_ok_s` (距上次心跳成功多少秒)、`session`、`via`、云端返回的原始原因 `raw_reason` 和响应码 `resp_code` (没有 reason、`resp_code=unauthorized` = 令牌被云端直接拒绝, 不是会话被撤销)。
+- **固定出口事实** (`env` 的 `pin.servers` / `pin.app_policies` / `pin.selectors_on_pin` / `pin.group_members`, 以及 state 行里的 `pin=ok|empty` 和 `环境状态变化 item=pin`)。
+- **`verdict` 的排序**: 节点判断按角色 (见上表 `node-down`), 并新增 `pin-empty` / `tun-dns-bypass`; `verdict.pin` / `verdict.session` 汇总两项事实。
+- 授权方式: `开启系统代理` 的详情带 `helper=used|installed|failed` (见下面「系统代理助手」)。
+
+## 诊断上传 (2.3.9)
+
+为了在用户遇到问题时不必来回索要文件, 2.3.9 起可以把**诊断摘要**自动上传到官方云端, 开发者在服务器上直接读取。
+
+**自动上传的是「摘要」, 不是日志**: `lib/diag.pl` 把一份导出 (`logs_bundle 24 snapshot,ops`) 按**白名单**缩成一份 JSON (`enana diag-preview` 随时可以看到下一份会传什么):
+
+- 有: 版本 / 系统 / 核心 / 接管方式 · `meta` 里的状态和开关 · `env` 里的接管 / 会话 / 固定出口数量等事实 · `verdict` 的原因代码和数字证据 · 健康汇总和故障时段 · 操作记录里的**动作头部** (纯汉字, 例如「总开关变更」) 和白名单里的详情键 (`reason` `http` `via` `since_ok_s` `from` `to` …)。
+- 没有: 访问记录、代理核心原始日志、配置规则、已安装应用、网站域名、应用名、IP 地址 (一律 `<ip>`)、服务器地址 / 端口 / 凭据、订阅名、用户名 / 邮箱、密码、令牌。服务器标签换成别名 (`node1` …); 动作名里拼进去的用户内容 (订阅名 / 域名 / 测速目标) 一律丢弃; 白名单之外的详情键 (`sub=` `user=` `tag=` `host=` …) 一律丢弃。服务端再做一道形状检查 (只认 `v` `generated` `meta` `verdict` `env` `ops` `health` `outages` 这几个顶层键, 限制深度 / 长度 / 数量)。
+
+**什么时候上传**: 登录 / 注册成功后一次; 之后只在 `ops` 里出现「值得上报」的新事件时一次 (`enana tick` 每分钟看新增的行): 总开关被**自动**关闭 (`总开关变更` 来源 `auto`, 用户自己在仪表盘 / 终端关的不算) · `环境状态变化` 的系统代理 / 核心 / TUN 变成 0 · 固定出口变空 · 核心进程被重启。本机 10 分钟内最多一次, 云端每台设备每 5 分钟 / 每天 60 份的限制。**仅 macOS** (Windows 的健康判定之后跟进)。每一次上传都会写进操作记录 (`诊断上传 trigger=… http=200 bytes=…`)。
+
+**完整诊断 (手动)**: 设置 → 日志 → 「发送完整诊断」(或 `enana diag-send [小时数]`) 才会上传最近 N 小时的完整导出 (含访问过的域名和应用名, 压缩后 ≤ 8 MiB, 太大自动缩短时间范围), 点确认之前会写明内容; 成功后得到一个**报告编号**, 把编号告诉开发者。每台设备每天最多 3 份。
+
+**控制权在用户**: 设置 → 日志里有「上传诊断摘要」开关 (默认开; 开关变化一定记进操作记录), 「删除已上传的诊断」(或 `enana diag-delete`) 删除自己在云端上传过的全部内容; 账号删除时一并级联删除。
+
+**云端**: PocketBase 集合 `diag_reports` (`server/pb_migrations/1790000004_enana_diag.js`, 接口 `POST /api/enana/v1/diag` · `POST .../diag/full` · `DELETE .../diag`, 见 `docs/CLOUD_API.md`); API 规则全是 `null` (只有管理员能读); 保留 **7 天** (每天 03:27 `enana_diag_gc`, 完整诊断的文件逐条删除), 每台设备最多留 200 份摘要 / 5 份完整诊断。读取方式 (管理员): 后台 `diag_reports` 集合按 `cause` / `device` / `created` 筛选, 或 `GET /api/collections/diag_reports/records?filter=cause='pin-empty'` (超级用户令牌)。
+
+## 系统代理助手 (2.3.9): 授权一次, 之后不再弹密码框
+
+`osascript … with administrator privileges` 每次调用都是新进程, macOS 不会记住授权, 所以以前每次要改系统代理 (比如 `iPhone USB` 这类新出现的网络服务没指向 enana) 都会再弹一次密码框。2.3.9 起第一次需要授权时, 在**同一次授权**里装一个只做「改系统代理」的小程序:
+
+- `/usr/local/libexec/enana/sysproxy-<uid>` (root 所有, 用户改不了; 端口和 `networksetup` 路径在安装时写死, 只接受 `on` / `off` / `version`, `off` 只关「正指向 enana」的服务) 和 `/etc/sudoers.d/enana-sysproxy-<uid>` (只有一行: `<用户> ALL=(root) NOPASSWD: <助手路径>`, 写入前用 `visudo -cf` 校验, 失败不留半成品)。
+- 之后打开 / 关闭系统代理走 `sudo -n <助手>`, 不再弹窗。使用前检查: 文件归 root、组 / 其他人不可写、不是符号链接、版本对、sudo 真的免密, 任何一条不满足就回到原来的授权流程 (并顺便重装)。
+- 已经有免密 sudo 的用户不装助手; `ENANA_NO_SYSPROXY_HELPER=1` 可以关掉; 卸载时 (`enana uninstall`) 一并删除助手和规则。
+- 操作记录: `开启系统代理` 的 `method=` (`already` `direct` `helper` `sudo` `sudo-nopass` `dialog`) 和 `helper=` (`used` `installed` `failed`)。
+
 ## 保留与隐私
 
 - 三类日志各有独立开关 (设置 → 日志): **操作记录** / **网站访问** / **代理日志**; 关闭哪一类, 导出里对应分区就没有数据 (`meta` 的 `settings.*` 会如实标出)。
 - 保留时长 12 小时 – 30 天 (默认 3 天), 按小时清理; 超出的日志在每小时的维护里自动压缩 / 删除。
-- 日志只存在本机 (`~/.enana/logs`), 不会自动上传; 导出文件由用户自己决定发给谁。健康记录 (`health-*.log`) 只含服务器名 / 角色 / 端口连通结果和探测站点的状态码, 不含服务器地址、凭据或访问过的网站; 算在「操作记录」的占用和开关里。
+- 日志只存在本机 (`~/.enana/logs`); **完整日志不会自动上传**, 导出文件由用户自己决定发给谁。2.3.9 起另有可关闭的「诊断摘要上传」(不含网站 / 应用名 / IP / 服务器地址, 见上面「诊断上传」)。健康记录 (`health-*.log`) 只含服务器名 / 角色 / 端口连通结果和探测站点的状态码, 不含服务器地址、凭据或访问过的网站; 算在「操作记录」的占用和开关里。
 
 ## 接管与绕过代理的证据
 

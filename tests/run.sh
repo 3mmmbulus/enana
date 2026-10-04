@@ -18,11 +18,12 @@ export FAKE_STATE=$W/state TESTS_DIR=$HERE HOME=$W/home ENANA_HOME=$W/h ENANA_SH
 export FAKE_PORT=$BASE PORT=$BASE UI_PORT=$((BASE+1)) API_PORT=$((BASE+2)) SPEED_PORT=$((BASE+3)) ENANA_YES=1 ENANA_SKIP_PROBE=1
 export ENANA_TUN_ROOT="$W/tun-root" ENANA_TUN_PLIST_DIR="$W/tun-plists"
 export ENANA_ACCOUNT_URL=http://127.0.0.1:$A_PORT ENANA_SPEEDTEST_CONF=$W/speedtest.conf ENANA_IPLOOKUP_URL=http://127.0.0.1:$N_PORT/ip ENANA_IPLOOKUP_URL2=http://127.0.0.1:$N_PORT/trace
-export ENANA_CLOUD_PUBKEY=$W/cpub.pem ENANA_UPDATE_BASE=http://127.0.0.1:$N_PORT/dl ENANA_CORE_LATEST=99.0.0 ENANA_LANG=zh ENANA_RULE_SOURCE=http://127.0.0.1:$N_PORT/rules/{file} ENANA_DNS_PRESETS=$W/dns-presets.conf
+export ENANA_CLOUD_PUBKEY=$W/cpub.pem ENANA_UPDATE_BASE=http://127.0.0.1:$N_PORT/dl ENANA_CORE_BASE=http://127.0.0.1:$N_PORT/dl/core MOCK_CORE_DIR=$W/coredl ENANA_CORE_LATEST=98.0.0 ENANA_LANG=zh ENANA_RULE_SOURCE=http://127.0.0.1:$N_PORT/rules/{file} ENANA_DNS_PRESETS=$W/dns-presets.conf
 export ENANA_MOCK_CTL=$W/vpsctl ENANA_VERIFY_IP_URL=http://127.0.0.1:$N_PORT/ipraw ENANA_SSH=$HERE/fakebin/fakessh FAKE_SSH_PW='sshpw-Test-123'
 mkdir -p "$W"/{state,home/Library/LaunchAgents,shortcut,h/rules,h/lib}
 export ENANA_NO_MDFIND=1 ENANA_APPS_ROOTS="$W/home/Applications"            # 应用扫描只看测试夹具里的目录 (不碰这台电脑上真实的应用)
 export PATH="$HERE/fakebin:$PATH"
+export ENANA_NO_DIAG=1                       # 假云端不认识诊断上传接口: 这里不测自动上传 (见 tests/diag.sh)
 for c in launchctl networksetup sudo open osascript; do
   case "$(command -v $c)" in "$HERE"/fakebin/*) ;; *) echo "REFUSING: 真实的 $c 出现在 PATH 中, 为防止改动系统已中止"; exit 1 ;; esac
 done
@@ -78,6 +79,9 @@ mkdir -p "$HOME/Applications/Existing App.app"   # 首次扫描前就存在的�
 /usr/bin/openssl ecparam -genkey -name prime256v1 -noout -out "$W/ckey.pem" 2>/dev/null; /usr/bin/openssl ec -in "$W/ckey.pem" -pubout -out "$W/cpub.pem" 2>/dev/null
 /usr/bin/openssl ecparam -genkey -name prime256v1 -noout -out "$W/evil.pem" 2>/dev/null
 mkdir -p "$W/v1"; bash "$REPO/tools/build-content-bundle.sh" "$HERE/fixtures/content" "$W/v1" "$W/ckey.pem" 100 >/dev/null
+# 核心兼容清单 (测试私钥签名): 只有清单里的、和当前 enana 兼容的核心版本才会被提示更新。ENANA_CORE_LATEST=98.0.0 是旧的「跟着 GitHub latest」的钩子, 现在不应该再起作用。
+mkdir -p "$W/coredl"; for _n in darwin-arm64 darwin-amd64 darwin-amd64-legacy-macos-10.13; do printf '99.0.0|%s|%s|2.0.0|\n' "$_n" "$(printf x | shasum -a 256 | awk '{print $1}')"; done > "$W/core-in.txt"
+bash "$REPO/tools/build-core-manifest.sh" "$W/core-in.txt" "$W/coredl" "$W/ckey.pem" 1 >/dev/null
 python3 "$HERE/mock-account.py" $A_PORT "$W/v1" & echo $! > "$W/pid-acct"
 /usr/bin/openssl ecparam -genkey -name prime256v1 -noout -out "$W/doh.key" 2>/dev/null; /usr/bin/openssl req -new -x509 -key "$W/doh.key" -out "$W/doh.crt" -days 2 -subj /CN=127.0.0.1 2>/dev/null
 cat > "$W/dns-presets.conf" <<EOF
@@ -1205,6 +1209,9 @@ cl -X PUT "$U/proxies/Global" -d "{\"name\":\"$dns_bench_global_before\"}" >/dev
 echo "== 10. 检查更新 (本机模拟的版本源)"
 rm -f "$W/h/update.json"
 api "$A/api/update/check?force=1" | chk "发现新版本 9.9.9 + 中文更新说明 + 核心也有新版" 'assert d["available"] and d["latest"]=="9.9.9" and "测试更新说明" in d["notes"] and d["core"]["available"] and d["core"]["latest"]=="99.0.0" and d["error"]==""'
+mv "$W/coredl/core-manifest.conf" "$W/coredl/core-manifest.conf.off"; rm -f "$W/h/core-manifest.conf" "$W/h/core-manifest.sig"
+api "$A/api/update/check?force=1" | chk "没有兼容清单时不提示核心更新 (即使 GitHub 的 latest 是 98.0.0)" 'assert d["available"] and d["core"]["latest"]==d["core"]["current"] and not d["core"]["available"]'
+mv "$W/coredl/core-manifest.conf.off" "$W/coredl/core-manifest.conf"; api "$A/api/update/check?force=1" >/dev/null
 api -H 'X-Enana-Lang: en' "$A/api/update/check" | chk "英文请求拿到英文更新说明" 'assert "Test release notes" in d["notes"]'
 api "$A/api/state" | chk "state 里带更新摘要" 'assert d["update"]["available"] and d["update"]["latest"]=="9.9.9"'
 api -X POST "$A/api/update/apply?what=nope" | chk "update/apply 参数无效 → 被拒" 'assert not d["ok"]'

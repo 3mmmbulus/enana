@@ -59,7 +59,9 @@ update_check() {
     core_latest=$(perl -MJSON::PP -e 'local $/; print decode_json(<>)->{core}->{version}' "$H/windows/runtime-pins.json" 2>/dev/null || true)
   else
     if _update_get VERSION valid_version_file "$tmp"; then latest=$(tr -d '[:space:]' < "$tmp"); fi
-    core_latest=$(core_latest_version 2>/dev/null || true)
+    # 核心只提示「和当前 enana 兼容」的版本: 来自项目签名的兼容清单, 不再直接取 GitHub 的 latest (没测试过的新版本可能和我们的配置不兼容)。
+    core_manifest_refresh >/dev/null 2>&1 || true
+    core_latest=$(core_latest_compat 2>/dev/null || true)
   fi
   NOTES_ZH=''; NOTES_EN=''
   if [ -n "$latest" ] && version_gt "$latest" "$VERSION" && _update_get CHANGELOG.md valid_text_file "$tmp"; then update_notes "$latest" "$tmp"; fi

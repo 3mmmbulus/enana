@@ -76,6 +76,20 @@ auth_reg_record() { date +%s >> "$H/reg.log"; chmod 600 "$H/reg.log" 2>/dev/null
 
 # ---------- 与云端通信 (先直连; 直连不通且本地代理在运行时再走本地代理; 凭据只通过 stdin 交给 curl; CLOUD_MAXTIME / CLOUD_CONNECT 可缩短超时) ----------
 # _cloud_req <方法> <路径> <JSON 正文> <输出文件> [额外请求头…]  -> 打印 HTTP 状态码 (000 = 没连上); 正文通过管道交给 curl (不落盘、不进进程参数)
+# multipart 上传一个文件 (完整诊断): 和 _cloud_req 一样依次试 直连 / 本地代理, 区别只是请求体是文件。打印 HTTP 状态码 (000 = 没连上)
+_cloud_upload() { # <路径> <文件> <输出文件> <应用版本> [请求头…]
+  local path=$1 file=$2 out=$3 appver=$4 code='' base route h; shift 4
+  local hdrs=(); for h in "$@"; do hdrs+=(-H "$h"); done
+  for base in $ACCOUNT_URL; do
+    for route in direct proxy; do
+      local args=(-sS -m "${CLOUD_UPLOAD_MAXTIME:-120}" --connect-timeout "${CLOUD_CONNECT:-8}" -o "$out" -w '%{http_code}' -X POST ${hdrs[@]+"${hdrs[@]}"} -F "app=$appver" -F "bundle=@$file;type=application/gzip;filename=diag.gz")
+      if [ "$route" = proxy ]; then nc -z 127.0.0.1 "$PORT" 2>/dev/null || continue; args+=(-x "http://127.0.0.1:$PORT"); else args+=(--noproxy '*'); fi
+      code=$(curl "${args[@]}" "${base%/}$path" 2>/dev/null) || code=000
+      case $code in 000|5??|404) continue ;; *) printf '%s' "$code"; return 0 ;; esac
+    done
+  done
+  printf '%s' "${code:-000}"
+}
 _cloud_req() {
   local method=$1 path=$2 body=$3 out=$4 code='' route base h; shift 4
   local hdrs=(); for h in "$@"; do hdrs+=(-H "$h"); done
@@ -178,6 +192,7 @@ auth_login() {
        auth_mark_in "$(auth_lower "$ACC_EMAIL")"; auth_unlock
        AUTH_VIA=online; AUTH_EMAIL=$ACC_EMAIL; auth_fail_clear
        sync_on_login "$ACC_ID" "$pw"                                     # 端到端同步的密钥由登录密码派生 (只在本机, 退出账号即删除)
+       ! type diag_kick >/dev/null 2>&1 || diag_kick login                # 诊断摘要: 登录成功后在后台传一份 (设置里可关; 不含网站 / 应用名 / IP / 服务器地址)
        return 0 ;;
     1) auth_fail_record; AUTH_CODE=E_BAD_CREDENTIALS; return 1 ;;
     3) AUTH_CODE=E_LOCKED; AUTH_WAIT=20; return 1 ;;

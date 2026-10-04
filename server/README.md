@@ -167,3 +167,16 @@ Do not use this initial deployment script to overwrite a running paid service.
 Gmail SMTP must be configured and real receipt acceptance validated before a
 complete Pro release can enable receiving. Never enable payments as a substitute
 for shipping the billing UI and official-node entitlement enforcement.
+
+## Diagnostics upload (2.3.9)
+
+`pb_migrations/1790000004_enana_diag.js` adds `diag_reports` (summary and full diagnostics per
+device; every API rule is `null`, so only superusers can read it). `pb_hooks/enana_diag.js` and
+`enana_diag.pb.js` implement `POST /api/enana/v1/diag`, `POST .../diag/full` and `DELETE .../diag`
+with shape/size checks, per-device rate limits and retention (7 days, 200 summaries / 5 full
+bundles per device, cascade delete with the account); see `docs/DIAGNOSTICS.md` and
+`docs/CLOUD_API.md`. nginx exposes only an exact allow-list of API paths, so deploying needs one
+extra step: run `python3 update-nginx-diag.py <current enana.cc.conf> <new file>`, review the diff,
+`nginx -t`, then reload. It adds the two exact-path locations with their larger body limits and
+touches nothing else. `tests/diag-pocketbase.test.js` runs all of this against a real PocketBase
+(`PB_BIN=/path/to/pocketbase node --test tests/diag-pocketbase.test.js`).

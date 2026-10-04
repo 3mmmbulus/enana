@@ -1,0 +1,23 @@
+#!/bin/bash
+# 测试用的假 install: 忽略 -o / -g (不是 root 也能跑), 支持 -d / -m。
+# 只允许写进测试沙箱 ($ENANA_ROOT_PREFIX 之下): 任何一个目标在沙箱之外就拒绝 —— 测试不可能改到真实的 /etc 或 /usr/local。
+echo "install $*" >> "$FAKE_STATE/calls.log"
+mode=''; dirs=0; args=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    -d) dirs=1; shift ;;
+    -m) mode=$2; shift 2 ;;
+    -o|-g) shift 2 ;;
+    -*) shift ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+[ -n "${ENANA_ROOT_PREFIX:-}" ] || { echo "fake install: ENANA_ROOT_PREFIX is not set, refusing" >&2; exit 1; }
+inside() { case $1 in "$ENANA_ROOT_PREFIX"/*) return 0 ;; *) return 1 ;; esac; }
+if [ "$dirs" = 1 ]; then
+  for d in "${args[@]}"; do inside "$d" || { echo "fake install: $d is outside the sandbox" >&2; exit 1; }; mkdir -p "$d" && { [ -z "$mode" ] || chmod "$mode" "$d"; } || exit 1; done
+  exit 0
+fi
+[ "${#args[@]}" -eq 2 ] || exit 1
+inside "${args[1]}" || { echo "fake install: ${args[1]} is outside the sandbox" >&2; exit 1; }
+cp "${args[0]}" "${args[1]}" && { [ -z "$mode" ] || chmod "$mode" "${args[1]}"; }

@@ -42,6 +42,7 @@ console_draw() {
   if [ "$CS_mode" = Direct ]; then pf '  代理      %s已关闭%s — 全部直连 (登录后按 3 或在仪表盘里打开总开关)\n' "$Y" "$N"; elif [ -n "$CS_mode" ]; then pf '  代理      已开启 (规则分流)\n'; fi
   if [ "$CS_srv" -gt 0 ] && [ "$CS_svc" = 1 ]; then
     pf '  固定出口  %s  %s\n' "${CS_pin:-—}" "$(_cs_ms "$CS_pin_ms")"
+    [ "$(health_pin_state)" != empty ] || pf '            %s⚠ 没有设置固定出口: 选了「固定出口」的应用 / 服务 (如 ChatGPT) 现在会直连 (真实 IP); 到仪表盘「服务器」页设置%s\n' "$Y" "$N"
     [ -n "$CS_auto" ] && pf '  自动线路  %s  %s\n' "$CS_auto" "$(_cs_ms "$CS_auto_ms")"
   fi
   if [ -n "$CS_acc" ]; then pf '  账号      已登录 %s\n' "$CS_acc"; else pf '  账号      未登录 (打开仪表盘, 用 enana.cc 账号登录或注册)\n'; fi

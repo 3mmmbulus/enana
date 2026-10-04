@@ -119,6 +119,7 @@ os_service_start() {
   fi
 }
 os_service_restart() {
+  type core_restart_note >/dev/null 2>&1 && core_restart_note
   if enhanced_configured || enhanced_loaded; then os_service_start; else os_system_service_restart; fi
 }
 os_service_stop() { enhanced_stop || return 1; os_system_service_stop; }
@@ -186,18 +187,54 @@ os_sysproxy_chain() { # on|off -> 打印要执行的 networksetup 命令串 (每
   printf '%sexit $r' "$c"
 }
 os_sysproxy_verify() { if [ "$1" = on ]; then os_sysproxy_ok; else ! os_sysproxy_mine; fi; }   # 修改之后回读确认: 开 = 所有网络服务都指向本程序; 关 = 没有任何服务还指向本程序
+# ---------- 系统代理助手: 一次管理员授权, 之后不再弹密码框 ----------
+# osascript 的「with administrator privileges」每次调用都是新进程, macOS 不会记住授权, 所以每次要改系统代理都会弹一次密码框。
+# 第一次需要授权时, 在同一次授权里顺便安装一个只做「改系统代理」这一件事的小程序 (root 所有、用户改不了、端口写死, 见 lib/sysproxy-helper.tpl),
+# 并给当前用户配置只开放这一个文件的免密 sudo (写入前用 visudo -cf 校验)。之后打开 / 关闭系统代理都直接调用它, 不再弹窗; 卸载时一并删除。
+SYSPROXY_HELPER_VERSION=1
+os_sysproxy_helper_path()  { printf '%s/usr/local/libexec/enana/sysproxy-%s' "${ENANA_ROOT_PREFIX:-}" "$(id -u)"; }
+os_sysproxy_sudoers_path() { printf '%s/etc/sudoers.d/enana-sysproxy-%s' "${ENANA_ROOT_PREFIX:-}" "$(id -u)"; }
+os_sysproxy_helper_text() { # 把端口 / networksetup 路径 / 版本写死进模板, 输出助手脚本全文 (networksetup 路径只有测试 (设了 ENANA_ROOT_PREFIX) 时才允许换)
+  local ns=/usr/sbin/networksetup
+  [ -z "${ENANA_ROOT_PREFIX:-}" ] || ns=${ENANA_NETWORKSETUP:-$ns}
+  [[ $PORT =~ ^[0-9]+$ ]] && [[ $ns =~ ^/[A-Za-z0-9._/-]+$ ]] || return 1
+  sed -e "s|@PORT@|$PORT|g" -e "s|@NETWORKSETUP@|$ns|g" -e "s|@VERSION@|$SYSPROXY_HELPER_VERSION|g" "$LIB/sysproxy-helper.tpl"
+}
+os_sysproxy_helper_ok() { # 已安装、归 root (测试里归当前用户)、别人改不了、版本对, 并且当前用户可以免密调用
+  local h v p want_uid=0; h=$(os_sysproxy_helper_path)
+  [ -z "${ENANA_ROOT_PREFIX:-}" ] || want_uid=$(id -u)
+  [ -f "$h" ] && [ ! -L "$h" ] && [ "$(stat -f %u "$h" 2>/dev/null)" = "$want_uid" ] || return 1
+  p=$(stat -f %Sp "$h" 2>/dev/null); [ "${p:5:1}" != w ] && [ "${p:8:1}" != w ] || return 1      # 组 / 其他人可写就不信任
+  v=$(sudo -n "$h" version 2>/dev/null) || return 1
+  [ "$v" = "$SYSPROXY_HELPER_VERSION" ]
+}
+os_sysproxy_helper_install_cmds() { # 以 root 身份执行的命令串 (末尾带分号): 安装助手 + 免密规则; 任何一步失败都不影响后面的系统代理设置, 也不会留下半成品规则
+  local h s u d sd text b64
+  [ -z "${ENANA_NO_SYSPROXY_HELPER:-}" ] || return 1
+  u=$(id -un); [[ $u =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+  h=$(os_sysproxy_helper_path); s=$(os_sysproxy_sudoers_path); d=$(dirname "$h"); sd=$(dirname "$s")
+  text=$(os_sysproxy_helper_text) || return 1
+  b64=$(printf '%s\n' "$text" | base64 | tr -d '\n')
+  printf '%s' "{ t=\$(mktemp -d) && printf %s $(enhanced_quote "$b64") | base64 -D > \"\$t/h\" && head -1 \"\$t/h\" | grep -q '^#!/bin/bash' && /bin/bash -n \"\$t/h\" && install -d -m 755 -o root -g wheel $(enhanced_quote "$d") && install -m 755 -o root -g wheel \"\$t/h\" $(enhanced_quote "$h") && printf '%s ALL=(root) NOPASSWD: %s\\n' $(enhanced_quote "$u") $(enhanced_quote "$h") > \"\$t/s\" && visudo -cf \"\$t/s\" >/dev/null && install -d -m 755 -o root -g wheel $(enhanced_quote "$sd") && install -m 440 -o root -g wheel \"\$t/s\" $(enhanced_quote "$s"); rm -rf \"\$t\"; } >/dev/null 2>&1 || true; "
+}
+os_sysproxy_helper_remove() { # 卸载: 删掉助手和免密规则 (需要管理员授权; 调用前已经 sudo -v 过)。拒绝授权不阻止卸载, 只是提示手动删除
+  local h s; h=$(os_sysproxy_helper_path); s=$(os_sysproxy_sudoers_path)
+  [ -e "$h" ] || [ -e "$s" ] || return 0
+  if sudo rm -f "$s" "$h" 2>/dev/null; then sudo rmdir "$(dirname "$h")" 2>/dev/null || true; return 0; fi
+  warn "没能删除系统代理助手, 可以手动删除: sudo rm -f $s $h"; return 0
+}
 os_admin_dialog() { # <命令串>  弹出 macOS 原生的管理员密码框 (仪表盘的后台服务没有终端); 写法与 enhanced_admin 的对话框分支完全相同 (真机验证过)
   local cmd; cmd=$(enhanced_quote /bin/bash)' -c '$(enhanced_quote "$1")
   cmd=$(printf '%s' "$cmd" | sed 's/\\/\\\\/g; s/"/\\"/g')
   osascript -e "do shell script \"$cmd\" with administrator privileges"
 }
 # 修改系统代理 (所有已启用的网络服务)。打开 / 关闭系统代理都不再要求「必须在终端里输入密码」:
-#   ① 当前用户直接修改 (管理员账户多数不需要密码)  ② 终端里用 sudo  ③ 已有免密 sudo  ④ 弹出 macOS 原生管理员密码框 (仪表盘用)
-# 每次修改后回读确认, 结果记在 SYSPROXY_METHOD (already|direct|sudo|sudo-nopass|dialog) 与 SYSPROXY_ERR (失败原因, 英文短码)。
+#   ① 当前用户直接修改 (管理员账户多数不需要密码)  ①b 系统代理助手 (授权过一次, 免密)  ② 终端里用 sudo  ③ 已有免密 sudo  ④ 弹出 macOS 原生管理员密码框 (仪表盘用)
+# 每次修改后回读确认, 结果记在 SYSPROXY_METHOD (already|direct|helper|sudo|sudo-nopass|dialog)、SYSPROXY_HELPER (used|installed|failed: 系统代理助手这次的情况) 与 SYSPROXY_ERR (失败原因, 英文短码)。
 # 这个函数不向标准输出打印任何内容: 仪表盘的辅助服务里标准输出就是 HTTP 响应。
 os_sysproxy_apply() { # on|off [force]  -> 0 = 已是想要的状态 · 1 = 没有改成功; force = 已经是想要的状态也重新写一遍 (修复被改过的绕过列表)
-  local want=$1 c errf msg rc
-  SYSPROXY_METHOD=''; SYSPROXY_ERR=''
+  local want=$1 c errf msg rc inst
+  SYSPROXY_METHOD=''; SYSPROXY_ERR=''; SYSPROXY_HELPER=''
   rm -f "$H/.cache-sysproxy"
   if [ "${2:-}" != force ] && os_sysproxy_verify "$want"; then SYSPROXY_METHOD=already; return 0; fi
   if [ "$want" = on ]; then os_sysproxy_backup >/dev/null 2>&1 || { SYSPROXY_ERR=backup-failed; return 1; }; fi
@@ -206,10 +243,19 @@ os_sysproxy_apply() { # on|off [force]  -> 0 = 已是想要的状态 · 1 = 没�
   /bin/bash -c "$c" >/dev/null 2>"$errf"; rc=$?                                       # ① 直接修改
   # 成功 = 所有命令都成功, 或回读确认所有网络服务都已是想要的状态 (个别服务读取出错时, 命令都成功了也不能判失败, 否则会反复要密码)
   if [ "$rc" = 0 ] || os_sysproxy_verify "$want"; then SYSPROXY_METHOD=direct; rm -f "$errf" "$H/.cache-sysproxy"; return 0; fi
-  if [ -t 0 ] && [ -t 1 ]; then SYSPROXY_METHOD=sudo; sudo /bin/bash -c "$c" 2>"$errf" >/dev/null; rc=$?     # ② 终端: 密码提示走 /dev/tty
-  elif sudo -n true >/dev/null 2>&1; then SYSPROXY_METHOD=sudo-nopass; sudo -n /bin/bash -c "$c" >/dev/null 2>"$errf"; rc=$?   # ③
-  else SYSPROXY_METHOD=dialog; os_admin_dialog "$c" >/dev/null 2>"$errf"; rc=$?; fi                      # ④
+  if os_sysproxy_helper_ok; then                                                       # ①b 系统代理助手 (授权过一次): 免密, 不弹窗
+    SYSPROXY_METHOD=helper; sudo -n "$(os_sysproxy_helper_path)" "$want" >/dev/null 2>"$errf"; rc=$?
+    rm -f "$H/.cache-sysproxy"
+    if [ "$rc" = 0 ] || os_sysproxy_verify "$want"; then SYSPROXY_HELPER=used; rm -f "$errf"; return 0; fi
+    SYSPROXY_HELPER=failed
+  fi
+  # 助手还没装 (或失败): 这一次的授权顺便把助手装上 (inst), 以后打开 / 关闭系统代理都不再要密码
+  inst=$(os_sysproxy_helper_install_cmds 2>/dev/null || true)
+  if [ -t 0 ] && [ -t 1 ]; then SYSPROXY_METHOD=sudo; sudo /bin/bash -c "$inst$c" 2>"$errf" >/dev/null; rc=$?     # ② 终端: 密码提示走 /dev/tty
+  elif sudo -n true >/dev/null 2>&1; then SYSPROXY_METHOD=sudo-nopass; sudo -n /bin/bash -c "$c" >/dev/null 2>"$errf"; rc=$?   # ③ 本来就有免密 sudo: 不需要助手
+  else SYSPROXY_METHOD=dialog; os_admin_dialog "$inst$c" >/dev/null 2>"$errf"; rc=$?; fi                      # ④
   rm -f "$H/.cache-sysproxy"
+  if [ -n "$inst" ] && [ "$SYSPROXY_METHOD" != sudo-nopass ] && os_sysproxy_helper_ok; then SYSPROXY_HELPER=installed; fi
   if [ "$rc" = 0 ] || os_sysproxy_verify "$want"; then rm -f "$errf"; return 0; fi
   msg=$(head -c 300 "$errf" 2>/dev/null | tr '\n\t' '  '); rm -f "$errf"
   case $msg in
@@ -234,9 +280,12 @@ os_sysproxy_uninstall() {
   # Restore proxy fields/bypass lists, not just Enable=off with localhost still
   # configured. Never erase foreign endpoints installed after enana.
   local status; status=$(osascript -l JavaScript "$LIB/proxy-state.js" check "$PORT" "$H/proxy-state.json") || return 1
-  [ "$status" = changed ] || return 0
-  sudo -v || return 1
-  sudo osascript -l JavaScript "$LIB/proxy-state.js" restore "$PORT" "$H/proxy-state.json"
+  if [ "$status" = changed ]; then
+    sudo -v || return 1
+    sudo osascript -l JavaScript "$LIB/proxy-state.js" restore "$PORT" "$H/proxy-state.json" || return 1
+  fi
+  if [ -e "$(os_sysproxy_helper_path)" ] || [ -e "$(os_sysproxy_sudoers_path)" ]; then sudo -v 2>/dev/null; os_sysproxy_helper_remove; fi      # 一次授权时安装的系统代理助手和免密规则
+  return 0
 }
 os_stop_owned_jobs() { perl "$LIB/stop-jobs.pl" "$H" "$$"; }
 

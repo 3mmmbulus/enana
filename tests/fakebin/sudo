@@ -1,12 +1,13 @@
 #!/bin/bash
 # 测试用的假 sudo: 记录调用并直接执行 (不提权)。支持 -v / -n / -S / -p <提示>; -S 时从标准输入读一行密码, 与 $FAKE_SUDO_PW (没设就是 ctl 里的 sudopw=) 比较, 不对就像真的 sudo 一样失败。
 #   FAKE_SUDO_NOPASS=0  模拟「需要密码」: sudo -n 失败 (和真的 sudo 一样提示需要密码)
+#   FAKE_SUDOERS_DIR    sudoers 片段目录: 设了以后, sudo -n <命令> 只有片段里有对应的 NOPASSWD 规则才成功 (用来验证「授权一次, 之后免密」)
 echo "sudo $*" >> "$FAKE_STATE/calls.log"
 [ "$1" = "-v" ] && exit 0
-S=0
+S=0; NSET=0
 while [ $# -gt 0 ]; do
   case $1 in
-    -n) [ "${FAKE_SUDO_NOPASS:-1}" = 0 ] && { echo "sudo: a password is required" >&2; exit 1; }; shift ;;
+    -n) NSET=1; shift ;;
     -S) S=1; shift ;;
     -p) shift 2 ;;
     --) shift; break ;;
@@ -14,6 +15,12 @@ while [ $# -gt 0 ]; do
     *) break ;;
   esac
 done
+if [ "$NSET" = 1 ]; then
+  # FAKE_SUDOERS_DIR 设了: 除 true / /bin/bash 之外的命令, 只有 sudoers 片段里有「当前用户 ALL=(root) NOPASSWD: 这条命令」才能免密 (模拟真实的 sudoers 规则)
+  if [ -n "${FAKE_SUDOERS_DIR:-}" ] && [ "${1:-}" != true ] && [ "${1:-}" != /bin/bash ]; then
+    grep -qsxF "$(id -un) ALL=(root) NOPASSWD: ${1:-}" "$FAKE_SUDOERS_DIR"/* 2>/dev/null || { echo "sudo: a password is required" >&2; exit 1; }
+  elif [ "${FAKE_SUDO_NOPASS:-1}" = 0 ]; then echo "sudo: a password is required" >&2; exit 1; fi
+fi
 if [ "$S" = 1 ]; then
   IFS= read -r pw
   want=${FAKE_SUDO_PW:-$(sed -n 's/^sudopw=//p' "${ENANA_MOCK_CTL:-/dev/null}" 2>/dev/null | head -1)}

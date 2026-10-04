@@ -387,14 +387,38 @@ op_sync_secret() {
   else job_fail "核心令牌尚未更新; Enhanced/TUN 需要管理员授权, 运行 enana doctor 查看原因" 1; return 1; fi
 }
 
+# 发送完整诊断给开发者 (用户在日志页点了按钮): 打包 → 上传, 完成后任务结果里带报告编号
+op_diag_send() { # [小时]
+  OP_WHO=dashboard
+  job_step 0 20 "打包完整诊断"
+  job_step 1 60 "上传"
+  if diag_send_full "${1:-24}"; then job_ok "已发送, 报告编号 $DIAG_ID" "{\"id\":\"$DIAG_ID\"}"; return 0; fi
+  case ${DIAG_ERR:-} in
+    not-logged-in) job_fail "需要先登录" 1 ;;
+    too-large)     job_fail "诊断文件太大, 请在设置里缩短日志保留时长后再试" 1 ;;
+    http-429)      job_fail "今天发送的次数已经够多了, 请明天再试" 1 ;;
+    *)             job_fail "发送失败 (${DIAG_ERR:-unknown}), 检查网络后重试" 1 ;;
+  esac
+  return 1
+}
+
 # 升级核心: 先下载, 用新核心校验现有配置, 通过才替换, 否则回退
-op_core_upgrade() { # [版本|latest]
-  local old new; old=$(core_version)
+op_core_upgrade() { # [版本|latest]  latest = 兼容清单里和当前 enana 兼容的最新核心 (没有清单就不升级); 写明版本号 = 照做 (有 SHA-256 才逐个校验)
+  local old new want=${1:-latest}; old=$(core_version)
   job_step 0 10 "查询最新版本"
+  if [ "$want" = latest ]; then
+    core_manifest_refresh >/dev/null 2>&1 || true
+    want=$(core_latest_compat)
+    if [ -z "$want" ]; then
+      oplog "${OP_WHO:-terminal}" "升级核心" "$(kv reason no-compatible-version current "$old")" error
+      _txn_end fail "没有经过验证的兼容版本可升级, 保持 sing-box $old" 1; return 1
+    fi
+    if [ -n "$old" ] && ! version_gt "$want" "$old"; then _txn_end ok "已经是兼容的最新版本 sing-box $old"; return 0; fi
+  fi
   cp "$SB" "$SB.old" 2>/dev/null
   job_step 1 30 "下载并校验新核心"
-  if ! SINGBOX_VERSION=${1:-latest} core_install chain >/dev/null 2>&1; then
-    rm -f "$SB.old"; oplog "${OP_WHO:-terminal}" "升级核心" "" error; _txn_end fail "升级失败, 保持原版本 $old" 1; return 1
+  if ! SINGBOX_VERSION=$want core_install chain >/dev/null 2>&1; then
+    rm -f "$SB.old"; oplog "${OP_WHO:-terminal}" "升级核心" "$(kv reason download-failed from "$old" to "$want")" error; _txn_end fail "升级失败, 保持原版本 $old" 1; return 1
   fi
   job_step 2 70 "用新核心校验现有配置"
   if "$SB" check -c "$H/config.json" >/dev/null 2>&1; then
@@ -500,6 +524,7 @@ job_dispatch() {
     self-update)    op_self_update ;;
     core-upgrade)   op_core_upgrade "${1:-latest}" ;;
     maintain)       op_maintain ;;
+    diag-send)      op_diag_send "${1:-24}" ;;
     net-info)       op_net_refresh ;;
     speedtest)      speed_run "$1" ;;
     *) job_fail "未知任务: $JOB_NAME" ;;
