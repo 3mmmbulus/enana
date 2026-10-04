@@ -4,11 +4,14 @@ const fs=require('fs'),path=require('path'),crypto=require('crypto'),{spawnSync}
 async function refresh(file,root='/opt/enana-cc',data='/var/lib/enana-cc/pb_data',options={}){
  const c=JSON.parse(fs.readFileSync(file,'utf8')),url=new URL(c.url);
  if(url.protocol!=='https:')throw Error('private_source_invalid');
- const res=await fetch(url,{signal:AbortSignal.timeout(20000),redirect:'error'});if(!res.ok)throw Error('source_unavailable');
+ // Providers negotiate by User-Agent. Request the supported Clash subscription
+ // representation instead of accidentally parsing their HTML landing page.
+ const res=await fetch(url,{headers:{'User-Agent':'Clash/1.18.0'},signal:AbortSignal.timeout(20000),redirect:'error'});if(!res.ok)throw Error('source_unavailable');
  const t=Math.floor(Date.now()/1000),info=res.headers.get('subscription-userinfo')||'',exp=info.match(/(?:^|;)\s*expire=(\d+)/);
  const freshUntil=Math.min(t+2*86400,exp&&Number(exp[1])>0?Number(exp[1]):t+2*86400);if(freshUntil<=t)throw Error('source_expired');
  const parts=[];let size=0;for await(const chunk of res.body){size+=chunk.length;if(size>1048576)throw Error('source_too_large');parts.push(chunk)}
- const parsed=require(path.join(root,'catalog/importer.js')).parse(Buffer.concat(parts).toString('utf8'),{role:'auto'});
+ const body=Buffer.concat(parts).toString('utf8');if(/<!doctype\s+html|<html(?:\s|>)/i.test(body))throw Error('source_html_response');
+ const parsed=require(path.join(root,'catalog/importer.js')).parse(body,{role:'auto'});
  if(!parsed.servers.length)throw Error('source_parse_failed');
  const D=require(path.join(root,'pb_hooks/enana_nodes_domain.js'));
  const nodes=parsed.servers.map(r=>{const o=r.outbound;return {key:crypto.createHash('sha256').update(o.type+'\0'+o.server+'\0'+o.server_port+'\0'+o.tag).digest('hex').slice(0,32),label:D.label(o.tag),outbound:D.outbound(o)}});

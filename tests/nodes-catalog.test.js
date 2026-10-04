@@ -7,9 +7,10 @@ test('private source preflight validates accepted proxies without changing data 
   fs.mkdirSync(path.join(dir,'catalog'));fs.mkdirSync(path.join(dir,'pb_hooks'));fs.copyFileSync(path.join(__dirname,'../ui/importer.js'),path.join(dir,'catalog/importer.js'));fs.copyFileSync(path.join(__dirname,'../server/pb_hooks/enana_nodes_domain.js'),path.join(dir,'pb_hooks/enana_nodes_domain.js'));
   const input=path.join(dir,'source.json'),url='https://source.example.invalid/private-source-token';fs.writeFileSync(input,JSON.stringify({url}),{mode:0o600});
   let body=JSON.stringify({outbounds:[{type:'http',tag:'US fixture',server:'proxy.example.com',server_port:443,password:'private-fixture',tls:{enabled:true}}]});
-  global.fetch=async(u,o)=>{assert.equal(String(u),url);assert.equal(o.redirect,'error');return new Response(body)};console.log=s=>output.push(s);
+  global.fetch=async(u,o)=>{assert.equal(String(u),url);assert.equal(o.redirect,'error');assert.equal(o.headers['User-Agent'],'Clash/1.18.0');return new Response(body)};console.log=s=>output.push(s);
   assert.equal(await refresh(input,dir,path.join(dir,'data'),{validateOnly:true}),1);assert.ok(!output.join().includes('private-source-token'));assert.ok(!output.join().includes('private-fixture'));assert.ok(!fs.existsSync(path.join(dir,'data')));
   body='empty invalid upstream';await assert.rejects(refresh(input,dir,path.join(dir,'data'),{validateOnly:true}));
+  body='<!DOCTYPE html><html><a href="https://proxy.example.com:443">not a subscription</a></html>';await assert.rejects(refresh(input,dir,path.join(dir,'data'),{validateOnly:true}),/source_html_response/);
   body=JSON.stringify({outbounds:[{type:'http',tag:'bad',server:'127.0.0.1',server_port:443}]});await assert.rejects(refresh(input,dir,path.join(dir,'data'),{validateOnly:true}));
   global.fetch=async()=>new Response(body,{headers:{'subscription-userinfo':'expire=1'}});await assert.rejects(refresh(input,dir,path.join(dir,'data'),{validateOnly:true}));
   global.fetch=async()=>new Response('blocked',{status:403});await assert.rejects(refresh(input,dir,path.join(dir,'data'),{validateOnly:true}));

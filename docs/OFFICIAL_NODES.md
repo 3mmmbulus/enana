@@ -87,9 +87,11 @@ validation rather than accepting arbitrary sing-box configuration.
 
 `/etc/enana/official-source.json` contains only the authorized upstream HTTPS URL,
 mode 640 root:enana. Never add it to Git, client archives, logs or screenshots.
-`enana-catalog-refresh.service` parses the private source with the shared importer,
-validates all accepted nodes, updates the catalog atomically and disables removed
-official nodes. The timer refreshes every six hours; existing node freshness lasts
+`enana-catalog-refresh.service` requests the Clash representation by User-Agent,
+rejects HTML landing pages before parsing with the shared importer, validates all
+accepted nodes, updates the catalog atomically and disables removed official nodes.
+Unsafe node validation is never relaxed for compatibility. The timer refreshes
+every six hours; existing node freshness lasts
 two days if the source becomes unavailable, bounded by an upstream expiry header. A failure cannot extend the old expiry
 or replace the catalog with an empty response.
 
