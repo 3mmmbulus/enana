@@ -1635,14 +1635,15 @@ function statsPayload(range) {
   const n = STAT_DAYS[range], t = now(), d = new Date(t), since = statSince(), today = dayOf(t), tot = [0, 0, 0, 0, 0, 0], nm = {}, series = [], days = [];
   const pin = M.servers.filter((s) => s.role === 'pin').map((s) => s.tag), auto = M.servers.filter((s) => s.role === 'auto').map((s) => s.tag);
   const row = (id, c) => ({ t: id, up: c[0] + c[2] + c[4], down: c[1] + c[3] + c[5], direct: c[0] + c[1], pin: c[2] + c[3], auto: c[4] + c[5] });
+  const gapDay = dayOf(addDays(t, -2));                                    // 模拟前天电脑一直在休眠: 没有任何采样
   for (let i = n - 1; i >= 0; i--) days.push(dayOf(addDays(t, -i)));
   days.forEach((day) => {
     const has = !!since && day >= since, m = has ? statDay(day, pin.length > 0, auto.length > 0, day === today ? d.getHours() : -1, (d.getMinutes() + 1) / 60) : { c: [0, 0, 0, 0, 0, 0], hours: Array.from({ length: 24 }, () => [0, 0, 0, 0, 0, 0]) };
     m.c.forEach((x, k) => { tot[k] += x; });
-    if (range === 'today') m.hours.forEach((hh, i) => series.push(row(pad(i), hh))); else series.push(row(day, m.c));
+    if (range === 'today') m.hours.forEach((hh, i) => series.push(row(pad(i), hh))); else series.push(Object.assign(row(day, m.c), { samples: has ? (day === gapDay ? 0 : 1200) : null }));      // samples: 这一天采到样的分钟数; 0 = 一次都没采到 (界面画成「未采集」, 不是零流量); null = 旧版本的数据
     if (has) statNodes(day, m.c, pin, auto).forEach((x) => { const o = nm[x[0]] || (nm[x[0]] = [0, 0]); o[0] += x[1]; o[1] += x[2]; });
   });
-  return { ok: true, range, granularity: range === 'today' ? 'hour' : 'day', from: days[0], to: today, since, retention_days: 92,
+  return { ok: true, range, granularity: range === 'today' ? 'hour' : 'day', from: days[0], to: today, since, sample_since: since, retention_days: 92,
     total: { up: tot[0] + tot[2] + tot[4], down: tot[1] + tot[3] + tot[5] },
     routes: { direct: { up: tot[0], down: tot[1] }, pin: { up: tot[2], down: tot[3] }, auto: { up: tot[4], down: tot[5] } }, series,
     nodes: Object.keys(nm).map((tag) => ({ tag, up: nm[tag][0], down: nm[tag][1] })).sort((x, y) => (y.up + y.down) - (x.up + x.down) || (x.tag < y.tag ? -1 : 1)) };

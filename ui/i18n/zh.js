@@ -3471,6 +3471,8 @@
     "traffic.bar.aria": "{when}: 合计 {total}, 下载 {down}, 上传 {up}; {routes}",
     "traffic.bar.none": "{when}: 没有流量",
     "traffic.bar.pre": "{when}: 统计还没有开始",
+    "traffic.bar.gap": "{when}: 这一天没有采集到数据",
+    "traffic.detail.gap": "这一天没有采集到数据 (不是「没有流量」): 当天电脑在休眠、代理核心没有运行, 或后台定时任务没有运行。可以在「日志 → 导出」的 env 分区里看每天的采样分钟数 (stats.day.*)。",
     "traffic.detail.aria": "所选时段的详情",
     "traffic.detail.prev": "上一个",
     "traffic.detail.next": "下一个",

@@ -92,7 +92,8 @@
     var from = String(r.from || ''), to = String(r.to || ''), max = 1, peak = null, routes = {}, nodes, i, k, x;
     var buckets = r.series.map(function (s, idx) {
       s = s || {};
-      var up = n0(s.up), down = n0(s.down), key = String(s.t == null ? idx : s.t), b = { i: idx, key: key, up: up, down: down, total: up + down, direct: n0(s.direct), pin: n0(s.pin), auto: n0(s.auto), pre: !hour && !!since && key < since };
+      var up = n0(s.up), down = n0(s.down), key = String(s.t == null ? idx : s.t), b = { i: idx, key: key, up: up, down: down, total: up + down, direct: n0(s.direct), pin: n0(s.pin), auto: n0(s.auto), pre: !hour && !!since && key < since, gap: false };
+      b.gap = !hour && !b.pre && s.samples === 0;                           // 这一天一次都没有采到样 (电脑休眠 / 核心没运行 / 定时任务没运行): 和「采到了, 但没有流量」不是一回事; samples 为 null = 旧版本的数据, 不知道
       b.top = Math.max(b.total, b.direct + b.pin + b.auto);
       return b;
     });
@@ -101,10 +102,10 @@
     nodes = (Array.isArray(r.nodes) ? r.nodes : []).filter(function (n) { return n && n.tag != null; }).map(function (n) { var up = n0(n.up), down = n0(n.down); return { tag: String(n.tag), up: up, down: down, total: up + down }; })
       .filter(function (n) { return n.total > 0; }).sort(function (a, b) { return b.total - a.total; });
     for (i = 0; i < buckets.length; i++) { if (buckets[i].top > max) max = buckets[i].top; if (!peak || buckets[i].total > peak.total) peak = buckets[i]; }
-    var covered = hour ? 1 : buckets.filter(function (b) { return !b.pre; }).length;
+    var covered = hour ? 1 : buckets.filter(function (b) { return !b.pre; }).length, gaps = hour ? 0 : buckets.filter(function (b) { return b.gap; }).length;
     var m = {
       range: range, hour: hour, from: from, to: to, since: since, retention: n0(r.retention_days) || 92, buckets: buckets, total: total, sum: total.up + total.down, routes: routes, routesSum: 0,
-      nodes: nodes, nodesSum: sumOf(nodes, 'total'), axis: niceAxis(max), peak: peak && peak.total > 0 ? peak : null, covered: covered, cut: !hour && !!since && !!from && since > from
+      nodes: nodes, nodesSum: sumOf(nodes, 'total'), axis: niceAxis(max), peak: peak && peak.total > 0 ? peak : null, covered: covered, gaps: gaps, cut: !hour && !!since && !!from && since > from
     };
     for (k = 0; k < ROUTES.length; k++) m.routesSum += routes[ROUTES[k]].total;
     m.sig = range + '#' + buckets.map(function (b) { return b.key + ',' + b.up + ',' + b.down + ',' + b.direct + ',' + b.pin + ',' + b.auto; }).join(';');
@@ -117,12 +118,13 @@
     return m.buckets.length ? m.buckets[m.buckets.length - 1].key : '';
   }
   /* 当前这根柱子是不是「还在统计中」: 小时 = 本地当前小时; 天 = 最后一天 (to = 今天) */
-  function isNow(m, b) { return !b.pre && (m.hour ? +b.key === new Date().getHours() : b.i === m.buckets.length - 1); }
+  function isNow(m, b) { return !b.pre && !b.gap && (m.hour ? +b.key === new Date().getHours() : b.i === m.buckets.length - 1); }
   /* 完整的时段名 (详情标题 / aria): 天 = 「今天 · 10月2日 周五」, 小时 = 「今天 · 10月2日 周五 · 21:00–21:59」 */
   function whenLabel(m, b) { return m.hour ? t('traffic.hourLabel', { day: fmt.day(m.to), from: b.key + ':00', to: b.key + ':59' }) : fmt.day(b.key); }
   function barLabel(m, b) {
     var when = whenLabel(m, b);
     if (b.pre) return t('traffic.bar.pre', { when: when });
+    if (b.gap) return t('traffic.bar.gap', { when: when });
     if (!b.top) return t('traffic.bar.none', { when: when });
     return t('traffic.bar.aria', { when: when, total: bytes(b.total), down: bytes(b.down), up: bytes(b.up), routes: ROUTES.map(function (k) { return routeName(k) + ' ' + bytes(b[k]); }).join(', ') });
   }
@@ -244,7 +246,7 @@
     return b;
   }
   function updateBar(b, bk) {
-    var m = view.m, sig = [bk.up, bk.down, bk.direct, bk.pin, bk.auto, bk.pre ? 1 : 0, m.axis.max, m.hour ? 1 : 0, I.lang].join('|'), rs, ts;
+    var m = view.m, sig = [bk.up, bk.down, bk.direct, bk.pin, bk.auto, bk.pre ? 1 : 0, bk.gap ? 1 : 0, m.axis.max, m.hour ? 1 : 0, I.lang].join('|'), rs, ts;
     b._bk = bk;
     if (b._sig !== sig) {
       b._sig = sig;
@@ -253,7 +255,7 @@
       ROUTES.forEach(function (k) { b._segs[k].style.flexGrow = bk[k] / rs; });
       b._segs.down.style.flexGrow = bk.down / ts; b._segs.up.style.flexGrow = bk.up / ts;
       setText(b._lab, m.hour ? bk.key + ':00' : dayShort(bk.key));
-      b.classList.toggle('is-zero', !bk.top); b.classList.toggle('is-pre', bk.pre);
+      b.classList.toggle('is-zero', !bk.top); b.classList.toggle('is-pre', bk.pre); b.classList.toggle('is-gap', bk.gap);
       b.setAttribute('aria-label', barLabel(m, bk));
     }
     b.classList.toggle('is-now', isNow(m, bk));
@@ -340,6 +342,7 @@
   }
   function detailBody(m, b, compact) {
     if (b.pre) return h('p', { class: 'muted trf-d-note' }, t('traffic.detail.pre'));
+    if (b.gap) return h('p', { class: 'muted trf-d-note' }, t('traffic.detail.gap'));
     var rs = b.direct + b.pin + b.auto || 1, ds = b.total || 1;
     var routes = h('dl', { class: 'trf-dl' }, ROUTES.map(function (k) { return dRow(k, routeName(k), b[k], compact ? null : b[k] / rs); }));
     var dirs = h('dl', { class: 'trf-dl' }, dRow('down', t('traffic.card.down'), b.down, compact ? null : b.down / ds), dRow('up', t('traffic.card.up'), b.up, compact ? null : b.up / ds));
@@ -354,7 +357,7 @@
     el.dNow.hidden = !isNow(m, b);
     ui.avail(el.dPrev, b.i > 0 ? '' : t('traffic.detail.first'));
     ui.avail(el.dNext, b.i < m.buckets.length - 1 ? '' : t('traffic.detail.last'));
-    ui.memo(el.dBody, [m.range, b.key, b.up, b.down, b.direct, b.pin, b.auto, b.pre].join('|'), function () { return detailBody(m, b, false); });
+    ui.memo(el.dBody, [m.range, b.key, b.up, b.down, b.direct, b.pin, b.auto, b.pre, b.gap].join('|'), function () { return detailBody(m, b, false); });
   }
   function showTip(b) {
     var m = view.m, bk = b._bk, cr, br, sr, tw, left;
@@ -378,7 +381,7 @@
     return h('table', null, h('caption', null, t('traffic.table.caption', { range: t('traffic.range.' + m.range) })),
       h('thead', null, h('tr', null, h('th', { scope: 'col' }, t(m.hour ? 'traffic.table.hour' : 'traffic.table.day')), ROUTES.map(function (k) { return h('th', { scope: 'col' }, routeName(k)); }), th('traffic.card.down'), th('traffic.card.up'), th('traffic.card.total'))),
       h('tbody', null, m.buckets.map(function (b) {
-        return h('tr', null, h('th', { scope: 'row' }, whenLabel(m, b)), b.pre ? h('td', { colspan: 6 }, t('traffic.detail.pre')) : [td(b.direct), td(b.pin), td(b.auto), td(b.down), td(b.up), td(b.total)]);
+        return h('tr', null, h('th', { scope: 'row' }, whenLabel(m, b)), b.pre ? h('td', { colspan: 6 }, t('traffic.detail.pre')) : b.gap ? h('td', { colspan: 6 }, t('traffic.detail.gap')) : [td(b.direct), td(b.pin), td(b.auto), td(b.down), td(b.up), td(b.total)]);
       })));
   }
 

@@ -291,6 +291,7 @@ _b_env() {
   launchctl print "$GUI/$LABEL" 2>/dev/null | awk '/^[[:space:]]*(last exit code|runs) = / { k = $0; sub(/^[[:space:]]*/, "", k); gsub(/ = /, "=", k); gsub(/ /, "_", k); print "service." k }'
   [ -f "$H/hb.fail" ] && printf 'session.heartbeat_failing_since=%s\n' "$(os_date_at "$(cat "$H/hb.fail" 2>/dev/null)" 2>/dev/null || cat "$H/hb.fail")"
   [ -s "$H/notice" ] && printf 'session.last_end_reason=%s\n' "$(head -1 "$H/notice")"
+  stats_summary                         # 流量统计: 最近 7 天每天采样了多少分钟 (有数据的日子 samples=N; 没有行 = 那天一次都没采到, 不是「没流量」)
   printf 'disk.free_kb=%s\n' "$(df -k "$H" 2>/dev/null | awk 'NR==2 {print $4}')"
   printf 'logs.size_kb=%s\n' "$(du -sk "$LOGS" 2>/dev/null | awk '{print $1}')"
   if [ -x "$SB" ] && [ -s "$H/config.json" ]; then

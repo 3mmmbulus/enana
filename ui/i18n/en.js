@@ -3471,6 +3471,8 @@
     "traffic.bar.aria": "{when}: {total} in total, {down} downloaded, {up} uploaded; {routes}",
     "traffic.bar.none": "{when}: no traffic",
     "traffic.bar.pre": "{when}: statistics hadn't started yet",
+    "traffic.bar.gap": "{when}: no data was collected on this day",
+    "traffic.detail.gap": "No data was collected on this day (this is not “no traffic”): the computer was asleep, the proxy core was not running, or the background timer did not run. The env section of Logs → Export shows the sampled minutes per day (stats.day.*).",
     "traffic.detail.aria": "Details for the selected period",
     "traffic.detail.prev": "Previous",
     "traffic.detail.next": "Next",

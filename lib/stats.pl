@@ -4,23 +4,28 @@
 #   curl …/connections | perl stats.pl collect <统计目录> <roles 文件> <默认类别 direct|auto>   (每分钟一次, 由 `enana tick` 调用)
 #   perl stats.pl report  <统计目录> <today|3d|7d|30d|90d>                                       打印 JSON (GET /api/stats)
 #   perl stats.pl purge   <统计目录>                                                              清理过期数据
+#   perl stats.pl summary <统计目录>                                                              打印最近 7 天每天的采样分钟数和总量 + 最后一次采样时间 (kv 行, 给诊断导出用)
 # 文件 (都在统计目录里, 纯本机数据, 不上传):
-#   daily.tsv   日期 up down direct_up direct_down pin_up pin_down auto_up auto_down      (保留 92 天)
+#   daily.tsv   日期 up down direct_up direct_down pin_up pin_down auto_up auto_down [采样分钟数]   (保留 92 天; 第 10 列是 2.3.8 加的: 这一天核心可达、定时任务真的采到样的次数 ——
+#               没有流量的日子也会有一行, 这样「没有流量」和「根本没有采集到 (电脑休眠 / 核心没运行 / 定时任务没运行)」可以区分; 旧版本留下的行没有这一列)
+#   last        最后一次成功采样的时间 (epoch 秒)
 #   hourly.tsv  日期 小时 up down direct pin auto                                         (保留 72 小时, 供「今日」按小时画图)
 #   nodes.tsv   日期 节点 up down                                                         (保留 92 天)
 #   state.json  上一次采样的累计值与每条连接的字节数 (用来算增量)
 # 精度说明: 总量来自核心的累计计数 (准确); 分类 (直连 / 固定出口 / 自动线路 / 各节点) 来自采样时仍在的连接, 两次采样之间已经结束的短连接
 # 按当时的分类比例分摊 (估算)。核心重启后计数会清零, 脚本自动识别并从新计数开始。
 use strict; use warnings;
-use JSON::PP; use POSIX qw(strftime);
+use JSON::PP; use POSIX qw(strftime); use Fcntl qw(:flock);
 my ($cmd, $dir, @rest) = @ARGV;
 die "usage: stats.pl collect|report|purge <dir> ...\n" unless $cmd && $dir;
 my $KEEP_DAYS = 92; my $KEEP_HOURS = 72;
 my $now = $ENV{ENANA_NOW} || time;
 mkdir $dir unless -d $dir;
+# 同一时刻只让一个进程读写这些文件: 每分钟的采样、每天凌晨的清理 (tick 里和 enana maintain 里各一次) 可能碰在一起, 整表重写没有锁时会互相覆盖
+open my $LOCK, '>>', "$dir/.lock" or die "lock: $!"; flock($LOCK, $cmd eq 'report' || $cmd eq 'summary' ? LOCK_SH : LOCK_EX) or die "flock: $!";
 
 sub read_tsv { my ($f) = @_; my @r; if (open my $h, '<', $f) { while (<$h>) { chomp; push @r, [split /\t/, $_, -1] if length; } close $h; } return @r; }
-sub write_tsv { my ($f, @r) = @_; open my $h, '>', "$f.new" or die; print $h join("\t", @$_), "\n" for @r; close $h; rename "$f.new", $f; }
+sub write_tsv { my ($f, @r) = @_; open my $h, '>', "$f.new.$$" or die; print $h join("\t", @$_), "\n" for @r; close $h; rename "$f.new.$$", $f; }
 sub day_of { strftime('%Y-%m-%d', localtime($_[0])) }
 sub purge_old {
     my $cut_day = day_of($now - $KEEP_DAYS * 86400); my $cut_hour = strftime('%Y-%m-%d %H', localtime($now - $KEEP_HOURS * 3600));
@@ -59,27 +64,34 @@ if ($cmd eq 'collect') {
         else { $cu{$defclass} += $ru; $cd{$defclass} += $rd; }
     }
     $state = { ut => $ut + 0, dt => $dt + 0, conns => \%cur };
-    open my $oh, '>', "$dir/state.json.new" or die; print $oh encode_json($state); close $oh; rename "$dir/state.json.new", "$dir/state.json";
-    if (!$first && ($tu > 0 || $td > 0)) {
+    open my $oh, '>', "$dir/state.json.new.$$" or die; print $oh encode_json($state); close $oh; rename "$dir/state.json.new.$$", "$dir/state.json";
+    unless ($first) {
         my $day = day_of($now); my $hour = strftime('%H', localtime($now));
+        my $traffic = ($tu > 0 || $td > 0) ? 1 : 0;
         my @d = read_tsv("$dir/daily.tsv"); my ($row) = grep { $_->[0] eq $day } @d;
         unless ($row) { $row = [$day, (0) x 8]; push @d, $row; }
-        $row->[1] += $tu; $row->[2] += $td;
-        my $i = 3; for my $k (qw(direct pin auto)) { $row->[$i++] += $cu{$k} || 0; $row->[$i++] += $cd{$k} || 0; }
-        @d = sort { $a->[0] cmp $b->[0] } @d; write_tsv("$dir/daily.tsv", @d);
-        my @h = read_tsv("$dir/hourly.tsv"); my ($hr) = grep { $_->[0] eq $day && $_->[1] eq $hour } @h;
-        unless ($hr) { $hr = [$day, $hour, (0) x 5]; push @h, $hr; }
-        $hr->[2] += $tu; $hr->[3] += $td; my $k2 = 4; for my $k (qw(direct pin auto)) { $hr->[$k2++] += ($cu{$k} || 0) + ($cd{$k} || 0); }
-        @h = sort { "$a->[0] $a->[1]" cmp "$b->[0] $b->[1]" } @h; write_tsv("$dir/hourly.tsv", @h);
-        if (%nu || %nd) {
-            my @n = read_tsv("$dir/nodes.tsv");
-            for my $node (keys %{{ %nu, %nd }}) {
-                my ($nr) = grep { $_->[0] eq $day && $_->[1] eq $node } @n;
-                unless ($nr) { $nr = [$day, $node, 0, 0]; push @n, $nr; }
-                $nr->[2] += $nu{$node} || 0; $nr->[3] += $nd{$node} || 0;
-            }
-            write_tsv("$dir/nodes.tsv", @n);
+        $row->[9] = ($row->[9] // 0) + 1;                                      # 这一分钟采到样了 (有没有流量都算)
+        if ($traffic) {
+            $row->[1] += $tu; $row->[2] += $td;
+            my $i = 3; for my $k (qw(direct pin auto)) { $row->[$i++] += $cu{$k} || 0; $row->[$i++] += $cd{$k} || 0; }
         }
+        @d = sort { $a->[0] cmp $b->[0] } @d; write_tsv("$dir/daily.tsv", @d);
+        if ($traffic) {
+            my @h = read_tsv("$dir/hourly.tsv"); my ($hr) = grep { $_->[0] eq $day && $_->[1] eq $hour } @h;
+            unless ($hr) { $hr = [$day, $hour, (0) x 5]; push @h, $hr; }
+            $hr->[2] += $tu; $hr->[3] += $td; my $k2 = 4; for my $k (qw(direct pin auto)) { $hr->[$k2++] += ($cu{$k} || 0) + ($cd{$k} || 0); }
+            @h = sort { "$a->[0] $a->[1]" cmp "$b->[0] $b->[1]" } @h; write_tsv("$dir/hourly.tsv", @h);
+            if (%nu || %nd) {
+                my @n = read_tsv("$dir/nodes.tsv");
+                for my $node (keys %{{ %nu, %nd }}) {
+                    my ($nr) = grep { $_->[0] eq $day && $_->[1] eq $node } @n;
+                    unless ($nr) { $nr = [$day, $node, 0, 0]; push @n, $nr; }
+                    $nr->[2] += $nu{$node} || 0; $nr->[3] += $nd{$node} || 0;
+                }
+                write_tsv("$dir/nodes.tsv", @n);
+            }
+        }
+        if (open my $lh, '>', "$dir/last.$$") { print $lh $now, "\n"; close $lh; rename "$dir/last.$$", "$dir/last"; }
     }
     purge_old() if (localtime($now))[2] == 3 && (localtime($now))[1] < 2;     # 每天凌晨顺手清一次
     exit 0;
@@ -91,6 +103,7 @@ if ($cmd eq 'report') {
     my $from = day_of($now - ($n - 1) * 86400); my $to = day_of($now);
     my @d = grep { $_->[0] ge $from && $_->[0] le $to } read_tsv("$dir/daily.tsv"); my %dm = map { $_->[0] => $_ } @d;
     my @all = read_tsv("$dir/daily.tsv"); my $since = @all ? $all[0][0] : '';
+    my ($cov) = sort grep { defined } map { defined $_->[9] ? $_->[0] : undef } @all;        # 有「采样分钟数」这一列的最早一天 (2.3.8 之后才有); 更早的日子没有行 = 没流量还是没采集, 无法区分
     my (%rt, @series); my ($tu, $td) = (0, 0);
     my %r = (direct => [0, 0], pin => [0, 0], auto => [0, 0]);
     for my $row (@d) { $tu += $row->[1]; $td += $row->[2]; my $i = 3; for my $k (qw(direct pin auto)) { $r{$k}[0] += $row->[$i++]; $r{$k}[1] += $row->[$i++]; } }
@@ -101,15 +114,25 @@ if ($cmd eq 'report') {
             push @series, { t => $k, up => $row->[2] + 0, down => $row->[3] + 0, direct => $row->[4] + 0, pin => $row->[5] + 0, auto => $row->[6] + 0 }; }
     } else {
         for my $i (reverse 0 .. $n - 1) { my $day = day_of($now - $i * 86400); my $row = $dm{$day} || [$day, (0) x 8];
-            push @series, { t => $day, up => $row->[1] + 0, down => $row->[2] + 0, direct => $row->[3] + $row->[4], pin => $row->[5] + $row->[6], auto => $row->[7] + $row->[8] }; }
+            my $smp = $dm{$day} ? (defined $row->[9] ? $row->[9] + 0 : undef) : (defined $cov && $day ge $cov ? 0 : undef);      # null = 旧版本的数据, 不知道; 0 = 这一天一次都没有采到样
+            push @series, { t => $day, up => $row->[1] + 0, down => $row->[2] + 0, direct => $row->[3] + $row->[4], pin => $row->[5] + $row->[6], auto => $row->[7] + $row->[8], samples => $smp }; }
     }
     my %nt; for my $row (grep { $_->[0] ge $from && $_->[0] le $to } read_tsv("$dir/nodes.tsv")) { $nt{$row->[1]}[0] += $row->[2]; $nt{$row->[1]}[1] += $row->[3]; }
     my @nodes = map { { tag => $_, up => $nt{$_}[0] + 0, down => $nt{$_}[1] + 0 } } sort { ($nt{$b}[0] + $nt{$b}[1]) <=> ($nt{$a}[0] + $nt{$a}[1]) } keys %nt;
-    my $out = { range => $range, granularity => $gran, from => $from, to => $to, since => $since, retention_days => $KEEP_DAYS,
+    my $out = { range => $range, granularity => $gran, from => $from, to => $to, since => $since, sample_since => $cov, retention_days => $KEEP_DAYS,
                 total => { up => $tu + 0, down => $td + 0 },
                 routes => { map { $_ => { up => $r{$_}[0] + 0, down => $r{$_}[1] + 0 } } qw(direct pin auto) },
                 series => \@series, nodes => \@nodes };
     print JSON::PP->new->canonical->encode($out);
+    exit 0;
+}
+if ($cmd eq 'summary') {
+    my @all = read_tsv("$dir/daily.tsv"); my $last = ''; if (open my $lh, '<', "$dir/last") { $last = <$lh>; chomp $last; close $lh; }
+    printf "stats.last_sample=%s\n", $last =~ /^\d+$/ ? strftime('%Y-%m-%d %H:%M:%S', localtime($last)) : 'never';
+    printf "stats.daily_rows=%d\nstats.first_day=%s\n", scalar(@all), @all ? $all[0][0] : '-';
+    my %dm = map { $_->[0] => $_ } @all;
+    for my $i (reverse 0 .. 6) { my $day = day_of($now - $i * 86400); my $r = $dm{$day};
+        printf "stats.day.%s=%s\n", $day, $r ? sprintf('samples=%s up=%d down=%d', defined $r->[9] ? $r->[9] : 'legacy', $r->[1], $r->[2]) : 'no-row'; }
     exit 0;
 }
 die "unknown command $cmd\n";

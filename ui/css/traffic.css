@@ -75,6 +75,7 @@
 .trf-bar:focus-visible{outline:2px solid var(--pri);outline-offset:-2px;z-index:1}
 .trf-col{flex:none;height:var(--trf-h);display:flex;align-items:flex-end;justify-content:center}
 .trf-bar.is-pre .trf-col{background:repeating-linear-gradient(135deg,transparent 0 5px,var(--line) 5px 6px)}
+.trf-bar.is-gap .trf-col{background:repeating-linear-gradient(135deg,transparent 0 4px,var(--warn,#d97706) 4px 5px);opacity:.55}      /* 没有采集到数据 (不是零流量): 斜纹 + 警示色 */
 .trf-stack{display:flex;flex-direction:column-reverse;width:min(72%,40px);min-width:3px;min-height:2px;overflow:hidden;border-radius:3px 3px 0 0;transition:height .25s ease}
 .trf-bar.is-zero .trf-stack{display:none}
 .trf-seg{display:block;flex:0 0 0%}

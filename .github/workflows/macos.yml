@@ -17,6 +17,8 @@ jobs:
         run: bash tests/sysproxy.sh
       - name: Record connection health, state changes and heartbeat events; automatic verdict
         run: bash tests/health.sh
+      - name: Traffic statistics distinguish "no traffic" from "no samples" and survive concurrent samplers
+        run: bash tests/stats.sh
       - name: Verify terminal waits for Enter and renders one action per line
         run: python3 tests/console-pty.py
       - name: Check protected TUN cleanup and rollback
