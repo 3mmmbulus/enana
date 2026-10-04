@@ -15,7 +15,7 @@ session_save() { # <token> <session id>
   [ -n "$2" ] && { printf '%s\n' "$2" > "$H/session.new" && chmod 600 "$H/session.new" && mv "$H/session.new" "$H/session"; }
   return 0
 }
-session_clear() { rm -f "$H/cloud.token" "$H/session" "$H/hb.fail"; }
+session_clear() { rm -f "$H/cloud.token" "$H/session" "$H/hb.fail" "$H/plan.json" "$H/plan.checked" "$H/official.json" "$H/official.json.prev" "$H/official.pending.json" "$H/official.pending.json.prev" "$H/official.roles.json" "$H/official.roles.json.prev" "$H/official.checked"; }
 session_notice() { local n; [ -s "$H/notice" ] && IFS= read -r n < "$H/notice"; printf '%s' "${n:-}"; }
 
 # session_call <输出文件> <GET|POST|PUT|DELETE> <路径> [JSON 正文]  -> 响应体写入输出文件, 打印 HTTP 状态码 (000 = 没连上 / 没有云端会话)
@@ -24,7 +24,7 @@ session_call() {
   local out=$1 m=$2 path=$3 body=${4:-} tok sid
   tok=$(session_token); sid=$(session_id)
   [ -n "$tok" ] && [ -n "$sid" ] || { printf '000'; return 0; }
-  _cloud_req "$m" "$path" "$body" "$out" "Authorization: Bearer $tok" "X-Enana-Session: $sid"
+  _cloud_req "$m" "$path" "$body" "$out" "Authorization: Bearer $tok" "X-Enana-Session: $sid" "X-Enana-Client-Version: $VERSION"
 }
 
 # 退出登录时通知云端释放名额 (后台进行, 最多几秒; 联网失败也无所谓: 云端 10 分钟没有心跳就不再占名额)

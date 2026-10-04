@@ -16,7 +16,7 @@ while [ -L "$_p" ]; do _l=$(readlink "$_p"); case $_l in /*) _p=$_l ;; *) _p=$(d
 _d=$(cd "$(dirname "$_p")" && pwd -P)
 . "$_d/lib/common.sh"
 init_paths "$_p"
-for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps menu detect console; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan official sync vps menu detect console; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 load_settings
 
@@ -325,6 +325,7 @@ cmd_restart() { info "正在重启服务…"; if os_service_restart && wait_port
 cmd_network_mode() { network_mode_set "$ARG1"; }
 cmd_on() { # 开启代理: 必须先在仪表盘登录 enana.cc 账号
   if ! auth_logged_in; then warn "还没有登录: 请先打开仪表盘 ($UI_URL) 用 enana.cc 账号登录, 再开启代理"; return 1; fi
+  if official_blocked; then warn "官方线路授权已失效，请先刷新官方线路"; return 1; fi
   cmd_start && proxy_set_enabled 1 && { [ "$NETWORK_MODE" = tun ] || os_sysproxy_set on; }
 }
 cmd_off() { proxy_set_enabled 0; if os_sysproxy_mine; then os_sysproxy_set off || { warn "系统代理没有关闭成功 (需要管理员密码), 服务未停止以免断网; 请重试 enana off"; return 1; }; fi; os_service_stop || return 1; ok "已关闭系统代理并停止服务"; }
@@ -366,6 +367,7 @@ cmd_tick() { # 每分钟一次 (launchd): 流量统计采样; 每 ~2 分钟一�
   stats_collect
   [ -f "$H/.hb.last" ] && IFS= read -r last < "$H/.hb.last"
   if [ $(( $(now) - ${last:-0} )) -ge 110 ]; then now > "$H/.hb.last"; session_heartbeat; fi
+  official_tick || true
   sync_auto_tick || true                       # 自动同步 (打开了才工作; 每 10 分钟检查一次)
   autosite_tick || true                        # 自动识别无法访问的网站 (设置里打开了才工作); 必须排在日志切分之前
   logs_tick || true                            # 日志: 每小时切分 / 压缩 / 按保留期 (最短 12 小时) 清理

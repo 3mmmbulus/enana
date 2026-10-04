@@ -10,7 +10,7 @@
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, I = window.I18N, t = I.t, L = I.L;
-  var P = TP.plan = {}, data = null, loadedAt = 0, loading = null;
+  var P = TP.plan = {}, data = null, loadedAt = 0, loading = null, epoch = 0;
 
   P.get = function () { return data; };
   P.name = function (key) { return I.has('plan.f.' + key) ? t('plan.f.' + key) : String(key).replace(/[_-]+/g, ' '); };
@@ -31,12 +31,14 @@
     if (S.locked) return Promise.resolve(data);
     if (loading) return loading;
     if (!force && data && Date.now() - loadedAt < 300000) return Promise.resolve(data);
-    loading = TP.helper('GET', '/api/plan', { timeout: 8000 }).then(function (r) {
+    var mine = epoch;
+    loading = TP.helper('GET', '/api/plan', { timeout: 12000, q: { refresh: force ? 1 : 0 } }).then(function (r) {
+      if (mine !== epoch) return null;
       data = r && r.ok !== false ? r : data; loadedAt = Date.now(); TP.emit('plan', data); return data;
-    }, function (e) { if (!(e && e.kind === 'auth')) TP.emit('plan', data); return data; }).then(function (x) { loading = null; return x; });
+    }, function (e) { if (mine !== epoch) return null; if (!(e && e.kind === 'auth')) TP.emit('plan', data); return data; }).then(function (x) { if (mine === epoch) loading = null; return x; });
     return loading;
   };
-  TP.on('auth', function (ok) { if (ok) { data = null; P.load(true); } else { data = null; } });
+  TP.on('auth', function (ok) { epoch++; loading = null; loadedAt = 0; if (ok) { data = null; P.load(true); } else { data = null; } });
   TP.on('lang', function () { /* 套餐名 / 原因由后端按语言头翻译: 下次读取时更新 */ loadedAt = 0; });
 
   /* 为什么这项功能现在不能用 / 它属于什么 -> 弹窗 (不是死按钮) */

@@ -343,7 +343,7 @@ _b_policy() { # 当前生效的策略: 代理模式 / 每个选择器当前选�
 
 _b_servers() { # tag type host(打码) port role sub
   printf 'tag\ttype\thost\tport\trole\tsub\n'
-  srv_list | while IFS=$'\t' read -r tag type host port role sub; do printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$tag" "$type" "$(printf '%s\n' "$host" | _b_mask_host)" "$port" "$role" "$sub"; done
+  srv_list | awk -F'\t' 'BEGIN{OFS="\t"} $7==1{$3="official";$4=0}{print $1,$2,$3,$4,$5,$6}' | while IFS=$'\t' read -r tag type host port role sub; do printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$tag" "$type" "$(printf '%s\n' "$host" | _b_mask_host)" "$port" "$role" "$sub"; done
 }
 
 _b_apps() { # 已识别的应用 + 当前设置

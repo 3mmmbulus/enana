@@ -1,5 +1,21 @@
 # Changelog / 更新日志
 
+## 2.3.8 (2026-10-04)
+
+### 中文
+- 接通官方节点下发：云端实时验证邮箱、Pro 期限与设备会话，免费、未验证、过期或被下线设备拿不到凭据。源订阅仅存服务器，定时刷新并校验，客户端使用独立、最长一小时的私有缓存。
+- 官方节点复用 Mac / Windows 现有 PIN、自动线路、应用与网站分流，角色可选固定 / 自动 / 停用；自建节点和代理模式保留。页面刷新只读取状态，TUN 节点变化等待用户应用，缓存失效暂停代理并要求刷新，防止后台自动授权及旧线路继续使用。
+- 增加独立的服务器共享授权：默认关闭、只上传所选自建节点代理配置、明确明文保存和带宽影响，授权七天、可撤销；首次提交或凭据变化必须重新审核，撤销清除云端凭据。加密备份、SSH 凭据及订阅节点不参与共享。
+- 官方凭据不出现在界面、备份及诊断；退出账号清理缓存，阻止旧账号响应重新填充界面。新增真实 PocketBase 权限/共享审核、CGI、配置生成、缓存过期及 Windows 原生核心校验测试。
+- 正式收款仍关闭，真实邮箱收件和 TRC20 主网到账尚待验收；专用 Claude 干净线路仍显示“暂无”。本机核心必须持有可用代理凭据，不宣称对客户端所有者隐瞒凭据或远程收回已下发副本。
+
+### English
+- Deliver official nodes only to verified, active Pro users with live device sessions. Keep the upstream subscription server-only, refresh a validated private catalog, and bind client caches to a session for at most one hour.
+- Reuse existing Mac/Windows PIN, Auto, app and website routing. Preserve user servers and capture mode. Page GETs only read status; TUN changes require explicit application. Pause proxy use when cached access expires.
+- Add separate, default-off seven-day server-sharing consent and operator review. Upload only a selected owned node; disclose unencrypted proxy credentials and bandwidth costs. Credential changes require review, revocation clears stored credentials, and encrypted backups never imply sharing.
+- Exclude official credentials from UI, backups and diagnostics; clear caches on logout and discard stale account responses. Cover real database gates/review, local CGI and routing, expiry and native Windows configuration checks.
+- Receiving remains disabled pending real mail/receipt acceptance; the dedicated Claude pool is empty. Local cores require usable credentials; downloaded copies cannot be remotely recalled.
+
 ## 2.3.7 (2026-10-04)
 
 ### 中文

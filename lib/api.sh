@@ -95,7 +95,7 @@ case $path in /favicon.ico) path="$ADMIN_PATH/favicon.png" ;; esac      # 浏览
 case $path in /|"$ADMIN_PATH"|"$ADMIN_PATH"/*) serve_static ;; esac
 
 # ---------- 以下是 JSON 接口: 到这里才加载其余模块 ----------
-for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan billing sync vps; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan billing official sync vps; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 i18n_init
 OP_WHO=dashboard; export OP_WHO
@@ -117,7 +117,7 @@ case "$method $path" in
 esac
 
 # 敏感操作 (step-up): 已经登录也要再输一次密码, 换到 X-Enana-Sudo 令牌才能调用。以后加功能只要往这张表里加一项 (格式 方法:路径)。
-SUDO_ENDPOINTS=" POST:/api/servers/delete POST:/api/sub/delete GET:/api/servers/secret GET:/api/sub/url POST:/api/logs/clear POST:/api/devices/kick POST:/api/sync/clear GET:/api/export "
+SUDO_ENDPOINTS=" POST:/api/servers/share POST:/api/servers/delete POST:/api/sub/delete GET:/api/servers/secret GET:/api/sub/url POST:/api/logs/clear POST:/api/devices/kick POST:/api/sync/clear GET:/api/export "
 case "$SUDO_ENDPOINTS" in *" $method:$path "*) auth_sudo_ok "$SUD" || deny 403 E_SUDO_REQUIRED "此操作需要再次输入登录密码" ;; esac
 
 urldecode() { case $1 in *\\*) printf ''; return ;; esac; local s=${1//+/ }; printf '%b' "${s//%/\\x}"; }
@@ -135,7 +135,7 @@ valid_day() { case $1 in '') return 0 ;; [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0
 # ---------- JSON 片段 ----------
 servers_json() {
   srv_list | awk -F'\t' 'BEGIN{printf "["} { gsub(/["\\]/, "", $1); gsub(/["\\]/, "", $3);
-    printf "%s{\"tag\":\"%s\",\"type\":\"%s\",\"server\":\"%s\",\"port\":%s,\"role\":\"%s\",\"sub\":\"%s\"}", (NR>1?",":""), $1, $2, $3, ($4==""?0:$4), $5, $6 } END{printf "]"}'
+    official=($7==1); printf "%s{\"tag\":\"%s\",\"type\":\"%s\",\"server\":\"%s\",\"port\":%s,\"role\":\"%s\",\"sub\":\"%s\",\"official\":%s}", (NR>1?",":""), $1, $2, (official?"":$3), (official||$4==""?0:$4), $5, $6, (official?"true":"false") } END{printf "]"}'
 }
 
 # ---------- 账号 / 代理总开关 ----------
@@ -189,7 +189,7 @@ ep_proxy() { # 代理总开关 + 模式 (on=0|1, mode=auto|global; 至少给一�
     os_service_start && wait_port "$PORT" 10 && enhanced_ready || fail "代理服务没有运行, 启动也失败了 (运行 enana doctor 查看原因)" E_NOT_RUNNING
   fi
   [ -n "$mode" ] && proxy_set_mode "$mode"
-  [ -n "$on" ] && proxy_set_enabled "$on"
+  if [ -n "$on" ]; then proxy_set_enabled "$on" || fail "官方线路授权已失效，请先刷新官方线路" E_OFFICIAL_EXPIRED; fi
   oplog dashboard "$([ -n "$on" ] && { [ "$on" = 1 ] && echo 开启代理 || echo 关闭代理; } || echo 切换代理模式)" "$(kv enabled "${PROXY_ENABLED:-0}" mode "${PROXY_MODE:-auto}" was_enabled "$was_on" was_mode "$was_mode")" ok
   okj "\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\""
 }
@@ -377,10 +377,21 @@ ep_prefs_set() { # 正文是 JSON 对象文本
 }
 ep_plan() {
   local c; c=$(plan_checked)
-  if [ -n "$(session_id)" ] && [ $(( $(now) - c )) -gt "$PLAN_TTL" ]; then
-    if [ "$c" = 0 ]; then plan_refresh || true; else ( plan_refresh >/dev/null 2>&1 & ); fi      # 从没取过: 等一下; 过期了: 先用旧的, 后台刷新
+  if [ -n "$(session_id)" ] && { [ "$(qp refresh)" = 1 ] || [ $(( $(now) - c )) -gt "$PLAN_TTL" ]; }; then
+    if [ "$c" = 0 ] || [ "$(qp refresh)" = 1 ]; then plan_refresh || true; else ( plan_refresh >/dev/null 2>&1 & ); fi      # 从没取过: 等一下; 过期了: 先用旧的, 后台刷新
   fi
   json "{\"ok\":true,$(plan_json)}"
+}
+
+ep_official() {
+  if [ "$1" = refresh ]; then okj "\"job\":\"$(job_spawn official-refresh "$APPLY_STEPS")\""; else json "$(official_cache meta)"; fi
+}
+ep_shares() {
+  local result; result=$(sharing_request "$1" "$BODY") || fail "暂时无法更新服务器共享，请稍后重试" "${SHARING_CODE:-E_ACCOUNT_UNREACHABLE}"
+  if [ "$1" = write ] && printf '%s' "$result" | grep -q '"ok":true'; then
+    local marktag markon; marktag=$(perl -MJSON::PP -e 'local $/;print decode_json(<>)->{tag}' "$BODY"); markon=$(perl -MJSON::PP -e 'local $/;print decode_json(<>)->{consent}?1:0' "$BODY"); sharing_mark "$marktag" "$markon"
+  fi
+  json "$result"
 }
 
 ep_billing() {
@@ -540,6 +551,10 @@ ep_servers_import() { # 先对副本「干跑」, 立即返回数量与逐行错
 ep_servers_change() { # delete | role  (校验后交给后台任务)
   local tag role; tag=$(qp tag); role=$(qp role)
   [ -n "$tag" ] && srv_has_tag "$tag" || fail "找不到这台服务器" E_NOT_FOUND
+  if official_tag "$tag"; then
+    [ "$1" != delete ] || fail "官方线路不能删除" E_INVALID
+    case $role in pin|auto|off) ;; *) fail "角色无效" E_INVALID ;; esac
+  fi
   if [ "$1" = delete ]; then okj "\"job\":\"$(job_spawn servers-delete "$APPLY_STEPS" "$tag")\""
   else case $role in pin|auto|off|dl) okj "\"job\":\"$(job_spawn servers-role "$APPLY_STEPS" "$tag" "$role")\"" ;; *) fail "角色无效" ;; esac; fi
 }
@@ -803,6 +818,10 @@ case "$method $path" in
   "GET /api/prefs")            json "{\"ok\":true,$(prefs_json)}" ;;
   "POST /api/prefs")           ep_prefs_set ;;
   "GET /api/plan")             ep_plan ;;
+  "GET /api/official/status")  ep_official status ;;
+  "POST /api/official/refresh") ep_official refresh ;;
+  "GET /api/servers/shares")   ep_shares read ;;
+  "POST /api/servers/share")   ep_shares write ;;
   "GET /api/billing")          ep_billing status billing GET ;;
   "POST /api/billing/checkout") ep_billing checkout billing/checkout POST ;;
   "GET /api/billing/order")    ep_billing order billing/order GET ;;

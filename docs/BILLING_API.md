@@ -1,7 +1,8 @@
 # Pro billing foundation (cloud service)
 
-This backend is implemented; customer checkout in the shared Mac/Windows
-dashboard is not yet released. Receiving stays disabled during integration.
+The shared Mac/Windows dashboard implements customer checkout, wallet renewal
+and email verification. Receiving stays disabled pending real mail and on-chain
+receipt acceptance. Official delivery and sharing are documented in [OFFICIAL_NODES.md](OFFICIAL_NODES.md).
 All customer APIs require the same user token and device session as CLOUD_API.
 Billing collections have no public REST access. Verified email is required to
 create an invoice, buy from balance or change automatic renewal.

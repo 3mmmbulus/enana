@@ -18,7 +18,7 @@
 | `audit_events` | 安全审计: `user` · `device` · `type`(register/login/login_failed/logout/kick/limit_blocked/sync_push/sync_pull …) · `detail` · `ip_masked` |
 所有集合只允许通过上面的接口访问 (规则: 只能访问自己的记录), 管理员通过 SSH 隧道进入后台。
 
-Pro 订单、余额、到账记录与验证接口见 [BILLING_API.md](BILLING_API.md)。这一阶段上线服务端基础，正式收款关闭，客户端购买界面和官方线路下发尚未发布。
+Pro 订单、余额、到账记录与验证接口见 [BILLING_API.md](BILLING_API.md)。共享 Mac/Windows 客户端已提供套餐购买界面与官方线路下发；正式收款关闭，仍须真实邮件及到账验收。节点权限和主动共享见 [OFFICIAL_NODES.md](OFFICIAL_NODES.md)。
 
 ## 设备数量限制 (服务端强制)
 同一个账号, **同一平台最多同时在线 2 台设备** (macOS 2 台 + Windows 2 台; 上限来自账号套餐 `plans.max_devices_per_platform`)。
