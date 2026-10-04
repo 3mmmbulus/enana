@@ -647,6 +647,17 @@ IP 地址格式不正确 (支持 IPv4 和 IPv6)	The IP address is not valid (IPv
 这份内容需要 enana * 或更高版本, 请先更新 enana	This content needs enana * or newer; update enana first
 连不上云端内容服务 (HTTP *)	Cannot reach the cloud content service (HTTP *)
 重置网站域名	Reset site domains
+恢复官方默认规则 完成, 配置已应用	Rules reset to the official defaults; configuration applied
+恢复官方默认规则 完成 (配置无变化, 未重启)	Rules reset to the official defaults (configuration unchanged, no restart)
+恢复官方默认规则 失败: 没有可应用的更改	Resetting the rules failed: no changes to apply
+撤销恢复默认 完成, 配置已应用	Reset undone; configuration applied
+撤销恢复默认 完成 (配置无变化, 未重启)	Reset undone (configuration unchanged, no restart)
+撤销恢复默认 失败: 没有可应用的更改	Undoing the reset failed: no changes to apply
+恢复官方默认规则	Reset rules to official defaults
+撤销恢复默认	Undo reset to defaults
+没有可以撤销的重置	There is no reset to undo
+备份文件不完整, 不能撤销	The backup is incomplete, so it cannot be undone
+备份文件无法读取, 不能撤销	The backup cannot be read, so it cannot be undone
 阿里 DNS (DoT)	Alibaba DNS (DoT)
 223.5.5.5,加密的 TLS 直连,和 DoH 速度相近	223.5.5.5. Encrypted TLS, similar speed to DoH
 腾讯 DNSPod (DoT)	Tencent DNSPod (DoT)

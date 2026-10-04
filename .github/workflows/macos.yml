@@ -19,6 +19,12 @@ jobs:
         run: bash tests/health.sh
       - name: Traffic statistics distinguish "no traffic" from "no samples" and survive concurrent samplers
         run: bash tests/stats.sh
+      - name: Reset to the official default rules (official content refresh, backup, undo, rollback)
+        run: bash tests/reset.sh
+      - name: Dashboard system-proxy flow and sortable table headers
+        run: |
+          node tests/sysproxy-ui.test.js
+          node tests/sorter.test.js
       - name: Verify terminal waits for Enter and renders one action per line
         run: python3 tests/console-pty.py
       - name: Check protected TUN cleanup and rollback

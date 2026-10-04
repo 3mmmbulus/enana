@@ -647,6 +647,11 @@ ep_settings_set() {
   okj "${job:+\"job\":\"$job\"}"
 }
 
+# ---------- 恢复官方默认规则 (设置 → 代理) ----------
+# GET /api/settings/reset 先给确认框要显示的数量 (只读); POST 开始重置 (后台任务, 清掉自己改过的规则 + 重新下载云端官方内容); POST .../undo 把最近一次重置清掉的内容放回去。
+ep_reset_run() { okj "\"job\":\"$(job_spawn rules-reset "$RULE_STEPS")\""; }
+ep_reset_undo() { [ -n "$(reset_latest_backup)" ] || fail "没有可以撤销的重置" E_NOT_FOUND; okj "\"job\":\"$(job_spawn rules-reset-undo "$RULE_STEPS")\""; }
+
 # ---------- 日志 ----------
 ep_logs() {
   local type day q; type=$(qp type); day=$(qp day); q=$(qp q | tr -d '\000-\037' | cut -c1-100)
@@ -836,6 +841,9 @@ case "$method $path" in
     nm=$(fp mode); case $nm in system|tun) ;; *) fail "流量接管模式无效" ;; esac
     j=$(job_spawn network-mode "$APPLY_STEPS" "$nm"); okj "\"job\":\"$j\"" ;;
   "POST /api/settings")        ep_settings_set ;;
+  "GET /api/settings/reset")   json "{\"ok\":true,$(reset_preview_json)}" ;;
+  "POST /api/settings/reset")  ep_reset_run ;;
+  "POST /api/settings/reset/undo") ep_reset_undo ;;
   "GET /api/apps")             apps_resp ;;
   "POST /api/apps/scan")       ep_apps_scan ;;
   "GET /api/sites/domains")    ep_sites_domains_get ;;

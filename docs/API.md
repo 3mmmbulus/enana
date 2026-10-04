@@ -119,6 +119,25 @@
 `lang=zh|en` · `log_hours=12..720` (日志保留时长 ★ 2.1.1: 最短 12 小时, 最长 30 天, 默认 72 = 3 天; 旧版仪表盘提交的 `log_days=1..30` 仍然接受并换算成小时) · `log_ops=0|1` (操作记录, 立即生效) · `access_log=0|1` (网站访问) · `log_core=0|1` (代理核心日志) · `auto_sites=0|1` (自动识别无法访问的网站, 开启时必须已有服务器, 否则 `E_NO_SERVERS`) → `{"ok":true}`; 改 `access_log` / `log_core` 需要重新生成配置 (重启核心), 返回 `{"ok":true,"job":"…"}`。
 三种日志各自的开关: 关闭只影响「之后」的记录, 已有的仍按保留时长清理。`access_log=0` → 核心只记警告和错误 (level warn); `access_log=0` 且 `log_core=0` → 核心完全不写日志 (`log.disabled`); `log_core=0` 但 `access_log=1` → 核心照常写 (连接记录要用), 只是把和连接无关的核心事件在切分时丢掉、读取时不显示。关闭操作记录时, 「关闭」这一条本身会先写下来。
 
+### 恢复官方默认规则 (2.3.8 起, 设置 → 代理)
+
+把「自己改过的规则」一次清掉, 回到官方默认。**以云端下发的官方内容 (签名校验) 为准**, 不会用「云端同步」里保存的那一份 (它可能已经带着错误的设置)。
+
+`GET /api/settings/reset` (需登录, 只读; 确认框用):
+```json
+{"ok":true,"apps":3,"sites":1,"auto_sites":1,"services":2,"rulesets":1,"toggles":2,"custom_apps":1,"domains":1,"hosts":1,"dns":1,"auto_on":1,
+ "total":14,"logged_in":true,"content":{"source":"cloud","seq":2026100401,"version":"2026.10.04.01","checked":1791000000,"error":""},
+ "sync":{"enabled":false,"auto":false},"backup":{"name":"reset-1791000000.tgz","time":1791000000}}
+```
+- 每一项是「自己改过的」数量: `apps` 应用的代理设置 · `sites` 自己添加的网站 · `auto_sites` 自动识别添加的网站 · `services` 网站 / 服务的出口开关 (和默认不同的; 开关的选择由代理核心记住, 默认值取当前配置里每个开关的 `default`, 兜底出口 `Final` 也算) · `rulesets` 自定义规则集 · `toggles` 规则集开关 (和默认不同的) · `custom_apps` 自定义软件 · `domains` 网站域名改动 · `hosts` 自定义解析 · `dns` DNS 设置是否被改过 (0 / 1) · `auto_on` 自动识别是否开着 (0 / 1, 不计入 `total`)。
+- `content.source`: `cloud` = 本机有云端下发的官方内容, `baseline` = 只有随程序自带的基线。`backup` = 最近一次重置的备份 (可撤销), 没有时是 `null`。
+
+`POST /api/settings/reset` (需登录, 无参数) → `{"ok":true,"job":"rules-reset-…"}`。后台任务 (同一把配置锁、失败整体回滚): ① 把要清掉的文件打包到 `~/.enana/backups/reset-<时间>.tgz` (权限 600, 只留最近 3 份; 本来就是默认状态时不建备份) ② 清掉 `overrides.tsv autosites.tsv autosites.dismissed rules.state custom-rulesets.tsv custom-apps.tsv site-domains.tsv hosts.tsv dns.conf`, 关闭自动识别 ③ **强制重新下载云端官方内容** (就算序号没变也换一份; 离线 / 没登录就用本机已验证的官方内容, 一份都没有用基线) ④ 网站 / 服务的出口开关和兜底出口通过核心的 API 热切回默认 ⑤ 像第一次安装那样重新识别应用 (推荐值来自官方内容, 标记 `def`, 不会弹出一堆「新应用」) ⑥ 补下默认启用的规则集、生成并应用配置。不动: 服务器 / 订阅 / 账号 / 端口 / 语言 / 日志和更新设置 / 测速自定义目标 / 界面偏好 / 节点选择 (`PIN` `Global`)。任务结果: `{"content":"cloud|cached|baseline","seq":2026100401,"error":""}` —— `cached` = 没连上云端, 用了本机已有的官方内容 (`error` 是原因); `baseline` = 从没拿到过云端内容。失败 (配置没通过校验等) 时所有文件和开关原样恢复, 也不留下备份。
+
+`POST /api/settings/reset/undo` (需登录, 无参数) → `{"ok":true,"job":"rules-reset-undo-…"}`: 把最近一次重置清掉的文件放回去 (包括自动识别开关、出口开关原来的选择; 自定义规则集按登记的链接重新下载), 备份用完即删; 没有备份 → `E_NOT_FOUND`。
+
+操作记录: `恢复官方默认规则` (详情是重置前各类规则的数量, 如 `apps=3 sites=1 services=2 …`) · `撤销恢复默认`。
+
 ## 状态 / 应用 / 覆盖 / 服务器 / 订阅 (与 v2 相同, 新增字段见 ★)
 
 `GET /enana/admin/…` (无需 `X-Enana` 头; 只读, 白名单扩展名, 只给 GET / HEAD): 仪表盘静态文件由辅助服务直接提供 (`/enana/admin/` = index.html, `/enana/admin/<页面>` 也给 index.html, 页面名 = overview apps sites rules dns servers conns traffic speed logs settings login register; 不带斜杠的 `/enana/admin` 与 `/` 跳转到 `/enana/admin/`)。核心控制接口 (Clash API) 在 `ports.ui` 上, 只允许这个来源跨域访问, 地址写在 `env.json` 的 `clashBase`, 接口同源 (`apiBase` 为空)。
@@ -178,6 +197,14 @@
 - **精度**: 总量来自核心的累计计数 (准确); 分类 (直连 / 固定出口 / 自动线路 / 节点) 由每分钟一次的采样得到, 采样间隔内已经结束的短连接按当时的比例分摊 (估算) —— 页面上注明「分类为估算」。**发往本机 / 局域网 (私有地址) 的流量不统计**。
 - **本地存储, 自动清理**: 统计数据只在本机 (`~/.enana/stats/`), 不上传; 超过 3 个月 (92 天) 的数据每天自动清除, 前端页面注明「仅保留最近 3 个月」。`since` = 本机最早有数据的日期 (没有数据则 `""`, 前端显示「还没有统计数据, 开启代理并使用一会儿后这里会出现图表」)。
 - 刚安装 / 核心刚重启 / 代理关闭期间的流量同样会统计 (直连流量也算)。
+
+### `GET /api/stats/apps?range=today|3d|7d|30d|90d` (需登录, 2.3.8 起)
+```json
+{"ok":true,"range":"today","from":"2026-10-04","to":"2026-10-04","apps":[{"name":"Google Chrome","up":1234,"down":567890},{"name":"Slack","up":10,"down":2048}]}
+```
+每个应用在这个范围内的流量 (单位字节, 按总量从大到小); 应用页的「今日流量」列用它。归属来自每分钟一次的连接采样 (进程名 → 应用名), 同样是估算; 没有流量的应用不在列表里。数据在本机 `~/.enana/stats/apps.tsv`, 和其它统计一起保留 92 天。
+
+> 2.3.8 修复: 之前从第二天起每天的统计会被重复累加成「最后一分钟」, 导致历史日期 (如 10 月 3 日) 的流量显示为 0 / 缺失。现在读取时会把重复的行合并 (历史自动恢复), 并且每天记录采样分钟数, 界面据此区分「没有流量」和「那天没有采集到数据」。
 
 ## 日志
 
@@ -348,7 +375,7 @@
 - 输入是路径 → 恰好一个候选; 是名称 → 最多 8 个候选让用户选。`valid:false` 时带 `reason` (已翻译): 路径不存在 / 不是应用或可执行文件 / 没有读权限 / 名称里有非法字符 / 找不到。`exists:true` = 已在应用列表里 (前端提示, 不允许重复添加)。路径只接受绝对路径, 且必须在用户可读的位置; 不会执行这个程序。
 ### `POST /api/apps/custom` 表单 `path` (用 inspect 返回的 path) `state=follow|pin|auto|direct` → `{ok,job}` (写入 `custom-apps.tsv` + 设置策略 + 重新生成配置, 热生效)
 ### `POST /api/apps/custom/delete` 表单 `name` → `{ok,job}` (只删自定义软件及其策略)
-- `GET /api/apps` 的应用多两个字段: `custom:true|false`、`path` (自定义软件才有); 路由匹配: 应用按 `.app` 路径匹配 (`/名称.app/`), 命令行工具按可执行文件名匹配 (`process_name`)。
+- `GET /api/apps` 的应用多两个字段: `custom:true|false`、`path` (自定义软件才有); 2.3.8 起还有 `installed` / `seen` (应用目录的创建时间 / enana 第一次识别到它的时间, epoch 秒, 0 = 不知道; 应用页的「安装时间 / 识别时间」列); 路由匹配: 应用按 `.app` 路径匹配 (`/名称.app/`), 命令行工具按可执行文件名匹配 (`process_name`)。
 
 ## 应用图标 ★
 
