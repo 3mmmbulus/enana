@@ -33,7 +33,7 @@ D1=$(epoch 2026 10 2 12 0); D2=$(epoch 2026 10 4 12 0)
 sample "$D1" 100 100; sample $((D1 + 60)) 200 300; sample $((D1 + 120)) 200 300       # 10-02: 2 分钟采样, 其中 1 分钟有流量
 sample "$D2" 0 0; sample $((D2 + 60)) 50 70                                              # 10-04: 核心重启过 (计数清零), 1 分钟采样
 R=$(report "$D2" 3d)
-eq "3 天范围: 10-02 / 10-03 / 10-04 的 samples = 2 / 0 / 1 (10-03 明确是「没采到」而不是「零流量」)" "$(printf '%s' "$R" | jf 'print(",".join(str(s["samples"]) for s in d["series"]))')" "2,0,1"
+eq "3 天范围: 10-02 / 10-03 / 10-04 的 samples = 2 / 0 / 2 (10-03 明确是「没采到」而不是「零流量」; 核心重启、计数清零的那一次也是有效采样)" "$(printf '%s' "$R" | jf 'print(",".join(str(s["samples"]) for s in d["series"]))')" "2,0,2"
 eq "10-03 的流量为 0, 但带 samples=0 (界面据此画成「未采集」)" "$(printf '%s' "$R" | jf 'print(d["series"][1]["t"], d["series"][1]["down"], d["series"][1]["samples"])')" "2026-10-03 0 0"
 eq "sample_since = 有采样列的最早一天" "$(printf '%s' "$R" | jf 'print(d["sample_since"])')" "2026-10-02"
 
@@ -64,7 +64,57 @@ M=$(ENANA_NOW=$D perl "$P" summary "$S")
 eq "last_sample 是本地时间" "$(printf '%s\n' "$M" | sed -n 's/^stats.last_sample=//p')" "2026-10-04 12:01:00"
 eq "10-02: samples=1 up=10 down=20" "$(printf '%s\n' "$M" | sed -n 's/^stats.day.2026-10-02=//p')" "samples=1 up=10 down=20"
 eq "10-03: no-row (一次都没采到)" "$(printf '%s\n' "$M" | sed -n 's/^stats.day.2026-10-03=//p')" "no-row"
-eq "10-04: samples=1 up=5 down=5" "$(printf '%s\n' "$M" | sed -n 's/^stats.day.2026-10-04=//p')" "samples=1 up=5 down=5"
+eq "10-04: samples=2 up=5 down=5 (两次采样, 第二次起有流量)" "$(printf '%s\n' "$M" | sed -n 's/^stats.day.2026-10-04=//p')" "samples=2 up=5 down=5"
+
+echo "== T6. 按应用统计 (应用页的「今日流量」): 浏览器辅助进程归到浏览器, 没归类的部分按比例分摊"
+rm -rf "$S"
+T=$(epoch 2026 10 4 10 0)
+conn() { # <id> <processPath> <up> <down>
+  printf '{"id":"%s","metadata":{"processPath":"%s"},"chains":["direct"],"upload":%s,"download":%s}' "$1" "$2" "$3" "$4"
+}
+sample_c() { # <epoch> <累计上传> <累计下载> <连接 JSON…>
+  local e=$1 u=$2 d=$3 cs; shift 3; cs=$(IFS=,; printf '%s' "$*")
+  printf '{"uploadTotal":%s,"downloadTotal":%s,"connections":[%s]}' "$u" "$d" "$cs" | ENANA_NOW=$e perl "$P" collect "$S" /dev/null auto
+}
+CH='/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper'
+GP='/Applications/ChatGPT.app/Contents/MacOS/ChatGPT'
+sample_c "$T" 0 0
+sample_c $((T + 60)) 600 7000 "$(conn c1 "$CH" 100 3000)" "$(conn c2 "$GP" 100 1000)"
+R=$(ENANA_NOW=$((T + 60)) perl "$P" apps "$S" today)
+eq "Chrome 的 Helper 进程归到 Google Chrome (取最外层 .app), 不是 Google Chrome Helper" "$(printf '%s' "$R" | jf 'print(",".join(a["name"] for a in d["apps"]))')" "Google Chrome,ChatGPT"
+# 总量 600/7000, 已归类 200/4000: 剩下的 400/3000 按 3100:1100 的比例分摊给两个应用
+eq "两个应用加起来等于总量 600 / 7000 (没归类的部分没有凭空丢失; 整数截断最多差几个字节)" "$(printf '%s' "$R" | jf 'print(abs(sum(a["up"] for a in d["apps"]) - 600) <= 2 and abs(sum(a["down"] for a in d["apps"]) - 7000) <= 2)')" "True"
+eq "Chrome 分到的更多 (它本来就占 3/4)" "$(printf '%s' "$R" | jf 'a=d["apps"]; print(a[0]["down"] > a[1]["down"] * 2)')" "True"
+sample_c $((T + 120)) 700 7500 "$(conn c1 "$CH" 150 3200)" "$(conn c2 "$GP" 100 1000)" "$(conn c3 /usr/bin/curl 10 20)"
+R=$(ENANA_NOW=$((T + 120)) perl "$P" apps "$S" today)
+eq "第二分钟只算增量: curl 出现了 (命令行程序取文件名)" "$(printf '%s' "$R" | jf 'print("curl" in [a["name"] for a in d["apps"]])')" "True"
+eq "apps 范围 3d 包含今天" "$(ENANA_NOW=$((T + 120)) perl "$P" apps "$S" 3d | jf 'print(len(d["apps"]))')" "3"
+eq "没有进程信息的连接不归任何应用 (也不报错)" "$(sample_c $((T + 180)) 800 7600 '{"id":"c9","metadata":{},"chains":["direct"],"upload":1,"download":1}'; echo done)" "done"
+
+echo "== T7. 2.3.7 及更早版本的缺陷: 从第二天起 daily.tsv 每分钟追加一条只含增量的新行, 每天只剩最后一分钟的流量 —— 升级后自动还原, 之后跨天采样每天的合计都对"
+rm -rf "$S"; mkdir -p "$S"
+# 这份文件就是旧版采集器在 3 天里 (每天 3 次采样, 每次 +1000 字节) 写出来的 (见提交说明里的复现): 日期重复、行与行之间有空行
+printf '2026-10-02\t200\t2000\t0\t0\t0\t0\t200\t2000\n\n2026-10-03\t100\t1000\t0\t0\t0\t0\t100\t1000\n\n2026-10-03\t100\t1000\t0\t0\t0\t0\t100\t1000\n\n2026-10-03\t100\t1000\t0\t0\t0\t0\t100\t1000\n\n2026-10-04\t100\t1000\t0\t0\t0\t0\t100\t1000\n\n2026-10-04\t100\t1000\t0\t0\t0\t0\t100\t1000\n\n2026-10-04\t100\t1000\t0\t0\t0\t0\t100\t1000\n' > "$S/daily.tsv"
+R=$(report "$(epoch 2026 10 4 13 0)" 7d)
+eq "读取时合并重复行: 10-02 / 10-03 / 10-04 各自的下载合计 = 2000 / 3000 / 3000 (以前只显示最后一分钟的 1000)" "$(printf '%s' "$R" | jf 'print([s["down"] for s in d["series"][-3:]])')" "[2000, 3000, 3000]"
+eq "总量 = 三天之和 8000" "$(printf '%s' "$R" | jf 'print(d["total"]["down"])')" "8000"
+sample "$(epoch 2026 10 4 13 0)" 0 0; sample "$(epoch 2026 10 4 13 1)" 100 1000
+eq "下一次采样把文件整理好: 每天只有一行 (没有重复日期, 没有空行)" "$(cut -f1 "$S/daily.tsv" | sort | uniq -c | awk '{print $1}' | paste -sd, -):$(grep -c '^$' "$S/daily.tsv")" "1,1,1:0"
+eq "整理后 10-04 的合计是 3000 + 新增的 1000" "$(awk -F'\t' '$1=="2026-10-04" {print $3}' "$S/daily.tsv")" "4000"
+printf '2026-10-04\t10\t100\t1000\t0\t1000\t0\n\n2026-10-04\t10\t100\t1000\t0\t1000\t0\n\n2026-10-04\t11\t50\t500\t500\t0\t0\n' > "$S/hourly.tsv"
+R=$(report "$(epoch 2026 10 4 13 0)" today)
+eq "今日按小时的图表同样合并重复行: 10 点 = 2000, 11 点 = 500 (以前只剩最后一条)" "$(printf '%s' "$R" | jf 'print(d["series"][10]["down"], d["series"][11]["down"])')" "2000 500"
+rm -rf "$S"
+# 新版采集器连续跑 3 天, 每天 3 次采样、每次 +1000 字节: 每天的合计都应该是 3000 (第一次采样只建基线), 不会出现重复行
+d=0
+for day in 2 3 4; do
+  T=$(epoch 2026 10 $day 12 0)
+  for m in 0 1 2; do d=$((d + 1000)); sample $((T + m * 60)) $((d / 10)) "$d"; done
+done
+R=$(report "$(epoch 2026 10 4 13 0)" 7d)
+eq "连续 3 天: 10-02 = 2000 (第一次采样只建基线), 10-03 = 3000, 10-04 = 3000" "$(printf '%s' "$R" | jf 'print([s["down"] for s in d["series"][-3:]])')" "[2000, 3000, 3000]"
+eq "daily.tsv 每天一行" "$(cut -f1 "$S/daily.tsv" | sort | uniq -d | wc -l | tr -d ' ')" "0"
+eq "每天的采样分钟数: 2 / 3 / 3" "$(awk -F'\t' '{print $10}' "$S/daily.tsv" | paste -sd, -)" "2,3,3"
 
 P_=$(grep -c . "$W/.pass"); F_=$(grep -c . "$W/.fail")
 echo; echo "流量统计测试: $P_ 通过, $F_ 失败"

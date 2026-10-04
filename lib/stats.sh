@@ -11,4 +11,5 @@ stats_collect() { # 由定时任务 `enana tick` 每分钟调用一次; 核心�
 }
 stats_json() { perl "$LIB/stats.pl" report "$STATS_DIR" "$1"; }      # today | 3d | 7d | 30d | 90d
 stats_summary() { perl "$LIB/stats.pl" summary "$STATS_DIR" 2>/dev/null; }           # 最近 7 天每天采了多少分钟 + 最后一次采样时间 (诊断导出的 env 分区用)
+stats_apps_json() { perl "$LIB/stats.pl" apps "$STATS_DIR" "$1"; }      # 每个应用的流量: today | 3d | 7d | 30d | 90d
 stats_purge() { [ -d "$STATS_DIR" ] && perl "$LIB/stats.pl" purge "$STATS_DIR"; return 0; }

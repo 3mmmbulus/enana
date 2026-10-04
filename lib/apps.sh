@@ -200,6 +200,7 @@ apps_scan() { # 新应用写入 overrides.tsv: 首次扫描 (或扫描范围扩�
   [ "$first" = 1 ] || { IFS= read -r seen_v < "$H/apps.seen" || true; case $seen_v in ''|*[!0-9]*) seen_v=1 ;; esac; [ "$seen_v" -ge "$APPS_SCAN_V" ] || first=1; }
   touch "$H/overrides.tsv"
   apps_installed > "$H/.apps.now"
+  apps_times_update
   _apps_fix_browsers
   before=$(wc -l < "$H/overrides.tsv" | tr -d ' ')
   # 只有还没有记录的应用才处理; 浏览器要读 Info.plist, 所以逐个判断 (新应用不多)
@@ -241,14 +242,25 @@ apps_rerecommend() { # 云端下发了新的应用推荐 (或首次扫描时还�
     } { print }' "$H/overrides.tsv" > "$H/overrides.tsv.new" && mv "$H/overrides.tsv.new" "$H/overrides.tsv"
 }
 
+# 每个应用的「识别时间」(第一次被扫描到, 之后不变) 和「安装时间」(应用目录的创建时间; 应用更新后会变): $H/apps.times  名称<TAB>识别<TAB>安装 (epoch 秒; 0 = 不知道)
+apps_times_update() {
+  local f="$H/apps.times" b name path
+  [ -s "$H/.apps.now" ] || return 0
+  touch "$f"; b=$(mktemp)
+  while IFS=$'\t' read -r name path; do [ -n "$name" ] && printf '%s\t%s\n' "$name" "$(os_birth_time "$path")"; done < "$H/.apps.now" > "$b"
+  LC_ALL=C awk -F'\t' -v now="$(now)" 'NR == FNR { s[$1] = $2; next } { i = $2; if (i !~ /^[0-9]+$/) i = 0; printf "%s\t%s\t%s\n", $1, ($1 in s ? s[$1] : now), i }' "$f" "$b" > "$f.new" && mv "$f.new" "$f"
+  rm -f "$b"
+}
+
 apps_json() { # 已安装应用 + 当前状态 + 推荐 (JSON 数组)
   [ -s "$H/.apps.now" ] || apps_installed > "$H/.apps.now"
-  LC_ALL=C awk -F'\t' -v conf="$(content_file apps.conf)" -v ovr="$H/overrides.tsv" -v cust="$H/custom-apps.tsv" -v icx="$H/ui/appicons/index.tsv" -v pins="$(ovr_pins | paste -sd'|' -)" '
+  LC_ALL=C awk -F'\t' -v conf="$(content_file apps.conf)" -v ovr="$H/overrides.tsv" -v cust="$H/custom-apps.tsv" -v icx="$H/ui/appicons/index.tsv" -v tms="$H/apps.times" -v pins="$(ovr_pins | paste -sd'|' -)" '
     BEGIN {
       while ((getline line < conf) > 0) { if (line ~ /^[ \t]*(#|$)/) continue; split(line, a, "|"); pat[++np] = tolower(a[1]); rec[np] = a[2]; grp[np] = a[3] }
       while ((getline line < ovr) > 0) { split(line, b, "|"); if (b[1] == "app") { st[b[2]] = b[3]; fl[b[2]] = b[4]; tg[b[2]] = b[5] } }
       while ((getline line < cust) > 0) { split(line, c, "|"); cu[c[1]] = c[2] }
       while ((getline line < icx) > 0) { split(line, d, "\t"); ic[d[1]] = d[2] }
+      while ((getline line < tms) > 0) { split(line, e, "\t"); sn[e[1]] = e[2] + 0; ins[e[1]] = e[3] + 0 }
       n_p = split(pins, PP, "|"); for (i = 1; i <= n_p; i++) pv[PP[i]] = 1
       printf "["
     }
@@ -264,7 +276,7 @@ apps_json() { # 已安装应用 + 当前状态 + 推荐 (JSON 数组)
       s = (name in st) ? st[name] : "direct"; f = (name in fl) ? fl[name] : "ack"; t = (name in tg) ? tg[name] : ""
       if (name in cu) g = (g == "其他" ? "自定义" : g)
       tv = (t == "" || t == "PINAUTO" || (t in pv)) ? "true" : "false"
-      printf "%s{\"name\":\"%s\",\"state\":\"%s\",\"flag\":\"%s\",\"target\":\"%s\",\"target_ok\":%s,\"known\":%s,\"rec\":\"%s\",\"group\":\"%s\",\"path\":\"%s\",\"custom\":%s,\"kind\":\"%s\",\"icon\":\"%s\"}", (n++ ? "," : ""), name, s, f, t, tv, (r == "" ? "false" : "true"), r, g, path, ((name in cu) ? "true" : "false"), ((name in cu) ? cu[name] : "app"), ((name in ic) ? ic[name] : "")
+      printf "%s{\"name\":\"%s\",\"state\":\"%s\",\"flag\":\"%s\",\"target\":\"%s\",\"target_ok\":%s,\"known\":%s,\"rec\":\"%s\",\"group\":\"%s\",\"path\":\"%s\",\"custom\":%s,\"kind\":\"%s\",\"icon\":\"%s\",\"installed\":%d,\"seen\":%d}", (n++ ? "," : ""), name, s, f, t, tv, (r == "" ? "false" : "true"), r, g, path, ((name in cu) ? "true" : "false"), ((name in cu) ? cu[name] : "app"), ((name in ic) ? ic[name] : ""), ((name in ins) ? ins[name] : 0), ((name in sn) ? sn[name] : 0)
     }
     END { printf "]" }' "$H/.apps.now"
 }

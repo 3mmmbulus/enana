@@ -222,6 +222,11 @@ ep_stats() {
   case $range in today|3d|7d|30d|90d) ;; *) fail "统计范围无效" ;; esac
   json "{\"ok\":true,$(stats_json "$range" | sed 's/^{//')"
 }
+ep_stats_apps() { # 每个应用在这个范围内的流量 (应用页「今日流量」列)
+  local range; range=$(qp range); [ -n "$range" ] || range=today
+  case $range in today|3d|7d|30d|90d) ;; *) fail "统计范围无效" ;; esac
+  json "{\"ok\":true,$(stats_apps_json "$range" | sed 's/^{//')"
+}
 ep_password() { # 在本机修改账号密码 (旧密码 + 新密码): 云端校验, 当前设备保持登录, 其它设备全部下线
   local old new; old=$(fp old); new=$(fp new)
   if auth_change_password "$old" "$new"; then oplog dashboard "修改密码" "$(kv user "$(auth_mask_email "$(auth_current_email)")")" ok; okj; return; fi
@@ -794,6 +799,7 @@ case "$method $path" in
   "GET /api/devices")          ep_devices ;;
   "POST /api/devices/kick")    ep_devices_kick ;;
   "GET /api/stats")            ep_stats ;;
+  "GET /api/stats/apps")       ep_stats_apps ;;
   "GET /api/content")          json "{\"ok\":true,$(cloud_status_json)}" ;;
   "POST /api/content/refresh") okj "\"job\":\"$(job_spawn content-sync "$RULE_STEPS" force)\"" ;;
   "POST /api/password")        ep_password ;;

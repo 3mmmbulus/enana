@@ -71,6 +71,7 @@ os_sysproxy_apply() { # on|off [force]
   return 1
 }
 os_sysproxy_uninstall() { win_bridge sysproxy-off; }
+os_birth_time() { stat -c %W "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
 os_date_at() { date -d "@$1" "+%F %T"; }
 os_stop_owned_jobs() { :; } # Native CLI releases this installation's runtime after Bash exits.
 os_open() { win_bridge open "$1"; }
