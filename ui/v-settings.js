@@ -46,7 +46,7 @@
     TP.on('helper', function () { if (active()) { renderAccount(); renderUpdates(); renderProxy(); renderAutoSites(); } });
     TP.on('clash', function () { if (active()) renderProxy(); });
     TP.on('proxy', function () { if (active()) renderProxy(); });
-    TP.on('auth', function (ok) { if (ok) { renderAccount(); if (active()) { loadDevices(false); TP.plan.load(false); } } });
+    TP.on('auth', function (ok) { if (ok) { renderAccount(); if (active()) { loadDevices(false); TP.plan.load(false); if (TP.billing && (cur === 'account' || cur === 'plan')) TP.billing.load(true); } } });
     TP.on('settings', function () { if (active()) { renderAccount(); renderProxy(); renderUpdates(); renderAutoSites(); } });
     TP.on('plan', function () { renderPlan(); });
     TP.on('lang', function () { renderAccount(); renderGeneral(); renderUpdates(); renderAbout(); renderProxy(); renderAutoSites(); renderDevices(); renderPlan(); });
@@ -56,6 +56,7 @@
     TP.setCrumb(function () { return t('set.tab.' + cur); });
     V.render();
     TP.loadSettings(); loadDevices(false); TP.plan.load(false);
+    if (TP.billing && (cur === 'account' || cur === 'plan')) TP.billing.load(false);
     if (!S.update.loaded && !S.update.checking) TP.updates.check(false);
   };
   V.render = function () { renderAccount(); renderGeneral(); renderProxy(); renderAutoSites(); renderUpdates(); renderAbout(); renderPlan(); };
@@ -66,8 +67,8 @@
     TP.setCrumb(function () { return t('set.tab.' + cur); });
     TABS.forEach(function (x) { panels[x[0]].hidden = x[0] !== id; });
     if (user) TP.prefs.set('ui.settings.tab', id);
-    if (id === 'account' && active()) loadDevices(false);
-    if (id === 'plan') TP.plan.load(false);
+    if (id === 'account' && active()) { loadDevices(false); if (TP.billing) TP.billing.load(false); }
+    if (id === 'plan') { TP.plan.load(false); if (TP.billing) TP.billing.load(false); }
   }
   /* 其它模块 / 横幅要跳到设置里的某个标签 */
   TP.settingsTab = function (id) { if (panels[id]) pick(id, true); TP.go('settings'); };
@@ -259,6 +260,7 @@
     el.btnOut = ui.btn(L('set.acc.logout'), { icon: 'logout', kind: 'soft-bad' }); ui.act(el.btnOut, function () { return TP.auth.logout('logout'); });
     var c = card('account', 'account', L('set.acc.title'), L('set.acc.sub'), 'settings.account');
     c.appendChild(row(L('set.acc.signedIn'), el.accWho)); c.appendChild(el.accNote);
+    if (TP.billing) c.appendChild(TP.billing.mountEmail());
     c.appendChild(h('div', { class: 'row wrap set-btns' }, el.btnPw, el.btnSwitch, el.btnOut));
     c.appendChild(h('p', { class: 'hint sudo-hint' }, ui.icon('lock', 14, 'ci'), h('span', null, L('set.acc.sudoNote'), hl('settings.sudo'))));
     return c;
@@ -350,12 +352,13 @@
     ui.toast(t('set.bk.done'), 'ok', 8000);
   }
 
-  /* ================= 会员 / 套餐 (目前所有功能免费; 界面只读 GET /api/plan) ================= */
+  /* ================= 套餐权益 + 服务端确认的订单 / 余额 ================= */
   function planCard() {
     el.planBox = h('div', { class: 'plan' });
     el.planRefresh = ui.ibtn('refresh', L('plan.refresh'), { size: 16 });
     ui.act(el.planRefresh, function () { return TP.plan.load(true); });
     var c = h('section', { class: 'card set-card', id: 'set-plan' }, h('div', { class: 'card-h' }, ui.icon('pro', 20, 'ci'), h('h2', null, L('plan.title'), hl('settings.plan')), h('span', { class: 'muted sm' }, L('plan.sub')), el.planRefresh), el.planBox);
+    if (TP.billing) c.appendChild(TP.billing.mount());
     return c;
   }
   function renderPlan() {
@@ -390,9 +393,7 @@
       list.appendChild(h('li', { class: 'plan-f' }, h('span', { class: 'plan-fn' }, f.pro ? ui.icon('pro', 15, 'ci pro-ic') : ui.icon('check', 15, 'ci'), h('span', null, TP.plan.name(k))), h('span', { class: 'plan-fb' }, ui.badge(f.pro ? L('plan.pro') : L('plan.tier.free'), f.pro ? 'pro' : 'neutral'), st, b)));
     });
     if (keys.length) { el.planBox.appendChild(h('h3', { class: 'plan-fh' }, t('plan.features'), hl('plan.features'))); el.planBox.appendChild(list); }
-    var up = ui.btn(L('plan.upgrade'), { kind: 'primary', icon: 'pro' });
-    ui.avail(up, t('plan.upgradeSoon')); ui.act(up, function () { ui.toast(t('plan.upgradeSoon'), 'warn', 4200); });
-    el.planBox.appendChild(h('div', { class: 'row wrap set-btns' }, up, h('span', { class: 'muted sm' }, t('plan.freeNow'))));
+    if (!TP.billing) el.planBox.appendChild(h('p', { class: 'muted sm' }, t('plan.upgradeSoon')));
   }
 
   /* ================= 关于 ================= */

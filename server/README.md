@@ -7,9 +7,11 @@ payment provider keys or subscription source URLs in a client package.
 The billing foundation provides authenticated order/wallet APIs, atomic receipt
 settlement, opt-in renewal, SMTP verification and a confirmation page. It has
 real PocketBase integration tests. Deployment deliberately leaves receiving
-disabled. The shared Mac/Windows billing UI, official-node lease delivery and
-server-sharing controls remain separate work; this is not a complete Pro launch.
-The existing clients continue to show official lines as coming soon.
+disabled. The shared Mac/Windows dashboard now includes catalog checkout,
+exact-amount invoices, wallet purchase, renewal consent and verification mail.
+Official-node lease delivery and server-sharing controls remain separate work;
+this is not a complete Pro launch. Official lines still show coming soon, with
+an explicitly empty dedicated Claude pool.
 
 The ordinary account service sources are now tracked here for reproducible
 testing. User databases, SMTP passwords, provider keys, and upstream subscription
@@ -80,13 +82,26 @@ nodes exist; ordinary nodes are not advertised as clean dedicated addresses.
 
 Do not paste the app password into chat, Git, shell command arguments, a client
 configuration or an exported diagnostic. Enter it only in the tunneled admin
-form. Keep protected database backups; PocketBase stores mail configuration in
+form or a protected administrator input file. Keep protected database backups; PocketBase stores mail configuration in
 the server settings. Gmail account-password changes revoke app passwords, so
 replace the SMTP app password after such a change.
 
 Gmail SMTP and PocketBase mail configuration references:
 [Google SMTP settings](https://support.google.com/mail/answer/7104828),
 [PocketBase mail](https://pocketbase.io/docs/js-sending-emails/).
+
+For deployment without opening the administrator UI, `server/admin/smtp.pb.js`
+offers local `enana-smtp-configure INPUT_PATH BACKUP_PATH`, `enana-smtp-status`
+and `enana-smtp-restore BACKUP_PATH` commands. Use an isolated `--hooksDir`
+containing this reviewed helper, an empty migrations directory, the existing
+enana database, and `--automigrate=false --hooksWatch=false`. The input contains
+only `sender` and `password`; both the input and backup must be private files.
+The helper saves a mode-600 settings backup and prints only safe status fields.
+Remove the temporary input after configuration, restart only enana's PocketBase
+unit to reload settings and check its health. Never load these administrator
+commands in the HTTP daemon or include them in a client archive. The receiving
+switch is independent of SMTP settings and must remain off until Pro delivery
+is ready.
 
 ## Verify the foundation
 
@@ -98,8 +113,12 @@ pass.
 ```sh
 PB_BIN=/absolute/path/to/pocketbase node --test \
   tests/billing-domain.test.js tests/billing-pocketbase.test.js \
-  tests/email-verification-ui.test.js
+  tests/email-verification-ui.test.js tests/billing-ui.test.js \
+  tests/billing-smtp-admin.test.js
 ```
+
+Run `python3 tests/billing-bridge.py` for the actual local CGI, authentication,
+request normalization, upstream failure handling and credential redaction.
 
 The test covers Mac/Windows sessions, unverified accounts, collection access,
 provider health, concurrent duplicate checkout/receipts, exact decimal amounts,

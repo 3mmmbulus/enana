@@ -95,7 +95,7 @@ case $path in /favicon.ico) path="$ADMIN_PATH/favicon.png" ;; esac      # 浏览
 case $path in /|"$ADMIN_PATH"|"$ADMIN_PATH"/*) serve_static ;; esac
 
 # ---------- 以下是 JSON 接口: 到这里才加载其余模块 ----------
-for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan billing sync vps; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 i18n_init
 OP_WHO=dashboard; export OP_WHO
@@ -381,6 +381,20 @@ ep_plan() {
     if [ "$c" = 0 ]; then plan_refresh || true; else ( plan_refresh >/dev/null 2>&1 & ); fi      # 从没取过: 等一下; 过期了: 先用旧的, 后台刷新
   fi
   json "{\"ok\":true,$(plan_json)}"
+}
+
+ep_billing() {
+  local op=$1 route=$2 verb=$3 body='' result id
+  if [ "$op" = order ]; then
+    id=$(qp id); printf '%s' "$id" | LC_ALL=C grep -Eq '^[a-z0-9]{15}$' || fail "订单编号无效" E_INVALID
+    route="$route?id=$id"
+  elif [ "$verb" = POST ]; then
+    # Resend has no arbitrary recipient: the cloud sends to this account only.
+    if [ "$op" = email-send ] && [ ! -s "$BODY" ]; then body='{}'
+    else body=$(billing_body "$op" "$BODY") || fail "付款参数无效" E_INVALID; fi
+  fi
+  result=$(billing_request "$verb" "$route" "$body") || fail "账号服务暂时无法连接，请稍后重试" E_ACCOUNT_UNREACHABLE
+  json "$result"
 }
 
 # ---------- 状态 ----------
@@ -789,6 +803,14 @@ case "$method $path" in
   "GET /api/prefs")            json "{\"ok\":true,$(prefs_json)}" ;;
   "POST /api/prefs")           ep_prefs_set ;;
   "GET /api/plan")             ep_plan ;;
+  "GET /api/billing")          ep_billing status billing GET ;;
+  "POST /api/billing/checkout") ep_billing checkout billing/checkout POST ;;
+  "GET /api/billing/order")    ep_billing order billing/order GET ;;
+  "POST /api/billing/cancel")   ep_billing cancel billing/cancel POST ;;
+  "POST /api/billing/purchase") ep_billing purchase billing/purchase POST ;;
+  "POST /api/billing/auto-renew") ep_billing auto-renew billing/auto-renew POST ;;
+  "GET /api/email/status")     ep_billing email-status email/status GET ;;
+  "POST /api/email/send")      ep_billing email-send email/send POST ;;
   "GET /api/state")            ep_state ;;
   "GET /api/settings")         ep_settings_get ;;
   "POST /api/network-mode")

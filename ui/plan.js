@@ -48,8 +48,7 @@
     else if (f.pro) { why = t('plan.why.included'); kind = 'ok'; }
     else { why = t('plan.why.free'); kind = 'ok'; }
     var up = ui.btn(L('plan.upgrade'), { kind: 'primary', icon: 'pro' });
-    ui.avail(up, t('plan.upgradeSoon'));
-    ui.act(up, function () { ui.toast(t('plan.upgradeSoon'), 'warn', 4200); });
+    ui.act(up, function () { if (TP.billing && TP.settingsTab) { TP.settingsTab('plan'); return; } ui.toast(t('plan.upgradeSoon'), 'warn', 4200); });
     var body = h('div', { class: 'plan-ex' },
       h('p', { class: 'cfm-m' }, why),
       h('p', { class: 'muted sm' }, t('plan.why.free.now')),
