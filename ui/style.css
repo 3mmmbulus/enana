@@ -431,6 +431,16 @@ dialog.login{border-color:var(--line2);box-shadow:0 10px 40px rgba(0,0,0,.18)}
 :root[data-density=compact]{--row-py:4px}
 :root[data-density=compact] .tbl th{padding-top:6px;padding-bottom:6px}
 .tbl th{letter-spacing:.2px}
+/* 可排序的表头: 整个表头文字是一个按钮; 当前排序的列显示 ▲ / ▼, 其它列鼠标移上去时显示淡淡的 ↕; 键盘 Tab 到表头也能用 */
+.th-sort{appearance:none;-webkit-appearance:none;display:inline-flex;align-items:center;gap:4px;margin:-3px -6px;padding:3px 6px;border:0;border-radius:6px;background:none;color:inherit;font:inherit;letter-spacing:inherit;text-align:inherit;cursor:pointer;white-space:inherit}
+.th-sort:hover{background:var(--surface);color:var(--text)}
+.th-sort:focus-visible{outline:2px solid var(--pri);outline-offset:0}
+.th-ar{display:inline-block;width:.8em;text-align:center;font-size:.85em;line-height:1;opacity:.28}
+.th-ar::after{content:"\2195"}
+.th-sort:hover .th-ar,.th-sort:focus-visible .th-ar{opacity:.45}
+[data-sort=asc]>.th-sort,[data-sort=desc]>.th-sort,[aria-sort=ascending]>.th-sort,[aria-sort=descending]>.th-sort{color:var(--pri);font-weight:650}
+[data-sort=asc] .th-ar,[aria-sort=ascending] .th-ar{opacity:1}[data-sort=asc] .th-ar::after,[aria-sort=ascending] .th-ar::after{content:"\25B2"}
+[data-sort=desc] .th-ar,[aria-sort=descending] .th-ar{opacity:1}[data-sort=desc] .th-ar::after,[aria-sort=descending] .th-ar::after{content:"\25BC"}
 .tbl tr.is-off td{opacity:.55}
 .tbl tr.is-busy{opacity:.6}
 .tbl th.num{text-align:right}

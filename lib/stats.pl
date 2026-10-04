@@ -3,30 +3,53 @@
 # 用法:
 #   curl …/connections | perl stats.pl collect <统计目录> <roles 文件> <默认类别 direct|auto>   (每分钟一次, 由 `enana tick` 调用)
 #   perl stats.pl report  <统计目录> <today|3d|7d|30d|90d>                                       打印 JSON (GET /api/stats)
+#   perl stats.pl apps    <统计目录> <today|3d|7d|30d|90d>                                       打印每个应用在这个范围内的流量 JSON (GET /api/stats/apps)
 #   perl stats.pl purge   <统计目录>                                                              清理过期数据
+#   perl stats.pl summary <统计目录>                                                              打印最近 7 天每天的采样分钟数和总量 + 最后一次采样时间 (kv 行, 给诊断导出用)
 # 文件 (都在统计目录里, 纯本机数据, 不上传):
-#   daily.tsv   日期 up down direct_up direct_down pin_up pin_down auto_up auto_down      (保留 92 天)
+#   daily.tsv   日期 up down direct_up direct_down pin_up pin_down auto_up auto_down [采样分钟数]   (保留 92 天; 第 10 列是 2.3.8 加的: 这一天核心可达、定时任务真的采到样的次数 ——
+#               没有流量的日子也会有一行, 这样「没有流量」和「根本没有采集到 (电脑休眠 / 核心没运行 / 定时任务没运行)」可以区分; 旧版本留下的行没有这一列)
+#   last        最后一次成功采样的时间 (epoch 秒)
 #   hourly.tsv  日期 小时 up down direct pin auto                                         (保留 72 小时, 供「今日」按小时画图)
 #   nodes.tsv   日期 节点 up down                                                         (保留 92 天)
+#   apps.tsv    日期 应用 up down                                                         (保留 92 天; 2.3.8: 按发起连接的进程归到应用 —— 浏览器的辅助进程算浏览器; 总量里没能归到应用的 (系统进程 / 两次采样之间结束的连接) 按已归类的比例分摊)
 #   state.json  上一次采样的累计值与每条连接的字节数 (用来算增量)
 # 精度说明: 总量来自核心的累计计数 (准确); 分类 (直连 / 固定出口 / 自动线路 / 各节点) 来自采样时仍在的连接, 两次采样之间已经结束的短连接
 # 按当时的分类比例分摊 (估算)。核心重启后计数会清零, 脚本自动识别并从新计数开始。
 use strict; use warnings;
-use JSON::PP; use POSIX qw(strftime);
+use JSON::PP; use POSIX qw(strftime); use Fcntl qw(:flock);
 my ($cmd, $dir, @rest) = @ARGV;
 die "usage: stats.pl collect|report|purge <dir> ...\n" unless $cmd && $dir;
 my $KEEP_DAYS = 92; my $KEEP_HOURS = 72;
 my $now = $ENV{ENANA_NOW} || time;
 mkdir $dir unless -d $dir;
+# 同一时刻只让一个进程读写这些文件: 每分钟的采样、每天凌晨的清理 (tick 里和 enana maintain 里各一次) 可能碰在一起, 整表重写没有锁时会互相覆盖
+open my $LOCK, '>>', "$dir/.lock" or die "lock: $!"; flock($LOCK, $cmd eq 'report' || $cmd eq 'summary' || $cmd eq 'apps' ? LOCK_SH : LOCK_EX) or die "flock: $!";
 
-sub read_tsv { my ($f) = @_; my @r; if (open my $h, '<', $f) { while (<$h>) { chomp; push @r, [split /\t/, $_, -1] if length; } close $h; } return @r; }
-sub write_tsv { my ($f, @r) = @_; open my $h, '>', "$f.new" or die; print $h join("\t", @$_), "\n" for @r; close $h; rename "$f.new", $f; }
+sub read_tsv { my ($f) = @_; my @r; if (open my $h, '<', $f) { local $/ = "\n"; while (<$h>) { chomp; push @r, [split /\t/, $_, -1] if length; } close $h; } return @r; }
+# 读出来的同一个键 (前 $nk 列) 出现多次时把数字列加起来: 正常数据每个键只有一行, 不受影响; 被旧版本缺陷写坏的文件 (每分钟一行增量) 求和后正好是正确的合计 —— 升级后历史流量自动恢复
+sub read_merged {
+    my ($f, $nk) = @_; my (%idx, @out);
+    for my $r (read_tsv($f)) {
+        next if @$r < $nk;
+        my $k = join("\t", @$r[0 .. $nk - 1]);
+        if (exists $idx{$k}) { my $t = $out[$idx{$k}]; for my $i ($nk .. $#$r) { next unless defined $r->[$i] && $r->[$i] =~ /^-?\d+$/; $t->[$i] = ($t->[$i] // 0) + $r->[$i]; } }
+        else { $idx{$k} = scalar @out; push @out, [@$r]; }
+    }
+    return @out;
+}
+sub write_tsv { my ($f, @r) = @_; open my $h, '>', "$f.new.$$" or die; print $h join("\t", @$_), "\n" for @r; close $h; rename "$f.new.$$", $f; }
 sub day_of { strftime('%Y-%m-%d', localtime($_[0])) }
+sub appname { # /Applications/Google Chrome.app/Contents/Frameworks/…/Google Chrome Helper.app/… -> Google Chrome (取最外层 .app, 和访问记录一致); 命令行程序取文件名; 没有进程信息 -> ''
+    my ($pp) = @_; return '' unless defined $pp && length $pp; $pp =~ s{\\}{/}g;
+    return $1 if $pp =~ m{([^/]+)\.app/}; return $1 if $pp =~ m{([^/]+)$}; return '';
+}
 sub purge_old {
     my $cut_day = day_of($now - $KEEP_DAYS * 86400); my $cut_hour = strftime('%Y-%m-%d %H', localtime($now - $KEEP_HOURS * 3600));
-    my @d = grep { $_->[0] ge $cut_day } read_tsv("$dir/daily.tsv"); write_tsv("$dir/daily.tsv", @d) if -e "$dir/daily.tsv";
-    my @n = grep { $_->[0] ge $cut_day } read_tsv("$dir/nodes.tsv"); write_tsv("$dir/nodes.tsv", @n) if -e "$dir/nodes.tsv";
-    my @h = grep { "$_->[0] $_->[1]" ge $cut_hour } read_tsv("$dir/hourly.tsv"); write_tsv("$dir/hourly.tsv", @h) if -e "$dir/hourly.tsv";
+    my @d = grep { $_->[0] ge $cut_day } read_merged("$dir/daily.tsv", 1); write_tsv("$dir/daily.tsv", @d) if -e "$dir/daily.tsv";
+    my @n = grep { $_->[0] ge $cut_day } read_merged("$dir/nodes.tsv", 2); write_tsv("$dir/nodes.tsv", @n) if -e "$dir/nodes.tsv";
+    my @a = grep { $_->[0] ge $cut_day } read_merged("$dir/apps.tsv", 2); write_tsv("$dir/apps.tsv", @a) if -e "$dir/apps.tsv";
+    my @h = grep { "$_->[0] $_->[1]" ge $cut_hour } read_merged("$dir/hourly.tsv", 2); write_tsv("$dir/hourly.tsv", @h) if -e "$dir/hourly.tsv";
 }
 
 if ($cmd eq 'purge') { purge_old(); exit 0; }
@@ -34,10 +57,11 @@ if ($cmd eq 'purge') { purge_old(); exit 0; }
 if ($cmd eq 'collect') {
     my ($rolesf, $defclass) = @rest; $defclass ||= 'auto';
     my %role; if ($rolesf && open my $rh, '<', $rolesf) { while (<$rh>) { chomp; my ($t, $r) = split /\t/; $role{$t} = $r if defined $r; } close $rh; }
-    local $/; my $raw = <STDIN>; my $j = eval { decode_json($raw) } or exit 1;
+    # 注意: 不能写成 `local $/;` 放在这个代码块里 —— 它会一直生效到块结束, 之后读 daily.tsv 等文件时会把整个文件当成一行 (2.3.7 及更早版本的缺陷: 从第二天起每分钟都追加一条只含这一分钟增量的新行, 报表按「同一天取最后一行」, 每天就只剩最后一分钟的流量)
+    my $raw = do { local $/; <STDIN> }; my $j = eval { decode_json($raw) } or exit 1;
     my $ut = $j->{uploadTotal} || 0; my $dt = $j->{downloadTotal} || 0;
     my $state = {}; if (open my $sh, '<', "$dir/state.json") { local $/; my $t = <$sh>; close $sh; $state = eval { decode_json($t) } || {}; }
-    my %cur; my (%cu, %cd, %nu, %nd); my ($au, $ad) = (0, 0);
+    my %cur; my (%cu, %cd, %nu, %nd, %pu, %pd); my ($au, $ad) = (0, 0);
     for my $c (@{ $j->{connections} || [] }) {
         my $id = $c->{id} or next; my $up = $c->{upload} || 0; my $down = $c->{download} || 0;
         my $chain = $c->{chains} || []; my $node = $chain->[0] // 'direct';
@@ -47,6 +71,7 @@ if ($cmd eq 'collect') {
         $cur{$id} = [$up + 0, $down + 0];
         $cu{$class} += $du; $cd{$class} += $dd; $au += $du; $ad += $dd;
         if ($class ne 'direct') { $nu{$node} += $du; $nd{$node} += $dd; }
+        my $app = appname($c->{metadata} && $c->{metadata}{processPath}); if (length $app) { $pu{$app} += $du; $pd{$app} += $dd; }
     }
     my $first = !exists $state->{ut};                                     # 第一次采样: 只建立基线, 不记录 (否则会把核心启动以来的累计都算成「这一分钟」)
     my ($tu, $td) = (0, 0);
@@ -57,29 +82,48 @@ if ($cmd eq 'collect') {
         my $sum = 0; $sum += ($cu{$_} || 0) + ($cd{$_} || 0) for qw(direct pin auto);
         if ($sum > 0) { for my $k (qw(direct pin auto)) { my $w = (($cu{$k} || 0) + ($cd{$k} || 0)) / $sum; $cu{$k} += int($ru * $w); $cd{$k} += int($rd * $w); } }
         else { $cu{$defclass} += $ru; $cd{$defclass} += $rd; }
+        my $asum = 0; $asum += ($pu{$_} || 0) + ($pd{$_} || 0) for keys %{{ %pu, %pd }};        # 应用也一样: 按这一分钟里有流量的应用的比例分摊 (没有任何应用有流量就不归任何应用)
+        if ($asum > 0) { for my $k (keys %{{ %pu, %pd }}) { my $w = (($pu{$k} || 0) + ($pd{$k} || 0)) / $asum; $pu{$k} += int($ru * $w); $pd{$k} += int($rd * $w); } }
     }
     $state = { ut => $ut + 0, dt => $dt + 0, conns => \%cur };
-    open my $oh, '>', "$dir/state.json.new" or die; print $oh encode_json($state); close $oh; rename "$dir/state.json.new", "$dir/state.json";
-    if (!$first && ($tu > 0 || $td > 0)) {
+    open my $oh, '>', "$dir/state.json.new.$$" or die; print $oh encode_json($state); close $oh; rename "$dir/state.json.new.$$", "$dir/state.json";
+    unless ($first) {
         my $day = day_of($now); my $hour = strftime('%H', localtime($now));
-        my @d = read_tsv("$dir/daily.tsv"); my ($row) = grep { $_->[0] eq $day } @d;
+        my $traffic = ($tu > 0 || $td > 0) ? 1 : 0;
+        my @d = read_merged("$dir/daily.tsv", 1); my ($row) = grep { $_->[0] eq $day } @d;
         unless ($row) { $row = [$day, (0) x 8]; push @d, $row; }
-        $row->[1] += $tu; $row->[2] += $td;
-        my $i = 3; for my $k (qw(direct pin auto)) { $row->[$i++] += $cu{$k} || 0; $row->[$i++] += $cd{$k} || 0; }
-        @d = sort { $a->[0] cmp $b->[0] } @d; write_tsv("$dir/daily.tsv", @d);
-        my @h = read_tsv("$dir/hourly.tsv"); my ($hr) = grep { $_->[0] eq $day && $_->[1] eq $hour } @h;
-        unless ($hr) { $hr = [$day, $hour, (0) x 5]; push @h, $hr; }
-        $hr->[2] += $tu; $hr->[3] += $td; my $k2 = 4; for my $k (qw(direct pin auto)) { $hr->[$k2++] += ($cu{$k} || 0) + ($cd{$k} || 0); }
-        @h = sort { "$a->[0] $a->[1]" cmp "$b->[0] $b->[1]" } @h; write_tsv("$dir/hourly.tsv", @h);
-        if (%nu || %nd) {
-            my @n = read_tsv("$dir/nodes.tsv");
-            for my $node (keys %{{ %nu, %nd }}) {
-                my ($nr) = grep { $_->[0] eq $day && $_->[1] eq $node } @n;
-                unless ($nr) { $nr = [$day, $node, 0, 0]; push @n, $nr; }
-                $nr->[2] += $nu{$node} || 0; $nr->[3] += $nd{$node} || 0;
-            }
-            write_tsv("$dir/nodes.tsv", @n);
+        $row->[9] = ($row->[9] // 0) + 1;                                      # 这一分钟采到样了 (有没有流量都算)
+        if ($traffic) {
+            $row->[1] += $tu; $row->[2] += $td;
+            my $i = 3; for my $k (qw(direct pin auto)) { $row->[$i++] += $cu{$k} || 0; $row->[$i++] += $cd{$k} || 0; }
         }
+        @d = sort { $a->[0] cmp $b->[0] } @d; write_tsv("$dir/daily.tsv", @d);
+        if ($traffic) {
+            my @h = read_merged("$dir/hourly.tsv", 2); my ($hr) = grep { $_->[0] eq $day && $_->[1] eq $hour } @h;
+            unless ($hr) { $hr = [$day, $hour, (0) x 5]; push @h, $hr; }
+            $hr->[2] += $tu; $hr->[3] += $td; my $k2 = 4; for my $k (qw(direct pin auto)) { $hr->[$k2++] += ($cu{$k} || 0) + ($cd{$k} || 0); }
+            @h = sort { "$a->[0] $a->[1]" cmp "$b->[0] $b->[1]" } @h; write_tsv("$dir/hourly.tsv", @h);
+            if (%pu || %pd) {
+                my @a = read_merged("$dir/apps.tsv", 2);
+                for my $app (keys %{{ %pu, %pd }}) {
+                    next unless ($pu{$app} || 0) > 0 || ($pd{$app} || 0) > 0;
+                    my ($ar) = grep { $_->[0] eq $day && $_->[1] eq $app } @a;
+                    unless ($ar) { $ar = [$day, $app, 0, 0]; push @a, $ar; }
+                    $ar->[2] += $pu{$app} || 0; $ar->[3] += $pd{$app} || 0;
+                }
+                write_tsv("$dir/apps.tsv", @a);
+            }
+            if (%nu || %nd) {
+                my @n = read_merged("$dir/nodes.tsv", 2);
+                for my $node (keys %{{ %nu, %nd }}) {
+                    my ($nr) = grep { $_->[0] eq $day && $_->[1] eq $node } @n;
+                    unless ($nr) { $nr = [$day, $node, 0, 0]; push @n, $nr; }
+                    $nr->[2] += $nu{$node} || 0; $nr->[3] += $nd{$node} || 0;
+                }
+                write_tsv("$dir/nodes.tsv", @n);
+            }
+        }
+        if (open my $lh, '>', "$dir/last.$$") { print $lh $now, "\n"; close $lh; rename "$dir/last.$$", "$dir/last"; }
     }
     purge_old() if (localtime($now))[2] == 3 && (localtime($now))[1] < 2;     # 每天凌晨顺手清一次
     exit 0;
@@ -89,27 +133,47 @@ if ($cmd eq 'report') {
     my ($range) = @rest; $range ||= 'today';
     my %days = ('today' => 1, '3d' => 3, '7d' => 7, '30d' => 30, '90d' => 90); my $n = $days{$range} || 1;
     my $from = day_of($now - ($n - 1) * 86400); my $to = day_of($now);
-    my @d = grep { $_->[0] ge $from && $_->[0] le $to } read_tsv("$dir/daily.tsv"); my %dm = map { $_->[0] => $_ } @d;
-    my @all = read_tsv("$dir/daily.tsv"); my $since = @all ? $all[0][0] : '';
+    my @d = grep { $_->[0] ge $from && $_->[0] le $to } read_merged("$dir/daily.tsv", 1); my %dm = map { $_->[0] => $_ } @d;
+    my @all = read_merged("$dir/daily.tsv", 1); my $since = @all ? $all[0][0] : '';
+    my ($cov) = sort grep { defined } map { defined $_->[9] ? $_->[0] : undef } @all;        # 有「采样分钟数」这一列的最早一天 (2.3.8 之后才有); 更早的日子没有行 = 没流量还是没采集, 无法区分
     my (%rt, @series); my ($tu, $td) = (0, 0);
     my %r = (direct => [0, 0], pin => [0, 0], auto => [0, 0]);
     for my $row (@d) { $tu += $row->[1]; $td += $row->[2]; my $i = 3; for my $k (qw(direct pin auto)) { $r{$k}[0] += $row->[$i++]; $r{$k}[1] += $row->[$i++]; } }
     my $gran = 'day';
     if ($range eq 'today') {
-        $gran = 'hour'; my %hm = map { $_->[1] => $_ } grep { $_->[0] eq $to } read_tsv("$dir/hourly.tsv");
+        $gran = 'hour'; my %hm = map { $_->[1] => $_ } grep { $_->[0] eq $to } read_merged("$dir/hourly.tsv", 2);
         for my $h (0 .. 23) { my $k = sprintf('%02d', $h); my $row = $hm{$k} || [$to, $k, 0, 0, 0, 0, 0];
             push @series, { t => $k, up => $row->[2] + 0, down => $row->[3] + 0, direct => $row->[4] + 0, pin => $row->[5] + 0, auto => $row->[6] + 0 }; }
     } else {
         for my $i (reverse 0 .. $n - 1) { my $day = day_of($now - $i * 86400); my $row = $dm{$day} || [$day, (0) x 8];
-            push @series, { t => $day, up => $row->[1] + 0, down => $row->[2] + 0, direct => $row->[3] + $row->[4], pin => $row->[5] + $row->[6], auto => $row->[7] + $row->[8] }; }
+            my $smp = $dm{$day} ? (defined $row->[9] ? $row->[9] + 0 : undef) : (defined $cov && $day ge $cov ? 0 : undef);      # null = 旧版本的数据, 不知道; 0 = 这一天一次都没有采到样
+            push @series, { t => $day, up => $row->[1] + 0, down => $row->[2] + 0, direct => $row->[3] + $row->[4], pin => $row->[5] + $row->[6], auto => $row->[7] + $row->[8], samples => $smp }; }
     }
-    my %nt; for my $row (grep { $_->[0] ge $from && $_->[0] le $to } read_tsv("$dir/nodes.tsv")) { $nt{$row->[1]}[0] += $row->[2]; $nt{$row->[1]}[1] += $row->[3]; }
+    my %nt; for my $row (grep { $_->[0] ge $from && $_->[0] le $to } read_merged("$dir/nodes.tsv", 2)) { $nt{$row->[1]}[0] += $row->[2]; $nt{$row->[1]}[1] += $row->[3]; }
     my @nodes = map { { tag => $_, up => $nt{$_}[0] + 0, down => $nt{$_}[1] + 0 } } sort { ($nt{$b}[0] + $nt{$b}[1]) <=> ($nt{$a}[0] + $nt{$a}[1]) } keys %nt;
-    my $out = { range => $range, granularity => $gran, from => $from, to => $to, since => $since, retention_days => $KEEP_DAYS,
+    my $out = { range => $range, granularity => $gran, from => $from, to => $to, since => $since, sample_since => $cov, retention_days => $KEEP_DAYS,
                 total => { up => $tu + 0, down => $td + 0 },
                 routes => { map { $_ => { up => $r{$_}[0] + 0, down => $r{$_}[1] + 0 } } qw(direct pin auto) },
                 series => \@series, nodes => \@nodes };
     print JSON::PP->new->canonical->encode($out);
+    exit 0;
+}
+if ($cmd eq 'apps') {
+    my ($range) = @rest; $range ||= 'today';
+    my %days = ('today' => 1, '3d' => 3, '7d' => 7, '30d' => 30, '90d' => 90); my $n = $days{$range} || 1;
+    my $from = day_of($now - ($n - 1) * 86400); my $to = day_of($now); my %t;
+    for my $row (grep { $_->[0] ge $from && $_->[0] le $to } read_merged("$dir/apps.tsv", 2)) { $t{$row->[1]}[0] += $row->[2]; $t{$row->[1]}[1] += $row->[3]; }
+    my @apps = map { { name => $_, up => $t{$_}[0] + 0, down => $t{$_}[1] + 0 } } sort { ($t{$b}[0] + $t{$b}[1]) <=> ($t{$a}[0] + $t{$a}[1]) || $a cmp $b } keys %t;
+    print JSON::PP->new->canonical->encode({ range => $range, from => $from, to => $to, apps => \@apps });
+    exit 0;
+}
+if ($cmd eq 'summary') {
+    my @all = read_merged("$dir/daily.tsv", 1); my $last = ''; if (open my $lh, '<', "$dir/last") { $last = <$lh>; chomp $last; close $lh; }
+    printf "stats.last_sample=%s\n", $last =~ /^\d+$/ ? strftime('%Y-%m-%d %H:%M:%S', localtime($last)) : 'never';
+    printf "stats.daily_rows=%d\nstats.first_day=%s\n", scalar(@all), @all ? $all[0][0] : '-';
+    my %dm = map { $_->[0] => $_ } @all;
+    for my $i (reverse 0 .. 6) { my $day = day_of($now - $i * 86400); my $r = $dm{$day};
+        printf "stats.day.%s=%s\n", $day, $r ? sprintf('samples=%s up=%d down=%d', defined $r->[9] ? $r->[9] : 'legacy', $r->[1], $r->[2]) : 'no-row'; }
     exit 0;
 }
 die "unknown command $cmd\n";

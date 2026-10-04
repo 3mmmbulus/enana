@@ -27,7 +27,7 @@
     root.appendChild(h('div', { class: 'intro set-intro' }, h('p', { class: 'muted' }, L('set.intro'), hl('settings.tabs'))));
     root.appendChild(h('div', { class: 'set-tabs' }, el.tabs.el));
     var built = {
-      general: [generalCard()], proxy: [proxyCard(), autoSitesCard()],
+      general: [generalCard()], proxy: [proxyCard(), autoSitesCard(), resetCard()],
       sync: [gateBanner('sync'), TP.sync && TP.sync.settingsCard ? TP.sync.settingsCard() : missing('sync', 'refresh', L('set.sync.title'))],
       logs: [TP.logs && TP.logs.settingsCard ? TP.logs.settingsCard() : missing('logs', 'nav-logs', L('set.logs.title'))],
       updates: [updatesCard()], account: [accountCard(), devicesCard(), backupCard()], plan: [planCard()], about: [aboutCard()]
@@ -43,23 +43,23 @@
     TP.on('update', function () { if (active()) renderUpdates(); });
     TP.on('state', function () { if (active()) { renderAccount(); renderAbout(); renderProxy(); renderAutoSites(); } });
     TP.on('core', function () { if (active()) renderUpdates(); });
-    TP.on('helper', function () { if (active()) { renderAccount(); renderUpdates(); renderProxy(); renderAutoSites(); } });
+    TP.on('helper', function () { if (active()) { renderAccount(); renderUpdates(); renderProxy(); renderAutoSites(); renderReset(); } });
     TP.on('clash', function () { if (active()) renderProxy(); });
     TP.on('proxy', function () { if (active()) renderProxy(); });
     TP.on('auth', function (ok) { if (ok) { renderAccount(); if (active()) { loadDevices(false); TP.plan.load(false); if (TP.billing && (cur === 'account' || cur === 'plan')) TP.billing.load(true); } } });
     TP.on('settings', function () { if (active()) { renderAccount(); renderProxy(); renderUpdates(); renderAutoSites(); } });
     TP.on('plan', function () { renderPlan(); });
-    TP.on('lang', function () { renderAccount(); renderGeneral(); renderUpdates(); renderAbout(); renderProxy(); renderAutoSites(); renderDevices(); renderPlan(); });
+    TP.on('lang', function () { renderAccount(); renderGeneral(); renderUpdates(); renderAbout(); renderProxy(); renderAutoSites(); renderDevices(); renderPlan(); renderReset(); });
     V.render();
   };
   V.show = function () {
     TP.setCrumb(function () { return t('set.tab.' + cur); });
     V.render();
-    TP.loadSettings(); loadDevices(false); TP.plan.load(false);
+    TP.loadSettings(); loadDevices(false); TP.plan.load(false); loadReset();
     if (TP.billing && (cur === 'account' || cur === 'plan')) TP.billing.load(false);
     if (!S.update.loaded && !S.update.checking) TP.updates.check(false);
   };
-  V.render = function () { renderAccount(); renderGeneral(); renderProxy(); renderAutoSites(); renderUpdates(); renderAbout(); renderPlan(); };
+  V.render = function () { renderAccount(); renderGeneral(); renderProxy(); renderAutoSites(); renderReset(); renderUpdates(); renderAbout(); renderPlan(); };
 
   function pick(id, user) {
     if (!panels[id]) id = 'general';
@@ -68,6 +68,7 @@
     TABS.forEach(function (x) { panels[x[0]].hidden = x[0] !== id; });
     if (user) TP.prefs.set('ui.settings.tab', id);
     if (id === 'account' && active()) { loadDevices(false); if (TP.billing) TP.billing.load(false); }
+    if (id === 'proxy' && active()) loadReset();
     if (id === 'plan') { TP.plan.load(false); if (TP.billing) TP.billing.load(false); }
   }
   /* 其它模块 / 横幅要跳到设置里的某个标签 */
@@ -151,6 +152,75 @@
     if (r.job) await TP.jobs.runInDock(t('set.asite.clear'), function () { return Promise.resolve(r); });
     ui.toast(t('set.asite.cleared', { n: (r && +r.removed) || n }), 'ok');
     await TP.loadState(); renderAutoSites();
+  }
+
+  /* ================= 恢复默认规则 (设置 → 代理) =================
+   * GET /api/settings/reset (每一类「自己改过的规则」的数量 / 官方内容状态 / 有没有可撤销的备份) → 确认框列出会清掉什么 →
+   * POST /api/settings/reset (后台任务: 清掉自己的规则, 重新下载云端官方内容 (签名校验), 像第一次安装那样重新识别应用) → 按 result.content 说明官方规则来自哪里 (云端最新 / 本机缓存 / 程序自带)。
+   * 重置前自动备份, 可以撤销 (POST /api/settings/reset/undo)。服务器 / 订阅 / 账号 / 端口 / 语言 / 日志设置不动; 「云端同步」里保存的那一份不参与 (它可能已经带着错误的设置)。 */
+  var RS_KINDS = ['apps', 'sites', 'auto_sites', 'services', 'rulesets', 'toggles', 'custom_apps', 'domains', 'hosts'];
+  var rst = { data: null, err: false };
+  function resetCard() {
+    el.rsBtn = ui.btn(L('set.reset.btn'), { icon: 'rotate-ccw', kind: 'soft-bad' }); ui.act(el.rsBtn, resetRules);
+    el.rsUndo = ui.btn(L('set.reset.undo'), { sm: true, icon: 'history' }); ui.act(el.rsUndo, undoReset);
+    el.rsStatus = h('div', null); el.rsOfficial = h('div', { class: 'muted sm' }); el.rsBkTxt = h('span', null);
+    el.rsBkRow = h('div', { class: 'kv-row set-row', hidden: true }, h('span', { class: 'kv-k' }, L('set.reset.backup')), h('span', { class: 'kv-v' }, el.rsBkTxt), h('span', { class: 'set-acts' }, el.rsUndo));
+    var c = card('reset', 'rotate-ccw', L('set.reset.title'), L('set.reset.sub'), 'settings.reset');
+    c.appendChild(h('p', { class: 'muted' }, L('set.reset.desc')));
+    c.appendChild(h('div', { class: 'kv-row set-row' }, h('span', { class: 'kv-k' }, L('set.reset.now'), hl('settings.reset')), h('span', { class: 'kv-v' }, el.rsStatus, el.rsOfficial), h('span', { class: 'set-acts' }, el.rsBtn)));
+    c.appendChild(el.rsBkRow);
+    c.appendChild(h('p', { class: 'muted sm set-note' }, L('set.reset.keeps')));
+    return c;
+  }
+  function renderReset() {
+    if (!el.rsBtn) return;
+    var d = rst.data, why = TP.why.helper(), n = d ? (+d.total || 0) : 0;
+    ui.avail(el.rsBtn, why || (d ? '' : t(rst.err ? 'set.reset.failedWhy' : 'set.reset.loadingWhy')));
+    setText(el.rsStatus, d ? (n ? t('set.reset.status', { n: n, num: TP.fmt.num(n) }) : t('set.reset.statusNone')) : '—');
+    setText(el.rsOfficial, d && d.content ? t('set.reset.official', { src: t(d.content.source === 'cloud' ? 'set.reset.src.cloud' : 'set.reset.src.baseline'), seq: d.content.seq || 0 }) : '');
+    el.rsBkRow.hidden = !(d && d.backup);
+    if (d && d.backup) setText(el.rsBkTxt, t('set.reset.backupAt', { when: TP.fmt.dateTime(d.backup.time) }));
+    ui.avail(el.rsUndo, why || '');
+  }
+  async function loadReset() {
+    if (S.locked || TP.why.helper()) { renderReset(); return null; }
+    try { rst.data = await TP.helper('GET', '/api/settings/reset'); rst.err = false; }
+    catch (e) { if (e && e.kind === 'auth') return null; rst.err = true; }
+    renderReset(); return rst.data;
+  }
+  function resetItems(d) {
+    var keys = { apps: 'set.reset.i.apps', sites: 'set.reset.i.sites', auto_sites: 'set.reset.i.auto_sites', services: 'set.reset.i.services', rulesets: 'set.reset.i.rulesets', toggles: 'set.reset.i.toggles', custom_apps: 'set.reset.i.custom_apps', domains: 'set.reset.i.domains', hosts: 'set.reset.i.hosts' }, out = [];
+    RS_KINDS.forEach(function (k) { if (+d[k] > 0) out.push(t(keys[k], { n: +d[k], num: TP.fmt.num(+d[k]) })); });
+    if (d.dns) out.push(t('set.reset.i.dns'));
+    if (d.auto_on) out.push(t('set.reset.i.autoOn'));
+    return out;
+  }
+  async function afterReset() { await Promise.all([TP.loadState(), TP.loadSettings(), loadReset()]); }
+  async function resetRules() {
+    var why = TP.why.helper(), d, items, kids, ok, r, res, kind;
+    if (why) { ui.toast(why, 'warn'); return; }
+    d = await loadReset();                                   // 数量以点击这一刻为准
+    if (!d) { ui.toast(t('set.reset.failedWhy'), 'warn'); return; }
+    items = resetItems(d); kids = [];
+    if (items.length) kids.push(h('p', { class: 'cfm-d' }, h('b', null, t('set.reset.willClear'))), h('ul', { class: 'cfm-list' }, items.map(function (x) { return h('li', null, x); })));
+    kids.push(h('p', { class: 'cfm-d' }, t('set.reset.keeps')), h('p', { class: 'cfm-d' }, t(d.logged_in ? 'set.reset.fromCloud' : 'set.reset.fromLocal')), h('p', { class: 'cfm-d' }, t('set.reset.backupNote')));
+    if (d.sync && d.sync.enabled) kids.push(h('p', { class: 'cfm-d' }, t('set.reset.syncNote')));
+    ok = await ui.confirmDialog({ title: t('set.reset.dlgTitle'), message: d.total ? t('set.reset.msg', { n: d.total }) : t('set.reset.msg0'), detail: h('div', null, kids), confirmText: t('set.reset.go'), danger: true, confirmIcon: 'rotate-ccw' });
+    if (!ok) return;
+    r = await TP.jobs.runInDock(t('set.reset.job'), function () { return TP.helper('POST', '/api/settings/reset'); });
+    if (!r.ok) { await afterReset(); return; }
+    res = (r.job && r.job.result) || {}; kind = res.content === 'cloud' ? 'cloud' : res.content === 'cached' ? 'cached' : 'baseline';
+    ui.toast(t('set.reset.done.' + kind, { seq: res.seq || 0 }), kind === 'cloud' ? 'ok' : 'warn', 12000, { action: { label: t('set.reset.undo'), fn: undoReset } });
+    await afterReset();
+  }
+  async function undoReset() {
+    var why = TP.why.helper(), d = rst.data, ok, r;
+    if (why) { ui.toast(why, 'warn'); return; }
+    ok = await ui.confirmDialog({ title: t('set.reset.undoTitle'), message: t('set.reset.undoMsg', { when: d && d.backup ? TP.fmt.dateTime(d.backup.time) : '—' }), detail: [t('set.reset.undoD')], confirmText: t('set.reset.undoGo'), kind: 'warning', confirmIcon: 'history' });
+    if (!ok) return;
+    r = await TP.jobs.runInDock(t('set.reset.undoJob'), function () { return TP.helper('POST', '/api/settings/reset/undo'); });
+    if (r.ok) ui.toast(t('set.reset.undone'), 'ok');
+    await afterReset();
   }
 
   /* ================= 代理: 总开关 / 模式 / 重启服务 ================= */

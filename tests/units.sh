@@ -17,7 +17,7 @@ export PORT=39700 UI_PORT=39701 API_PORT=39702 SPEED_PORT=39703
 mkdir -p "$UW/home/Applications" "$UW/h/rules" "$UW/h/logs"
 . "$REPO/lib/common.sh"; init_paths "$REPO/install.sh"
 LIB=$REPO/lib; DATA=$REPO/data
-for _f in i18n jobs servers apps autosites sites fetch os-darwin enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os-darwin enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan sync vps; do . "$LIB/$_f.sh"; done
 load_settings; QUIET=1
 [ "$H" = "$UW/h" ] || { echo "REFUSING: 数据目录不是临时目录 ($H)"; exit 1; }
 
@@ -235,11 +235,14 @@ printf '+0800 %s %s INFO [9 0ms] inbound/mixed[in]: inbound connection to google
 +0800 %s %s INFO [9 0ms] router: found process path: /Users/someone/Applications/Foo.app/Contents/MacOS/foo, user: someone
 +0800 %s %s INFO [9 1ms] outbound/direct[direct-app]: outbound connection to google.com:443
 ' "$TODAY" "$(date +%T)" "$TODAY" "$(date +%T)" "$TODAY" "$(date +%T)" > "$LOGS/proxy-$TODAY.log"
+# 健康记录 (lib/health.sh 每分钟写入): 服务器端口 + 经代理的金丝雀 + 状态行; 用于验证 health / health_summary / outages / verdict 分区
+{ for _m in 5 4 3 2 1; do printf '%s\tnode\tPin-A\tok\t41\trole=pin mode=system\n' "$(date -v-${_m}M '+%F %T' 2>/dev/null || date -d "-${_m} min" '+%F %T')"; done
+  printf '%s\tcanary\tgoogle_204\tok\t210\thttp=204 via=proxy\n%s\tstate\tcapture\tok\t0\tcore=1 proxy=1 sysproxy=1 capture=system\n' "$(date '+%F %T')" "$(date '+%F %T')"; } > "$LOGS/health-$TODAY.log"
 printf '{"role":"pin","outbound":{"type":"socks","tag":"Pin-A","server":"203.0.113.77","server_port":1080,"username":"u-secret","password":"PW-SECRET-123"}}\n' > "$H/servers.jsonl"
 echo '{"log":{"level":"info"},"route":{"rules":[{"rule_set":["ovr-direct"],"action":"route","outbound":"direct-site"}],"final":"Final"},"outbounds":[{"type":"socks","tag":"Pin-A","server":"203.0.113.77","server_port":1080,"username":"u-secret","password":"PW-SECRET-123"}],"experimental":{"clash_api":{"external_controller":"127.0.0.1:1","secret":"CLASH-SECRET-XYZ"}}}' > "$H/config.json"
 logs_bundle 24 ops,access,proxy,snapshot > "$UW/bundle.txt" 2>/dev/null
 eq "第一行是格式标记 (#ENANA-DIAGNOSTICS format=1)" "$(head -1 "$UW/bundle.txt")" "#ENANA-DIAGNOSTICS format=1"
-eq "bash 3.2: 导出分区声明完整, 不混入 shell 代码" "$(sed -n '/^#sections=/p' "$UW/bundle.txt")" "#sections=meta,env,config,policy,servers,apps,probes,live,ops,access,proxy"
+eq "bash 3.2: 导出分区声明完整, 不混入 shell 代码" "$(sed -n '/^#sections=/p' "$UW/bundle.txt")" "#sections=meta,verdict,env,config,policy,servers,apps,probes,live,health_summary,outages,health,ops,access,proxy"
 python3 - "$UW/bundle.txt" > "$UW/bundle.check" 2>&1 <<'PY'
 import sys, re
 lines = open(sys.argv[1], encoding='utf-8').read().split('\n')
@@ -250,7 +253,7 @@ for l in lines:
         cur = m.group(1); secs[cur] = [m.group(2), int(m.group(3)), 0]; continue
     if l == '@@END': cur = None; continue
     if cur is not None and l != '': secs[cur][2] += 1
-need = ['meta','env','config','policy','servers','apps','probes','live','ops','access','proxy']
+need = ['meta','verdict','env','config','policy','servers','apps','probes','live','health_summary','outages','health','ops','access','proxy']
 assert [k for k in need if k not in secs] == [], 'missing sections: %s' % [k for k in need if k not in secs]
 bad = {k: v for k, v in secs.items() if v[2] > v[1] + 1 or v[2] < v[1] - 1}
 assert not bad, 'rows mismatch: %s' % bad
@@ -258,7 +261,7 @@ assert secs['ops'][0] == 'tsv' and secs['meta'][0] == 'kv' and secs['proxy'][0] 
 assert lines[-2] == '@@END' or lines[-1] == '@@END', 'no @@END'
 print('ok')
 PY
-eq "每个分区都有 @@SECTION 名称 format rows=N, 行数自洽, 以 @@END 结尾 (meta env config policy servers apps probes live ops access proxy)" "$(cat "$UW/bundle.check")" "ok"
+eq "每个分区都有 @@SECTION 名称 format rows=N, 行数自洽, 以 @@END 结尾 (meta verdict env config policy servers apps probes live health_summary outages health ops access proxy)" "$(cat "$UW/bundle.check")" "ok"
 awk -v d="$UW" '/^@@SECTION /{ if (f) close(f); f = d "/sec." $2; printf "" > f; next } /^@@END/{ if (f) close(f); f = ""; next } f { print > f }' "$UW/bundle.txt"
 has() { grep -q -- "$2" "$UW/sec.$1"; }                       # has <分区> <正则>
 nothas() { ! grep -q -- "$2" "$UW/sec.$1"; }
@@ -266,6 +269,11 @@ t "meta: 版本 / 日志开关 / 保留时长 / 服务器数量" sh -c "grep -q 
 eq "ops 分区: 第一行是列名" "$(head -1 "$UW/sec.ops")" "$(printf 'ts\twho\taction\tdetail\tresult')"
 t "ops 分区: 详情是 key=value (谁 / 什么 / 从什么改成什么 / 指定的出口)" has ops 'kind=site name=chatgpt.com from=follow to=pin target_to=Pin-B'
 eq "access 分区: google.com 一条连接一行, 直连原因 app, 路径里的用户名已打码" "$(awk -F'\t' 'NR>1 && $4=="google.com" {print $8 "/" $10 "/" $16}' "$UW/sec.access")" "direct/app//Users/<user>/Applications/Foo.app/Contents/MacOS/foo"
+eq "meta 之后紧跟 verdict (自动判定排在文件开头)" "$(grep '^@@SECTION' "$UW/bundle.txt" | sed -n '1,2p' | awk '{print $2}' | paste -sd, -)" "meta,verdict"
+t "verdict: 有结论字段 (cause / blame / confidence / 中英文摘要)" sh -c "grep -q '^verdict.cause=' '$UW/sec.verdict' && grep -q '^verdict.blame=' '$UW/sec.verdict' && grep -q '^verdict.summary.zh=' '$UW/sec.verdict' && grep -q '^verdict.summary.en=' '$UW/sec.verdict'"
+t "verdict: 节点可达率来自健康记录 (Pin-A reachable=100.0%)" has verdict '^verdict.node.Pin-A=role=pin reachable=100.0%'
+eq "health 分区: 第一行是列名, 原始记录一行一条" "$(head -1 "$UW/sec.health")" "$(printf 'ts\tkind\ttarget\tresult\tms\tdetail')"
+t "health_summary / outages 分区: 有列名" sh -c "head -1 '$UW/sec.health_summary' | grep -q '^bucket	kind	target' && head -1 '$UW/sec.outages' | grep -q '^start	end	minutes'"
 t "servers 分区: 地址已打码 (203.0.*.*)" has servers '203\.0\.\*\.\*'
 t "servers 分区: 不出现完整地址" nothas servers '203\.0\.113\.77'
 t "config 分区: 规则按顺序列出 (rule[0] …)" has config '^rule\[0\] '

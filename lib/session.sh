@@ -35,9 +35,9 @@ session_logout_remote() {
 }
 
 # 在本机结束登录 (被下线 / 离线过久): 关闭代理 + 令牌轮换 + 记下原因 (登录框会显示) + 让核心换上新令牌
-session_local_end() { # <原因>
-  local reason=$1
-  oplog "${OP_WHO:-terminal}" "已被退出登录" "$reason" ok
+session_local_end() { # <原因> [云端返回的 HTTP 状态码]
+  local reason=$1 http=${2:-}
+  oplog auto "已被退出登录" "$(kv reason "$reason" http "$http" proxy_was "${PROXY_ENABLED:-0}")" ok      # 只有心跳会走到这里 (来源是 auto); 以前这里写的是 terminal 且详情不是 key=value
   auth_logout_local
   mkdir -p "$H"; printf '%s\n' "$reason" > "$H/notice"
   op_sync_secret
@@ -52,16 +52,17 @@ session_heartbeat() {
   case $code in
     200)
       tok=$(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "$out" | head -1); [ -n "$tok" ] && session_save "$tok" ''
+      if [ -f "$H/hb.fail" ]; then IFS= read -r first < "$H/hb.fail"; oplog auto "会话心跳恢复" "$(kv down_s "$(( $(date +%s) - ${first:-0} ))")" ok; fi      # 连不上云端的这段时间有多长 (超过 7 天会被自动退出登录)
       rm -f "$out" "$H/hb.fail"; return 0 ;;
     401)
       reason=$(sed -n 's/.*"reason":"\([a-z_]*\)".*/\1/p' "$out" | head -1); rm -f "$out"
       case $reason in kicked|limit|logout|expired) ;; *) reason=kicked ;; esac
-      session_local_end "$reason"; return 1 ;;
+      session_local_end "$reason" 401; return 1 ;;
     *)
       rm -f "$out"; now_=$(date +%s)
-      if [ -f "$H/hb.fail" ]; then IFS= read -r first < "$H/hb.fail"; else first=$now_; printf '%s\n' "$now_" > "$H/hb.fail"; fi
+      if [ -f "$H/hb.fail" ]; then IFS= read -r first < "$H/hb.fail"; else first=$now_; printf '%s\n' "$now_" > "$H/hb.fail"; oplog auto "会话心跳失败" "$(kv http "$code" note "cannot reach the cloud; the session is kept for $HB_OFFLINE_DAYS days offline")" error; fi
       age=$(( now_ - ${first:-$now_} ))
-      if [ "$age" -gt $(( HB_OFFLINE_DAYS * 86400 )) ]; then session_local_end offline_expired; return 1; fi
+      if [ "$age" -gt $(( HB_OFFLINE_DAYS * 86400 )) ]; then session_local_end offline_expired "$code"; return 1; fi
       return 0 ;;
   esac
 }

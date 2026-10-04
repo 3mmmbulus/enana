@@ -2,18 +2,32 @@
  * 原有的 .site / .grp / .flow 等基础样式在 style.css; 这里只放新增和覆盖的部分。颜色只用主题变量 (深色模式自动跟随)。 */
 
 /* ===== 页面 ===== */
-/* 顶部: 来源标签 (和全站同一套 .subtabs) + 搜索 / 添加 */
-.sx-top{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px;margin:12px 0 8px}
-.sx-tabs{display:flex;align-items:center;gap:4px;min-width:0;max-width:100%}
-.sx-tb{flex:1 1 340px;justify-content:flex-end;min-width:0}
+/* 顶部: 来源标签 + 搜索 / 添加。一级导航 = 下划线式的大标签 (标签坐在一条贯穿整行的线上, 选中的标签有主色粗下划线) —— 和下面的二级导航 (左侧竖排、带左边条的分类列表) 一眼就能分开 */
+.sx-top{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px 16px;margin:14px 0 14px;border-bottom:2px solid var(--line)}
+.sx-tabs{display:flex;align-items:flex-end;gap:4px;min-width:0;max-width:100%}
+.sx-tabs .subtabs{gap:4px;padding:0;background:none;border:0;border-radius:0}
+.sx-tabs .subtab{margin-bottom:-2px;padding:10px 16px 10px;border-radius:8px 8px 0 0;border-bottom:3px solid transparent;font-size:15px;font-weight:600;color:var(--muted)}
+.sx-tabs .subtab:hover{background:var(--pri-bg);color:var(--pri)}
+.sx-tabs .subtab.on,.sx-tabs .subtab[aria-selected=true]{background:none;box-shadow:none;border-bottom-color:var(--pri);color:var(--pri);font-weight:700}
+.sx-tabs .subtab-n{background:var(--line)}
+.sx-tabs .subtab.on .subtab-n,.sx-tabs .subtab[aria-selected=true] .subtab-n{background:var(--pri-bg2);color:var(--pri)}
+.sx-tb{flex:1 1 340px;justify-content:flex-end;min-width:0;padding-bottom:6px}
 .sx-tb .inp[type=search]{flex:1 1 200px;max-width:320px}
-/* 标签下面: 左边二级导航 + 右边内容 */
-.sx-layout{display:grid;grid-template-columns:230px minmax(0,1fr);gap:16px;align-items:start;margin-top:10px}
-.sx-nav{position:sticky;top:8px;min-width:0;max-height:calc(100dvh - 150px);overflow:auto}
+/* 标签下面: 左边二级导航 (靠左贴边的竖排列表: 一条细竖线 + 选中项左边的主色粗条) + 右边内容 */
+.sx-layout{display:grid;grid-template-columns:236px minmax(0,1fr);gap:18px;align-items:start;margin-top:10px;margin-left:-4px}
+.sx-nav{position:sticky;top:8px;min-width:0;max-height:calc(100dvh - 150px);overflow:auto;padding-right:2px}
+.sx-nav-t{margin:0 0 6px 4px;font-size:var(--fs-11-5);font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+.sx-nav .subtabs.is-v{gap:1px;padding:0;background:none;border:0;border-left:1px solid var(--line);border-radius:0}
+.sx-nav .subtabs.is-v .subtab{margin-left:-1px;padding:7px 10px 7px 12px;border-radius:0 8px 8px 0;border-left:3px solid transparent;background:none;color:var(--text);font-size:var(--fs-13)}
+.sx-nav .subtabs.is-v .subtab:hover{background:var(--surface2);color:var(--text)}
+.sx-nav .subtabs.is-v .subtab.on,.sx-nav .subtabs.is-v .subtab[aria-selected=true]{background:var(--pri-bg);color:var(--pri);border-left-color:var(--pri);box-shadow:none;font-weight:650}
+.sx-nav .subtabs.is-v .subtab>.ci{color:var(--muted)}
+.sx-nav .subtabs.is-v .subtab.on>.ci{color:var(--pri)}
 .sx-main,.sx-pane{min-width:0}
 .sx-pane>*+*{margin-top:12px}
 @media (max-width:760px){
-  .sx-layout{grid-template-columns:minmax(0,1fr);gap:10px}
+  .sx-layout{grid-template-columns:minmax(0,1fr);gap:10px;margin-left:0}
+  .sx-nav-t{display:none}
   .sx-nav{position:static;max-height:none;overflow:visible}
   .sx-tb{flex:1 1 100%;justify-content:flex-start}
   .sx-tb .inp[type=search]{max-width:none}

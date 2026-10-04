@@ -31,6 +31,7 @@
  *   speedlast=seed|none           预置一条昨天的测速结果 / 清空                 env=bad|ok      环境异常 (规则缺失 / 无系统代理) / 恢复
  *   stale=1                       让第一个订阅过期                            tick=N          立刻生成 N 条「实时」访问 / 代理日志
  *   newapp=名称                   下一次「扫描应用」会发现这个新应用           reset=1|first-run   恢复初始数据 (令牌不变)
+ *   content=cloud|cached|baseline  「恢复默认规则」(POST /api/settings/reset) 任务的结果: 云端最新 (默认) / 离线: 用本机缓存 / 从没拿到过云端内容: 用程序自带的基线
  *   stats=normal|short|empty      流量统计 (GET /api/stats?range=today|3d|7d|30d|90d): normal (默认) = 最早的数据在 41 天前 (90d 只有一部分有数据); short = 2 天前开始; empty = 没有任何数据 (since:"", 全是 0, nodes:[])
  *   statsfail=1                   下一个 /api/stats 请求失败一次 (E_NETWORK; 与 failnext=/api/stats 相同)
  *   devices=free|full|reset       设备限制: free (默认) = demo 账号只有一台 macOS 设备在线, 正常登录; full = 两台 macOS 设备都在线, 这台电脑下一次登录得到 E_DEVICE_LIMIT; reset = 恢复种子数据
@@ -267,6 +268,9 @@ const S = {
   'dns.direct': ['直连的网站一律用国内 DNS 解析: 苹果、微软等在国内有 CDN 的域名会解析到离你最近的节点, 速度更快', "Direct sites are always resolved with domestic DNS: names such as Apple's or Microsoft's that have CDNs in China resolve to the nearest node, so they load faster"],
   'dns.proxy': ['域名直接交给代理服务器解析, 本机不会向任何 DNS 询问, 不会被污染或泄漏', 'The name is handed to the proxy server to resolve; this computer asks no DNS server, so nothing is polluted or leaked'],
   'dns.hostsName': ['本地对照表', 'Local table'], 'dns.proxyName': ['代理服务器', 'Proxy server'],
+  /* 新增: 恢复官方默认规则 (设置 → 代理) */
+  'jd.reset': ['已恢复为官方默认规则, 配置已应用', 'Rules reset to the official defaults; configuration applied'], 'jd.resetUndo': ['已撤销, 自己的规则已放回去, 配置已应用', 'Reset undone: your rules are back; configuration applied'],
+  'e.noResetBackup': ['没有可以撤销的重置', 'There is no reset to undo'],
   /* 新增: 任务步骤 / 完成消息 */
   'js.saveChg': ['保存你的改动', 'Save your changes'], 'js.regen': ['重新生成配置', 'Regenerate the config'], 'js.hot': ['应用', 'Apply'], 'js.saveApp': ['保存自定义软件', 'Save the custom app'], 'js.setPolicy': ['设置策略', 'Set the policy'],
   'js.dnsBenchCn': ['测试国内 DNS 服务器 (直连)', 'Test the China DNS servers (direct)'], 'js.dnsBenchGlobal': ['测试海外 DNS 服务器 (经自动线路)', 'Test the overseas DNS servers (via the auto route)'],
@@ -276,6 +280,7 @@ const S = {
   /* 任务: 步骤名 / 完成消息 */
   'js.gen': ['生成配置', 'Generate config'], 'js.check': ['校验配置', 'Validate config'], 'js.apply': ['应用并重启', 'Apply and restart'], 'js.ready': ['等待就绪', 'Wait until ready'],
   'js.restart': ['重启服务', 'Restart service'], 'js.waitSvc': ['等待服务就绪', 'Wait for the service to be ready'],
+  'js.sysproxy': ['修改系统代理', 'Change the system proxy'], 'js.sysproxyCheck': ['确认结果', 'Verify the result'],
   'js.prep': ['准备', 'Prepare'], 'js.dlRules': ['下载规则集', 'Download rule sets'], 'js.applyRules': ['应用规则集', 'Apply rule sets'], 'js.finish': ['完成', 'Finish'],
   'js.dlCustom': ['下载规则集文件', 'Download the rule set file'], 'js.validateSrs': ['校验规则集格式', 'Validate the rule set format'],
   'js.netDirect': ['查询本机直连出口 IP', 'Look up the direct exit IP'], 'js.netPin': ['查询固定出口 IP', 'Look up the pinned exit IP'], 'js.netAuto': ['查询自动线路出口 IP', 'Look up the auto route exit IP'],
@@ -293,7 +298,7 @@ const S = {
   'jd.vpsProbe': ['检测完成', 'Detection finished'], 'jd.vpsProvision': ['服务器已部署, 已添加 {n} 个节点', 'The server is deployed and {n} node(s) were added'],
   'jd.vpsRedetect': ['已重新识别出口 IP (新增 {n} 个节点)', 'Exit IPs re-detected ({n} new node(s))'], 'jd.syncPush': ['已上传到云端 (版本 {v})', 'Uploaded to the cloud (version {v})'],
   'jd.syncPull': ['已从云端同步 (版本 {v})', 'Synced from the cloud (version {v})'],
-  'jd.restart': ['服务已重启', 'Service restarted'], 'jd.rules': ['规则集已更新 ({n} 个有变化, 0 个失败)', 'Rule sets updated ({n} changed, 0 failed)'], 'jd.net': ['已更新', 'Updated'],
+  'jd.restart': ['服务已重启', 'Service restarted'], 'jd.sysproxy': ['系统代理已指向 enana', 'The system proxy now points to enana'], 'jd.sysproxyCancel': ['已取消授权, 系统代理没有改动。需要时再点一次「开启系统代理」。', 'Authorization cancelled; the system proxy was not changed. Try again whenever you like.'], 'jd.rules': ['规则集已更新 ({n} 个有变化, 0 个失败)', 'Rule sets updated ({n} changed, 0 failed)'], 'jd.net': ['已更新', 'Updated'],
   'jd.updApp': ['已更新到 {v}, 辅助服务已重启', 'Updated to {v}; the helper service was restarted.'], 'jd.updCore': ['核心已更新到 {v}', 'Core updated to {v}.'],
   'jd.fail': ['配置未通过校验, 已撤销本次更改: sing-box check 报错 (模拟的失败)', 'The config did not pass validation and the change was rolled back: sing-box check reported an error (simulated failure).'],
   /* 测速 / 本机 IP */
@@ -607,7 +612,13 @@ function iconNameFor(slug) {                                               // �
   if (!name || BROKEN_ICON.indexOf(name) >= 0 || NO_ICON.indexOf(name) >= 0) return '';
   return a && !M.inspected[slug] && !appIconOk(a) ? '' : name;               // 应用列表里的应用要到时间才有; 检查过 (inspect) 的候选是即时提取的
 }
-const appsPayload = () => ({ ok: true, apps: M.apps.map((a) => ({ name: a.name, state: a.state, flag: a.flag, target: a.target || '', target_ok: targetOk(a.target || ''), known: a.known, rec: a.rec, group: a.group, custom: !!a.custom, kind: a.kind || 'app', path: a.custom ? a.path : appPath(a.name), icon: appIconOk(a) ? iconUrl(a.name) : '' })),
+/* 应用的安装时间 (应用目录的创建时间) 和识别时间 (enana 第一次扫描到的时间): 按名称哈希出确定的假数据; 少数应用「不知道安装时间」(installed 0) 只有识别时间 */
+const appHash = (name) => { let n = 7; for (let i = 0; i < name.length; i++) n = (n * 31 + name.charCodeAt(i)) % 1000003; return n; };
+const appInstalled = (name) => (appHash(name) % 7 === 0 ? 0 : sec() - (3 + appHash(name) % 160) * 86400 - appHash(name) % 80000);
+const appSeen = (name) => sec() - (1 + appHash(name) % 40) * 86400 - appHash(name) % 50000;
+/* 每个应用今天的流量 (确定的假数据: 一半左右的应用有流量) */
+const appToday = (name) => { const k = appHash(name); return k % 3 === 0 ? null : { up: (k % 900) * 1024 + 4096, down: (k % 4000) * 8192 + 20000 }; };
+const appsPayload = () => ({ ok: true, apps: M.apps.map((a) => ({ name: a.name, state: a.state, flag: a.flag, target: a.target || '', target_ok: targetOk(a.target || ''), known: a.known, rec: a.rec, group: a.group, custom: !!a.custom, kind: a.kind || 'app', path: a.custom ? a.path : appPath(a.name), icon: appIconOk(a) ? iconUrl(a.name) : '', installed: appInstalled(a.name), seen: appSeen(a.name) })),
   new_count: M.apps.filter((a) => a.flag === 'new').length, scanned_at: M.appsScanned });
 const nodesOf = (list) => list.filter((s) => s.role === 'pin' || s.role === 'auto');          // 只有 pin / auto 会写进核心配置
 const applyNow = () => { M.applied = clone(M.servers); };
@@ -939,7 +950,22 @@ route('POST', '/api/proxy', async (c) => {
   if (M.proxyOn !== wasOn || (M.proxyOn && M.proxyMode !== wasMode)) M.conns = [];     // 切换后现有连接会断开重连 (走新的路由)
   if (hasMode && M.proxyMode !== wasMode) oplog('dashboard', 'proxy.mode', kv({ mode: M.proxyMode, enabled: M.proxyOn ? 1 : 0 }));
   if (hasOn && M.proxyOn !== wasOn) oplog('dashboard', M.proxyOn ? 'proxy.on' : 'proxy.off', '');
-  return { ok: true, enabled: M.proxyOn, mode: M.proxyMode };
+  const out = { ok: true, enabled: M.proxyOn, mode: M.proxyMode };
+  if (hasOn && on === '1' && M.network !== 'tun') {                        // 打开总开关时系统代理一并指向 enana: 已经指向 → on · 被别的软件占用 → foreign (不擅自覆盖) · 否则后台任务开启 (pending + job)
+    if (M.env.sysproxy) out.sysproxy = { state: 'on' };
+    else if (M.sysproxyForeign) out.sysproxy = { state: 'foreign' };
+    else out.sysproxy = { state: 'pending', job: sysproxyJob(true) };
+  }
+  return out;
+});
+function sysproxyJob(want) {                                              // 开启 / 关闭系统代理的后台任务; M.sysproxyCancel = true 时模拟用户在 macOS 密码框里点了取消
+  const cancel = want && !!M.sysproxyCancel;
+  return newJob('sysproxy', ['js.sysproxy', 'js.sysproxyCheck'], 2600, { outage: false, noFail: true, fail: cancel, failAt: 0.7, failMsg: 'jd.sysproxyCancel', msg: 'jd.sysproxy', done: () => { M.env.sysproxy = want; M.sysproxyForeign = false; } });
+}
+route('POST', '/api/sysproxy', (c) => {
+  const on = c.p('on'); if (on !== '0' && on !== '1') throw E('E_INVALID', 'e.badBool');
+  oplog('dashboard', on === '1' ? 'sysproxy.on' : 'sysproxy.off', kv({ method: 'dialog' }));
+  return { ok: true, job: sysproxyJob(on === '1') };
 });
 route('POST', '/api/password', async (c) => {                            // 本机修改密码 (不需要 sudo: 旧密码就是验证); 成功后这台设备保持登录, 账号下的其它设备全部被退出
   const oldPw = String(c.form.old || ''), nw = String(c.form.new || '');   // 密码只读请求体, 绝不看 URL, 也不写进日志
@@ -1135,6 +1161,45 @@ route('POST', '/api/audit', (c) => {
   const ev = c.p('ev'); if (ev !== 'kill') throw E('E_INVALID', 'e.badKind');
   const scope = ['all', 'one', 'host'].indexOf(c.p('scope')) >= 0 ? c.p('scope') : 'all', host = /^[A-Za-z0-9._:-]{0,120}$/.test(c.p('host')) ? c.p('host') : '';
   oplog('dashboard', 'conns.kill', kv({ scope, count: +c.p('n') || 0, host })); return { ok: true };
+});
+/* ---- 恢复官方默认规则 (设置 → 代理): 对照 lib/ops.sh 的 reset_counts / txn_reset_official / txn_reset_undo ----
+ * 清掉自己改过的规则 (应用 / 网站策略、网站 / 服务的出口开关、规则集开关、自定义规则集 / 软件 / 域名 / 解析、DNS、自动识别) 并重新下载云端官方内容; 服务器 / 订阅 / 账号 / 设置不动。
+ * 魔法输入: ?content=cached|baseline (POST /mock/ctl: 模拟离线 / 从没拿到过云端内容时的任务结果)。重置前备份一份, 可以撤销 (只留最近一份)。 */
+const resetDnsDefault = () => ({ cn: 'alidns', cn_custom: '', global: 'cloudflare', global_custom: '', via: 'Global', strategy: 'prefer_ipv4', leak_guard: true, ads_block: false });
+const appDefaultState = (a) => (a.known ? a.rec : 'follow');
+const RESET_SEQ = 2026100401;
+function resetCounts() {
+  const autos = M.overrides.filter((o) => o.kind === 'site' && o.src === 'auto').length, rsDef = (tag) => { const r = RULESETS.filter((x) => x.tag === tag)[0]; return !!(r && (r.essential || r.def)); };
+  const services = CAT.entries.filter((e) => M.svc[e.id] !== (POL[e.default] || 'direct')).length + M.custom.filter((c) => M.svc['rs-' + c.tag] !== POL[c.policy]).length + (M.final !== 'Global' ? 1 : 0);
+  return { apps: M.apps.filter((a) => !a.custom && (a.flag === 'new' ? a.state !== 'direct' : a.state !== appDefaultState(a))).length, sites: M.overrides.filter((o) => o.kind === 'site' && o.src !== 'auto').length, auto_sites: autos, services,
+    rulesets: M.custom.length, toggles: M.rs.filter((x) => x.enabled !== rsDef(x.tag)).length, custom_apps: M.apps.filter((a) => a.custom).length,
+    domains: Object.keys(M.siteMods).reduce((n, k) => n + ((M.siteMods[k].added || []).length + (M.siteMods[k].removed || []).length), 0), hosts: M.hosts.length, dns: JSON.stringify(M.dns) !== JSON.stringify(resetDnsDefault()) ? 1 : 0, auto_on: M.autoSites ? 1 : 0 };
+}
+const resetTotal = (c) => Object.keys(c).reduce((n, k) => n + (k === 'auto_on' ? 0 : c[k]), 0);
+const resetSnapshot = () => clone({ overrides: M.overrides, dismissed: M.dismissed, apps: M.apps, rs: M.rs, custom: M.custom, svc: M.svc, final: M.final, siteMods: M.siteMods, hosts: M.hosts, dns: M.dns, autoSites: M.autoSites });
+route('GET', '/api/settings/reset', () => {
+  const c = resetCounts();
+  return Object.assign({ ok: true }, c, { total: resetTotal(c), logged_in: !!M.account, content: { source: 'cloud', seq: RESET_SEQ, version: '2026.10.04.01', checked: sec() - 7200, error: '' }, sync: { enabled: !!M.sync.enabled, auto: !!M.sync.auto },
+    backup: M.resetBackup ? { name: 'reset-' + M.resetBackup.time + '.tgz', time: M.resetBackup.time } : null });
+});
+route('POST', '/api/settings/reset', () => {
+  const c = resetCounts(), snap = resetSnapshot(), had = resetTotal(c) > 0 || M.autoSites, src = M.resetContent || 'cloud';
+  oplog('dashboard', 'rules.reset', kv(c));
+  return { ok: true, job: newJob('rules-reset', DL_STEPS, 4800, { msg: 'jd.reset', done: () => {
+    if (had) M.resetBackup = { time: sec(), snap };
+    M.overrides = []; M.dismissed = []; M.autoSites = false; M.siteMods = {}; M.hosts = []; M.dns = resetDnsDefault(); M.final = 'Global';
+    M.custom.forEach((x) => { delete M.svc['rs-' + x.tag]; }); M.custom = [];
+    CAT.entries.forEach((e) => { M.svc[e.id] = POL[e.default] || 'direct'; });
+    M.apps = M.apps.filter((a) => !a.custom); M.apps.forEach((a) => { a.state = appDefaultState(a); a.flag = 'ack'; a.target = ''; });
+    M.rs.forEach((x) => { const r = RULESETS.filter((y) => y.tag === x.tag)[0]; x.enabled = !!(r && (r.essential || r.def)); if (x.enabled && !x.present) { x.present = true; x.bytes = ruleSize(x.tag); x.updated = sec(); } });
+    return { result: { content: src, seq: RESET_SEQ, error: src === 'cloud' ? '' : 'Cannot reach the cloud content service (HTTP 000)' } };
+  } }) };
+});
+route('POST', '/api/settings/reset/undo', () => {
+  if (!M.resetBackup) throw E('E_NOT_FOUND', 'e.noResetBackup');
+  const b = M.resetBackup;
+  oplog('dashboard', 'rules.reset.undo', kv({ backup: 'reset-' + b.time + '.tgz' }));
+  return { ok: true, job: newJob('rules-reset-undo', DL_STEPS, 3600, { msg: 'jd.resetUndo', done: () => { Object.keys(b.snap).forEach((k) => { M[k] = clone(b.snap[k]); }); M.resetBackup = null; } }) };
 });
 route('POST', '/api/sites/auto/clear', () => {
   const autos = M.overrides.filter((o) => o.kind === 'site' && o.src === 'auto');
@@ -1619,18 +1684,25 @@ function statsPayload(range) {
   const n = STAT_DAYS[range], t = now(), d = new Date(t), since = statSince(), today = dayOf(t), tot = [0, 0, 0, 0, 0, 0], nm = {}, series = [], days = [];
   const pin = M.servers.filter((s) => s.role === 'pin').map((s) => s.tag), auto = M.servers.filter((s) => s.role === 'auto').map((s) => s.tag);
   const row = (id, c) => ({ t: id, up: c[0] + c[2] + c[4], down: c[1] + c[3] + c[5], direct: c[0] + c[1], pin: c[2] + c[3], auto: c[4] + c[5] });
+  const gapDay = dayOf(addDays(t, -2));                                    // 模拟前天电脑一直在休眠: 没有任何采样
   for (let i = n - 1; i >= 0; i--) days.push(dayOf(addDays(t, -i)));
   days.forEach((day) => {
     const has = !!since && day >= since, m = has ? statDay(day, pin.length > 0, auto.length > 0, day === today ? d.getHours() : -1, (d.getMinutes() + 1) / 60) : { c: [0, 0, 0, 0, 0, 0], hours: Array.from({ length: 24 }, () => [0, 0, 0, 0, 0, 0]) };
     m.c.forEach((x, k) => { tot[k] += x; });
-    if (range === 'today') m.hours.forEach((hh, i) => series.push(row(pad(i), hh))); else series.push(row(day, m.c));
+    if (range === 'today') m.hours.forEach((hh, i) => series.push(row(pad(i), hh))); else series.push(Object.assign(row(day, m.c), { samples: has ? (day === gapDay ? 0 : 1200) : null }));      // samples: 这一天采到样的分钟数; 0 = 一次都没采到 (界面画成「未采集」, 不是零流量); null = 旧版本的数据
     if (has) statNodes(day, m.c, pin, auto).forEach((x) => { const o = nm[x[0]] || (nm[x[0]] = [0, 0]); o[0] += x[1]; o[1] += x[2]; });
   });
-  return { ok: true, range, granularity: range === 'today' ? 'hour' : 'day', from: days[0], to: today, since, retention_days: 92,
+  return { ok: true, range, granularity: range === 'today' ? 'hour' : 'day', from: days[0], to: today, since, sample_since: since, retention_days: 92,
     total: { up: tot[0] + tot[2] + tot[4], down: tot[1] + tot[3] + tot[5] },
     routes: { direct: { up: tot[0], down: tot[1] }, pin: { up: tot[2], down: tot[3] }, auto: { up: tot[4], down: tot[5] } }, series,
     nodes: Object.keys(nm).map((tag) => ({ tag, up: nm[tag][0], down: nm[tag][1] })).sort((x, y) => (y.up + y.down) - (x.up + x.down) || (x.tag < y.tag ? -1 : 1)) };
 }
+route('GET', '/api/stats/apps', (c) => {
+  const range = c.p('range') || 'today';
+  if (!Object.prototype.hasOwnProperty.call(STAT_DAYS, range)) throw E('E_INVALID', 'e.badRange');
+  const n = STAT_DAYS[range], apps = M.apps.map((a) => { const x = appToday(a.name); return x ? { name: a.name, up: x.up * n, down: x.down * n } : null; }).filter(Boolean).sort((x, y) => (y.up + y.down) - (x.up + x.down) || (x.name < y.name ? -1 : 1));
+  return { ok: true, range, from: dayOf(addDays(now(), -(n - 1))), to: dayOf(now()), apps };
+});
 route('GET', '/api/stats', (c) => {
   const range = c.p('range') || 'today';                                 // 缺省 = today (与 lib/api.sh 的 ep_stats 一致)
   if (!Object.prototype.hasOwnProperty.call(STAT_DAYS, range)) throw E('E_INVALID', 'e.badRange');
@@ -2376,6 +2448,7 @@ async function mockCtl(req, res, u) {
   sw('syncoffline', ['0', '1'], (v) => { M.sync.offline = v === '1'; });
   if (q.has('tick')) liveTick(Math.max(0, Math.min(500, num(g('tick'), 1))));
   if (g('newapp')) M.pendingApps.push(g('newapp').slice(0, 80));
+  if (g('content')) M.resetContent = ['cached', 'baseline'].indexOf(g('content')) >= 0 ? g('content') : null;          // 「恢复默认规则」任务的结果: cloud (默认) / cached (离线, 用本机缓存) / baseline (从没拿到过云端内容)
   jsonRes(req, res, 200, { ok: true, helper: helperIsDown() ? 'down' : 'up', clash: clashIsDown() ? 'down' : 'up', helperDown: M.helperDown, clashDown: M.clashDown, conns: M.connTarget, os: M.os, net: M.net, central: M.central,
     lastacct: M.lastAcct ? (M.lastAcct.email === 'demo@example.com' ? 'demo' : M.lastAcct.email === 'other@example.com' ? 'other' : 'custom') : 'none', proxy: M.proxyOn ? 'on' : 'off', proxymode: M.proxyMode, account: M.account ? maskEmail(M.account) : '', locked: lockWait(), locksec: M.locksec,
     devices: Object.keys(M.devices).reduce((o, e) => { o[maskEmail(e)] = M.devices[e].filter((d) => d.online).map((d) => d.uid); return o; }, {}), notice: M.notice ? noticeText('en') : '',
@@ -2458,7 +2531,7 @@ const makeHelper = () => http.createServer(guard(async (req, res) => {
 const listenOn = (srv, port) => new Promise((ok, bad) => { const onErr = (e) => bad(e); srv.once('error', onErr); srv.listen(port, HOST, () => { srv.removeListener('error', onErr); ok(port); }); });
 
 /* ===================== 11. 自测: node tools/mock-server.js --selftest (在 18090-18099 里找空闲端口, 时间加速, 失败则退出码非 0) ===================== */
-const OPS_CODES = ['policy.switch', 'conns.kill', 'logs.bundle', 'autosite.add', 'autosite.clear', 'apps.found', 'login', 'login.fail', 'logout', 'proxy.on', 'proxy.off', 'proxy.mode', 'override.set', 'override.delete', 'apps.scan', 'apps.adopt', 'apps.ack', 'servers.import', 'servers.delete', 'servers.role', 'sub.save', 'sub.delete',
+const OPS_CODES = ['rules.reset', 'rules.reset.undo', 'policy.switch', 'conns.kill', 'logs.bundle', 'autosite.add', 'autosite.clear', 'apps.found', 'login', 'login.fail', 'logout', 'proxy.on', 'proxy.off', 'proxy.mode', 'override.set', 'override.delete', 'apps.scan', 'apps.adopt', 'apps.ack', 'servers.import', 'servers.delete', 'servers.role', 'sub.save', 'sub.delete',
   'sub.refresh', 'rules.update', 'rules.toggle', 'rules.custom.add', 'rules.custom.delete', 'dns.set', 'dns.test', 'settings.set', 'logs.clear', 'update.apply', 'restart', 'install', 'upgrade', 'uninstall', 'start', 'stop',
   'net.refresh', 'speedtest.start', 'speedtest.stop', 'vps.probe', 'vps.provision', 'vps.forget', 'vps.redetect', 'sync.settings', 'sync.push', 'sync.pull', 'sync.clear', 'devices.kick',
   'auth.verify', 'secret.view', 'backup.export', 'password.change', 'sites.domain', 'sites.reset', 'apps.custom.add', 'apps.custom.delete', 'speed.target', 'speed.targets.reset', 'dns.hosts', 'dns.hosts.reset', 'dns.bench'];
@@ -2727,6 +2800,33 @@ async function selftest() {
     r = await api('POST', '/api/settings', { form: { auto_sites: '2' } }); ck('settings: auto_sites must be 0|1', jx(r).code === 'E_INVALID');
     r = await api('POST', '/api/sites/auto/clear'); const st1 = jx(await api('GET', '/api/state')).overrides;
     ck('sites/auto/clear: undoes every auto-added site (answers {removed}), user sites are untouched; recorded (autosite.clear count)', jx(r).ok === true && jx(r).removed === 1 && !st1.some((o) => o.src === 'auto') && st1.some((o) => o.value === 'example.org') && jx(await logs({ type: 'ops', day: dayOf(now()), limit: '3' })).rows.some((x) => x.action === 'autosite.clear' && x.detail === 'count=1'));
+  }
+  {   // ---- 恢复官方默认规则 (设置 → 代理): 这一块结束时把 mock 的状态原样放回去, 不影响后面的用例
+    const keep = resetSnapshot(), nSrv = M.servers.length, nSub = M.subs.length, pin0 = M.pin, COUNT_KEYS = ['apps', 'sites', 'auto_sites', 'services', 'rulesets', 'toggles', 'custom_apps', 'domains', 'hosts', 'dns', 'auto_on'];
+    const pv0 = jx(await api('GET', '/api/settings/reset'));
+    ck('settings/reset (GET): numbers for every kind of rule + total + official content status + sync + backup (none yet)', pv0.ok === true && COUNT_KEYS.every((k) => typeof pv0[k] === 'number') && pv0.total === COUNT_KEYS.filter((k) => k !== 'auto_on').reduce((n, k) => n + pv0[k], 0) && pv0.content.source === 'cloud' && pv0.content.seq > 0 && pv0.sync && pv0.backup === null, pv0);
+    r = await api('POST', '/api/rules/custom/add', { form: { name: 'resettest', url: 'https://example.com/reset-test.srs', policy: 'pin' } }); await run(r);
+    await run(await api('POST', '/api/dns/hosts', { form: { action: 'add', domain: 'reset.example', ip: '192.0.2.7' } }));
+    const tgl = jx(await api('GET', '/api/rules')).sets.filter((x) => !x.essential && !x.custom)[0]; await run(await api('POST', '/api/rules/toggle', { form: { tag: tgl.tag, on: tgl.enabled ? '0' : '1' } }));
+    const e0 = CAT.entries[0], svcDef = POL[e0.default] || 'direct'; M.svc[e0.id] = svcDef === 'direct' ? 'Global' : 'direct'; M.dns.strategy = 'ipv4_only'; M.autoSites = true; M.final = 'direct';
+    const pv1 = jx(await api('GET', '/api/settings/reset'));
+    ck('settings/reset (GET): counts the things changed above (custom rule set, hosts, rule-set switch, service switch, Final, DNS, auto-detect)', pv1.rulesets >= 1 && pv1.hosts >= 1 && pv1.toggles >= 1 && pv1.services >= 2 && pv1.dns === 1 && pv1.auto_on === 1 && pv1.sites >= 1 && pv1.total > pv0.total, pv1);
+    r = await api('POST', '/api/settings/reset'); const rj = await run(r);
+    ck('settings/reset (POST): a background job; the result says where the official content came from (cloud)', jx(r).ok === true && rj.state === 'done' && rj.result.content === 'cloud' && rj.result.seq > 0 && rj.result.error === '', rj);
+    ck('reset: custom rule sets, hosts, user sites, auto-detect, DNS, rule-set switches and service switches are back to the official defaults',
+      M.custom.length === 0 && M.hosts.length === 0 && M.overrides.length === 0 && M.autoSites === false && M.dns.strategy === 'prefer_ipv4' && M.final === 'Global' && M.svc[e0.id] === svcDef && M.rs.filter((x) => x.tag === tgl.tag)[0].enabled === tgl.enabled);
+    ck('reset: servers, subscriptions and the pinned exit are not touched', M.servers.length === nSrv && M.subs.length === nSub && nSrv > 0 && M.pin === pin0);
+    const pv2 = jx(await api('GET', '/api/settings/reset'));
+    ck('settings/reset (GET) after a reset: nothing is customized any more, and an undo backup is offered (name + time)', pv2.apps === 0 && pv2.sites === 0 && pv2.rulesets === 0 && pv2.hosts === 0 && pv2.dns === 0 && pv2.services === 0 && pv2.backup && /^reset-\d+\.tgz$/.test(pv2.backup.name) && pv2.backup.time > 0, pv2);
+    ck('reset: recorded in the operations log with the numbers (rules.reset)', jx(await logs({ type: 'ops', day: dayOf(now()), limit: '20' })).rows.some((x) => x.action === 'rules.reset' && /rulesets=1/.test(x.detail) && /hosts=1/.test(x.detail)));
+    r = await api('POST', '/api/settings/reset/undo'); const uj = await run(r);
+    ck('undo: your rules are back (custom rule set, hosts, DNS, switches, auto-detect), and the backup is used up', uj.state === 'done' && M.custom.length === 1 && M.hosts.length === 1 && M.dns.strategy === 'ipv4_only' && M.autoSites === true && M.svc[e0.id] !== svcDef && M.final === 'direct' && M.resetBackup === null);
+    r = await api('POST', '/api/settings/reset/undo', { lang: 'en' }); ck('undo again: E_NOT_FOUND, "There is no reset to undo"', jx(r).code === 'E_NOT_FOUND' && jx(r).error === 'There is no reset to undo');
+    await ctl('failnext=1'); r = await api('POST', '/api/settings/reset'); const fj = await run(r);
+    ck('a reset that fails changes nothing and leaves no undo backup', fj.state === 'error' && M.custom.length === 1 && M.hosts.length === 1 && M.autoSites === true && M.resetBackup === null, fj);
+    await ctl('content=cached'); r = await api('POST', '/api/settings/reset'); const cj = await run(r); await ctl('content=cloud');
+    ck('offline: the reset still succeeds with the cached official content, and says why (result.content cached + error)', cj.state === 'done' && cj.result.content === 'cached' && /Cannot reach/.test(cj.result.error), cj);
+    Object.keys(keep).forEach((k) => { M[k] = clone(keep[k]); }); M.resetBackup = null;
   }
   r = await api('GET', '/api/logs/export', { q: { type: 'ops', day: dayOf(now()) } }); const full = jx(await logs({ type: 'ops', day: dayOf(now()), limit: '2000' }));
   ck('logs/export: text/plain lines, one per row', r.status === 200 && /^text\/plain; charset=utf-8/.test(r.headers['content-type']) && r.text.split('\n').filter(Boolean).length === full.total && r.text.split('\n')[0].split('\t').length === 5);

@@ -16,7 +16,7 @@ while [ -L "$_p" ]; do _l=$(readlink "$_p"); case $_l in /*) _p=$_l ;; *) _p=$(d
 _d=$(cd "$(dirname "$_p")" && pwd -P)
 . "$_d/lib/common.sh"
 init_paths "$_p"
-for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan sync vps menu detect console; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan sync vps menu detect console; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 load_settings
 
@@ -325,9 +325,9 @@ cmd_restart() { info "正在重启服务…"; if os_service_restart && wait_port
 cmd_network_mode() { network_mode_set "$ARG1"; }
 cmd_on() { # 开启代理: 必须先在仪表盘登录 enana.cc 账号
   if ! auth_logged_in; then warn "还没有登录: 请先打开仪表盘 ($UI_URL) 用 enana.cc 账号登录, 再开启代理"; return 1; fi
-  cmd_start && proxy_set_enabled 1 && { [ "$NETWORK_MODE" = tun ] || os_sysproxy_set on; }
+  cmd_start && proxy_set_enabled 1 && { oplog terminal "开启代理" "$(kv enabled 1 via 'enana on')" ok; [ "$NETWORK_MODE" = tun ] || os_sysproxy_set on; }
 }
-cmd_off() { proxy_set_enabled 0; if os_sysproxy_mine; then os_sysproxy_set off || { warn "系统代理没有关闭成功 (需要管理员密码), 服务未停止以免断网; 请重试 enana off"; return 1; }; fi; os_service_stop || return 1; ok "已关闭系统代理并停止服务"; }
+cmd_off() { proxy_set_enabled 0; oplog terminal "关闭代理" "$(kv enabled 0 via 'enana off')" ok; if os_sysproxy_mine; then os_sysproxy_set off || { warn "系统代理没有关闭成功 (需要管理员密码), 服务未停止以免断网; 请重试 enana off"; return 1; }; fi; os_service_stop || return 1; ok "已关闭系统代理并停止服务"; }
 cmd_open() { os_open "$UI_URL"; echo "$UI_URL"; }
 cmd_env() { echo "export http_proxy=http://127.0.0.1:$PORT https_proxy=http://127.0.0.1:$PORT all_proxy=socks5://127.0.0.1:$PORT no_proxy=localhost,127.0.0.1,::1"; }
 cmd_logs() { tail -n "${ARG1:-100}" "$H/sing-box.log" 2>/dev/null || _t "(暂无日志)"; }
@@ -364,6 +364,7 @@ cmd_content() { # 拉取并应用云端内容 (登录后下发的服务目录 / 
 cmd_tick() { # 每分钟一次 (launchd): 流量统计采样; 每 ~2 分钟一次登录会话心跳; 自动识别打不开的网站; 每小时一次日志切分 + 清理
   local last=0
   stats_collect
+  health_tick || true                          # 连接健康记录: 每分钟探测服务器端口 + 记录状态变化, 每 ~5 分钟经代理访问关键站点 (见 lib/health.sh); 排在心跳之前, 状态时间点才准
   [ -f "$H/.hb.last" ] && IFS= read -r last < "$H/.hb.last"
   if [ $(( $(now) - ${last:-0} )) -ge 110 ]; then now > "$H/.hb.last"; session_heartbeat; fi
   sync_auto_tick || true                       # 自动同步 (打开了才工作; 每 10 分钟检查一次)

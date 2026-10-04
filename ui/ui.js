@@ -617,4 +617,79 @@
       }
     };
   };
+
+  /* ================= 表头排序 (所有表格共用) =================
+   * var so = ui.sorter('servers', { name: {get: function (r) { return r.tag; }}, port: {type: 'num', get: ...}, added: {type: 'date', get: ...} }, {onChange: render, def: null});
+   *   type: 'text' (默认; 按语言排序, 数字按大小, 不分大小写) | 'num' | 'date' (可以是时间戳 / 日期字符串); get(row) 返回要比较的值, 空值 (null / undefined / '') 无论升降都排在最后
+   *   o.def: 没有选排序时的状态 {key, dir:'asc'|'desc'} 或 null (= 保持原来的顺序 / 分组); 点同一个表头: 升序 → 降序 → 恢复默认
+   *   o.onChange: 排序变了要重画 (记在偏好 sort.<id> 里, 下次打开还是这个排序)
+ * 用法: var th = so.th('port', t('col.port'));          // 新建一个可点击的表头 <th>
+ *       so.attach(existingTh, 'port');                    // 或者把已有的 <th> / <span> 变成可点击的
+ *       rows = so.apply(rows);                            // 渲染时先排序、再分页 (排的是整张表, 不只是当前这一页); 排序稳定
+ *       so.set('port', 'desc'); so.state() -> {key, dir} | null */
+  ui.sorter = function (id, cols, o) {
+    o = o || {};
+    var pk = 'sort.' + id, heads = [], collator = null, st = load();
+    function load() {
+      var v = String(TP.prefs.get(pk, '') || ''), m = /^([A-Za-z0-9_-]+):(asc|desc)$/.exec(v);
+      if (v === 'none') return null;                                                  // 用户明确选了「不排序」(和从没选过区分开: 有默认排序时才有意义)
+      if (m && cols[m[1]]) return { key: m[1], dir: m[2] };
+      return o.def && cols[o.def.key] ? { key: o.def.key, dir: o.def.dir || 'asc' } : null;
+    }
+    function save() { TP.prefs.set(pk, st ? st.key + ':' + st.dir : 'none'); }
+    function paint() {
+      heads = heads.filter(function (x) { if (document.contains(x.el)) x.seen = true; else if (x.seen) return false; return true; });
+      heads.forEach(function (x) {
+        var on = st && st.key === x.key, dir = on ? st.dir : '', th = x.th, lb = x.label();
+        if (x.tt.textContent !== lb) x.tt.textContent = lb;
+        x.el.setAttribute('data-sort', on ? dir : '');
+        if (th) { if (on) th.setAttribute('aria-sort', dir === 'asc' ? 'ascending' : 'descending'); else th.setAttribute('aria-sort', 'none'); }
+        x.btn.setAttribute('aria-label', t('sort.aria', { col: x.label() }) + (on ? ' — ' + t(dir === 'asc' ? 'sort.asc' : 'sort.desc') : ''));
+        x.btn.title = t(on ? (dir === 'asc' ? 'sort.toDesc' : 'sort.clear') : 'sort.toAsc');
+      });
+    }
+    function click(key) {
+      if (!st || st.key !== key) st = { key: key, dir: 'asc' };
+      else if (st.dir === 'asc') st = { key: key, dir: 'desc' };
+      else st = null;                                                                 // 升序 → 降序 → 不排序 (回到原来的顺序 / 分组)
+      save(); paint(); if (o.onChange) o.onChange(st);
+    }
+    function norm(c, v) {
+      if (v == null || v === '') return null;
+      var ty = c.type || 'text';
+      if (ty === 'num') { v = +v; return isFinite(v) ? v : null; }
+      if (ty === 'date') { if (typeof v === 'number') return v; var d = Date.parse(String(v).replace(' ', 'T')); return isNaN(d) ? null : d; }
+      return String(v);
+    }
+    function cmp(a, b, text) { return text ? (collator ? collator.compare(a, b) : (a < b ? -1 : a > b ? 1 : 0)) : (a < b ? -1 : a > b ? 1 : 0); }
+    var so = {
+      state: function () { return st ? { key: st.key, dir: st.dir } : null; },
+      set: function (key, dir) { st = cols[key] ? { key: key, dir: dir === 'desc' ? 'desc' : 'asc' } : null; save(); paint(); if (o.onChange) o.onChange(st); },
+      /* labelFn (可选): 返回当前语言的列名 —— 切换语言时表头文字跟着更新; 不给就用现在 <th> 里的文字 */
+      attach: function (el, key, labelFn) {
+        var txt0 = (el.textContent || '').trim(), label = labelFn || function () { return txt0; };
+        var tt = h('span', { class: 'th-t' }, label());
+        var btn = h('button', { class: 'th-sort', type: 'button' }, tt, h('span', { class: 'th-ar', 'aria-hidden': 'true' }));
+        TP.clear(el); el.appendChild(btn);
+        btn.addEventListener('click', function () { click(key); });
+        heads.push({ el: el, th: el.tagName === 'TH' ? el : null, btn: btn, key: key, label: label, tt: tt });
+        paint(); return el;
+      },
+      th: function (key, labelFn, attrs) { var th = h('th', Object.assign({ scope: 'col' }, attrs || {})); return so.attach(th, key, typeof labelFn === 'function' ? labelFn : function () { return String(labelFn); }); },
+      apply: function (rows) {
+        if (!st || !cols[st.key]) return rows;
+        if (!collator) { try { collator = new Intl.Collator(I.lang === 'zh' ? 'zh-CN' : undefined, { numeric: true, sensitivity: 'base' }); } catch (e) { collator = null; } }
+        var c = cols[st.key], text = (c.type || 'text') === 'text', sgn = st.dir === 'desc' ? -1 : 1;
+        var keyed = rows.map(function (r, i) { return { r: r, i: i, v: norm(c, c.get(r)) }; });
+        keyed.sort(function (x, y) {
+          if (x.v == null || y.v == null) return x.v == null && y.v == null ? x.i - y.i : x.v == null ? 1 : -1;      // 空值永远在最后
+          return sgn * cmp(x.v, y.v, text) || x.i - y.i;                                                          // 稳定
+        });
+        return keyed.map(function (k) { return k.r; });
+      }
+    };
+    TP.on('lang', function () { paint(); });
+    TP.on('prefs', function (d) { if (d && d.all) { var ns = load(); if (JSON.stringify(ns) !== JSON.stringify(st)) { st = ns; paint(); if (o.onChange) o.onChange(st); } } });
+    return so;
+  };
 })();

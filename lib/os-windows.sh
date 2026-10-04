@@ -57,7 +57,22 @@ os_sysproxy_foreign() { win_bridge sysproxy-foreign; }
 os_sysproxy_backup() { :; } # The native setter captures all WinINet/PAC values transactionally.
 os_sysproxy_services() { printf '%s\n' Windows-user; }
 os_sysproxy_set() { case $1 in on|off) win_bridge "sysproxy-$1" ;; *) return 1 ;; esac; }
+# Windows 的用户级系统代理 (WinINet) 不需要管理员权限; 与 macOS 同名同约定: 不向标准输出打印, 结果记在 SYSPROXY_METHOD / SYSPROXY_ERR。
+os_sysproxy_apply() { # on|off [force]
+  local want=$1 out
+  SYSPROXY_METHOD=''; SYSPROXY_ERR=''
+  case $want in on|off) ;; *) SYSPROXY_ERR=invalid; return 1 ;; esac
+  if [ "${2:-}" != force ]; then
+    if [ "$want" = on ] && os_sysproxy_ok; then SYSPROXY_METHOD=already; return 0; fi
+    if [ "$want" = off ] && ! os_sysproxy_ok; then SYSPROXY_METHOD=already; return 0; fi
+  fi
+  if out=$(win_bridge "sysproxy-$want" 2>&1); then SYSPROXY_METHOD=user; return 0; fi
+  case $out in *"machine policy"*) SYSPROXY_ERR=machine-policy ;; *) SYSPROXY_ERR=failed ;; esac
+  return 1
+}
 os_sysproxy_uninstall() { win_bridge sysproxy-off; }
+os_birth_time() { stat -c %W "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+os_date_at() { date -d "@$1" "+%F %T"; }
 os_stop_owned_jobs() { :; } # Native CLI releases this installation's runtime after Bash exits.
 os_open() { win_bridge open "$1"; }
 os_date_minus_days() { date -d "$1 days ago" +%F; }

@@ -199,6 +199,20 @@ api -X POST "$A/api/proxy" -d 'on=maybe' | chk "代理开关: 参数无效 → �
 api -X POST "$A/api/proxy" -d 'on=1' | chk "手动开启代理 → enabled" 'assert d["ok"] and d["enabled"] is True'
 cl "$U/configs" | chk "开启后核心切到规则分流 (Rule)" 'assert d["mode"]=="Rule"'
 api "$A/api/state" | chk "state.proxy.enabled = true" 'assert d["proxy"]["enabled"] is True'
+api -X POST "$A/api/proxy" -d 'on=1' | chk "总开关开启时系统代理已经指向 enana: 不再改动它 (sysproxy.state=on)" 'assert d["ok"] and d["sysproxy"]["state"]=="on"'
+rm -f "$FAKE_STATE/sysproxy-on"; : > "$FAKE_STATE/calls.log"
+SPJ=$(api -X POST "$A/api/proxy" -d 'on=1' | tee "$W/sp.json" | jp 'print(d["sysproxy"].get("job",""))')
+chk "总开关开启时系统代理没有指向 enana: 自动在后台任务里开启 (state=pending + job), 不再必须去终端输入 enana on" 'assert d["ok"] and d["sysproxy"]["state"]=="pending" and d["sysproxy"]["job"]' < "$W/sp.json"
+[ "$(job_wait "$SPJ")" = done ] && tpass "系统代理后台任务完成" || tfail "系统代理后台任务完成"
+expect "系统代理已被后台任务重新指向 enana (不需要终端 / 管理员密码输入)" test -f "$FAKE_STATE/sysproxy-on"
+expect "这一步没有向标准输出污染 HTTP 响应, 也没有 sudo -v (仪表盘里没有终端可输入密码)" test "$(grep -c '^sudo -v' "$FAKE_STATE/calls.log")" = 0
+expect "操作记录里有「开启系统代理」(方式 direct, 结果 ok)" sh -c "grep -h '开启系统代理' '$W'/h/logs/ops-*.log | grep -q 'method=direct.*ok$'"
+SPJ=$(api -X POST "$A/api/sysproxy" -d 'on=0' | jp 'print(d["job"])'); [ "$(job_wait "$SPJ")" = done ] && tpass "POST /api/sysproxy on=0 → 后台任务完成" || tfail "POST /api/sysproxy on=0 → 后台任务完成"
+expect "单独关闭系统代理后不再指向 enana" test ! -f "$FAKE_STATE/sysproxy-on"
+api -X POST "$A/api/sysproxy" -d 'on=maybe' | chk "POST /api/sysproxy 参数无效 → 被拒" 'assert not d["ok"]'
+SPJ=$(api -X POST "$A/api/sysproxy" -d 'on=1' | jp 'print(d["job"])'); [ "$(job_wait "$SPJ")" = done ] && tpass "POST /api/sysproxy on=1 → 后台任务完成" || tfail "POST /api/sysproxy on=1 → 后台任务完成"
+expect "单独开启系统代理后指向 enana" test -f "$FAKE_STATE/sysproxy-on"
+api "$A/api/state" | chk "state.env.sysproxy 反映最新状态 (清掉 20 秒缓存)" 'assert d["env"]["sysproxy"] is True'
 expect "开关已写进设置与磁盘配置 (重启后保持)" sh -c "grep -q '^PROXY_ENABLED=1' '$W/h/settings.env' && grep -q '\"default_mode\":\"Rule\"' '$W/h/config.json'"
 login user2@example.test 'Another-Pass1' | chk "换另一个账号登录也可以 (没有绑定限制)" 'assert d["ok"] and d["account"]=="user2@example.test"'
 login user1@example.test 'Passw0rd!' >/dev/null
@@ -1334,13 +1348,17 @@ expect "升级不会重新打开用户关掉的系统代理" test "$(grep -c 'ne
 touch "$FAKE_STATE/sysproxy-on"
 
 echo "== 15. 每日维护: 日志切分 / 压缩 / 按保留期清理"
+"$W/shortcut/enana" tick --quiet >/dev/null 2>&1
+expect "enana tick 写连接健康记录: state 基线行 (核心 / 总开关 / 系统代理 / 登录 / 接管方式)" sh -c "grep -q '	state	capture	ok	0	core=' '$W'/h/logs/health-*.log"
+expect "健康记录不含密码 / 令牌" sh -c "! grep -q \"\$(cat '$W/h/secret')\" '$W'/h/logs/health-*.log"
 mkdir -p "$W/h/logs"; OLDD=$(date -v-100d +%F); MID=$(date -v-10d +%F)
 printf '%s 00:00:00\tdashboard\t旧记录\t.\tok\n' "$OLDD" > "$W/h/logs/ops-$OLDD.log"; printf '%s 00:00:00\tdashboard\t较新记录\t.\tok\n' "$MID" > "$W/h/logs/ops-$MID.log"
+printf '%s 00:00:00\tnode\tOld-Node\tok\t10\trole=pin\n' "$OLDD" > "$W/h/logs/health-$OLDD.log"; printf '%s 00:00:00\tnode\tMid-Node\tok\t10\trole=pin\n' "$MID" > "$W/h/logs/health-$MID.log"
 printf '+0800 %s 01:02:03 INFO [1 0ms] inbound/mixed[in]: inbound connection to a.example:443\n' "$OLDD" > "$W/h/logs/proxy-$OLDD.log"
 api -X POST "$A/api/settings" -d 'log_hours=720' >/dev/null
 "$W/shortcut/enana" maintain --quiet >/dev/null 2>&1
-expect "超过保留期 (100 天前) 的日志被清理" test ! -e "$W/h/logs/ops-$OLDD.log" -a ! -e "$W/h/logs/proxy-$OLDD.log"
-expect "保留期内 (10 天前) 的日志被压缩保留" test -e "$W/h/logs/ops-$MID.log.gz"
+expect "超过保留期 (100 天前) 的日志被清理 (含健康记录)" test ! -e "$W/h/logs/ops-$OLDD.log" -a ! -e "$W/h/logs/proxy-$OLDD.log" -a ! -e "$W/h/logs/health-$OLDD.log"
+expect "保留期内 (10 天前) 的日志被压缩保留 (含健康记录)" test -e "$W/h/logs/ops-$MID.log.gz" -a -e "$W/h/logs/health-$MID.log.gz"
 api "$A/api/logs?type=ops&day=$MID" | chk "压缩过的日志仍可在仪表盘查询" 'assert d["total"]==1 and d["rows"][0]["action"]=="较新记录"'
 api -X POST "$A/api/settings" -d 'log_hours=720' >/dev/null; printf '%s 00:00:00\tdashboard\t二十天前\t.\tok\n' "$(date -v-20d +%F)" > "$W/h/logs/ops-$(date -v-20d +%F).log"; printf '%s 00:00:00\tdashboard\t四十天前\t.\tok\n' "$(date -v-40d +%F)" > "$W/h/logs/ops-$(date -v-40d +%F).log"; "$W/shortcut/enana" maintain --quiet >/dev/null 2>&1
 expect "保留期 30 天 (720 小时): 20 天前的日志被保留, 40 天前的被清理" sh -c "{ test -e '$W/h/logs/ops-$(date -v-20d +%F).log.gz' -o -e '$W/h/logs/ops-$(date -v-20d +%F).log'; } && test ! -e '$W/h/logs/ops-$(date -v-40d +%F).log' -a ! -e '$W/h/logs/ops-$(date -v-40d +%F).log.gz'"

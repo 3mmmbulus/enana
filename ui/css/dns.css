@@ -66,6 +66,9 @@
 @media (min-width:760px){
   .dns-pl td:first-child{width:52%}
 }
+@media (max-width:759px){
+  .dns-pl thead .th-sort,.dns-hs-tbl thead .th-sort{visibility:hidden}      /* 窄屏表格变成卡片, 表头被藏起来了: 里面的排序按钮不能留在键盘焦点里 */
+}
 
 /* ===== 默认已开启的优化 ===== */
 .dns-opts{list-style:none;margin:6px 0 0;padding:0}

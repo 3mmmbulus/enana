@@ -65,6 +65,19 @@ def main():
         for line in evidence[:20]: print('   ', line)
     else:
         print('  没有绕过代理的 socket 证据; 不能据此证明应用全部请求进入核心。')
+    # ---- 自动判定 (verdict 分区: 2.3.8 起由 lib/health.pl 根据每分钟的服务器端口记录 / 经代理的探测 / 状态变化 / 访问记录自动给出)
+    vd = kv(secs.get('verdict', ('', []))[1])
+    if vd:
+        print('\n== 自动判定 (verdict)')
+        print('  原因 %s · 归因 %s (client=本机设置 / node=服务器 / exit-ip=出口 IP 被限制 / network=本机网络) · 置信度 %s%s' % (vd.get('verdict.cause'), vd.get('verdict.blame'), vd.get('verdict.confidence'), (' · 自 ' + vd['verdict.since']) if vd.get('verdict.since') else ''))
+        print('  ' + vd.get('verdict.summary.zh', ''))
+        for k in sorted(vd, key=lambda x: (x.split('.')[1] if '.' in x else '', x)):
+            if k.startswith(('verdict.evidence.', 'verdict.also.', 'verdict.now.', 'verdict.node.', 'verdict.canary.', 'verdict.outage.', 'verdict.chatgpt', 'verdict.last_proxy', 'verdict.data', 'note.')):
+                print('   ', k.replace('verdict.', '', 1), '=', vd[k])
+    hs = tsv(secs.get('outages', ('', []))[1])
+    if hs:
+        print('\n== 故障时段 (服务器端口 / 经代理探测连续失败, outages 分区)')
+        for r in hs[-20:]: print('  %s ~ %s  %s 分钟  %s/%s  %s' % (r['start'][5:], r['end'][5:], r['minutes'], r['kind'], r['target'], r['result']))
     # ---- 自检
     pr = tsv(secs.get('probes', ('', []))[1])
     if pr:

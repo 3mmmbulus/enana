@@ -95,7 +95,7 @@ case $path in /favicon.ico) path="$ADMIN_PATH/favicon.png" ;; esac      # 浏览
 case $path in /|"$ADMIN_PATH"|"$ADMIN_PATH"/*) serve_static ;; esac
 
 # ---------- 以下是 JSON 接口: 到这里才加载其余模块 ----------
-for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs update config ops speed stats prefs snapshot plan billing sync vps; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan billing sync vps; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 i18n_init
 OP_WHO=dashboard; export OP_WHO
@@ -180,8 +180,13 @@ ep_logout() { # 退出账号: 自动关闭代理 + 令牌立刻失效 + 释放�
   job_spawn auth-sync '同步令牌' >/dev/null
   okj
 }
+ep_sysproxy() { # 单独开启 / 关闭系统代理 (on=0|1) -> 后台任务 (macOS 可能弹出管理员密码窗口, 要等用户输入, 不能卡住这个请求); 进度用 GET /api/job 查询
+  local on; on=$(fp on)
+  case $on in 0|1) ;; *) fail "参数无效" ;; esac
+  okj "\"job\":\"$(job_spawn sysproxy '修改系统代理|确认结果' "$([ "$on" = 1 ] && echo on || echo off)")\""
+}
 ep_proxy() { # 代理总开关 + 模式 (on=0|1, mode=auto|global; 至少给一个)
-  local on mode was_on was_mode; on=$(fp on); mode=$(fp mode); was_on=${PROXY_ENABLED:-0}; was_mode=${PROXY_MODE:-auto}
+  local on mode was_on was_mode sp=''; on=$(fp on); mode=$(fp mode); was_on=${PROXY_ENABLED:-0}; was_mode=${PROXY_MODE:-auto}
   [ -n "$on" ] || [ -n "$mode" ] || fail "参数无效"
   case $on in ''|0|1) ;; *) fail "参数无效" ;; esac
   case $mode in ''|auto|global) ;; *) fail "代理模式无效" ;; esac
@@ -190,8 +195,15 @@ ep_proxy() { # 代理总开关 + 模式 (on=0|1, mode=auto|global; 至少给一�
   fi
   [ -n "$mode" ] && proxy_set_mode "$mode"
   [ -n "$on" ] && proxy_set_enabled "$on"
-  oplog dashboard "$([ -n "$on" ] && { [ "$on" = 1 ] && echo 开启代理 || echo 关闭代理; } || echo 切换代理模式)" "$(kv enabled "${PROXY_ENABLED:-0}" mode "${PROXY_MODE:-auto}" was_enabled "$was_on" was_mode "$was_mode")" ok
-  okj "\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\""
+  # 打开总开关时让系统代理一并指向 enana (System Proxy 接管方式): 浏览器和多数 App 只有走系统代理才会进入 enana, 以前总开关打开了却「没有效果」, 必须去终端输入 enana on。
+  #   已经指向 enana → 不用动 · 系统里正在用别的代理设置 (其它软件) → 不擅自覆盖, 交给用户在界面上确认 · 否则在后台任务里开启 (可能弹出 macOS 管理员密码窗口)
+  if [ "$on" = 1 ] && [ "${NETWORK_MODE:-system}" != tun ]; then
+    if os_sysproxy_ok; then sp='"sysproxy":{"state":"on"}'
+    elif [ -n "$(os_sysproxy_foreign 2>/dev/null)" ]; then sp='"sysproxy":{"state":"foreign"}'
+    else sp="\"sysproxy\":{\"state\":\"pending\",\"job\":\"$(job_spawn sysproxy '修改系统代理|确认结果' on)\"}"; fi
+  fi
+  oplog dashboard "$([ -n "$on" ] && { [ "$on" = 1 ] && echo 开启代理 || echo 关闭代理; } || echo 切换代理模式)" "$(kv enabled "${PROXY_ENABLED:-0}" mode "${PROXY_MODE:-auto}" was_enabled "$was_on" was_mode "$was_mode" sysproxy "$(printf '%s' "$sp" | sed -n 's/.*"state":"\([a-z]*\)".*/\1/p')")" ok
+  okj "\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\"${sp:+,$sp}"
 }
 ep_devices() { # 我的设备 (云端)
   auth_logged_in || fail "需要登录" E_AUTH
@@ -209,6 +221,11 @@ ep_stats() {
   local range; range=$(qp range); [ -n "$range" ] || range=today
   case $range in today|3d|7d|30d|90d) ;; *) fail "统计范围无效" ;; esac
   json "{\"ok\":true,$(stats_json "$range" | sed 's/^{//')"
+}
+ep_stats_apps() { # 每个应用在这个范围内的流量 (应用页「今日流量」列)
+  local range; range=$(qp range); [ -n "$range" ] || range=today
+  case $range in today|3d|7d|30d|90d) ;; *) fail "统计范围无效" ;; esac
+  json "{\"ok\":true,$(stats_apps_json "$range" | sed 's/^{//')"
 }
 ep_password() { # 在本机修改账号密码 (旧密码 + 新密码): 云端校验, 当前设备保持登录, 其它设备全部下线
   local old new; old=$(fp old); new=$(fp new)
@@ -630,6 +647,11 @@ ep_settings_set() {
   okj "${job:+\"job\":\"$job\"}"
 }
 
+# ---------- 恢复官方默认规则 (设置 → 代理) ----------
+# GET /api/settings/reset 先给确认框要显示的数量 (只读); POST 开始重置 (后台任务, 清掉自己改过的规则 + 重新下载云端官方内容); POST .../undo 把最近一次重置清掉的内容放回去。
+ep_reset_run() { okj "\"job\":\"$(job_spawn rules-reset "$RULE_STEPS")\""; }
+ep_reset_undo() { [ -n "$(reset_latest_backup)" ] || fail "没有可以撤销的重置" E_NOT_FOUND; okj "\"job\":\"$(job_spawn rules-reset-undo "$RULE_STEPS")\""; }
+
 # ---------- 日志 ----------
 ep_logs() {
   local type day q; type=$(qp type); day=$(qp day); q=$(qp q | tr -d '\000-\037' | cut -c1-100)
@@ -778,9 +800,11 @@ case "$method $path" in
   "POST /api/register")        ep_register ;;
   "POST /api/logout")          ep_logout ;;
   "POST /api/proxy")           ep_proxy ;;
+  "POST /api/sysproxy")        ep_sysproxy ;;
   "GET /api/devices")          ep_devices ;;
   "POST /api/devices/kick")    ep_devices_kick ;;
   "GET /api/stats")            ep_stats ;;
+  "GET /api/stats/apps")       ep_stats_apps ;;
   "GET /api/content")          json "{\"ok\":true,$(cloud_status_json)}" ;;
   "POST /api/content/refresh") okj "\"job\":\"$(job_spawn content-sync "$RULE_STEPS" force)\"" ;;
   "POST /api/password")        ep_password ;;
@@ -817,6 +841,9 @@ case "$method $path" in
     nm=$(fp mode); case $nm in system|tun) ;; *) fail "流量接管模式无效" ;; esac
     j=$(job_spawn network-mode "$APPLY_STEPS" "$nm"); okj "\"job\":\"$j\"" ;;
   "POST /api/settings")        ep_settings_set ;;
+  "GET /api/settings/reset")   json "{\"ok\":true,$(reset_preview_json)}" ;;
+  "POST /api/settings/reset")  ep_reset_run ;;
+  "POST /api/settings/reset/undo") ep_reset_undo ;;
   "GET /api/apps")             apps_resp ;;
   "POST /api/apps/scan")       ep_apps_scan ;;
   "GET /api/sites/domains")    ep_sites_domains_get ;;

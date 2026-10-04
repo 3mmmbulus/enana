@@ -25,6 +25,20 @@
   ];
   var SS_METHODS = ['aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305', '2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305'];
 
+  /* 预览表的表头排序 (ui.sorter, 记在 prefs sort.imp.preview): 所有来源的表共用一个排序状态; 整个预览一起排, 之后才分页。
+   * 只创建一次 (每次打开弹窗都新建会不断多出全局监听); 行是预览里的行对象 {sv, ...}; 排序变了通知当前的弹窗会话重排。 */
+  var pvSo = null;
+  function pvSorter() {
+    if (!pvSo) {
+      pvSo = ui.sorter('imp.preview', {                                // i18n-ignore (排序偏好的 id)
+        name: { get: function (r) { return r.sv.outbound.tag; } },
+        type: { get: function (r) { return typeLabel(r.sv.outbound); } },
+        addr: { get: function (r) { return r.sv.outbound.server + ':' + r.sv.outbound.server_port; } },
+        role: { type: 'num', get: function (r) { var i = ROLES.indexOf(r.sv.role); return i < 0 ? null : i; } }
+      }, { onChange: function () { if (cur && cur.resort) cur.resort(); } });
+    }
+    return pvSo;
+  }
   function typeLabel(ob) { return ob.type === 'http' && ob.tls && ob.tls.enabled ? 'HTTPS' : (TYPE_LABEL[ob.type] || ob.type); }
   function canDl(ty) { return ty === 'http' || ty === 'socks'; }
   function cleanSubName(s) { s = String(s || '').replace(/[^A-Za-z0-9._ -]/g, '').trim().slice(0, 40); return s || 'sub'; }
@@ -459,15 +473,18 @@
         if (src.servers.length) blk.appendChild(table(src, rows));
         if (src.skipped.length) blk.appendChild(skippedBlock(src.skipped));
         box.appendChild(blk);
+        if (src._sortThs) attachSort(src._sortThs);
       });
       el.errBox = h('div', { class: 'hint bad', hidden: true });
       box.appendChild(el.errBox);
+      assignOrder();                                                    // 上次选的排序 (或切换语言重建预览前的排序) 继续生效
       refresh();
     }
 
     function table(src, rows) {
-      var tb = h('tbody');
-      src.servers.forEach(function (sv) {
+      var tb = h('tbody'), ths = src._sortThs = { name: h('th', { scope: 'col' }), type: h('th', { scope: 'col' }), addr: h('th', { scope: 'col' }), role: h('th', { scope: 'col' }) };   // 表头排序在表放进页面之后再挂 (attachSort)
+      src._tb = tb;
+      src.servers.forEach(function (sv, i) {
         var ob = sv.outbound;
         var cb = h('input', { type: 'checkbox', 'aria-label': t('imp.pv.pickAria', { tag: ob.tag }) }); cb.checked = !!sv.sel;
         var sel = roleSelect(ob.type, sv.role);
@@ -479,13 +496,32 @@
           h('td', { class: 'c-role', 'data-l': t('servers.col.role') }, sel));
         cb.addEventListener('change', function () { sv.sel = cb.checked; refresh(); });
         sel.addEventListener('change', function () { sv.role = sel.value; });
-        rows.push({ tr: tr, cb: cb, sel: sel, sv: sv, src: src });
+        rows.push({ tr: tr, cb: cb, sel: sel, sv: sv, src: src, _o: i });         // _o: 在这个来源里的显示顺序 (默认 = 原来的顺序; 排序时由 assignOrder 重新编号)
         tb.appendChild(tr);
       });
       var pg = ui.pager('imp.preview', { def: 20 }); src._pg = pg; pg.onChange(function () { refresh(); });          // 预览表格分页 (订阅里可能有上百个节点)
       return h('div', { class: 'pv-tblbox' }, h('div', { class: 'pv-scroll' }, h('table', { class: 'tbl pv-tbl' },
-        h('thead', null, h('tr', null, h('th', { class: 'c-cb', scope: 'col' }, t('imp.col.sel')), ['servers.col.name', 'servers.col.type', 'servers.col.addr', 'servers.col.role'].map(function (k) { return h('th', { scope: 'col' }, t(k)); }))), tb)), pg.el);
+        h('thead', null, h('tr', null, h('th', { class: 'c-cb', scope: 'col' }, t('imp.col.sel')), ths.name, ths.type, ths.addr, ths.role)), tb)), pg.el);
     }
+
+    /* 把表头变成可点击排序的 (表已经在页面里: ui.sorter 靠「看到过又不在页面里了」来清理旧表头, 弹窗关掉后旧的预览表不会一直留在内存里) */
+    function attachSort(ths) {
+      var so = pvSorter();
+      so.attach(ths.name, 'name', function () { return t('servers.col.name'); }); so.attach(ths.type, 'type', function () { return t('servers.col.type'); });
+      so.attach(ths.addr, 'addr', function () { return t('servers.col.addr'); }); so.attach(ths.role, 'role', function () { return t('servers.col.role'); });
+    }
+    /* 按当前的表头排序给每个来源的所有行重新编号 (排的是整个来源, 不是当前页; 之后 refresh 再分页); 没有排序 = 原来的顺序。
+     * 只在点表头 / 重建预览时重排: 之后改「角色」下拉不会让行跳来跳去 */
+    function assignOrder() {
+      var so = pvSorter();
+      st.sources.forEach(function (sc) { so.apply(st.rows.filter(function (r) { return r.src === sc; })).forEach(function (r, i) { r._o = i; }); });
+    }
+    ses.resort = function () {
+      if (st.phase !== 'preview') return;
+      assignOrder();
+      st.sources.forEach(function (sc) { if (sc._pg && sc._pg.page() !== 1) sc._pg.setPage(1); });         // 换了排序: 回到第一页
+      refresh();
+    };
 
     /* 更新筛选 / 计数 / 导入按钮 */
     function refresh() {
@@ -497,9 +533,12 @@
       });
       st.sources.forEach(function (sc) {                                              // 每个来源一个分页器: 只显示当前页的行 (全选 / 计数仍按筛选后的全部行)
         if (!sc._pg) return;
-        var vr = rows.filter(function (r) { return r.src === sc && !r._f; }), rg = sc._pg.update(vr.length);
+        var vr = rows.filter(function (r) { return r.src === sc && !r._f; }).sort(function (a, b) { return a._o - b._o; }), rg = sc._pg.update(vr.length), ref = sc._tb.firstChild;
         rows.forEach(function (r) { if (r.src === sc && r._f) r.tr.hidden = true; });
-        vr.forEach(function (r, i) { r.tr.hidden = !(i >= rg.start && i < rg.end); });
+        vr.forEach(function (r, i) {
+          r.tr.hidden = !(i >= rg.start && i < rg.end);
+          if (r.tr === ref) ref = ref.nextSibling; else sc._tb.insertBefore(r.tr, ref);          // 行按 _o 的顺序排好 (顺序没变就不动 DOM)
+        });
       });
       if (el.allCb) { el.allCb.checked = vis > 0 && visSel === vis; el.allCb.indeterminate = visSel > 0 && visSel < vis; }
       st.sources.forEach(function (s) { if (s.badName && s.save && s.servers.some(function (x) { return x.sel; })) bad = true; });

@@ -4,7 +4,7 @@
 # 因此连续快速的操作不会互相覆盖备份, 坏配置绝不会留在磁盘上。每次操作都会写一条「操作记录」(不含任何密码/令牌)。
 
 APPLY_STEPS='生成配置|校验配置|应用并重启|等待就绪'
-TXN_FILES="servers.jsonl subs.tsv dns.conf rules.state custom-rulesets.tsv settings.env overrides.tsv autosites.tsv autosites.dismissed custom-apps.tsv site-domains.tsv hosts.tsv speedtest-custom.tsv prefs.json vps.jsonl"
+TXN_FILES="servers.jsonl subs.tsv dns.conf rules.state custom-rulesets.tsv settings.env overrides.tsv autosites.tsv autosites.dismissed custom-apps.tsv site-domains.tsv hosts.tsv speedtest-custom.tsv prefs.json vps.jsonl apps.seen"
 TXN_ERR=''; TXN_RESULT=''
 
 op_wait_turn() { # 轮到我了吗? 等所有「更早创建且还在运行」的排队任务结束 (任务进程已死/卡住超过 5 分钟的忽略)
@@ -76,6 +76,8 @@ _txn_detail() { # <变更函数> <参数…>
     txn_app_custom_add) kv path "$1" state "$2" ;;
     txn_app_custom_delete) kv name "$1" ;;
     txn_content)       kv force "${TXN_FORCE:-}" seq_before "$(cloud_seq)" ;;
+    txn_reset_official) reset_counts ;;
+    txn_reset_undo)    kv backup "$(basename "$(reset_latest_backup)" 2>/dev/null)" ;;
     txn_sync_apply)    kv mode "$1" ;;
     txn_vps_save)      kv host "$1" ;;
     txn_none)          printf '' ;;
@@ -189,6 +191,110 @@ txn_app_custom_delete() { apps_custom_delete "$1" || { TXN_ERR=$APPS_ERR; return
 txn_site_domain() { sites_edit "$@" || { TXN_ERR=$SITES_ERR; return 1; }; }       # 条目id 操作 域名 [新域名]
 txn_site_reset() { sites_reset "$1" || { TXN_ERR=$SITES_ERR; return 1; }; }
 
+# ---- 恢复官方默认规则 (设置 → 代理 → 恢复默认规则) ----
+# 清掉所有「自己改过的规则」, 回到官方默认: 以云端下发的官方内容 (签名校验) 为准 —— 不是云同步里保存的那一份 (那份可能已经带着错误的设置)。
+# 不动: 服务器 / 订阅 / 账号 / 流量接管模式 / 端口 / 语言 / 日志设置 / 测速自定义目标 / 界面偏好。重置前把被清掉的文件打包到 $H/backups/ (最近 3 份), 可以在设置里撤销。
+RESET_FILES="overrides.tsv autosites.tsv autosites.dismissed rules.state custom-rulesets.tsv custom-apps.tsv site-domains.tsv hosts.tsv dns.conf"
+RESET_KEEP=3
+reset_latest_backup() { ls -1 "$H"/backups/reset-*.tgz 2>/dev/null | sort | tail -1; }
+_reset_lines() { [ -s "$H/$1" ] && awk 'NF {n++} END{print n+0}' "$H/$1" || echo 0; }
+reset_selector_diff() { # 每个网站 / 服务的出口开关 (svc-*) 和兜底出口 (Final) 的选择是代理核心自己记住的 (cache.db), 不在上面那些文件里。
+  # 打印「标签<TAB>现在<TAB>默认」(默认 = 当前 config.json 里每个开关的 default), 只列和默认不一样的; 核心没运行 / 读不到就什么都不打印。
+  local px; [ -s "$H/config.json" ] || return 0
+  px=$(clash GET /proxies 2>/dev/null) || return 0; [ -n "$px" ] || return 0
+  printf '%s' "$px" | /usr/bin/perl -MJSON::PP -e '
+    my $cfg = shift; local $/; my $p = eval { JSON::PP->new->decode(<STDIN>) } or exit 0;
+    open my $fh, "<", $cfg or exit 0; my $c = eval { JSON::PP->new->decode(<$fh>) } or exit 0;
+    for my $o (@{ $c->{outbounds} || [] }) {
+      next unless ($o->{type} // "") eq "selector" && ($o->{tag} // "") =~ /^(svc-[a-z0-9-]+|Final)$/ && defined $o->{default};
+      my $now = $p->{proxies}{ $o->{tag} }{now}; next unless defined $now && $now ne $o->{default};
+      print "$o->{tag}\t$now\t$o->{default}\n";
+    }' "$H/config.json" 2>/dev/null || true
+}
+reset_selectors_apply() { # <差异文件>  逐个切回默认 (热切换, 不重启核心); 打印切了几个
+  local tag now def n=0
+  while IFS=$'\t' read -r tag now def; do [ -n "$tag" ] && [ -n "$def" ] || continue
+    [ -z "$(clash PUT "/proxies/$tag" "{\"name\":\"$(jesc "$def")\"}" 2>/dev/null)" ] && n=$((n + 1))
+  done < "$1"
+  echo "$n"
+}
+reset_selectors_restore() { # <差异文件>  把 reset_selectors_apply 改过的开关切回「现在」那一列 (撤销 / 回滚用; 开关已经不存在就跳过)
+  local tag now def
+  while IFS=$'\t' read -r tag now def; do [ -n "$tag" ] && [ -n "$now" ] || continue
+    clash PUT "/proxies/$tag" "{\"name\":\"$(jesc "$now")\"}" >/dev/null 2>&1 || true
+  done < "$1"
+}
+reset_counts() { # -> 一行 key=value: 各类「自己改过的」规则的数量 (确认框和操作记录用; 只数不动)
+  local apps sites autos
+  apps=$(awk -F'|' '$1=="app" && $4!="def" && $4!="new" {n++} END{print n+0}' "$H/overrides.tsv" 2>/dev/null); autos=$(_reset_lines autosites.tsv)
+  sites=$(awk -F'|' '$1=="site" {n++} END{print n+0}' "$H/overrides.tsv" 2>/dev/null); sites=$(( ${sites:-0} - autos )); [ "$sites" -ge 0 ] || sites=0
+  printf 'apps=%s sites=%s auto_sites=%s services=%s rulesets=%s toggles=%s custom_apps=%s domains=%s hosts=%s dns=%s auto_on=%s' \
+    "${apps:-0}" "$sites" "$autos" "$(reset_selector_diff | awk 'NF {n++} END{print n+0}')" "$(_reset_lines custom-rulesets.tsv)" "$(_reset_lines rules.state)" "$(_reset_lines custom-apps.tsv)" "$(_reset_lines site-domains.tsv)" "$(_reset_lines hosts.tsv)" "$([ -s "$H/dns.conf" ] && echo 1 || echo 0)" "${AUTO_SITES:-0}"
+}
+reset_total() { local c t=0; for c in $(reset_counts); do case $c in auto_on=*) ;; *) t=$((t + ${c#*=})) ;; esac; done; echo "$t"; }
+reset_preview_json() { # GET /api/settings/reset 的主体
+  local c k v out='' b bt=0 bn='' total=0 logged=false
+  for c in $(reset_counts); do k=${c%%=*}; v=${c#*=}; out="$out\"$k\":$v,"; [ "$k" = auto_on ] || total=$((total + v)); done
+  b=$(reset_latest_backup); [ -n "$b" ] && { bn=$(basename "$b"); bt=${bn#reset-}; bt=${bt%.tgz}; }       # 文件名里就是时间 (epoch 秒)
+  auth_logged_in && logged=true
+  printf '%s"total":%s,"logged_in":%s,"content":{%s},"sync":{"enabled":%s,"auto":%s},"backup":%s' "$out" "$total" "$logged" "$(cloud_status_json)" \
+    "$(sync_enabled && echo true || echo false)" "$(sync_auto && echo true || echo false)" "$([ -n "$b" ] && printf '{"name":"%s","time":%s}' "$(jesc "$bn")" "${bt:-0}" || echo null)"
+}
+reset_backup() { # 打包即将清掉的文件; 没有任何自定义内容就不建
+  local f list='' d="$H/backups" ts out
+  [ "$(reset_total)" -gt 0 ] || [ "${AUTO_SITES:-0}" = 1 ] || return 0                   # 本来就是默认状态: 没有什么可备份的
+  for f in $RESET_FILES; do [ -f "$H/$f" ] && list="$list $f"; done
+  mkdir -p "$d"; chmod 700 "$d" 2>/dev/null || true
+  printf 'AUTO_SITES=%s\n' "${AUTO_SITES:-0}" > "$H/.reset.meta"
+  reset_selector_diff > "$H/.reset.sel"                                                  # 出口开关原来的选择也放进备份 (撤销时切回去)
+  list="$list .reset.sel"
+  ts=$(now); out="$d/reset-$ts.tgz"
+  # shellcheck disable=SC2086
+  if ( cd "$H" && { COPYFILE_DISABLE=1 tar -czf "$out.new" --no-xattrs .reset.meta $list || COPYFILE_DISABLE=1 tar -czf "$out.new" .reset.meta $list; } ) 2>/dev/null; then mv "$out.new" "$out"; chmod 600 "$out" 2>/dev/null || true; else rm -f "$out.new"; fi
+  rm -f "$H/.reset.meta"
+  ls -1 "$d"/reset-*.tgz 2>/dev/null | sort | awk -v k="$RESET_KEEP" '{ a[NR] = $0 } END { for (i = 1; i <= NR - k; i++) print a[i] }' | while IFS= read -r f; do rm -f "$f"; done
+  return 0
+}
+txn_reset_official() {
+  local f src=baseline err='' rc
+  job_step 0 10 "准备"
+  rm -f "$H/.reset.sel"; reset_backup
+  for f in $RESET_FILES; do rm -f "$H/$f"; done
+  rm -f "$H/apps.seen" "$H/.autosite.off" "$H/.autosite.ev"                 # (自定义规则集的文件等重置成功之后再删, 见 op_rules_reset: 失败回滚时登记会恢复, 文件不能已经没了)
+  settings_set AUTO_SITES 0; AUTO_SITES=0
+  job_step 1 30 "下载规则集"
+  cloud_content_install 1; rc=$?                      # 强制重新下载云端官方内容 (签名 + 校验和), 就算序号没变也换一份干净的
+  case $rc in
+    0) src=cloud ;;
+    *) err=$CLOUD_ERR; [ -s "$H/cloud/content/SEQ" ] && src=cached                 # 连不上 / 没登录: 用本机已验证过的官方内容; 一份都没有就用随程序自带的基线
+       [ "$rc" = 2 ] || cloud_state_set "$err" ;;
+  esac
+  [ -s "$H/.reset.sel" ] && reset_selectors_apply "$H/.reset.sel" >/dev/null          # 网站 / 服务的出口开关切回默认 (热切换)
+  apps_scan >/dev/null                               # 像第一次安装那样重新识别应用: 推荐值来自官方内容
+  rules_update >/dev/null 2>&1 || true               # 默认启用的规则集可能和以前不一样: 缺的先下载 (失败不致命)
+  TXN_RESULT="{\"content\":\"$src\",\"seq\":$(cloud_seq),\"error\":\"$(jesc "$(_t "$err")")\"}"
+  return 0
+}
+op_rules_reset() { # 重置; 成功后清掉已经没有登记的自定义规则集文件; 失败时连同刚建的备份一起撤掉 (不让人误以为可以撤销)
+  local was now_b; was=$(reset_latest_backup)
+  if op_txn "恢复官方默认规则" txn_reset_official; then rm -f "$H"/rules/custom-*.srs "$H/.reset.sel"; return 0; fi
+  [ -s "$H/.reset.sel" ] && reset_selectors_restore "$H/.reset.sel"; rm -f "$H/.reset.sel"      # 失败回滚: 出口开关也切回原来的
+  now_b=$(reset_latest_backup); [ -z "$now_b" ] || [ "$now_b" = "$was" ] || rm -f "$now_b"
+  return 1
+}
+txn_reset_undo() { # 撤销最近一次重置: 把当时清掉的文件放回去
+  local b t f
+  b=$(reset_latest_backup); [ -n "$b" ] || { TXN_ERR="没有可以撤销的重置"; return 1; }
+  tar -tzf "$b" 2>/dev/null | sed 's#^\./##' | grep -Ev '^\._' | grep -Evq '^(\.reset\.meta|\.reset\.sel|overrides\.tsv|autosites\.tsv|autosites\.dismissed|rules\.state|custom-rulesets\.tsv|custom-apps\.tsv|site-domains\.tsv|hosts\.tsv|dns\.conf)$' && { TXN_ERR="备份文件不完整, 不能撤销"; return 1; }
+  t=$(mktemp -d); tar -xzf "$b" -C "$t" 2>/dev/null || { rm -rf "$t"; TXN_ERR="备份文件无法读取, 不能撤销"; return 1; }
+  for f in $RESET_FILES; do rm -f "$H/$f"; [ -f "$t/$f" ] && cp -p "$t/$f" "$H/$f"; done
+  [ "$(sed -n 's/^AUTO_SITES=//p' "$t/.reset.meta" 2>/dev/null | head -1)" = 1 ] && { settings_set AUTO_SITES 1; AUTO_SITES=1; }
+  [ -s "$t/.reset.sel" ] && reset_selectors_restore "$t/.reset.sel"                       # 网站 / 服务的出口开关切回重置前的选择
+  rm -rf "$t"; rm -f "$b"
+  custom_rs_refresh_all; ovr_sync                    # 自定义规则集文件不在备份里: 按登记的链接重新下载
+  return 0
+}
+
 op_apply() { op_txn "应用配置" txn_none; }
 
 op_restart() {
@@ -196,6 +302,29 @@ op_restart() {
   os_service_restart || { job_fail "核心未能重启 (Enhanced/TUN 需要管理员授权)" 0; return 1; }
   job_step 1 60 "等待服务就绪"
   if wait_port "$PORT" 15 && enhanced_ready; then proxy_sync_mode; oplog "${OP_WHO:-terminal}" "重启服务" "" ok; job_ok "服务已重启"; else oplog "${OP_WHO:-terminal}" "重启服务" "" error; job_fail "服务没有在 15 秒内启动, 运行 enana doctor 查看原因" 1; return 1; fi
+}
+
+# 开启 / 关闭系统代理 (仪表盘「开启系统代理」按钮和总开关共用): 后台任务 —— macOS 可能弹出管理员密码窗口, 等用户输入时不能卡住 HTTP 请求。
+# 系统代理只在「System Proxy」接管方式下使用; Enhanced/TUN 保留用户现有的系统代理设置, 不会改动它。
+op_sysproxy() { # on|off
+  local want=${1:-on} rc msg
+  case $want in on|off) ;; *) job_fail "参数无效" 0; return 1 ;; esac
+  if [ "$want" = on ] && [ "${NETWORK_MODE:-system}" = tun ]; then job_ok "Enhanced/TUN 模式不使用系统代理" '{"method":"tun"}'; return 0; fi
+  job_step 0 25 "修改系统代理"
+  os_sysproxy_apply "$want"; rc=$?
+  sysproxy_record "${OP_WHO:-dashboard}" "$want" "$rc"
+  job_step 1 90 "确认结果"
+  if [ "$rc" = 0 ]; then job_ok "$([ "$want" = on ] && echo '系统代理已指向 enana' || echo '系统代理已关闭')" "{\"method\":\"${SYSPROXY_METHOD:-}\"}"; return 0; fi
+  case ${SYSPROXY_ERR:-} in
+    user-canceled)   msg="已取消授权, 系统代理没有改动。需要时再点一次「开启系统代理」。" ;;
+    wrong-password)  msg="管理员密码不正确, 系统代理没有改动。请再试一次。" ;;
+    not-admin)       msg="当前 macOS 账户不是管理员, 无法修改系统代理。请用管理员账户登录 macOS 后再试。" ;;
+    no-gui-session)  msg="找不到可以弹出密码窗口的桌面会话。请在这台 Mac 的桌面上打开仪表盘再试。" ;;
+    not-authorized)  msg="macOS 没有允许 enana 弹出授权窗口。请在「系统设置 → 隐私与安全性 → 自动化」里允许后再试。" ;;
+    no-network-service) msg="没有找到已启用的网络服务, 请先连接网络。" ;;
+    *)               msg="系统代理没有改成功 (原因代码: ${SYSPROXY_ERR:-unknown}), 可以重试; 仍然失败请在「日志 → 导出」里导出诊断文件。" ;;
+  esac
+  job_fail "$msg" 0; return 1
 }
 
 op_update_rules() { # 规则集 (本地规则集文件变化后 sing-box 自动重载, 无需重启)
@@ -338,6 +467,7 @@ job_dispatch() {
     apps-scan)      op_txn "识别已安装的应用" txn_apps_scan ;;
     autosites-clear) op_txn "自动识别: 全部撤销" txn_autosites_clear ;;
     restart)        op_restart ;;
+    sysproxy)       op_sysproxy "$@" ;;
     update-rules)   op_update_rules ;;
     servers-import) TXN_INTERVAL=${3:-}; TXN_USED=${4:-}; TXN_TOTAL=${5:-}; TXN_EXPIRE=${6:-}; TXN_SAVE=${7:-}; op_txn "导入服务器" txn_import "${1:-}" "${2:-merge}" ;;
     servers-delete) op_txn "删除服务器" txn_delete "$1" ;;
@@ -363,6 +493,8 @@ job_dispatch() {
     site-domain-reset) op_txn "重置网站域名" txn_site_reset "$1" ;;
     app-custom)     op_txn "添加自定义软件" txn_app_custom_add "$1" "$2" ;;
     app-custom-delete) op_txn "删除自定义软件" txn_app_custom_delete "$1" ;;
+    rules-reset)    APPLY_BASE=2; op_rules_reset ;;
+    rules-reset-undo) APPLY_BASE=2; op_txn "撤销恢复默认" txn_reset_undo ;;
     auth-sync)      op_sync_secret ;;
     auth-logout)    op_logout "$@" ;;
     self-update)    op_self_update ;;

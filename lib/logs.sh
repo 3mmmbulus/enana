@@ -34,6 +34,9 @@ oplog() { # oplog <来源 dashboard|terminal|auto> <动作> <详情 (用 kv 生�
   [ "${LOG_OPS:-1}" = 1 ] || return 0
   oplog_force "$@"
 }
+sysproxy_record() { # <来源> <on|off> <返回码>  把「开启 / 关闭系统代理」的结果写进操作记录: 用了哪种授权方式 (method) 和失败原因 (err) —— 以前系统代理没开成功时不留任何痕迹
+  oplog "$1" "$([ "$2" = on ] && echo 开启系统代理 || echo 关闭系统代理)" "$(kv method "${SYSPROXY_METHOD:-}" err "${SYSPROXY_ERR:-}" port "${PORT:-}" mode "${NETWORK_MODE:-system}")" "$([ "$3" = 0 ] && echo ok || echo error)"
+}
 oplog_force() {
   local f ts; mkdir -p "$LOGS"
   ts=$(date '+%F %T'); f="$LOGS/ops-${ts%% *}.log"
@@ -60,7 +63,7 @@ logs_rotate() {
 logs_compress() { # 压缩 2 天前的日志
   local f today yday d
   today=$(date +%F); yday=$(os_date_minus_days 1)
-  for f in "$LOGS"/proxy-*.log "$LOGS"/ops-*.log; do
+  for f in "$LOGS"/proxy-*.log "$LOGS"/ops-*.log "$LOGS"/health-*.log; do
     [ -f "$f" ] || continue
     d=$(printf '%s' "$f" | sed -E 's/.*-([0-9]{4}-[0-9]{2}-[0-9]{2})\.log$/\1/')
     [ "$d" = "$today" ] || [ "$d" = "$yday" ] || gzip -9 -f "$f" 2>/dev/null || true
@@ -88,7 +91,7 @@ logs_purge() {
     sz=$(stat -f %z "$f" 2>/dev/null || echo 0)
     if [ "$d" \< "$cday" ]; then freed=$((freed + sz)); rm -f "$f"
     elif [ "$d" = "$cday" ]; then
-      case $f in */ops-*) kind=ops ;; *) kind=proxy ;; esac
+      case $f in */ops-*|*/health-*) kind=ops ;; *) kind=proxy ;; esac      # 健康记录和操作记录一样每行以时间戳开头
       tmp=$(mktemp)
       case $f in *.gz) gzip -dc "$f" 2>/dev/null ;; *) cat "$f" ;; esac | _logs_trim "$kind" "$cutoff" > "$tmp"
       if [ -s "$tmp" ]; then
@@ -205,7 +208,7 @@ logs_export() { # <类型> <日期>  -> 纯文本 (旧接口; 仪表盘现在用
 
 logs_usage_json() { # 各类日志占用的字节数
   local o=0 a=0 p=0 f sz
-  for f in "$LOGS"/ops-*; do [ -f "$f" ] && { sz=$(stat -f %z "$f" 2>/dev/null || echo 0); o=$((o+sz)); }; done
+  for f in "$LOGS"/ops-* "$LOGS"/health-*; do [ -f "$f" ] && { sz=$(stat -f %z "$f" 2>/dev/null || echo 0); o=$((o+sz)); }; done      # 健康记录算在「操作记录」里
   for f in "$LOGS"/proxy-* "$H/sing-box.log"; do [ -f "$f" ] && { sz=$(stat -f %z "$f" 2>/dev/null || echo 0); p=$((p+sz)); }; done
   a=$p   # 网站访问从代理日志里归并出来, 占用即代理日志的占用
   printf '{"ops":%s,"access":%s,"proxy":%s,"total":%s}' "$o" "$a" "$p" "$((o + p))"
@@ -216,7 +219,7 @@ logs_clear() { # <类型 ops|access|proxy|all> [before=YYYY-MM-DD] -> 打印释�
   case $type in ops|access|proxy|all) ;; *) return 1 ;; esac
   for f in "$LOGS"/*; do
     [ -f "$f" ] || continue
-    case $type in ops) case $f in */ops-*) ;; *) continue ;; esac ;; access|proxy) case $f in */proxy-*) ;; *) continue ;; esac ;; esac
+    case $type in ops) case $f in */ops-*|*/health-*) ;; *) continue ;; esac ;; access|proxy) case $f in */proxy-*) ;; *) continue ;; esac ;; esac
     d=$(printf '%s' "$f" | sed -nE 's/.*-([0-9]{4}-[0-9]{2}-[0-9]{2})\.log(\.gz)?$/\1/p')
     if [ -n "$before" ] && [ -n "$d" ] && ! [ "$d" \< "$before" ]; then continue; fi
     sz=$(stat -f %z "$f" 2>/dev/null || echo 0); freed=$((freed + sz)); rm -f "$f"
@@ -284,6 +287,11 @@ _b_env() {
   done
   pid=${SVC_PID:-$(os_service_pid 2>/dev/null)}
   if [ -n "$pid" ]; then ps -o etime=,rss= -p "$pid" 2>/dev/null | awk -v p="$pid" '{ print "core.pid=" p; print "core.uptime=" $1; print "core.rss_kb=" $2 }'; fi
+  # launchd 眼里的核心进程: 退出码 / 被拉起过几次 (崩溃后反复重启时 runs 会很大); 会话心跳 / 被退出登录的原因
+  launchctl print "$GUI/$LABEL" 2>/dev/null | awk '/^[[:space:]]*(last exit code|runs) = / { k = $0; sub(/^[[:space:]]*/, "", k); gsub(/ = /, "=", k); gsub(/ /, "_", k); print "service." k }'
+  [ -f "$H/hb.fail" ] && printf 'session.heartbeat_failing_since=%s\n' "$(os_date_at "$(cat "$H/hb.fail" 2>/dev/null)" 2>/dev/null || cat "$H/hb.fail")"
+  [ -s "$H/notice" ] && printf 'session.last_end_reason=%s\n' "$(head -1 "$H/notice")"
+  stats_summary                         # 流量统计: 最近 7 天每天采样了多少分钟 (有数据的日子 samples=N; 没有行 = 那天一次都没采到, 不是「没流量」)
   printf 'disk.free_kb=%s\n' "$(df -k "$H" 2>/dev/null | awk 'NR==2 {print $4}')"
   printf 'logs.size_kb=%s\n' "$(du -sk "$LOGS" 2>/dev/null | awk '{print $1}')"
   if [ -x "$SB" ] && [ -s "$H/config.json" ]; then
@@ -410,7 +418,15 @@ _b_proxy() { # <起始时间|空> <日期…>
   for d in "$@"; do _logs_stream proxy "$d"; done | sed $'s/\033\\[[0-9;]*m//g' | LC_ALL=C awk -v s="$since" '{ ch = substr($0, 1, 1); if ((ch == "+" || ch == "-") && $2 ~ /^[0-9][0-9][0-9][0-9]-/) keep = (s == "" || ($2 " " $3) >= s); if (keep) print }' | _b_mask_user
 }
 
+_b_gen() { # <名称> <格式> <函数> [参数…]  生成一个分区: 内容写到 $BT/<名称>, 完整分区 (含 @@SECTION 行) 写到 $BT/sec.<名称>; 之后按需要的顺序输出 (自动判定要读别的分区, 但应该排在文件开头)
+  local name=$1 fmt=$2; shift 2
+  "$@" > "$BT/$name" 2>/dev/null || true
+  { printf '@@SECTION %s format=%s rows=%s\n' "$name" "$fmt" "$(wc -l < "$BT/$name" | tr -d ' ')"; cat "$BT/$name"; } > "$BT/sec.$name"
+}
+_b_emit() { local n; for n in "$@"; do [ -f "$BT/sec.$n" ] && cat "$BT/sec.$n"; done; return 0; }
+
 # logs_bundle <小时数|all> <分区 逗号分隔: ops access proxy snapshot>  -> 打印诊断导出文件 (UTF-8 文本)
+#   输出顺序: meta · verdict (自动判定) · env config policy servers apps probes live · health_summary outages health · ops · access · proxy
 logs_bundle() {
   local hours=${1:-24} secs=${2:-ops,access,proxy,snapshot} since='' days dlist BT declared=meta
   case $hours in all) ;; ''|*[!0-9]*) hours=24 ;; esac
@@ -421,27 +437,34 @@ logs_bundle() {
   printf '#generated=%s tz=%s app=enana version=%s\n' "$(date '+%F %T')" "$(date +%z)" "$VERSION"
   printf '#range since="%s" hours=%s days=%s\n' "${since:-beginning}" "$hours" "${dlist:-none}"
   # macOS bash 3.2 misparses unparenthesized case patterns inside quoted $().
-  case ",$secs," in *,snapshot,*) declared="$declared,env,config,policy,servers,apps,probes,live" ;; esac
+  case ",$secs," in *,snapshot,*) declared="$declared,verdict,env,config,policy,servers,apps,probes,live,health_summary,outages,health" ;; esac
   case ",$secs," in *,ops,*) declared="$declared,ops" ;; esac
   case ",$secs," in *,access,*) declared="$declared,access" ;; esac
   case ",$secs," in *,proxy,*) declared="$declared,proxy" ;; esac
   printf '#sections=%s\n' "$declared"
-  printf '%s\n' '#about=这是 enana 的诊断导出文件, 用来排查「网站打不开 / 走错出口 / 应用没识别」之类的问题。每个 "@@SECTION 名称 format=… rows=N" 开始一个分区, 到下一个 "@@SECTION" 或 "@@END" 结束; 以 "#" 开头的行是说明; format=kv 是 键=值, tsv 的第一行是列名 (制表符分隔), raw 是原始日志行。'
+  printf '%s\n' '#about=这是 enana 的诊断导出文件, 用来排查「网站打不开 / 走错出口 / 应用没识别 / 某个 App 连不上」之类的问题。每个 "@@SECTION 名称 format=… rows=N" 开始一个分区, 到下一个 "@@SECTION" 或 "@@END" 结束; 以 "#" 开头的行是说明; format=kv 是 键=值, tsv 的第一行是列名 (制表符分隔), raw 是原始日志行。先看 verdict 分区: 它是根据 health (每分钟的服务器端口探测 + 每 5 分钟经代理的探测) / 状态变化 / 访问记录自动给出的判断和证据。'
   printf '%s\n' '#privacy=不含任何密码 / 令牌 / 服务器凭据; 服务器地址和系统用户名已打码; 但包含访问过的域名和应用名, 请只发给你信任的人。'
   printf '%s\n' '#route-reasons=出口名 direct-mode(代理总开关关闭) direct-lan(本机/局域网) direct-site(你把该网站设为直连) direct-app(你把该应用设为直连/关) direct-cn(国内规则) direct(策略选了直连) 都是直连; 其它名字是代理服务器节点。'
-  _b_sec meta kv _b_meta
+  _b_gen meta kv _b_meta
   case ",$secs," in *,snapshot,*)
-    _b_sec env kv _b_env
-    _b_sec config text _b_config
-    _b_sec policy text _b_policy
-    _b_sec servers tsv _b_servers
-    _b_sec apps tsv _b_apps
-    _b_sec probes tsv _b_probes
-    _b_sec live tsv _b_live ;; esac
+    _b_gen env kv _b_env
+    _b_gen config text _b_config
+    _b_gen policy text _b_policy
+    _b_gen servers tsv _b_servers
+    _b_gen apps tsv _b_apps
+    _b_gen probes tsv _b_probes
+    _b_gen live tsv _b_live
+    _b_gen health tsv _b_health "$since"
+    _b_gen health_summary tsv _b_health_summary "$since" "$hours"
+    _b_gen outages tsv _b_health_outages "$since" ;; esac
   # shellcheck disable=SC2086
-  case ",$secs," in *,ops,*) _b_sec ops tsv _b_ops "$since" $days ;; esac
-  case ",$secs," in *,access,*) _b_sec access tsv _b_access "$since" $days ;; esac
-  case ",$secs," in *,proxy,*) _b_sec proxy raw _b_proxy "$since" $days ;; esac
+  case ",$secs," in *,ops,*) _b_gen ops tsv _b_ops "$since" $days ;; esac
+  case ",$secs," in *,access,*) _b_gen access tsv _b_access "$since" $days ;; esac
+  # 自动判定读 meta / env / health, 以及用户选了导出的 ops / access (没选的分区不会被拿来分析)
+  case ",$secs," in *,snapshot,*) _b_gen verdict kv _b_verdict "$since" ;; esac
+  _b_emit meta verdict env config policy servers apps probes live health_summary outages health ops access
+  # shellcheck disable=SC2086
+  case ",$secs," in *,proxy,*) _b_sec proxy raw _b_proxy "$since" $days ;; esac      # 最大的一个分区: 直接流式输出
   printf '@@END\n'
   rm -rf "$BT"
 }

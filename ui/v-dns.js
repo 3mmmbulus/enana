@@ -6,6 +6,8 @@
  *    给每个预设标延迟, 并提示最快的一个; 「采用」只是选中它, 仍然走保存流程 (确认 + 任务进度)
  *  - 自定义解析: GET /api/dns 里的 hosts; POST /api/dns/hosts (action=add|update|remove, 任务) 与 POST /api/dns/hosts/reset (清空)
  *  - 解析测试: POST /api/dns/test; 答案来自自定义解析时标出徽标
+ * 列头排序 (ui.sorter, 记在 prefs sort.dns-pl / sort.dns-hosts): 自定义解析表 (域名 / IP) 和解析流程表 (匹配的网站 / 回答的 DNS / 路径) 的列头都可以点。
+ *   自定义解析: 筛选 → 排序 (整张表) → 分页, 不排序时按域名; 流程是「从上往下检查, 第一个匹配的负责回答」, 不排序时一定是评估顺序, 排序只是换个看法 (步骤编号仍是评估顺序里的第几步)。
  * 范围: 这些设置只影响代理核心自己发起的解析, 页面上有明文说明 (不是藏在提示里)。
  * 流程图对后端字段保持宽容: id / match / via 是已知代码就用本地化文案, 否则原样显示后端给的字符串 (detail 也一样)。 */
 (function () {
@@ -20,6 +22,7 @@
   var uid = 0;
   var HOST_MAX = 200;                   // 自定义解析最多多少条 (docs/API.md)
   var hs = { edit: null, busy: false, filter: '', flash: '', focus: null, btns: [], forms: [], pg: null, add: null };      // 自定义解析的界面状态
+  var plSo = null, hsSo = null;                                                                                 // 列头排序 (ui.sorter): 解析流程表 / 自定义解析表
   var bn = { running: false, res: null, at: 0, views: [], cards: [] };                                         // 测速: 最近一次结果 {cn:{id:ms|null}, global:{…}} + 时间; views = 正在显示的测速条
 
   /* ---------- 词典键表 (键写成字面量, 方便 tools/i18n-check.js 检查) ---------- */
@@ -326,7 +329,15 @@
     el.bnSug = h('div', { class: 'dns-sgs' });
     el.bar = benchBar({ onSync: function () { if (D) { renderSummary(); renderBenchSug(); } } });
     /* 流程图 */
-    el.plBox = h('div', { class: 'dns-pl-box' });
+    plSo = ui.sorter('dns-pl', {
+      match: { get: function (it) { return stepTitle(it); } },
+      server: { get: function (it) { return serverText(it, viaCode(it.via)); } },
+      path: { get: function (it) { return viaText(it); } }
+    }, { onChange: function () { if (D) renderPipeline(); } });
+    el.plBody = h('tbody');
+    el.plBox = h('div', { class: 'dns-pl-box' }, h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl rt dns-pl', 'aria-label': L('dns.pipe.aria') },
+      h('thead', null, h('tr', null, plSo.th('match', function () { return t('dns.pl.col.match'); }), plSo.th('server', function () { return t('dns.pl.col.server'); }), plSo.th('path', function () { return t('dns.pl.col.path'); }))),
+      el.plBody)));
     el.pipeEmpty = ui.emptyBox();
 
     /* 默认已开启的优化 (不用设置, 只说明) */
@@ -487,9 +498,18 @@
     return rawVia ? h('span', { class: 'dns-via' }, rawVia) : null;
   }
   function td(labelKey, cls) { var kids = Array.prototype.slice.call(arguments, 2); return h.apply(null, ['td', { 'data-l': labelKey ? L(labelKey) : '', class: cls || '' }].concat(kids)); }
+  /* 「匹配的网站」列显示的名称 / 「路径」列显示的文字 (排序用的也是它们) */
+  function stepTitle(it) {
+    var st = STEPS[stepKey(it)];
+    return st ? t(st.t) : (I.pick(it, 'title') || I.pick(it, 'match_name') || str(it.match) || str(it.id));
+  }
+  function viaText(it) {
+    var vcode = viaCode(it.via);
+    return VIA_ICON[vcode] ? TP.name.route(vcode) : vcode === 'none' ? t('dns.via.none') : str(it.via).trim();
+  }
   function pipeRow(it, i) {
     var k = stepKey(it), st = STEPS[k], vcode = viaCode(it.via), title, detail, cls;
-    title = st ? t(st.t) : (I.pick(it, 'title') || I.pick(it, 'match_name') || str(it.match) || str(it.id));
+    title = stepTitle(it);
     detail = k === 'global' ? globalDetail(it, vcode) : (st && st.d ? t(st.d) : str(it.detail));
     cls = 'dns-pl-r' + (VIA_ICON[vcode] ? ' v-' + vcode : ' v-none') + (k ? ' is-' + k : '');
     return h('tr', { class: cls },
@@ -504,11 +524,11 @@
   }
   function renderPipeline() {
     var pl = D.pipeline;
-    ui.memo(el.plBox, JSON.stringify([pl, D.presets, D.settings, D.hosts.length]), function () {
-      if (!pl.length) return null;
-      return h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl rt dns-pl', 'aria-label': L('dns.pipe.aria') },
-        h('thead', null, h('tr', null, h('th', { scope: 'col' }, L('dns.pl.col.match')), h('th', { scope: 'col' }, L('dns.pl.col.server')), h('th', { scope: 'col' }, L('dns.pl.col.path')))),
-        h('tbody', null, pl.map(pipeRow))));
+    /* 不排序: 评估顺序 (第一个匹配的负责回答); 点了列头: 只是换个看法, 步骤编号还是评估顺序里的第几步。表头一直在 (排序按钮不会因为重画丢掉键盘焦点), 只重画 tbody */
+    ui.memo(el.plBody, JSON.stringify([pl, D.presets, D.settings, D.hosts.length, plSo.state()]), function () {
+      var f = document.createDocumentFragment();
+      plSo.apply(pl).forEach(function (it) { f.appendChild(pipeRow(it, pl.indexOf(it))); });
+      return f;
     });
     el.plBox.hidden = !pl.length;
     if (pl.length) el.pipeEmpty.hide(); else el.pipeEmpty.show({ icon: 'info', text: t('dns.pipe.empty') });
@@ -530,8 +550,16 @@
     el.hsEmpty = ui.emptyBox();
     hs.pg = ui.pager('dns.hosts', { def: 10 });                      // i18n-ignore (翻页器的 id, 不是词典键)
     hs.pg.onChange(function () { renderHosts(); });
+    hsSo = ui.sorter('dns-hosts', {
+      domain: { get: function (x) { return x.domain; } },
+      ip: { get: function (x) { return ipKey(x.ip); } }
+    }, { onChange: function () {                                      // 排序变了回到第 1 页 (setPage 会重画); 正在编辑的那一行跟着排序换了位置, 就翻到它所在的那一页 (不要让编辑框消失)
+      if (hs.edit) hs.flash = hs.edit.orig;
+      else if (hs.pg.page() !== 1) { hs.pg.setPage(1); return; }
+      renderHosts();
+    } });
     el.hsTbl = h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl rt dns-hs-tbl' },
-      h('thead', null, h('tr', null, h('th', { scope: 'col' }, L('dns.hs.col.domain')), h('th', { scope: 'col' }, L('dns.hs.col.ip')), h('th', { scope: 'col', class: 'c-act' }, L('dns.hs.col.act')))),
+      h('thead', null, h('tr', null, hsSo.th('domain', function () { return t('dns.hs.col.domain'); }), hsSo.th('ip', function () { return t('dns.hs.col.ip'); }), h('th', { scope: 'col', class: 'c-act' }, L('dns.hs.col.act')))),
       el.hsBody));
     el.hsList = h('div', { class: 'dns-hs-list' }, el.hsTbl, el.hsEmpty.el, hs.pg.el);
     var go = h('button', { class: 'dns-link', type: 'button', on: { click: function () { goTest('', false); } } }, ui.icon('search', 14, 'ci'), L('dns.hs.tip.go'));
@@ -691,6 +719,13 @@
     if (el.hsClear) ui.avail(el.hsClear, why || (D && !D.hosts.length ? t('dns.hs.clear.none') : ''));
   }
   function byDomain(a, b) { return a.domain < b.domain ? -1 : a.domain > b.domain ? 1 : 0; }
+  /* 「IP 地址」列排序用的键: IPv4 在前, 然后 IPv6, 每一段补零到固定宽度 (192.0.2.9 排在 192.0.2.10 前面, IPv6 的十六进制也按数值比较); 不是合法 IP 就用原文 */
+  function ipKey(raw) {
+    var p = parseIp(raw), w;
+    if (!p) return str(raw);
+    w = p.v === 4 ? 3 : 5;
+    return p.v + ':' + p.key.split(p.v === 4 ? '.' : ':').map(function (g) { return ('00000' + (p.v === 4 ? +g : parseInt(g, 16))).slice(-w); }).join('.');
+  }
   function viewRow(x) {
     var bT = ui.ibtn('search', t('dns.hs.test.aria', { domain: x.domain })), bE = ui.ibtn('edit', t('dns.hs.edit.aria', { domain: x.domain })), bD = ui.ibtn('delete', t('dns.hs.del.aria', { domain: x.domain }), { cls: 'danger-t' });
     ui.act(bT, function () { goTest(x.domain, true); });
@@ -717,6 +752,7 @@
     all = D.hosts.slice().sort(byDomain);
     q = hs.filter.trim().toLowerCase();
     list = q ? all.filter(function (x) { return x.domain.indexOf(q) >= 0 || x.ip.toLowerCase().indexOf(q) >= 0; }) : all;
+    list = hsSo.apply(list);                                             // 筛选 → 排序 (整张表, 不只是当前页) → 分页; 没有选排序时原样返回 (按域名)
     r = hs.pg.update(list.length);
     if (hs.flash) {                                                      // 刚添加 / 修改的那一条: 翻到它所在的那一页
       n = list.findIndex(function (x) { return x.domain === hs.flash; });

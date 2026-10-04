@@ -647,6 +647,17 @@ IP 地址格式不正确 (支持 IPv4 和 IPv6)	The IP address is not valid (IPv
 这份内容需要 enana * 或更高版本, 请先更新 enana	This content needs enana * or newer; update enana first
 连不上云端内容服务 (HTTP *)	Cannot reach the cloud content service (HTTP *)
 重置网站域名	Reset site domains
+恢复官方默认规则 完成, 配置已应用	Rules reset to the official defaults; configuration applied
+恢复官方默认规则 完成 (配置无变化, 未重启)	Rules reset to the official defaults (configuration unchanged, no restart)
+恢复官方默认规则 失败: 没有可应用的更改	Resetting the rules failed: no changes to apply
+撤销恢复默认 完成, 配置已应用	Reset undone; configuration applied
+撤销恢复默认 完成 (配置无变化, 未重启)	Reset undone (configuration unchanged, no restart)
+撤销恢复默认 失败: 没有可应用的更改	Undoing the reset failed: no changes to apply
+恢复官方默认规则	Reset rules to official defaults
+撤销恢复默认	Undo reset to defaults
+没有可以撤销的重置	There is no reset to undo
+备份文件不完整, 不能撤销	The backup is incomplete, so it cannot be undone
+备份文件无法读取, 不能撤销	The backup cannot be read, so it cannot be undone
 阿里 DNS (DoT)	Alibaba DNS (DoT)
 223.5.5.5,加密的 TLS 直连,和 DoH 速度相近	223.5.5.5. Encrypted TLS, similar speed to DoH
 腾讯 DNSPod (DoT)	Tencent DNSPod (DoT)
@@ -852,3 +863,20 @@ Enhanced/TUN 需要 sing-box 1.12 或更新版本	Enhanced/TUN requires sing-box
 新版本未就绪, 已回退	New version not ready; rolled back
 新版本未能启动, 已回退到 *	New version failed to start; rolled back to *
 Enhanced/TUN: 保留现有系统代理设置	Enhanced/TUN: preserving existing System Proxy settings
+修改系统代理	Change the system proxy
+确认结果	Verify the result
+系统代理已指向 enana	The system proxy now points to enana
+系统代理已关闭	The system proxy is off
+Enhanced/TUN 模式不使用系统代理	Enhanced/TUN does not use the system proxy
+已取消授权, 系统代理没有改动。需要时再点一次「开启系统代理」。	Authorization cancelled; the system proxy was not changed. Click “Turn system proxy on” again whenever you like.
+管理员密码不正确, 系统代理没有改动。请再试一次。	Incorrect administrator password; the system proxy was not changed. Please try again.
+当前 macOS 账户不是管理员, 无法修改系统代理。请用管理员账户登录 macOS 后再试。	This macOS account is not an administrator, so the system proxy cannot be changed. Sign in to macOS with an administrator account and try again.
+找不到可以弹出密码窗口的桌面会话。请在这台 Mac 的桌面上打开仪表盘再试。	No desktop session is available to show the password window. Open the dashboard on this Mac's desktop and try again.
+macOS 没有允许 enana 弹出授权窗口。请在「系统设置 → 隐私与安全性 → 自动化」里允许后再试。	macOS did not allow enana to show the authorization window. Allow it under System Settings → Privacy & Security → Automation and try again.
+没有找到已启用的网络服务, 请先连接网络。	No enabled network service was found. Connect to a network first.
+系统代理没有改成功 (原因代码: *), 可以重试; 仍然失败请在「日志 → 导出」里导出诊断文件。	The system proxy was not changed (reason code: *). You can retry; if it keeps failing, export the diagnostics file from Logs → Export.
+系统代理没有*成功 (原因: *); 可以在仪表盘概览里再试一次	The system proxy was not turned * successfully (reason: *); you can retry from the dashboard Overview
+环境状态变化	Environment state changed
+核心进程已重启	Core process restarted
+会话心跳失败	Session heartbeat failed
+会话心跳恢复	Session heartbeat recovered

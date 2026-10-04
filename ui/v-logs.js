@@ -9,7 +9,8 @@
  * 日志设置 (TP.logs): 设置页与日志页共用 —— 保留时长 (12 小时 – 30 天) / 操作记录 / 网站访问 / 代理核心日志 (三个开关) / 占用空间。
  *   TP.logs.settingsCard() -> 自更新的 <section class="card"> (设置页嵌入);  TP.logs.openSettings() -> 同样的控件放进弹窗。
  *   数据来自 TP.loadSettings() 的 S.prefs: {settings:{log_hours, log_hours_min/max, log_ops, access_log, log_core}, usage:{ops, access, proxy, total}}; 每次修改后重新加载。
- * 偏好 (TP.prefs): logs.tab (上次打开的标签); 每页条数 / 页码由 ui.pager 记在 table.logs.<类型>.* (页码每次打开页面时回到最新的第 1 页)。
+ * 偏好 (TP.prefs): logs.tab (上次打开的标签); 每页条数 / 页码由 ui.pager 记在 table.logs.<类型>.* (页码每次打开页面时回到最新的第 1 页); sort.logs.<类型> (列头排序, ui.sorter)。
+ * 列头排序: 每个标签一个 ui.sorter。服务端一次只给一页 (新→旧), 所以排序只重排「当前读到的这一页」, 不是整个日志 (想看整个日志的排序请用搜索 / 筛选缩小范围); 没选排序 = 新→旧 (和以前一样)。
  *
  * 约定: 日志里的文字 (域名 / 应用 / 详情 / 消息) 一律只用 textContent。
  * 性能: 日志行里不用 I18N.L() (每个 L 都会进语言注册表) 也不用 fmt.hms (每次调用都新建 Intl 对象, 约 0.3 ms);
@@ -29,21 +30,21 @@
   var FILTERS = { ops: ['', 'error'], access: ['', 'direct', 'proxy', 'error'], proxy: ['', 'warn', 'error'] };
   var REASONS = { mode: 1, lan: 1, site: 1, app: 1, cn: 1, policy: 1 };
   var YMD = /^\d{4}-\d{2}-\d{2}$/, TIME_RE = /^\d{4}-\d{2}-\d{2}[ T](\d{2}:\d{2}:\d{2})(?:\.\d+)?$/;
-  var COLS = {
-    ops: [['log-t', 'logs.col.time'], ['log-who', 'logs.col.who'], ['log-act', 'logs.col.action'], ['log-d', 'logs.col.detail'], ['log-res', 'logs.col.result']],
-    access: [['log-t', 'logs.col.time'], ['log-host', 'logs.col.site'], ['log-app', 'logs.col.app'], ['log-route', 'logs.col.route'], ['log-node', 'logs.col.node']],
-    proxy: [['log-t', 'logs.col.time'], ['log-lv', 'logs.col.level'], ['log-msg', 'logs.col.msg']]
+  var COLS = {                   // [单元格类名, 列名词典键, 排序键 (SORT_COLS 里的列)]
+    ops: [['log-t', 'logs.col.time', 'time'], ['log-who', 'logs.col.who', 'who'], ['log-act', 'logs.col.action', 'action'], ['log-d', 'logs.col.detail', 'detail'], ['log-res', 'logs.col.result', 'result']],
+    access: [['log-t', 'logs.col.time', 'time'], ['log-host', 'logs.col.site', 'site'], ['log-app', 'logs.col.app', 'app'], ['log-route', 'logs.col.route', 'route'], ['log-node', 'logs.col.node', 'node']],
+    proxy: [['log-t', 'logs.col.time', 'time'], ['log-lv', 'logs.col.level', 'level'], ['log-msg', 'logs.col.msg', 'msg']]
   };
   var LEVEL = { INFO: 'info', DEBUG: '', TRACE: '', WARN: 'warn', WARNING: 'warn', ERROR: 'bad', FATAL: 'bad', PANIC: 'bad' };      // 级别颜色: INFO 蓝灰 · WARN 琥珀 · ERROR 红
   var ROUTE_ICON = { pin: 'pin', auto: 'auto', direct: 'direct' };
 
-  var el = {}, tabsCtl = null, T = {}, PG = {}, lastSize = {}, quiet = 0, segs = {}, liveTimer = 0;
+  var el = {}, tabsCtl = null, T = {}, PG = {}, SO = {}, lastSize = {}, quiet = 0, segs = {}, liveTimer = 0;
   var cur = pickType(TP.prefs.get(PK.tab, 'ops')), day = '', days = [], qTimer = 0;
   TYPES.forEach(function (k) { T[k] = fresh(); });
 
-  /* 每个类型一份状态。rows = 当前这一页; base = 最近一次「新读取」时的总数 (分页的基准, 翻页期间日志又新增的在最新一端, 另外提示); total = 最近一次响应里的总数;
+  /* 每个类型一份状态。rows = 当前这一页 (服务端的顺序: 新→旧); view = 实际显示的顺序 (列头排序之后; 点行打开详情时按它翻页); pos = 行 -> 它在 rows 里的序号 (排序时间相同的行时保持新旧次序); base = 最近一次「新读取」时的总数 (分页的基准, 翻页期间日志又新增的在最新一端, 另外提示); total = 最近一次响应里的总数;
    * gen = rows 被整体替换的次数 (DOM 据此决定要不要重建); f = 筛选; sum = 服务端给的汇总 (筛选按钮上的数字) */
-  function fresh() { return { rows: [], total: 0, base: 0, q: '', f: '', sum: null, key: '', loaded: false, loading: false, err: null, seq: 0, gen: 0, at: 0, pageNo: 0 }; }
+  function fresh() { return { rows: [], view: [], pos: null, total: 0, base: 0, q: '', f: '', sum: null, key: '', loaded: false, loading: false, err: null, seq: 0, gen: 0, at: 0, pageNo: 0 }; }
 
   /* ================= 小工具 ================= */
   function active() { return TP.tab === 'logs'; }
@@ -148,8 +149,9 @@
       h('span', { class: 'log-c log-d' }, detailInline(r.detail, act)),
       h('span', { class: 'log-c log-res' }, res === 'error' ? ui.chip(t('logs.result.error'), 'bad', 'error') : res === 'ok' ? ui.chip(t('logs.result.ok'), 'ok', 'success') : (res ? ui.chip(str(res)) : null)));
   }
+  function nodeText(r) { return routeKind(r.route) === 'direct' ? (reasonText(r.reason) || str(r.node)) : str(r.node); }      // 「出口」列的文字: 直连时写「为什么直连」
   function accessRow(r) {
-    var rt = routeKind(r.route), node = str(r.node), why = reasonText(r.reason), bad = !!r.err, nodeTxt = rt === 'direct' ? (why || node) : node;
+    var rt = routeKind(r.route), node = str(r.node), bad = !!r.err, nodeTxt = nodeText(r);
     return h('li', { class: 'log-row log-access' + (bad ? ' is-err' : '') },
       h('span', { class: 'log-c log-t' }, openBtn(r.ts, hostText(r))),
       h('span', { class: 'log-c log-host' }, h('span', { class: 'log-hn' }, hostText(r)), bad ? h('span', { class: 'chip bad log-ec', title: str(r.errmsg) }, errText(r.err)) : null),
@@ -166,15 +168,52 @@
   }
   var ROW = { ops: opsRow, access: accessRow, proxy: proxyRow };
 
+  /* ================= 列头排序 (每个标签一个 ui.sorter; 只排当前读到的这一页) ================= */
+  var LV_RANK = { TRACE: 0, DEBUG: 1, INFO: 2, WARN: 3, WARNING: 3, ERROR: 4, FATAL: 5, PANIC: 5 };                          // 代理日志级别: 按严重程度排
+  function nz(v) { return v == null || v === '' ? null : v; }
+  function sortCol(type, get) { return { type: type, get: function (r) { return r ? get(r) : null; } }; }
+  /* 时间 = 行的时间戳 (毫秒); 同一秒里的几行再按服务端的新→旧次序区分 (每一行在 rows 里的序号 × 0.001 ms), 这样升序 = 真的从旧到新 */
+  function timeCol(k) {
+    return sortCol('num', function (r) {
+      var d = fmt.toDate(r.ts), p = T[k].pos && T[k].pos.get(r);
+      return d ? d.getTime() - (p || 0) * 0.001 : null;
+    });
+  }
+  var SORT_COLS = {
+    ops: {
+      time: timeCol('ops'),
+      who: sortCol('text', function (r) { var who = str(r.who), wk = 'logs.who.' + who; return who ? (I.has(wk) ? t(wk) : who) : null; }),      // 用显示出来的文字排 (和列表里看到的一致)
+      action: sortCol('text', function (r) { return nz(actText(str(r.action))); }),
+      detail: sortCol('text', function (r) { return nz(str(r.detail)); }),
+      result: sortCol('text', function (r) { return nz(str(r.result)); })
+    },
+    access: {
+      time: timeCol('access'),
+      site: sortCol('text', function (r) { return nz(str(r.host)); }),
+      app: sortCol('text', function (r) { return nz(str(r.app)); }),
+      route: sortCol('text', function (r) { return nz(str(r.route)); }),
+      node: sortCol('text', function (r) { return nz(nodeText(r)); })
+    },
+    proxy: {
+      time: timeCol('proxy'),
+      level: sortCol('num', function (r) { var lv = str(r.level).toUpperCase(); return own(LV_RANK, lv) ? LV_RANK[lv] : null; }),
+      msg: sortCol('text', function (r) { return nz(str(r.msg)); })
+    }
+  };
+
   /* 这一页的行: 数据整体替换 (gen 变了) / 语言变了 / 换了标签才重建 (最多一页, 几十行) */
   function syncRows(k) {
-    var tb = T[k], b = el.list._b, frag, i, li;
-    if (b && b.k === k && b.gen === tb.gen && b.lang === I.lang) return;
+    var tb = T[k], b = el.list._b, st = SO[k].state(), ss = st ? st.key + ':' + st.dir : '', frag, i, li;
+    if (b && b.k === k && b.gen === tb.gen && b.lang === I.lang && b.sort === ss) return;
     TP.clear(el.list);
-    el.list._b = { k: k, gen: tb.gen, lang: I.lang };
+    el.list._b = { k: k, gen: tb.gen, lang: I.lang, sort: ss };
+    if (st) {                                                                                  // 列头排序: 只重排这一页 (没选排序时 view = rows = 新→旧)
+      tb.pos = new Map(); tb.rows.forEach(function (r, n) { if (r) tb.pos.set(r, n); });
+      tb.view = SO[k].apply(tb.rows);
+    } else { tb.pos = null; tb.view = tb.rows; }
     frag = document.createDocumentFragment();
-    for (i = 0; i < tb.rows.length; i++) {
-      try { li = ROW[k](tb.rows[i] || {}); li._i = i; frag.appendChild(li); } catch (e) { console.error('[logs] bad row', e); }
+    for (i = 0; i < tb.view.length; i++) {
+      try { li = ROW[k](tb.view[i] || {}); li._i = i; frag.appendChild(li); } catch (e) { console.error('[logs] bad row', e); }
     }
     el.list.appendChild(frag);
   }
@@ -182,7 +221,11 @@
     var sig = k + '|' + I.lang;
     if (el.head._sig === sig) return;
     el.head._sig = sig; TP.clear(el.head); el.head.className = 'log-head log-' + k;
-    COLS[k].forEach(function (c) { el.head.appendChild(h('span', { class: 'log-c ' + c[0] }, t(c[1]))); });
+    COLS[k].forEach(function (c) {
+      var cell = h('span', { class: 'log-c ' + c[0] });
+      SO[k].attach(cell, c[2], function () { return t(c[1]); });                               // 列头 = 排序按钮 (升序 → 降序 → 恢复新→旧)
+      el.head.appendChild(cell);
+    });
   }
 
   /* ================= 日志详情弹窗 ================= */
@@ -272,7 +315,7 @@
     return f;
   }
   function openRow(k, i) {
-    var rows = T[k].rows.slice(), idx = i, api, f = {}, body;
+    var rows = T[k].view.slice(), idx = i, api, f = {}, body;                              // 按列表里显示的顺序 (排序后) 翻页
     if (!rows.length || !rows[idx]) return;
     f.prev = ui.ibtn('chevron-left', L('logs.dt.prev')); f.next = ui.ibtn('chevron-right', L('logs.dt.next'));
     f.prev.addEventListener('click', function () { if (f.prev._un) ui.unavailable(f.prev); else step(-1); });
@@ -665,12 +708,13 @@
     ui.act(el.newerBtn, function () { setPage(cur, 1); return load(cur); });
     el.sum = h('div', { class: 'muted sm log-sum', hidden: true }, el.sumTxt, el.newerBtn);
     el.sumx = h('div', { class: 'log-sumx muted sm', hidden: true });
-    el.head = h('div', { class: 'log-head', 'aria-hidden': 'true', hidden: true });
+    el.head = h('div', { class: 'log-head', hidden: true });                                   // 列头里有排序按钮, 不能 aria-hidden
     el.list = h('ul', { class: 'log-list', 'aria-label': L('logs.list.aria'), hidden: true });
     el.empty = ui.emptyBox();
     el.capNote = h('p', { class: 'muted sm log-cap', hidden: true });
     el.pgBox = h('div', { class: 'log-pg' });
     TYPES.forEach(function (k) {
+      SO[k] = ui.sorter('logs.' + k, SORT_COLS[k], { onChange: function () { render(); } });     // 只重排已读到的这一页, 不换页 (服务端分页)
       PG[k] = ui.pager('logs.' + k, { sizes: [20, 50, 100], def: 50 });
       lastSize[k] = PG[k].size();
       PG[k].wrap = h('div', { class: 'log-pgw', hidden: true }, PG[k].el);
@@ -712,6 +756,13 @@
     });
   };
 
+  /* 从别的页面跳到「日志」并搜索 (应用详情的「查看访问记录」): 先设好标签和搜索词, 再切到日志页 (V.show 会按这个搜索读数据) */
+  LG.search = function (type, q) {
+    if (!el.q || TYPES.indexOf(type) < 0) { TP.go('logs'); return; }
+    pickTab(type, true);
+    T[type].q = String(q || '').trim(); el.q.value = T[type].q; setPage(type, 1);
+    TP.go('logs');
+  };
   V.show = function () {
     loadPrefs();
     render();

@@ -44,27 +44,45 @@
 .apps-md .sel{min-width:0;max-width:100%}
 .apps-tg{border-left-width:4px;border-left-color:var(--pin)}
 
-/* ===== 表格列头 (软件名 / 路径 / 状态 / 模式 / 操作) =====
- * 列表盒子够宽 (≥ 760px, 用容器查询, 和侧栏是否展开无关) 时变成表格: 每行 = 图标+名称 | 路径 | 状态 | 模式 | 操作, 列头吸顶。
- * 窄的时候 (以及不支持容器查询的浏览器) 保持原来的堆叠样式: 路径在名称下面, 控件在右侧 / 下方, 不显示列头。 */
+/* ===== 表格列头 (软件名 / 路径 / 安装·识别时间 / 今日流量 / 状态 / 模式 / 操作) =====
+ * 列表盒子够宽 (用容器查询, 和侧栏是否展开无关) 时变成表格: 每行 = 图标+名称 | 路径 | 安装 / 识别时间 | 今日流量 | 状态 | 模式 | 操作, 列头吸顶, 列头可以点击排序 (ui.sorter)。
+ *   ≥ 1060px: 全部 7 列;  900–1059px: 路径列收起 (鼠标移到名称上看路径, 详情里也有);  < 900px (以及不支持容器查询的浏览器): 堆叠样式 —— 路径 / 时间 / 今日流量在名称下面, 控件在右侧 / 下方, 不显示列头 (用工具栏的排序下拉)。 */
 .apps-colh{display:none}
 .apps-st,.apps-act{display:inline-flex;align-items:center;gap:8px}
+.apps-act{flex-wrap:wrap;justify-content:flex-end}
 .apps-stt{display:none}
+.apps-tm,.apps-tr{display:inline-block;margin:2px 14px 0 0;font-size:var(--fs-12);color:var(--muted)}
+.apps-tm-k{margin-left:6px}
+.apps-tr-k{margin-right:4px}
+.apps-tr-v{font-weight:650;color:var(--text)}
+.apps-tr.is-zero .apps-tr-v{font-weight:400;color:var(--muted)}
 .apps-box{overflow:clip}                                          /* 不产生滚动容器, 列头的 sticky 才有效; 旧浏览器退回上面的 hidden */
+.apps-sortbox{display:inline-flex;align-items:center;gap:2px}
+.apps-sortdir[data-dir=desc] svg{transform:rotate(180deg)}
 @supports (container-type:inline-size){
   .apps-box{container-type:inline-size}
 }
-@container (min-width:760px){
-  .apps-colh,.apps-row{grid-template-columns:var(--ic,40px) minmax(170px,1.6fr) minmax(0,1.2fr) 112px 160px 96px;column-gap:12px}
+@container (min-width:900px){
+  .apps-colh,.apps-row{grid-template-columns:var(--ic,40px) minmax(140px,1.4fr) 108px 84px 92px 140px minmax(128px,auto);column-gap:12px}
   .apps-colh{display:grid;position:sticky;top:0;z-index:2;align-items:center;padding:7px 14px;font-size:var(--fs-12-5);font-weight:650;color:var(--muted);background:var(--surface2);border-bottom:1px solid var(--line)}
   .apps-colh>:first-child{grid-column:1/3}
+  .apps-colh .h-path{display:none}
+  .apps-colh .h-act{justify-self:end}
   .apps-main,.apps-c{display:contents}
-  .apps-p{font-family:var(--mono);font-size:var(--fs-11-5)}
-  .apps-p[hidden]{display:block}                                   /* 没有路径也要占住这一列, 后面的列才不会错位 */
+  .apps-p,.apps-p[hidden]{display:none}
+  .apps-tm,.apps-tr{display:flex;flex-direction:column;align-items:flex-start;gap:1px;margin:0}
+  .apps-tr{align-items:flex-start}
+  .apps-tr-k{display:none}
   .apps-stt{display:inline;font-size:var(--fs-12-5);color:var(--muted);white-space:nowrap}
   .apps-row:not(.is-off) .apps-stt{color:var(--ok)}
   .apps-md{flex-direction:column;align-items:stretch;flex-wrap:nowrap;gap:4px}
   .apps-md .sel{width:100%}
+  .apps-box .th-sort{padding:3px 6px}
+}
+@container (min-width:1060px){
+  .apps-colh,.apps-row{grid-template-columns:var(--ic,40px) minmax(150px,1.3fr) minmax(0,1.2fr) 108px 84px 92px 140px minmax(128px,auto)}
+  .apps-colh .h-path{display:block}
+  .apps-p,.apps-p[hidden]{display:block;font-family:var(--mono);font-size:var(--fs-11-5)}      /* 没有路径也要占住这一列, 后面的列才不会错位 */
 }
 
 /* ===== 添加自定义软件 (弹窗) ===== */
