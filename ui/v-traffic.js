@@ -4,7 +4,8 @@
  *   total:{up,down}, routes:{direct|pin|auto:{up,down}}, series:[{t,up,down,direct,pin,auto}] (旧→新), nodes:[{tag,up,down}] (按总量降序)}
  * 页面: 范围标签 (今日 / 3 天 / 7 天 / 1 个月 / 3 个月) · 合计卡片 · 堆叠柱状图 (纯 CSS 柱子, 没有图表库; 按线路 / 按上传·下载)
  *       + 选中柱子的详情面板 · 线路占比 · 常用节点表 (分页, ui.pager('traffic.nodes', {def: 10})) · 两条说明。每 60 秒自动刷新 (只在本页可见时), 也可手动刷新。
- * 偏好 (TP.prefs): traffic.range (统计范围) · traffic.view (柱子的分法: route / dir); 常用节点表的每页条数 / 页码由 ui.pager 记在 table.traffic.nodes.*。
+ * 常用节点表的列头可以点击排序 (ui.sorter 'traffic.nodes': 节点 / 下载 / 上传 / 合计 / 占比; 排的是整张表, 先排序再分页; 排名列始终是按合计排的名次, 不随排序变); 没点列头时保持按合计降序。
+ * 偏好 (TP.prefs): traffic.range (统计范围) · traffic.view (柱子的分法: route / dir) · sort.traffic.nodes (节点表的列头排序, ui.sorter); 常用节点表的每页条数 / 页码由 ui.pager 记在 table.traffic.nodes.*。
  * 约定:
  *   - 来自接口的字符串 (节点名) 只用 textContent / h() 渲染。
  *   - 每根柱子的数值同时出现在 悬停 / 键盘焦点提示、选中柱子的详情面板、柱子的 aria-label、一张看不见的数据表 (.sr) 里 —— 不靠悬停。
@@ -22,7 +23,7 @@
   var UNITS = ['B', 'KB', 'MB', 'GB', 'TB'], YMD = /^\d{4}-\d{2}-\d{2}$/;
   var STEPS_H = [1, 2, 3, 4, 6, 8, 12], STEPS_D = [1, 2, 3, 4, 5, 7, 10, 14, 15, 30];     // x 轴标签的间隔 (小时必须能整除 24)
 
-  var el = {}, built = false, tabs = null, seg = null, pg = null, pgTotal = -1;
+  var el = {}, built = false, tabs = null, seg = null, pg = null, pgTotal = -1, so = null;       // so: 常用节点表的列头排序 (ui.sorter)
   var cur = { range: rangeOf(TP.prefs.get(PK.range, 'today')), mode: viewOf(TP.prefs.get(PK.view, 'route')) };
   var view = { data: null, m: null, range: '', err: null, at: 0 };         // 最近一次成功的响应 (m = 整理后的模型) / 它对应的范围 / 最近一次失败
   var sel = { key: '', user: false };                                     // 选中的柱子 (user=false: 自动选最新有数据的那根)
@@ -101,6 +102,7 @@
     ROUTES.forEach(function (rk) { x = (r.routes && r.routes[rk]) || {}; routes[rk] = { up: n0(x.up), down: n0(x.down) }; routes[rk].total = routes[rk].up + routes[rk].down; });
     nodes = (Array.isArray(r.nodes) ? r.nodes : []).filter(function (n) { return n && n.tag != null; }).map(function (n) { var up = n0(n.up), down = n0(n.down); return { tag: String(n.tag), up: up, down: down, total: up + down }; })
       .filter(function (n) { return n.total > 0; }).sort(function (a, b) { return b.total - a.total; });
+    nodes.forEach(function (n, i) { n.rank = i + 1; });                     // 名次 (按合计降序); 表格按别的列排序时「排名」列仍然显示它
     for (i = 0; i < buckets.length; i++) { if (buckets[i].top > max) max = buckets[i].top; if (!peak || buckets[i].total > peak.total) peak = buckets[i]; }
     var covered = hour ? 1 : buckets.filter(function (b) { return !b.pre; }).length, gaps = hour ? 0 : buckets.filter(function (b) { return b.gap; }).length;
     var m = {
@@ -403,14 +405,14 @@
 
   /* ---- 常用节点 (分页) ---- */
   function renderNodes(m) {
-    var all = m.nodes, has = !!(S.state && S.state.servers), map = Object.create(null), pr = pageOf(all.length), list = all.slice(pr.start, pr.end), sig;
+    var all = so.apply(m.nodes), has = !!(S.state && S.state.servers), map = Object.create(null), pr = pageOf(all.length), list = all.slice(pr.start, pr.end), sig;     // 没点列头: 原顺序 (按合计降序); 点了: 整张表先排序再分页
     TP.servers().forEach(function (s) { map[s.tag] = s; });
     el.nodesNone.hidden = all.length > 0; el.tblWrap.hidden = !all.length;
-    sig = m.range + '|' + pr.start + '|' + list.map(function (n) { return n.tag + ',' + n.up + ',' + n.down + ',' + (map[n.tag] ? map[n.tag].role : has ? '-' : '?'); }).join(';');
+    sig = m.range + '|' + pr.start + '|' + list.map(function (n) { return n.rank + ',' + n.tag + ',' + n.up + ',' + n.down + ',' + (map[n.tag] ? map[n.tag].role : has ? '-' : '?'); }).join(';');
     ui.memo(el.tbody, sig, function () {
       var f = document.createDocumentFragment();
       list.forEach(function (n, i) {
-        var sv = map[n.tag], share = m.nodesSum ? n.total / m.nodesSum : 0, bar = h('i'), chip = null, no = pr.start + i + 1;
+        var sv = map[n.tag], share = m.nodesSum ? n.total / m.nodesSum : 0, bar = h('i'), chip = null, no = n.rank;
         if (sv) chip = h('span', { class: 'badge ' + (sv.role === 'pin' ? 'pin' : sv.role === 'auto' ? 'auto' : '') }, TP.name.role(sv.role));
         else if (has) chip = h('span', { class: 'badge', title: t('traffic.nodes.goneTip') }, t('traffic.nodes.gone'));
         bar.style.width = (share * 100) + '%';
@@ -445,6 +447,11 @@
   V.init = function (root) {
     pg = ui.pager('traffic.nodes', { def: 10 });                                                   // i18n-ignore (表格 id)
     pg.onChange(function () { render(); toTop(el.nodesCard); });
+    so = ui.sorter('traffic.nodes', {                                                              // i18n-ignore (表格 id)
+      node: { get: function (n) { return n.tag; } },
+      down: { type: 'num', get: function (n) { return n.down; } }, up: { type: 'num', get: function (n) { return n.up; } },
+      total: { type: 'num', get: function (n) { return n.total; } }, share: { type: 'num', get: function (n) { return n.total; } }      // 占比 = 合计 / 总数, 排序和合计一致
+    }, { onChange: function () { if (pg.page() !== 1) pg.setPage(1); else render(); } });            // 排序变了: 回到第 1 页 (setPage 会重画)
     tabs = ui.tabs(L('traffic.range.aria'), RANGES.map(function (r) { return { id: r, label: L('traffic.range.' + r) }; }), pickRange);
     tabs.set(cur.range);
     el.refresh = ui.btn(L('common.refresh'), { icon: 'refresh' }); ui.act(el.refresh, function () { return load('manual'); });
@@ -501,8 +508,9 @@
     el.tbody = h('tbody');
     el.nodesNone = h('p', { class: 'muted trf-none', hidden: true }, L('traffic.nodes.none'));
     el.tblWrap = h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl rt trf-tbl' },
-      h('thead', null, h('tr', null, h('th', { scope: 'col', class: 'trf-rkc num' }, L('traffic.col.rank')), h('th', { scope: 'col' }, L('traffic.col.node')), h('th', { scope: 'col', class: 'num' }, L('traffic.card.down')),
-        h('th', { scope: 'col', class: 'num' }, L('traffic.card.up')), h('th', { scope: 'col', class: 'num' }, L('traffic.card.total')), h('th', { scope: 'col' }, L('traffic.col.share')))), el.tbody));
+      h('thead', null, h('tr', null, h('th', { scope: 'col', class: 'trf-rkc num' }, L('traffic.col.rank')), so.th('node', function () { return t('traffic.col.node'); }),
+        so.th('down', function () { return t('traffic.card.down'); }, { class: 'num' }), so.th('up', function () { return t('traffic.card.up'); }, { class: 'num' }),
+        so.th('total', function () { return t('traffic.card.total'); }, { class: 'num' }), so.th('share', function () { return t('traffic.col.share'); }))), el.tbody));
     el.nodesCard = h('section', { class: 'card flush trf-card', 'aria-labelledby': 'trf-h-nodes' },
       h('div', { class: 'trf-hd' }, h('div', { class: 'trf-hd-t' }, h('h3', { id: 'trf-h-nodes' }, L('traffic.nodes.title')), ui.help(HT.nodes), h('span', { class: 'muted sm' }, L('traffic.nodes.sub')))), el.tblWrap, el.nodesNone, pg.el);
 

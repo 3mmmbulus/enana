@@ -48,7 +48,7 @@
 /* ===== 窄一点的窗口 (内容区放不下 5 列): 每行变成两行的网格; 手机上再变成卡片 ===== */
 @media (max-width:1260px){
   .rl-tbl thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
-  .rl-tbl thead .help-i{visibility:hidden}                       /* 表头被藏起来了: 里面的「!」不能留在键盘焦点里 (这个说明在「添加规则集链接」里也能打开) */
+  .rl-tbl thead .help-i,.rl-tbl thead .th-sort{visibility:hidden}   /* 表头被藏起来了: 里面的「!」和排序按钮不能留在键盘焦点里 (这个说明在「添加规则集链接」里也能打开) */
   .rl-tbl,.rl-tbl tbody{display:block}
   .rl-tbl tbody tr{display:grid;grid-template-columns:44px minmax(0,1fr) minmax(0,230px) 44px;grid-template-areas:"sw name st act" "sw tag src act";gap:4px 14px;padding:11px 14px;border-top:1px solid var(--line)}
   .rl-tbl tbody tr:first-child{border-top:0}

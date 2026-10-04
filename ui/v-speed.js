@@ -8,6 +8,8 @@
  * D) 管理测速目标 (弹窗): GET /api/speedtest/targets 的全部目标按分组列出 (内置 / 已修改 / 自定义 / 已隐藏), 搜索 + 筛选 + 分页 (ui.pager),
  *    添加 / 编辑 (内置的保存为覆盖) / 隐藏 (内置) 或删除 (自定义) / 恢复 / 全部还原: POST /api/speedtest/targets[/delete|/restore|/reset] (都不是任务)。
  *    每次改动后重新读取 plan, 页面上的选择器和已保存的选择随之更新; 测速进行中这些按钮「暂不可用」并说明原因。
+ * 表头排序 (ui.sorter, 记在 prefs sort.speed.nodes / sort.speed.matrix / sort.speed.route): 节点表 (名称 / 角色 / 类型 / 延迟), 结果矩阵 (站点名, 以及每条线路的延迟 —— 在每个分组内排序, 分组本身不动),
+ *    线路详情表 (站点 / 结果 / 延迟 / 连接 / 首字节 / HTTP / 错误; 排的是整张表, 之后才分页)。没有选排序时都保持原来的顺序。
  * 约定: 来自接口的字符串 (IP / 节点名 / 网站名 / 网址 / 说明) 一律经 h() 当文本渲染, 绝不拼 HTML; 控件暂时不能用时用 ui.avail + toast 说明原因, 不用 disabled。 */
 (function () {
   'use strict';
@@ -28,8 +30,9 @@
   };
   var KNOWN_ERR = { timeout: 1, dns: 1, reset: 1, refused: 1, tls: 1, error: 1 };   // 单元格 err / IP 查询 reason 里有译文的代码
   var PHASES = { ip: 1, direct: 1, nodes: 1, speed: 1 };
-  var ROLES = { pin: 1, auto: 1 }, nodeQ = '';
+  var ROLES = { pin: 1, auto: 1 }, ROLE_RANK = { pin: 0, auto: 1 }, nodeQ = '';
   var CELL_ST = { ok: 1, slow: 1, limited: 1, fail: 1, skip: 1, pending: 1 };       // 不认识的状态都按「还没测到」显示
+  var CELL_RANK = { ok: 0, slow: 1, limited: 2, fail: 3, pending: 4, skip: 5 };      // 「结果」列的排序: 好的在前
   var ST_BADGE = { ok: ['ok', 'success'], slow: ['warn', 'clock'], limited: ['warn', 'warning'], fail: ['bad', 'error'], pending: ['neutral', 'clock'], skip: ['neutral', 'minus'] };   // 状态 -> [徽标颜色, 图标]
   var FLT = ['all', 'builtin', 'custom', 'modified', 'hidden'];                      // 管理弹窗的筛选
 
@@ -41,7 +44,9 @@
   var last = { st: 'idle', res: null, err: null, busy: false };                                  // GET /api/speedtest/last
   var run = { id: '', res: null, stopping: false, stopAt: 0, fails: 0 };                         // 正在跟踪的测速
   var poll = { timer: 0, busy: false };
-  var mx = { sig: '', cells: Object.create(null), heads: Object.create(null) };                  // 结果矩阵的节点索引
+  var mx = { sig: '', cells: Object.create(null), heads: Object.create(null), groups: [], data: Object.create(null) };       // 结果矩阵的节点索引 (groups: 每个分组的 tbody / 行, 排序时只挪动行; data: 当前的单元格)
+  var soN = null, soM = null, soR = null;                                                        // 表头排序: 节点表 / 结果矩阵 / 线路详情表
+  var mxCols = { site: { get: function (x) { return String(x.name || x.id); } } };               // 矩阵的排序列: 站点名 + 每条线路一列 ('r-<id>', 每次重建矩阵时重新生成; 同一个对象交给 ui.sorter)
   var tg = { st: 'idle', list: [], err: null, warn: null, busy: false, seq: 0 };                 // GET /api/speedtest/targets (管理弹窗)
   var mg = null;                                                                                 // 管理弹窗打开时的状态 {api, q, flt, el}
   var detail = null;                                                                             // 打开着的 单元格 / 线路 详情弹窗: {update(), page()}
@@ -362,11 +367,19 @@
     el.nodeAllCb = h('input', { type: 'checkbox', 'aria-label': L('speed.nodes.allAria') });
     el.nodeAllCb.addEventListener('change', TP.safe(function () { setNodes(el.nodeAllCb.checked ? 'all' : 'none'); }));
     el.nodeBody = h('tbody');
+    soN = ui.sorter('speed.nodes', {                                                                // i18n-ignore (排序偏好的 id)
+      name: { get: function (n) { return n.tag; } },
+      role: { type: 'num', get: function (n) { return own(ROLES, n.role) ? ROLE_RANK[n.role] : null; } },
+      type: { get: function (n) { var sv = S.svMap && S.svMap[n.tag]; return sv && sv.type ? String(sv.type) : null; } },
+      delay: { type: 'num', get: function (n) { return +n.delay > 0 ? +n.delay : null; } }
+    }, { onChange: function () { renderTest(); } });
     el.nodeQ = h('input', { class: 'inp sm spd-nq', type: 'search', placeholder: L('speed.nodes.search'), 'aria-label': L('speed.nodes.search'), autocomplete: 'off', hidden: true, on: { input: function () { nodeQ = el.nodeQ.value.trim().toLowerCase(); renderTest(); } } });
     el.nodeEmpty = h('p', { class: 'muted sm spd-nempty', hidden: true }, L('speed.nodes.empty'));
     el.nodeList = h('div', { class: 'spd-nodes', role: 'group', 'aria-label': L('speed.nodes.aria') }, el.nodeQ,
       h('div', { class: 'spd-ntw' }, h('table', { class: 'tbl spd-ntbl' },
-        h('thead', null, h('tr', null, h('th', { class: 'c-ck' }, el.nodeAllCb), h('th', null, L('speed.nodes.col.name')), h('th', null, L('speed.nodes.col.role')), h('th', { class: 'spd-ntype' }, L('speed.nodes.col.type')), h('th', { class: 'num' }, L('speed.nodes.col.delay')))),
+        h('thead', null, h('tr', null, h('th', { class: 'c-ck' }, el.nodeAllCb),
+          soN.th('name', function () { return t('speed.nodes.col.name'); }), soN.th('role', function () { return t('speed.nodes.col.role'); }),
+          soN.th('type', function () { return t('speed.nodes.col.type'); }, { class: 'spd-ntype' }), soN.th('delay', function () { return t('speed.nodes.col.delay'); }, { class: 'num' }))),
         el.nodeBody)), el.nodeEmpty);
     el.nodeNote = h('div', { class: 'spd-note' });
     el.form = h('div', { class: 'spd-form' },
@@ -529,7 +542,9 @@
     tr.title = d ? t('speed.nodes.delayTip', { ms: ms(d) }) : t('speed.nodes.noDelay');
   }
   /* 节点「全选 / 全不选」: 一次最多测 MAX_NODES 个, 节点更多时只选前 MAX_NODES 个并说明 */
-  function nodesBulk() { return arr(plan.data && plan.data.nodes).filter(function (n) { return n && (!nodeQ || String(n.tag).toLowerCase().indexOf(nodeQ) >= 0); }).map(function (n) { return n.tag; }).slice(0, MAX_NODES); }
+  /* 排了序时「选前 N 个」按表里看到的顺序选 (例如按延迟升序 = 选最快的) */
+  function nodesBulk() { return sortNodes(arr(plan.data && plan.data.nodes).filter(function (n) { return n && (!nodeQ || String(n.tag).toLowerCase().indexOf(nodeQ) >= 0); })).map(function (n) { return n.tag; }).slice(0, MAX_NODES); }
+  function sortNodes(list) { return soN ? soN.apply(list) : list; }
   function nodesBulkSelected() { var tags = nodesBulk(); return tags.length > 0 && tags.every(function (tag) { return sel.nodes.indexOf(tag) >= 0; }); }
   function setNodes(how) {
     var tags = nodesBulk();
@@ -639,7 +654,7 @@
     el.nodeAll.setAttribute('aria-label', t('speed.nodes.allAria')); el.nodeNone.setAttribute('aria-label', t('speed.nodes.noneAria'));
     setText(el.nodeCount, showChips ? t('speed.nodes.count', { n: sel.nodes.length, max: MAX_NODES }) : '');
     if (showChips) {
-      var all = arr(p.nodes).filter(Boolean), shown = nodeQ ? all.filter(function (n) { return String(n.tag).toLowerCase().indexOf(nodeQ) >= 0; }) : all, nsel = shown.filter(function (n) { return sel.nodes.indexOf(n.tag) >= 0; }).length;
+      var all = arr(p.nodes).filter(Boolean), shown = sortNodes(nodeQ ? all.filter(function (n) { return String(n.tag).toLowerCase().indexOf(nodeQ) >= 0; }) : all), nsel = shown.filter(function (n) { return sel.nodes.indexOf(n.tag) >= 0; }).length;
       el.nodeQ.hidden = all.length <= 8; el.nodeEmpty.hidden = shown.length > 0;
       ui.syncList(el.nodeBody, shown, function (n) { return n.tag; }, makeNode, updateNode);
       el.nodeAllCb.checked = nodesBulkSelected(); el.nodeAllCb.indeterminate = nsel > 0 && nsel < shown.length;
@@ -832,6 +847,7 @@
     el.resStrip = h('div', { class: 'spd-strip' });
     el.resEmpty = ui.emptyBox();
     el.mxHint = h('p', { class: 'hint', hidden: true });
+    soM = ui.sorter('speed.matrix', mxCols, { onChange: function () { var r = viewRes(); if (r) renderMatrix(r); } });   // i18n-ignore (排序偏好的 id)
     el.mxScroll = h('div', { class: 'spd-scroll', tabindex: '0', role: 'region', 'aria-label': L('speed.mx.region'), hidden: true });
     el.legend = h('div', { class: 'spd-legend', hidden: true },
       legendItem('ok', 'speed.legend.ok'), legendItem('slow', 'speed.legend.slow'), legendItem('limited', 'speed.legend.limited'),
@@ -908,22 +924,26 @@
     updateMatrix(r, routes, targets);
   }
   function buildMatrix(routes, targets) {
-    var head = h('tr', null, h('th', { class: 'spd-c1', scope: 'col' }, t('speed.mx.site'))), table;
-    mx.cells = Object.create(null); mx.heads = Object.create(null);
+    var head = h('tr', null, soM.attach(h('th', { class: 'spd-c1', scope: 'col' }), 'site', function () { return t('speed.mx.site'); })), table;
+    mx.cells = Object.create(null); mx.heads = Object.create(null); mx.groups = [];
+    Object.keys(mxCols).forEach(function (k) { if (k !== 'site') delete mxCols[k]; });                 // 排序列: 站点名 + 现在这批线路的延迟
     routes.forEach(function (r) {
-      var hd = { th: h('th', { class: 'spd-rh', scope: 'col' }), best: h('span', { class: 'spd-best', hidden: true }, ui.icon('success', 12), t('speed.best')), avg: h('span'), ok: h('span') };
+      var key = routeKey(r.id), hd = { key: key, th: h('th', { class: 'spd-rh', scope: 'col' }), best: h('span', { class: 'spd-best', hidden: true }, ui.icon('success', 12), t('speed.best')), avg: h('span'), ok: h('span') };
       var more = ui.btn(t('speed.dt.open'), { sm: true, kind: 'ghost', icon: 'list-checks', aria: t('speed.dt.openAria', { name: routeLabel(r) }), cls: 'spd-rmore' });
       more.addEventListener('click', TP.safe(function () { openRoute(r.id); }));
-      hd.th.appendChild(h('div', { class: 'spd-rt' }, h('span', { class: 'spd-rn' }, routeLabel(r)), roleBadge(r), hd.best));
+      mxCols[key] = { type: 'num', get: function (x) { return cellMs(mx.data[x.id + SEP + r.id]); } };
+      hd.th.appendChild(h('div', { class: 'spd-rt' }, soM.attach(h('span', { class: 'spd-rn' }), key, function () { return routeLabel(r); }), roleBadge(r), hd.best));
       hd.th.appendChild(h('div', { class: 'spd-rs muted' }, hd.avg, hd.ok));
       hd.th.appendChild(more);
       mx.heads[r.id] = hd; head.appendChild(hd.th);
     });
     table = h('table', { class: 'spd-mx' }, h('caption', { class: 'spd-sr' }, t('speed.mx.caption')), h('thead', null, head));
     groupedTargets(targets).forEach(function (g) {
-      var tb = h('tbody', null, h('tr', { class: 'spd-grp' }, h('th', { class: 'spd-c1', scope: 'rowgroup' }, groupName(g.id)), h('td', { colspan: routes.length })));
+      var tb = h('tbody', null, h('tr', { class: 'spd-grp' }, h('th', { class: 'spd-c1', scope: 'rowgroup' }, groupName(g.id)), h('td', { colspan: routes.length }))), gi = { items: g.items, tb: tb, grp: tb.firstChild, rows: Object.create(null), order: '' };
+      mx.groups.push(gi);
       g.items.forEach(function (tgt) {
         var tr = h('tr', null, h('th', { class: 'spd-c1', scope: 'row' }, String(tgt.name || tgt.id)));
+        gi.rows[tgt.id] = tr;
         routes.forEach(function (r) {
           var td = h('td', { class: 'spd-cell s-pending' });
           mx.cells[tgt.id + SEP + r.id] = { td: td, tid: tgt.id, rid: r.id, site: String(tgt.name || tgt.id), route: routeLabel(r), sig: '' };
@@ -938,9 +958,12 @@
   function updateMatrix(r, routes, targets) {
     var map = Object.create(null), best = bestOf(r, routes);
     arr(r.cells).forEach(function (c) { if (c) map[c.t + SEP + c.r] = c; });
+    mx.data = map;
+    var so = soM.state();
     routes.forEach(function (rt) {
       var hd = mx.heads[rt.id], s;
       if (!hd) return;
+      if (so && so.key === hd.key) hd.th.setAttribute('aria-sort', so.dir === 'asc' ? 'ascending' : 'descending'); else hd.th.removeAttribute('aria-sort');
       s = routeStats(r, rt.id);
       setText(hd.avg, s.avg > 0 ? t('speed.mx.avg', { ms: ms(s.avg) }) : DASH);
       setText(hd.ok, s.total > 0 ? t('speed.mx.okTotal', { ok: fmt.num(s.ok), total: fmt.num(s.total) }) : '');
@@ -954,7 +977,21 @@
         if (n.sig !== sig) { n.sig = sig; paintCell(n, c, isBest); }
       });
     });
+    sortMatrix();
   }
+  /* 排序: 每个分组内部按 站点名 / 某条线路的延迟 重新排行 (分组的先后不变); 行是同一批元素, 只挪动位置, 顺序没变就什么都不做。边测边出结果时也会跟着重排 */
+  function sortMatrix() {
+    mx.groups.forEach(function (g) {
+      var list = soM.apply(g.items), sig = list.map(function (x) { return x.id; }).join(SEP), ref;
+      if (sig === g.order) return;
+      g.order = sig; ref = g.grp.nextSibling;
+      list.forEach(function (x) { var tr = g.rows[x.id]; if (tr === ref) ref = ref.nextSibling; else g.tb.insertBefore(tr, ref); });
+    });
+  }
+  /* 排序列的键只能用字母 数字 _ - (偏好里存的是 键:方向), 线路 id 里别的字符转义掉 */
+  function routeKey(id) { return 'r-' + String(id).replace(/[^A-Za-z0-9_]/g, function (c) { return '-' + c.charCodeAt(0).toString(36) + '-'; }); }
+  /* 排序用的延迟: 只有显示出毫秒数的格子 (正常 / 较慢) 才有; 失败 / 受限 / 还没测到的排在最后 */
+  function cellMs(c) { return c && (c.st === 'ok' || c.st === 'slow') && +c.ms > 0 ? +c.ms : null; }
   function cellState(c) { return c && own(CELL_ST, c.st) ? c.st : 'pending'; }
   /* 一个单元格: 有结果的 (正常 / 较慢 / 受限 / 失败) 是一个按钮, 点开 (或键盘回车) 看所有数字; 还没测到 / 不适用的只是文字。
    * 可见部分 aria-hidden 的单元格另带 .spd-sr 说明; 按钮用 aria-label 读出完整说明。 */
@@ -1079,12 +1116,28 @@
       chips.appendChild(b);
     });
     if (!pgR) { pgR = ui.pager('speed.route', { def: 10 }); pgR.onChange(function () { if (detail && detail.page) detail.page(); }); }   // i18n-ignore
+    if (!soR) {                                                    // 表头排序 (只创建一次, 换一条线路 / 重新打开弹窗仍是同一个排序); 值都用原始数字 / 状态, 不用显示出来的文字
+      soR = ui.sorter('speed.route', {                                                           // i18n-ignore (排序偏好的 id)
+        site: { get: function (x) { return String(x.tg.name || x.tg.id); } },
+        result: { type: 'num', get: function (x) { return own(CELL_RANK, x.st) ? CELL_RANK[x.st] : null; } },
+        latency: { type: 'num', get: function (x) { return +x.c.ms > 0 ? +x.c.ms : null; } },
+        connect: { type: 'num', get: function (x) { return +x.c.connect > 0 ? +x.c.connect : null; } },
+        ttfb: { type: 'num', get: function (x) { return +x.c.ttfb > 0 ? +x.c.ttfb : null; } },
+        http: { type: 'num', get: function (x) { return +x.c.http > 0 ? +x.c.http : null; } },
+        error: { get: function (x) { return x.c.err ? reasonText(x.c.err) : null; } }
+      }, { onChange: function () { if (pgR.page() !== 1) { pgR.setPage(1); return; } if (detail && detail.page) detail.page(); } });      // 换了排序: 回到第一页 (翻页会重画); 本来就在第一页就直接重画
+    }
     var box = h('div', { class: 'spd-dt' }, top, dls, note, chips, wrap, empty.el, pgR.el);
     function head() {
-      return h('tr', null, ['speed.dt.col.site', 'speed.dt.col.result', 'speed.dt.col.latency', 'speed.dt.col.connect', 'speed.dt.col.ttfb', 'speed.dt.col.http', 'speed.dt.col.error'].map(function (k, i) { return h('th', { class: i >= 2 && i <= 5 ? 'num' : '' }, t(k)); }));
+      return h('tr', null,
+        soR.th('site', function () { return t('speed.dt.col.site'); }), soR.th('result', function () { return t('speed.dt.col.result'); }),
+        soR.th('latency', function () { return t('speed.dt.col.latency'); }, { class: 'num' }), soR.th('connect', function () { return t('speed.dt.col.connect'); }, { class: 'num' }),
+        soR.th('ttfb', function () { return t('speed.dt.col.ttfb'); }, { class: 'num' }), soR.th('http', function () { return t('speed.dt.col.http'); }, { class: 'num' }),
+        soR.th('error', function () { return t('speed.dt.col.error'); }));
     }
     function draw(first) {
-      var r = viewRes(), rt, rows = [], issues, list, pg, cm = Object.create(null), skipped = 0, s, sp, tb;
+      var r = viewRes(), rt, rows = [], issues, list, pg, cm = Object.create(null), skipped = 0, s, sp, tb, ae = document.activeElement;
+      var fi = ae && ae.classList && ae.classList.contains('th-sort') && wrap.contains(ae) ? Array.prototype.indexOf.call(wrap.querySelectorAll('.th-sort'), ae) : -1;
       if (!r) { TP.clear(top); TP.clear(wrap); setText(note, t('speed.dt.gone')); pgR.update(0); return; }
       rt = byId(routesOf(r), rid) || { id: rid, name: rid };
       api.setTitle(t('speed.dt.routeTitle', { name: routeLabel(rt) }));
@@ -1094,7 +1147,7 @@
         if (st === 'skip') skipped++; else rows.push({ tg: x, c: c, st: st });
       });
       issues = rows.filter(function (x) { return x.st === 'slow' || x.st === 'limited' || x.st === 'fail'; });
-      list = f === 'issues' ? issues : rows;
+      list = soR.apply(f === 'issues' ? issues : rows);              // 先排序 (整张表) 再分页
       cb.all._n.textContent = String(rows.length); cb.issues._n.textContent = String(issues.length);
       cb.all.setAttribute('aria-pressed', f === 'all' ? 'true' : 'false'); cb.issues.setAttribute('aria-pressed', f === 'issues' ? 'true' : 'false');
       s = routeStats(r, rid);
@@ -1121,6 +1174,7 @@
       }));
       TP.clear(wrap);
       wrap.appendChild(h('table', { class: 'tbl rt spd-rtbl' }, h('caption', { class: 'spd-sr' }, t('speed.dt.routeCaption', { name: routeLabel(rt) })), h('thead', null, head()), tb));
+      if (fi >= 0) { var nb = wrap.querySelectorAll('.th-sort')[fi]; if (nb) nb.focus({ preventScroll: true }); }          // 整张表每次都重建 (测速时每秒一次): 键盘焦点留在刚点的表头上
       wrap.hidden = !list.length;
       if (!list.length) empty.show({ icon: f === 'issues' ? 'success' : 'info', text: t(f === 'issues' ? 'speed.dt.noIssues' : 'speed.dt.noRows') }); else empty.hide();
     }

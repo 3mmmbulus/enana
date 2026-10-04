@@ -67,6 +67,19 @@
   }
   function osName(p) { var o = (p && p.os) || {}; return String(o.pretty || [o.id, o.version].filter(Boolean).join(' ') || t('common.unknown')); }
   function missingOf(p) { return Array.isArray(p && p.missing) ? p.missing.map(String) : []; }
+  /* 探测结果里的「依赖」表: 列头可点击排序 (ui.sorter 'vps-deps', 所有这类表共用一个, 点了以后重排正在显示的那几张) */
+  var depsSo = null, depsTabs = [];
+  function depsSorter() {
+    if (!depsSo) depsSo = ui.sorter('vps-deps', {
+      name: { get: function (r) { return r.d.name; } },
+      state: { type: 'num', get: function (r) { return r.d.installed ? 1 : 0; } },                       // 升序: 缺失的在前
+      version: { get: function (r) { return r.d.installed && r.d.version ? r.d.version : null; } }       // 没装 / 没有版本号 (显示 —) 排最后
+    }, { onChange: function () {
+      depsTabs = depsTabs.filter(function (x) { if (x.tb.isConnected) x.seen = true; return !x.seen || x.tb.isConnected; });   // 已经从页面上拿掉的表不再管
+      depsTabs.forEach(function (x) { x.fill(); });
+    } });
+    return depsSo;
+  }
   /* 出口 IP: [{local, public, v}] (只算有公网地址的); 兼容字符串元素 */
   function ipsOf(p) {
     return (Array.isArray(p && p.ips) ? p.ips : []).map(function (x) {
@@ -605,16 +618,18 @@
       return box;
     }
     function packagesBlock(p) {
-      var deps = Array.isArray(p.deps) ? p.deps : [], miss = missingOf(p), box = h('div', null), tb = h('tbody');
+      var deps = Array.isArray(p.deps) ? p.deps : [], miss = missingOf(p), box = h('div', null), tb = h('tbody'), so = depsSorter();
       if (!deps.length) { box.appendChild(h('p', { class: 'muted sm' }, t('vps.deps.none'))); return box; }
-      deps.forEach(function (d) {
-        tb.appendChild(h('tr', null,
+      var rows = deps.map(function (d) {                          // 行只建一次; 排序只改变它们的顺序
+        return { d: d, tr: h('tr', null,
           h('td', { class: 'c-name vps-dn mono' }, String(d.name)),
           h('td', { 'data-l': t('vps.deps.state') }, d.installed ? ui.chip(t('vps.deps.ok'), 'ok', 'check') : ui.chip(t('vps.deps.missing'), 'warn', 'x')),
-          h('td', { class: 'mono sm', 'data-l': t('vps.deps.version') }, d.installed && d.version ? String(d.version) : '—')));
+          h('td', { class: 'mono sm', 'data-l': t('vps.deps.version') }, d.installed && d.version ? String(d.version) : '—')) };
       });
+      function fill() { so.apply(rows).forEach(function (r) { tb.appendChild(r.tr); }); }
+      depsTabs.push({ tb: tb, fill: fill, seen: false }); fill();
       box.appendChild(h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl rt vps-tbl' },
-        h('thead', null, h('tr', null, h('th', { scope: 'col' }, t('vps.deps.name')), h('th', { scope: 'col' }, t('vps.deps.state')), h('th', { scope: 'col' }, t('vps.deps.version')))), tb)));
+        h('thead', null, h('tr', null, so.th('name', function () { return t('vps.deps.name'); }), so.th('state', function () { return t('vps.deps.state'); }), so.th('version', function () { return t('vps.deps.version'); }))), tb)));
       box.appendChild(h('p', { class: 'hint' + (miss.length ? ' warn' : ' ok') }, miss.length ? t('vps.deps.missingN', { n: miss.length, list: miss.join(', ') }) : t('vps.deps.allOk')));
       return box;
     }
@@ -709,8 +724,20 @@
     var card = h('section', { class: 'card vps-card' }), empty = ui.emptyBox();
     var addBtn = ui.btn(L('vps.list.add'), { icon: 'plus', kind: 'primary', sm: true });
     var note = h('p', { class: 'hint warn', hidden: true }), list = h('tbody');
+    /* 列头可点击排序 (ui.sorter 'vps-list'; 先排序再分页, 没排序时保持服务器给的顺序); 「操作」列不排序 */
+    var so = ui.sorter('vps-list', {
+      name: { get: function (r) { return r.name || r.id; } },
+      addr: { get: function (r) { return r.host ? addrOf(r.host, r.ssh_port || 22) : null; } },
+      user: { get: function (r) { return r.user; } },
+      os: { get: function (r) { return r.os; } },
+      ips: { type: 'num', get: function (r) { return Array.isArray(r.ips) ? r.ips.length : 0; } },          // 芯片列: 按个数排
+      nodes: { type: 'num', get: function (r) { return Array.isArray(r.nodes) ? r.nodes.length : 0; } },
+      updated: { type: 'date', get: function (r) { return r.updated || null; } }                             // 秒级时间戳; 没有 (显示「从未」) 排最后
+    }, { onChange: function () { if (pg.page() !== 1) pg.setPage(1); else render(); } });                     // setPage 会触发分页的 onChange 重画
     var table = h('div', { class: 'tbl-wrap vps-table' }, h('table', { class: 'tbl' },
-      h('thead', null, h('tr', null, ['name', 'addr', 'user', 'os', 'ips', 'nodes', 'updated', 'actions'].map(function (k) { return h('th', { scope: 'col' }, L('vps.col.' + k)); }))), list));
+      h('thead', null, h('tr', null, ['name', 'addr', 'user', 'os', 'ips', 'nodes', 'updated', 'actions'].map(function (k) {
+        return k === 'actions' ? h('th', { scope: 'col' }, L('vps.col.' + k)) : so.th(k, function () { return t('vps.col.' + k); });
+      }))), list));
     function openWizard() { return TP.imp.open('vps-password'); }
     ui.act(addBtn, openWizard);
     var titleId = 'vps-card-t' + (++uid);
@@ -765,7 +792,7 @@
       table.hidden = !rows; note.hidden = !(rows && err);
       if (!note.hidden) setText(note, t('vps.list.stale'));
       var pr = pg.update(rows ? data.length : 0);
-      if (rows) { ui.syncList(list, data.slice(pr.start, pr.end), function (x) { return x.id; }, makeRow, updateRow); empty.hide(); return; }
+      if (rows) { ui.syncList(list, so.apply(data).slice(pr.start, pr.end), function (x) { return x.id; }, makeRow, updateRow); empty.hide(); return; }
       ui.syncList(list, [], function (x) { return x.id; }, makeRow, updateRow);
       if (!loaded && !err) empty.show({ icon: 'refresh', text: S.locked ? t('why.locked') : t('common.loading') });
       else if (!loaded) empty.show({ icon: why ? 'wifi-off' : 'warning', text: why || t('vps.list.loadFail'), hint: why ? '' : TP.errMsg(err), action: { label: t('common.retry'), icon: 'refresh', fn: load } });

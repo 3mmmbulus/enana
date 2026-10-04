@@ -164,6 +164,7 @@
     if (el.nav._sig !== sig) {
       el.nav._sig = sig; TP.clear(el.nav);
       navCtl = ui.tabs(L('sites.nav.aria'), items, function (id) { setNav(id); }, { vertical: !compact });
+      el.nav.appendChild(h('div', { class: 'sx-nav-t' }, L(tab === 'catalog' ? 'sites.nav.title' : 'sites.nav.titleRoute')));      // 二级导航的小标题: 这一列是「分类」(系统目录) / 「按出口筛选」(我添加的 / 自动识别)
       el.nav.appendChild(navCtl.el);
     }
     items.forEach(function (x) { navCtl.count(x.id, x.count); });

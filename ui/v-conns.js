@@ -4,7 +4,10 @@
  * 详情弹窗 (行内按钮 / 点整行): 一行里合并了多条连接时用 ‹ › 逐条查看; 弹窗打开期间每秒跟着 S.conns 更新 (只改变化的文字, 不重建 DOM, 选中的文字不会丢);
  *   连接消失后显示「已结束」并冻结数值, 「断开」按钮变成「不可用 + 原因」。
  * 分页: 实时数据只保持「页码」不变 (不会自己跳页); 分页条只在总数变化时重画, 鼠标 / 键盘正在分页条上时不重画 (否则会丢焦点)。
- * 偏好 (TP.prefs): conns.route (线路筛选) · conns.sort (排序); 表格每页条数 / 页码由 ui.pager 记在 table.conns.*。 */
+ * 列头排序 (ui.sorter 'conns'): 主机 / 应用 / 线路 / 服务 / 下载速度 / 累计下载 / 连接数 都能点列头排序 (升序 → 降序 → 恢复), 排的是整张表 (先排序再分页);
+ *   排序和上面的「行顺序」共用同一套稳定机制 (最多每 3 秒重排一次, 鼠标 / 焦点在表格里时不重排), 所以按「速度」这类每秒在变的列排序时行也不会乱跳。
+ *   列头排序生效时它优先于工具栏的排序下拉 (下拉显示同一列; 线路 / 服务在下拉里没有对应项, 临时显示列名); 在下拉里手选一项会取消列头排序。没点列头时一切照旧。
+ * 偏好 (TP.prefs): conns.route (线路筛选) · conns.sort (排序下拉) · sort.conns (列头排序, ui.sorter); 表格每页条数 / 页码由 ui.pager 记在 table.conns.*。 */
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, fmt = TP.fmt, setText = TP.setText, enc = TP.enc, I = window.I18N, t = I.t, L = I.L;
@@ -16,6 +19,9 @@
   var CLS_NAME = { pin: 'conns.cls.pin', auto: 'conns.cls.auto', direct: 'conns.cls.direct' };
   var CLS = ['', 'pin', 'auto', 'direct'];
   var col = null, colLang = '';
+  var so = null, soQuiet = false;                                          // 列头排序 (ui.sorter); soQuiet: 代码里取消列头排序时不要触发重画
+  var SEL_OF = { host: 'host', app: 'app', speed: 'speed', total: 'total', n: 'count' };       // 列头 -> 排序下拉里的同一项
+  var COL_NAME = { route: 'conns.col.route', svc: 'conns.col.svc' };                          // 下拉里没有的列: 临时显示列名
 
   function active() { return TP.tab === 'conns'; }
   function clsText(g) { return g.cls === 'direct' ? t('name.policy.direct') : TP.name.route(g.cls) + ' · ' + g.node; }
@@ -46,13 +52,23 @@
     flt.cls = pickCls(TP.prefs.get(PK.route, '')); flt.sort = pickSort(TP.prefs.get(PK.sort, 'speed'));
     pg = ui.pager('conns', { def: 20 });
     pg.onChange(function () { force = true; V.render(); toTop(el.bar); });
+    so = ui.sorter('conns', {
+      host: { get: function (g) { return g.host; } },
+      app: { get: function (g) { return g.app; } },                                        // 没有应用信息的永远排在后面
+      route: { get: function (g) { return clsText(g); } },
+      svc: { get: function (g) { return g.svc ? TP.svcName(g.svc) : null; } },
+      speed: { type: 'num', get: function (g) { return g.sd; } },
+      total: { type: 'num', get: function (g) { return g.dn; } },
+      n: { type: 'num', get: function (g) { return g.n; } }
+    }, { onChange: function () { if (soQuiet) return; syncSort(); firstPage(); } });
     el.seg = ui.seg(L('conns.filter.aria'), [
       { v: '', label: L('conns.filter.all') }, { v: 'pin', label: L(CLS_NAME.pin), icon: 'pin' }, { v: 'auto', label: L(CLS_NAME.auto), icon: 'auto' }, { v: 'direct', label: L(CLS_NAME.direct), icon: 'direct' }],
       function (v) { setRoute(v, true); });
     el.seg.set(flt.cls);
     el.q = h('input', { class: 'inp', type: 'search', placeholder: L('conns.search'), 'aria-label': L('conns.search'), autocomplete: 'off', on: { input: function () { flt.q = el.q.value.trim().toLowerCase(); firstPage(); } } });
-    el.sort = h('select', { class: 'sel cn-sort', 'aria-label': L('conns.sort.aria') }, SORTS.map(function (k) { return h('option', { value: k }, L('conns.sort.' + k)); }));
-    el.sort.value = flt.sort;
+    el.sortX = h('option', { value: '~', hidden: true });                                  // 列头排序在「线路 / 服务」上时, 下拉临时显示它 (不出现在下拉列表里)
+    el.sort = h('select', { class: 'sel cn-sort', 'aria-label': L('conns.sort.aria') }, SORTS.map(function (k) { return h('option', { value: k }, L('conns.sort.' + k)); }).concat([el.sortX]));
+    syncSort();
     el.sort.addEventListener('change', function () { setSort(el.sort.value, true); });
     el.kill = TP.bindKillBtn(ui.btn(L('act.kill.label'), { icon: 'disconnect', cls: 'soft-bad' }));
     el.sum = h('div', { class: 'muted sm conn-sum', 'aria-live': 'off' });
@@ -63,9 +79,11 @@
     el.empty = ui.emptyBox();
     el.card = h('section', { class: 'card flush' },
       h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl rt conn-tbl' },
-        h('thead', null, h('tr', null, ['conns.col.host', 'conns.col.app', 'conns.col.route', 'conns.col.svc', 'conns.col.speed', 'conns.col.total', 'conns.col.n', 'conns.col.act'].map(function (k) {
-          return h('th', { scope: 'col', class: /\.act$/.test(k) ? 'c-act' : null }, L(k), k === 'conns.col.svc' ? ui.help(HT.svc, { size: 14 }) : null);
-        }))),
+        h('thead', null, h('tr', null, [['host', 'conns.col.host'], ['app', 'conns.col.app'], ['route', 'conns.col.route'], ['svc', 'conns.col.svc'], ['speed', 'conns.col.speed'], ['total', 'conns.col.total'], ['n', 'conns.col.n']].map(function (c) {
+          var th = so.th(c[0], function () { return t(c[1]); });                         // 数据列: 点列头排序
+          if (c[0] === 'svc') th.appendChild(ui.help(HT.svc, { size: 14 }));
+          return th;
+        }).concat([h('th', { scope: 'col', class: 'c-act' }, L('conns.col.act'))]))),   // 操作列不排序
         el.tbody)),
       el.empty.el, pg.el);
     el.bar = h('div', { class: 'toolbar cn-bar' }, withHelp(el.seg.el, HT.route), el.q, el.sort, withHelp(el.kill, HT.kill), withHelp(TP.monitorSwitch(), HT.monitor));
@@ -91,12 +109,12 @@
     TP.on('monitor', function () { if (active()) V.render(); if (dt) dt.sync(); });
     TP.on('helper', function () { if (active()) V.render(); });
     TP.on('clash', function () { if (active()) V.render(); if (dt) dt.sync(); });
-    TP.on('lang', function () { force = true; V.render(); if (dt) dt.paint(); });
+    TP.on('lang', function () { force = true; syncSort(); V.render(); if (dt) dt.paint(); });
     TP.on('prefs', function (d) {                                                              // 别的设备同步过来 / 登录后读到本机的偏好
       if (!d || !(d.all || d.key === PK.route || d.key === PK.sort)) return;
       var r = pickCls(TP.prefs.get(PK.route, '')), s = pickSort(TP.prefs.get(PK.sort, 'speed'));
       if (r === flt.cls && s === flt.sort) return;
-      flt.cls = r; flt.sort = s; el.seg.set(r); el.sort.value = s; force = true; V.render();
+      flt.cls = r; flt.sort = s; el.seg.set(r); syncSort(); force = true; V.render();
     });
     V.render();
   };
@@ -104,7 +122,19 @@
 
   function firstPage() { force = true; if (pg.page() !== 1) pg.setPage(1); else V.render(); }       // 用户改了筛选 / 排序 / 搜索: 回到第 1 页 (实时刷新时绝不自己翻页)
   function setRoute(v, save) { flt.cls = pickCls(v); el.seg.set(flt.cls); if (save) TP.prefs.set(PK.route, flt.cls || undefined); firstPage(); }
-  function setSort(v, save) { flt.sort = pickSort(v); el.sort.value = flt.sort; if (save) TP.prefs.set(PK.sort, flt.sort === 'speed' ? undefined : flt.sort); firstPage(); }
+  function setSort(v, save) {
+    flt.sort = pickSort(v);
+    if (save) TP.prefs.set(PK.sort, flt.sort === 'speed' ? undefined : flt.sort);
+    if (so.state()) { soQuiet = true; try { so.set('', 'asc'); } finally { soQuiet = false; } }       // 手选了排序下拉: 列头排序让位 (回到按下拉排序)
+    syncSort(); firstPage();
+  }
+  /* 排序下拉跟列头的状态保持一致: 列头排序生效时显示同一列 (下拉里没有的列用临时的隐藏项显示列名), 否则显示下拉自己的排序 */
+  function syncSort() {
+    if (!so || !el.sort) return;
+    var s = so.state(), v = flt.sort;
+    if (s) { v = SEL_OF[s.key] || '~'; if (v === '~') setText(el.sortX, t(COL_NAME[s.key] || 'conns.col.host')); }
+    el.sort.value = v;
+  }
   /* 当前页的范围: 数据已经读到 (ready) 并且总数变了才更新分页条 (每次更新它都会重建按钮, 键盘焦点会丢; 数据还没读到时更新会把记住的页码钳制成第 1 页);
    * 分页条正在被使用 (鼠标在上面 / 焦点在里面) 时只在本地钳制页码, 等用完再同步 */
   function pageOf(total, ready) {
@@ -142,7 +172,8 @@
     var now = Date.now();
     if (hold && !el.tbody.matches(':hover') && !el.tbody.contains(document.activeElement)) hold = false;     // 防止「占用」状态卡住
     if (!hold && (force || now - rankAt >= 3000)) {
-      list.sort(cmp);
+      list.sort(cmp);                                                     // 先按下拉的排序排好 (也是列头排序里相同值的先后顺序), 再按列头排 (稳定); 排的是整张表, 分页在后面
+      if (so.state()) list = so.apply(list);
       rank = {}; list.forEach(function (g, i) { rank[g.key] = i; }); rankAt = now; force = false;
     } else {
       list.sort(function (a, b) { var ra = rank[a.key], rb = rank[b.key]; return (ra == null ? 1e9 : ra) - (rb == null ? 1e9 : rb) || cmp(a, b); });

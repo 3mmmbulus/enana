@@ -8,7 +8,9 @@
  *
  * 每个会改变状态的操作: confirmDialog (说清楚会下载什么、应用什么、哪些网站受影响; 启用 = 绿色确认, 停用 = 琥珀色, 删除 = 红色) -> 任务 (dock 或弹窗内进度卡片) -> 重新加载列表。
  * 不能用的控件不用 disabled: ui.avail(控件, 原因) + 点击时 toast 原因。
- * 分页: ui.pager('rules', {def: 20}) (筛选 / 搜索之后再分页; 改了筛选回到第 1 页); 偏好 (TP.prefs): rules.filter (上次选的筛选)。 */
+ * 分页: ui.pager('rules', {def: 20}) (筛选 / 搜索之后再分页; 改了筛选回到第 1 页); 偏好 (TP.prefs): rules.filter (上次选的筛选)。
+ * 列头排序 (ui.sorter('rules'), 记在 prefs sort.rules): 启用 / 规则集 / 标签 / 来源 / 状态 都可以点列头排序 (「操作」列不是数据); 顺序: 筛选 → 排序 (整张表) → 分页;
+ *   没有选排序时保持原来的顺序 (必选 → 自定义 → 其余按名称)。 */
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, fmt = TP.fmt, setText = TP.setText, I = window.I18N, t = I.t, L = I.L;
@@ -26,7 +28,7 @@
   var PK = { filter: 'rules.filter' };                                                                                         // i18n-ignore (偏好键, 不是词典键)
   var HT = { page: 'rules.page', update: 'rules.update', custom: 'rules.custom', essential: 'rules.essential', policy: 'rules.policy' };     // i18n-ignore (「!」说明的话题: 词典键是 help.<话题>.*)
 
-  var el = {}, chips = {}, pg = null, pgTotal = -1;
+  var el = {}, chips = {}, pg = null, so = null, pgTotal = -1;
   var data = null, err = null, seq = 0;                   // data = {sets, updated}; err 只在还没有数据时显示
   var flt = { q: '', f: pickFilter(TP.prefs.get(PK.filter, 'all')) };
   var pending = {};                                        // tag -> 'on' | 'off' | 'del': 任务进行中
@@ -39,6 +41,9 @@
     return s._blob;
   }
   function rank(s) { return s.essential ? 0 : s.custom ? 1 : 2; }
+  /* 列头排序用的值 (数字用原始数据, 不是格式化后的「12 MB」) */
+  function srcOf(s) { return s.custom ? t('rules.src.custom') : s.repo; }                  // 来源列显示的就是这个; 内置的没有仓库 = 空, 排在最后
+  function stOf(s) { return (s.present ? 0 : s.enabled ? 1 : 2) * 1e13 + (s.present ? s.bytes : 0); }       // 状态: 已下载 (再按大小) → 已启用但没下载 → 未下载; 用后端的状态, 任务进行中不会让行跳来跳去
   function own(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
   function pickFilter(v) { return FILTERS.indexOf(v) >= 0 ? v : 'all'; }
   function withHelp(node, topic) { return h('span', { class: 'rl-hp' }, node, ui.help(topic)); }
@@ -127,7 +132,7 @@
       else el.empty.show({ icon: 'refresh', text: t('rules.loading') });
       return;
     }
-    items = visible();
+    items = so.apply(visible());                           // 筛选 → 排序 (整张表, 不只是当前页) → 分页; 没有选排序时 apply 原样返回
     el.wrap.hidden = !items.length;
     pr = pageOf(items.length);
     ui.syncList(el.tbody, items.slice(pr.start, pr.end), function (s) { return s.tag; }, makeRow, updateRow);
@@ -359,11 +364,20 @@
     });
     el.count = h('span', { class: 'muted sm rl-count' });
 
+    so = ui.sorter('rules', {
+      on: { type: 'num', get: function (s) { return s.enabled ? 0 : 1; } },              // 升序 = 已启用的在前
+      name: { get: nameOf }, tag: { get: function (s) { return s.tag; } }, src: { get: srcOf },
+      st: { type: 'num', get: stOf }
+    }, { onChange: firstPage });
+    var thOn = so.th('on', function () { return t('rules.col.on'); }, { class: 'rl-c-sw' });
+    thOn.querySelector('.th-t').classList.add('sr');                                       // 开关列很窄: 只显示排序箭头, 列名给读屏 (和原来的 sr 文字一样)
+    var thSrc = so.th('src', function () { return t('rules.col.src'); });
+    thSrc.appendChild(ui.help(HT.policy, { size: 14 }));
     el.tbody = h('tbody');
     el.wrap = h('div', { class: 'rl-wrap', hidden: true }, h('table', { class: 'rl-tbl' },
       h('thead', null, h('tr', null,
-        h('th', { scope: 'col', class: 'rl-c-sw' }, h('span', { class: 'sr' }, L('rules.col.on'))),
-        h('th', { scope: 'col' }, L('rules.col.name')), h('th', { scope: 'col' }, L('rules.col.tag')), h('th', { scope: 'col' }, L('rules.col.src'), ui.help(HT.policy, { size: 14 })), h('th', { scope: 'col' }, L('rules.col.st')),
+        thOn,
+        so.th('name', function () { return t('rules.col.name'); }), so.th('tag', function () { return t('rules.col.tag'); }), thSrc, so.th('st', function () { return t('rules.col.st'); }),
         h('th', { scope: 'col', class: 'rl-c-act' }, h('span', { class: 'sr' }, L('rules.col.act'))))),
       el.tbody));
     el.empty = ui.emptyBox();

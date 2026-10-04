@@ -1,10 +1,12 @@
 /* enana · v-servers.js — 服务器页: 当前出口 / 服务器表 / 测速全部 / 订阅列表 (含过期自动刷新)
- * 添加·导入服务器是弹窗 (v-import.js, TP.imp.open); 每个会改变状态的操作都先 confirmDialog; 暂时不能用的按钮显示原因而不是失灵。 */
+ * 添加·导入服务器是弹窗 (v-import.js, TP.imp.open); 每个会改变状态的操作都先 confirmDialog; 暂时不能用的按钮显示原因而不是失灵。
+ * 服务器表: 列头 (名称 / 类型 / 地址 / 角色 / 延迟) 可以点击排序 (ui.sorter, 先排序再分页); 工具栏的排序下拉保留 (没点列头时照旧, 用下拉框会取消列头排序)。 */
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, setText = TP.setText, I = window.I18N, t = I.t, L = I.L;
   var V = TP.V.servers = { id: 'servers' };
   var el = {}, sortKey = TP.prefs.get('servers.sort', 'default');
+  var so = null;                                            // 列头排序 (ui.sorter, 记在 prefs sort.servers); 排序时它优先, 同值的行按下拉框 (sortKey) 的顺序排
   var pendingRole = {}, pendingDel = {};                    // 操作进行中的临时显示 (避免被 10 秒轮询的旧状态闪回)
   var test = { running: false, stop: false, i: 0, n: 0, done: false };
   var ROLES = ['pin', 'auto', 'dl', 'off'], ROLE_RANK = { pin: 0, auto: 1, dl: 2, off: 3 };
@@ -48,7 +50,10 @@
     ui.act(el.testBtn, function () { if (!servers().length) { TP.imp.open('import'); return; } return testAll(); });
     el.stopBtn = ui.btn(L('servers.test.stop'), { sm: true, icon: 'stop' }); el.stopBtn.hidden = true;
     ui.act(el.stopBtn, function () { test.stop = true; });
-    el.sort = h('select', { class: 'sel', 'aria-label': L('servers.sort.aria'), on: { change: function () { sortKey = el.sort.value; TP.prefs.set('servers.sort', sortKey); renderTable(); } } },
+    el.sort = h('select', { class: 'sel', 'aria-label': L('servers.sort.aria'), on: { change: function () {
+      sortKey = el.sort.value; TP.prefs.set('servers.sort', sortKey);
+      if (so && so.state()) so.set(''); else renderTable();              // 用了下拉框: 取消列头排序 (so.set 会同步下拉框并重画)
+    } } },
       TP.opt('default', t('servers.sort.role')), TP.opt('delay', t('servers.sort.delay')), TP.opt('name', t('servers.sort.name')));
     el.count = h('span', { class: 'muted sm' });
     el.tBar = ui.bar(); el.tMsg = h('span', { class: 'muted sm', 'aria-live': 'polite' });
@@ -61,11 +66,25 @@
     el.tbody = h('tbody');
     el.empty = ui.emptyBox();
     el.pg = ui.pager('servers', { def: 10 }); el.pg.onChange(function () { renderTable(); });
+    so = ui.sorter('servers', {
+      name: { get: function (s) { return s.tag; } },
+      type: { get: function (s) { return s.type; } },
+      addr: { get: function (s) { return s.server ? s.server + ':' + s.port : null; } },
+      role: { type: 'num', get: function (s) { return ROLE_RANK[s.role]; } },
+      lat: { type: 'num', get: latOf }
+    }, { onChange: function () { syncSort(); if (el.pg.page() !== 1) el.pg.setPage(1); else renderTable(); } });       // setPage 会触发分页的 onChange 重画
+    var heads = [['name', 'servers.col.name'], ['type', 'servers.col.type'], ['addr', 'servers.col.addr'], ['role', 'servers.col.role'], ['lat', 'servers.col.lat']].map(function (c) {
+      var th = h('th', { scope: 'col' });
+      so.attach(th, c[0], function () { return t(c[1]); });
+      if (c[0] === 'role') th.appendChild(ui.help('servers.roles'));      // 帮助按钮放在排序按钮外面
+      return th;
+    });
     panels.nodes.appendChild(h('section', { class: 'card flush' },
       h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl rt' },
-        h('thead', null, h('tr', null, ['servers.col.name', 'servers.col.type', 'servers.col.addr', 'servers.col.role', 'servers.col.lat', 'servers.col.act'].map(function (k) { return h('th', { scope: 'col', class: /\.act$/.test(k) ? 'c-act' : null }, L(k), k === 'servers.col.role' ? ui.help('servers.roles') : null); }))),
+        h('thead', null, h('tr', null, heads.concat(h('th', { scope: 'col', class: 'c-act' }, L('servers.col.act'))))),     // 「操作」列不排序
         el.tbody)),
       el.empty.el, el.pg.el));
+    syncSort();
 
     /* enana 官方线路 (会员): 以后订阅用户登录后自动出现; 现在是「即将推出」占位卡片 (读 GET /api/plan 的 features.official_proxy) */
     panels.official.appendChild(officialCard());
@@ -148,7 +167,19 @@
       if (sortKey === 'name') return a.s.tag.localeCompare(b.s.tag, I.lang) || a.i - b.i;
       return (ROLE_RANK[a.s.role] || 0) - (ROLE_RANK[b.s.role] || 0) || a.i - b.i;
     });
-    return list.map(function (x) { return x.s; });
+    list = list.map(function (x) { return x.s; });
+    return so && so.state() ? so.apply(list) : list;                      // 列头排序 (整张表, 先排序再分页); 稳定, 同值的行保持下拉框的顺序
+  }
+  /* 延迟列的排序值 (和单元格显示的一致): 没测过 / 不在核心里 (显示 —) = null, 永远排最后; 超时排在所有有延迟的后面 (降序时最先) */
+  function latOf(s) {
+    var d = S.proxies[s.tag] ? TP.delayOf(s.tag) : null;
+    return !d ? null : d.ms > 0 ? d.ms : 1e9;
+  }
+  /* 工具栏的排序下拉跟列头保持一致: 没有列头排序 = 下拉框自己的值; 列头排序刚好对应下拉框的某一项 (升序的 名称 / 延迟 / 角色) 就显示那一项, 其它列没有对应项 = 留空 */
+  function syncSort() {
+    if (!so || !el.sort) return;
+    var s = so.state(), v = !s ? sortKey : s.dir === 'asc' ? { name: 'name', lat: 'delay', role: 'default' }[s.key] : null;
+    if (v) el.sort.value = v; else el.sort.selectedIndex = -1;
   }
   function td(labelKey, cls) { var kids = Array.prototype.slice.call(arguments, 2); return h.apply(null, ['td', { 'data-l': labelKey ? L(labelKey) : '', class: cls || '' }].concat(kids)); }
   function renderTable() {
@@ -276,7 +307,7 @@
       var done = !test.stop;
       el.tBar.set(100, done ? 'ok' : 'err');
       setText(el.tMsg, t(done ? 'servers.test.done' : 'servers.test.stopped', { ok: ok, n: list.length }) + (best ? ' · ' + t('servers.test.best', { tag: best.tag, ms: best.ms }) : ''));
-      if (done && !tags) { sortKey = 'delay'; el.sort.value = 'delay'; test.done = true; }
+      if (done && !tags) { sortKey = 'delay'; syncSort(); test.done = true; }       // 列头排序开着时它优先 (sortKey 只决定同值行的顺序)
       if (onProgress) onProgress(list.length, list.length, '');
       if (done) ui.toast(t('servers.test.doneToast', { ok: ok, n: list.length }), 'ok');
       return { ok: ok, total: list.length, best: best };
