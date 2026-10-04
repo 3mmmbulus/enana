@@ -1,5 +1,20 @@
 # Changelog / 更新日志
 
+## 2.3.7 (2026-10-04)
+
+### 中文
+- Mac 与 Windows 共用 Pro 套餐、余额和邮箱验证界面。套餐按整段期限显示总价; 余额购买与每月 4 USDT 自动续费均需用户确认, 续费默认关闭。
+- TRC20 订单弹窗显示服务器生成的六位小数完整金额、地址、付款期限与链上状态, 支持复制、关闭、刷新及取消; 关闭不取消订单, 取消或过期后不再提供付款复制按钮。到账和权益只由服务器确认。
+- 本地账号接口严格验证请求, 固定转发云端路径; 超时重试沿用操作编号以防重复建单或扣款。切换账号清除付款界面状态, 邮件重发有限流, 网络故障保留离线登录。
+- 增加真实 PocketBase / SMTP 设置回滚、客户端付款状态和本地 CGI 身份鉴权测试。管理员邮件配置助手仅供服务器本地命令使用, 不进入客户端包、不输出密码。
+- 专用 Claude 线路显示“暂无”。正式收款仍关闭, 官方节点交付与用户服务器主动共享仍待实现和验收; 此版本不代表 Pro 已上线。
+
+### English
+- Share Pro catalog, wallet and email verification UI on macOS and Windows. Display full-term totals; confirm balance purchases and opt-in 4 USDT monthly renewal.
+- Show exact six-decimal server invoices with bounded status polling, copy controls, closure and cancellation. Disable payment copying for closed or expired invoices; only the cloud can confirm settlement and entitlement.
+- Authenticate and normalize local billing requests, retain idempotency keys across unknown outcomes, discard stale account state and preserve offline login on network failure. Add real database, administrator SMTP rollback, CGI and UI coverage without real transfers.
+- Show an empty dedicated Claude pool. Receiving remains disabled pending official-node delivery and server-sharing acceptance; this is not a complete Pro launch.
+
 ## 2.3.6 (2026-10-04)
 
 ### 中文

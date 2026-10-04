@@ -69,6 +69,7 @@
 
     /* enana 官方线路 (会员): 以后订阅用户登录后自动出现; 现在是「即将推出」占位卡片 (读 GET /api/plan 的 features.official_proxy) */
     panels.official.appendChild(officialCard());
+    panels.official.appendChild(h('section', { class: 'card srv-off' }, h('div', { class: 'card-h' }, ui.icon('pro', 20, 'ci'), h('h3', null, L('billing.dedicatedTitle')), ui.badge(L('billing.none'), 'neutral')), h('p', { class: 'muted' }, L('billing.dedicatedNote'))));
 
     /* 订阅 */
     el.subs = h('div', { class: 'rows' });
