@@ -608,7 +608,13 @@ function iconNameFor(slug) {                                               // �
   if (!name || BROKEN_ICON.indexOf(name) >= 0 || NO_ICON.indexOf(name) >= 0) return '';
   return a && !M.inspected[slug] && !appIconOk(a) ? '' : name;               // 应用列表里的应用要到时间才有; 检查过 (inspect) 的候选是即时提取的
 }
-const appsPayload = () => ({ ok: true, apps: M.apps.map((a) => ({ name: a.name, state: a.state, flag: a.flag, target: a.target || '', target_ok: targetOk(a.target || ''), known: a.known, rec: a.rec, group: a.group, custom: !!a.custom, kind: a.kind || 'app', path: a.custom ? a.path : appPath(a.name), icon: appIconOk(a) ? iconUrl(a.name) : '' })),
+/* 应用的安装时间 (应用目录的创建时间) 和识别时间 (enana 第一次扫描到的时间): 按名称哈希出确定的假数据; 少数应用「不知道安装时间」(installed 0) 只有识别时间 */
+const appHash = (name) => { let n = 7; for (let i = 0; i < name.length; i++) n = (n * 31 + name.charCodeAt(i)) % 1000003; return n; };
+const appInstalled = (name) => (appHash(name) % 7 === 0 ? 0 : sec() - (3 + appHash(name) % 160) * 86400 - appHash(name) % 80000);
+const appSeen = (name) => sec() - (1 + appHash(name) % 40) * 86400 - appHash(name) % 50000;
+/* 每个应用今天的流量 (确定的假数据: 一半左右的应用有流量) */
+const appToday = (name) => { const k = appHash(name); return k % 3 === 0 ? null : { up: (k % 900) * 1024 + 4096, down: (k % 4000) * 8192 + 20000 }; };
+const appsPayload = () => ({ ok: true, apps: M.apps.map((a) => ({ name: a.name, state: a.state, flag: a.flag, target: a.target || '', target_ok: targetOk(a.target || ''), known: a.known, rec: a.rec, group: a.group, custom: !!a.custom, kind: a.kind || 'app', path: a.custom ? a.path : appPath(a.name), icon: appIconOk(a) ? iconUrl(a.name) : '', installed: appInstalled(a.name), seen: appSeen(a.name) })),
   new_count: M.apps.filter((a) => a.flag === 'new').length, scanned_at: M.appsScanned });
 const nodesOf = (list) => list.filter((s) => s.role === 'pin' || s.role === 'auto');          // 只有 pin / auto 会写进核心配置
 const applyNow = () => { M.applied = clone(M.servers); };
@@ -1648,6 +1654,12 @@ function statsPayload(range) {
     routes: { direct: { up: tot[0], down: tot[1] }, pin: { up: tot[2], down: tot[3] }, auto: { up: tot[4], down: tot[5] } }, series,
     nodes: Object.keys(nm).map((tag) => ({ tag, up: nm[tag][0], down: nm[tag][1] })).sort((x, y) => (y.up + y.down) - (x.up + x.down) || (x.tag < y.tag ? -1 : 1)) };
 }
+route('GET', '/api/stats/apps', (c) => {
+  const range = c.p('range') || 'today';
+  if (!Object.prototype.hasOwnProperty.call(STAT_DAYS, range)) throw E('E_INVALID', 'e.badRange');
+  const n = STAT_DAYS[range], apps = M.apps.map((a) => { const x = appToday(a.name); return x ? { name: a.name, up: x.up * n, down: x.down * n } : null; }).filter(Boolean).sort((x, y) => (y.up + y.down) - (x.up + x.down) || (x.name < y.name ? -1 : 1));
+  return { ok: true, range, from: dayOf(addDays(now(), -(n - 1))), to: dayOf(now()), apps };
+});
 route('GET', '/api/stats', (c) => {
   const range = c.p('range') || 'today';                                 // 缺省 = today (与 lib/api.sh 的 ep_stats 一致)
   if (!Object.prototype.hasOwnProperty.call(STAT_DAYS, range)) throw E('E_INVALID', 'e.badRange');

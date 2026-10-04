@@ -4,7 +4,10 @@
  * · 添加自定义软件: 两步弹窗 (输入路径或名称 -> POST /api/apps/inspect -> 确认结果并选路由方式 -> 最后确认 -> POST /api/apps/custom -> 任务); 自定义软件可删除
  * · 新应用: 打开「应用」页就算已知晓 —— 导航上的数字立刻消失 (后端的新标记同时确认掉), 但这一次访问里这些应用仍然高亮, 方便处理; 下次进来就不再是新的了
  * · 固定出口有 2 个以上时, 状态是「固定出口」的应用可以再选: 默认固定出口 / 在固定出口里自动选 / 指定某一个固定出口 (POST /api/override 的 target)
- * · 列表分页 (ui.pager) + 分组标题; 分类筛选 / 搜索记在 TP.prefs (apps.group / apps.q) */
+ * · 列表分页 (ui.pager) + 分组标题; 分类筛选 / 搜索记在 TP.prefs (apps.group / apps.q)
+ * · 2.3.8: 每个应用显示「安装 / 识别时间」(GET /api/apps 的 installed / seen) 和「今日流量」(GET /api/stats/apps?range=today, 页面开着时每 30 秒刷新);
+ *   「操作」列每行都有按钮 (详情 + 保持关闭 / 删除); 所有列头可点击排序 (ui.sorter, 记在 prefs sort.apps; 排序时不分组), 工具栏也有排序下拉 (窄屏没有列头时用);
+ *   「详情」弹窗: 路径 / 类型 / 分类 / 安装与识别时间 / 今日流量 / 当前与推荐设置, 可以直接采用推荐设置或跳到该应用的访问记录 */
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, setText = TP.setText, I = window.I18N, t = I.t, L = I.L;
@@ -16,9 +19,27 @@
   var badIc = {};                                                          // 加载失败的图标地址: 本次页面会话里不再重试
   var VN = {};                                                             // 这一次访问里「新」的应用 (名称 -> true): 进来时已经是新的 + 页面开着期间新发现的; 离开再进来就清空
   var ackTimer = 0;
+  var AT = { map: {}, at: 0, busy: false, ok: false };                     // 今日流量: map[应用名] = {up, down}
+  var so = null;                                                           // 列头排序 (ui.sorter)
+  var MODE_RANK = { follow: 0, pin: 1, auto: 2, direct: 3 };
   function isNew(a) { return a.flag === 'new' || !!VN[a.name]; }
 
   function list() { return (S.apps && S.apps.apps) || []; }
+  /* ---- 今日流量 (后台按发起连接的应用归类; 旧版本的辅助服务没有这个接口时静默保持「—」) ---- */
+  async function loadTraffic() {
+    if (AT.busy || S.locked || TP.noHelper() || TP.why.helper()) return;
+    AT.busy = true;
+    try {
+      var r = await TP.helper('GET', '/api/stats/apps', { q: { range: 'today' }, timeout: 8000 }), m = {};
+      (r && Array.isArray(r.apps) ? r.apps : []).forEach(function (x) { if (x && x.name != null) m[String(x.name)] = { up: +x.up || 0, down: +x.down || 0 }; });
+      AT.map = m; AT.at = Date.now(); AT.ok = true;
+      if (active()) V.render();
+    } catch (e) { /* 读不到就保持上一次的数据 */ }
+    finally { AT.busy = false; }
+  }
+  function trafficOf(a) { var x = AT.map[a.name]; return x ? x.up + x.down : 0; }
+  function whenOf(a) { return (+a.installed > 0 ? +a.installed : +a.seen > 0 ? +a.seen : 0) || null; }        // 排序用: 优先安装时间, 没有就用识别时间
+  function whenKind(a) { return +a.installed > 0 ? 'installed' : +a.seen > 0 ? 'seen' : ''; }
   function active() { return TP.tab === 'apps'; }
   function hue(s) { var n = 0, i; for (i = 0; i < s.length; i++) n = (n * 31 + s.charCodeAt(i)) % 360; return n; }
   function hl(topic, o) { return ui.help(topic, o); }                      // 「!」说明图标; 话题 id 对应词典 help.<话题>.*
@@ -133,7 +154,24 @@
     el.list = h('div', { class: 'apps-list' });
     pg = ui.pager('apps.list', { sizes: [10, 20, 50], def: 20 });          // i18n-ignore
     pg.onChange(function () { V.render(); });
-    el.colh = h('div', { class: 'apps-colh', 'aria-hidden': 'true' }, h('span', null, L('apps.col.name')), h('span', null, L('apps.col.path')), h('span', null, L('apps.col.state')), h('span', null, L('apps.col.mode')), h('span', null, L('apps.col.act')));   // 列头: 列表够宽时才显示 (css/apps.css)
+    so = ui.sorter('apps', {
+      name: { get: function (a) { return a.name; } }, path: { get: function (a) { return a.path; } },
+      time: { type: 'num', get: whenOf }, traffic: { type: 'num', get: trafficOf },
+      state: { type: 'num', get: function (a) { return (a.state || 'follow') === 'direct' ? 0 : 1; } },
+      mode: { type: 'num', get: function (a) { return MODE_RANK[a.state || 'follow']; } }
+    }, { onChange: function () { toFirstPage(); syncSort(); V.render(); } });
+    el.colh = h('div', { class: 'apps-colh' });
+    el.colh.appendChild(h('span', { class: 'h-name' })); so.attach(el.colh.lastChild, 'name', function () { return t('apps.col.name'); });
+    el.colh.appendChild(h('span', { class: 'h-path' })); so.attach(el.colh.lastChild, 'path', function () { return t('apps.col.path'); });
+    el.colh.appendChild(h('span', { class: 'h-time' })); so.attach(el.colh.lastChild, 'time', function () { return t('apps.col.time'); });
+    el.colh.appendChild(h('span', { class: 'h-traffic' })); so.attach(el.colh.lastChild, 'traffic', function () { return t('apps.col.traffic'); });
+    el.colh.appendChild(h('span', { class: 'h-state' })); so.attach(el.colh.lastChild, 'state', function () { return t('apps.col.state'); });
+    el.colh.appendChild(h('span', { class: 'h-mode' })); so.attach(el.colh.lastChild, 'mode', function () { return t('apps.col.mode'); });
+    el.colh.appendChild(h('span', { class: 'h-act' }, L('apps.col.act')));
+    el.sortSel = h('select', { class: 'sel apps-sortsel', 'aria-label': L('apps.sort.aria'), on: { change: function () { so.set(el.sortSel.value, (so.state() || {}).dir); } } },
+      [['', 'apps.sort.group'], ['name', 'apps.col.name'], ['time', 'apps.sort.time'], ['traffic', 'apps.sort.traffic'], ['state', 'apps.col.state'], ['mode', 'apps.col.mode'], ['path', 'apps.col.path']].map(function (o) { var op = TP.opt(o[0], t(o[1])); op._k = o[1]; return op; }));
+    el.sortDir = ui.ibtn('chevron-up', L('apps.sort.dir'), { size: 16, cls: 'apps-sortdir' });
+    el.sortDir.addEventListener('click', function () { var s = so.state(); if (s) so.set(s.key, s.dir === 'asc' ? 'desc' : 'asc'); });   // 列头: 列表够宽时才显示 (css/apps.css)
     el.box = h('div', { class: 'apps-box' }, el.colh, el.list, pg.el);
     el.empty = ui.emptyBox();
 
@@ -148,7 +186,7 @@
     el.capture = h('section', { class: 'hint warn', hidden: true }, el.captureText, el.captureBtn);
     root.appendChild(el.capture);
     root.appendChild(el.bar);
-    root.appendChild(h('div', { class: 'toolbar apps-tb' }, el.q, el.g, el.scan, el.addBtn,
+    root.appendChild(h('div', { class: 'toolbar apps-tb' }, el.q, el.g, h('span', { class: 'apps-sortbox' }, el.sortSel, el.sortDir), el.scan, el.addBtn,
       h('span', { class: 'apps-tb-r' }, h('span', { class: 'apps-opts muted sm' }, L('apps.opts'), hl('apps.policy')), el.count)));
     root.appendChild(el.box);
     root.appendChild(el.empty.el);
@@ -174,13 +212,24 @@
       if (active()) V.render();
     });
     document.addEventListener('visibilitychange', function () { if (!document.hidden) kickIcons(); });
+    TP.poll(loadTraffic, 30000, { when: active, delay: 1500 });             // 今日流量: 页面开着时每 30 秒刷新
+    TP.on('lang', function () { syncSort(); });
+    syncSort();
     renderBar(); renderTools();
   };
   V.show = function () {
     VN = {};
     seeNew();
-    V.render(); kickIcons();
+    V.render(); kickIcons(); loadTraffic();
   };
+  function syncSort() {                                                    // 工具栏的排序下拉 / 方向按钮跟列头的状态保持一致
+    if (!so || !el.sortSel) return;
+    var s = so.state();
+    Array.prototype.forEach.call(el.sortSel.options, function (op) { var lb = t(op._k); if (op.textContent !== lb) op.textContent = lb; });
+    el.sortSel.value = s ? s.key : '';
+    el.sortDir.hidden = !s;
+    if (s) { var lb2 = t(s.dir === 'asc' ? 'apps.sort.toDesc' : 'apps.sort.toAsc'); el.sortDir.setAttribute('aria-label', lb2); el.sortDir.title = lb2; el.sortDir.setAttribute('data-dir', s.dir); }
+  }
   /* 页面开着时出现的新应用 (进来时就有的 / 之后扫描到的) 都算已经看到了: 记进 VN (本次访问里继续高亮), 导航上的数字消失, 后台把新标记确认掉 (防抖, 一次请求) */
   function seeNew() {
     var any = false;
@@ -251,13 +300,15 @@
     var want = names.indexOf(flt.g) >= 0 ? flt.g : '';
     if (el.g.value !== want) el.g.value = want;
 
-    // 新应用在最前, 然后按分类 (词典顺序) / 分类名 / 应用名; 同一个分类一定连在一起 (分组标题不会重复)
+    // 默认: 新应用在最前, 然后按分类 (词典顺序) / 分类名 / 应用名; 同一个分类一定连在一起 (分组标题不会重复)。点了列头排序: 整张表按那一列排 (不分组), 先排序再分页
+    var sorted = !!(so && so.state());
     var shown = apps.filter(function (a) {
       return (!flt.g || groupOf(a) === flt.g) && (!qq || a.name.toLowerCase().indexOf(qq) >= 0);
     }).sort(function (a, b) {
       var ga = groupOf(a), gb = groupOf(b);
       return isNew(b) - isNew(a) || groupRank(ga) - groupRank(gb) || ga.localeCompare(gb) || a.name.localeCompare(b.name);
     });
+    if (sorted) shown = so.apply(shown);
     // 分页: 总数没变时不要重画分页条 (重画会丢掉键盘焦点)
     var total = shown.length, rg;
     if (total !== el._total) { el._total = total; rg = pg.update(total); }
@@ -266,7 +317,7 @@
     var items = [], last = null;
     shown.slice(rg.start, rg.end).forEach(function (a) {
       var k = gkey(a);
-      if (k !== last) { last = k; items.push({ head: k, n: cnt[k] }); }
+      if (!sorted && k !== last) { last = k; items.push({ head: k, n: cnt[k] }); }
       items.push({ app: a });
     });
     ui.syncList(el.list, items, function (x) { return x.app ? x.app.name : '/' + x.head; },
@@ -276,6 +327,7 @@
     var off = apps.filter(function (a) { return a.state === 'direct'; }).length;
     setText(el.count, apps.length ? t(shown.length !== apps.length ? 'apps.countFiltered' : 'apps.count', { n: apps.length, off: off, shown: shown.length }) : '');
     el.box.hidden = !shown.length;
+    el.box.classList.toggle('is-sorted', sorted);
     renderTools();
     if (!apps.length) {
       if (TP.noHelper()) el.empty.show({ icon: 'wifi-off', text: t('apps.empty.noHelper'), hint: t('apps.empty.noHelperHint') });
@@ -313,17 +365,21 @@
     r.tg = h('select', { class: 'sel sm apps-tg', hidden: true });                       // 固定出口有 2 个以上、状态是「固定出口」时: 指定走哪一个
     r.tgGone = h('span', { class: 'chip warn', hidden: true }, L('apps.tg.gone'));
     r.tHelp = hl('apps.terminal'); r.tHelp.hidden = true;
+    r.tm = h('div', { class: 'apps-tm' }); r.tmD = h('span', { class: 'apps-tm-d' }); r.tmK = h('span', { class: 'apps-tm-k muted' }); r.tm.appendChild(r.tmD); r.tm.appendChild(r.tmK);
+    r.tr = h('div', { class: 'apps-tr' }); r.trK = h('span', { class: 'apps-tr-k muted' }, L('apps.tr.today')); r.trV = h('b', { class: 'apps-tr-v' }); r.tr.appendChild(r.trK); r.tr.appendChild(r.trV);
+    r.info = ui.btn(L('apps.info'), { sm: true, kind: 'ghost', icon: 'info' });
     r.ack = ui.btn(L('apps.keepOffOne'), { sm: true, kind: 'ghost' }); r.ack.hidden = true;
     r.del = ui.btn(L('common.delete'), { sm: true, cls: 'soft-bad', icon: 'delete' }); r.del.hidden = true;
     var row = h('div', { class: 'apps-row', role: 'group' },
       r.ic,
-      h('div', { class: 'apps-main' }, h('div', { class: 'apps-t' }, r.name, r.badge, r.cus, r.cusHelp, r.kind, r.tHelp, r.rec, r.grp), r.path),
-      h('div', { class: 'apps-c' }, h('div', { class: 'apps-st' }, h('label', { class: 'sw' }, r.sw, h('span', { class: 'sw-ui' })), r.stT), h('div', { class: 'apps-md' }, r.sel, r.tg, r.tgGone), h('div', { class: 'apps-act' }, r.ack, r.del)));
+      h('div', { class: 'apps-main' }, h('div', { class: 'apps-t' }, r.name, r.badge, r.cus, r.cusHelp, r.kind, r.tHelp, r.rec, r.grp), r.path, r.tm, r.tr),
+      h('div', { class: 'apps-c' }, h('div', { class: 'apps-st' }, h('label', { class: 'sw' }, r.sw, h('span', { class: 'sw-ui' })), r.stT), h('div', { class: 'apps-md' }, r.sel, r.tg, r.tgGone), h('div', { class: 'apps-act' }, r.info, r.ack, r.del)));
     row._r = r;
     ui.switchAct(r.sw, function () { return (row._a.state || 'follow') !== 'direct'; }, function (want) { return askState(row, want ? 'follow' : 'direct'); });
     ui.selectAct(r.sel, function () { return row._a.state || 'follow'; }, function (want) { return askState(row, want); });
     ui.selectAct(r.tg, function () { return tgOf(row._a); }, function (want) { return askTarget(row, want); });
     ui.act(r.rec, function () { return askState(row, row._a.rec); });
+    ui.act(r.info, function () { TP.safe(openInfo)(row._a); });        // 弹窗开着时按钮不能一直显示「正在读取…」: 不等弹窗关闭
     ui.act(r.ack, function () { return ack(row); });
     ui.act(r.del, function () { return delCustom(row); });
     return row;
@@ -338,6 +394,11 @@
     r.badge.hidden = !nw; r.ack.hidden = !nw;
     r.grp.hidden = !nw; if (nw) setText(r.grp, groupName(groupOf(a)));
     r.cus.hidden = !cus; r.cusHelp.hidden = !cus; r.del.hidden = !cus; r.kind.hidden = a.kind !== 'bin';
+    var wk = whenKind(a), wo = whenOf(a), tv = AT.map[a.name], ttl = trafficOf(a);
+    setText(r.tmD, wo ? TP.fmt.date(wo) : '—'); setText(r.tmK, wk ? t('apps.tm.' + wk) : '');
+    r.tm.title = [+a.installed > 0 ? t('apps.info.installed') + ': ' + TP.fmt.date(+a.installed) : '', +a.seen > 0 ? t('apps.info.seen') + ': ' + TP.fmt.date(+a.seen) : ''].filter(Boolean).join('\n');
+    setText(r.trV, ttl > 0 ? TP.fmt.bytes(ttl) : (AT.ok ? '0 B' : '—'));
+    r.tr.classList.toggle('is-zero', !(ttl > 0)); r.tr.title = tv ? t('apps.tr.detail', { down: TP.fmt.bytes(tv.down), up: TP.fmt.bytes(tv.up) }) : t('apps.tr.none');
     setText(r.path, a.path || ''); r.path.hidden = !a.path; r.path.classList.toggle('is-wrap', cus);   // 自定义软件的路径整行显示出来 (不靠提示框)
     if (cus || !a.path) r.path.removeAttribute('title'); else r.path.title = a.path;
     if (r.sw.checked !== on) r.sw.checked = on;
@@ -347,6 +408,7 @@
     r.tHelp.hidden = !isTerm(a);
     setAttr(row, 'data-st', st);
     ui.avail(r.sw, why); ui.avail(r.sel, why); ui.avail(r.ack, why); ui.avail(r.rec, why); ui.avail(r.del, why);
+    setAttr(r.info, 'aria-label', t('apps.info.aria', { name: a.name }));
     setAttr(r.sw, 'aria-label', t('apps.row.sw', { name: a.name, state: TP.name.app(st) }));
     setAttr(r.sel, 'aria-label', t('apps.row.sel', { name: a.name }));
     setAttr(r.del, 'aria-label', t('apps.cu.delAria', { name: a.name }));
@@ -415,6 +477,28 @@
     if (!ok) return;
     await TP.helper('POST', '/api/apps/ack', { q: { name: a.name } });
     a.flag = 'ack'; delete VN[a.name]; recount(); TP.emit('apps');
+  }
+
+  /* ================= 应用详情 (操作列「详情」) ================= */
+  function kvRow(k, v, mono) { return h('div', { class: 'apps-kv-r' }, h('dt', null, k), h('dd', null, mono ? h('span', { class: 'apps-v mono' }, v) : v)); }
+  function whenText(sec) { return +sec > 0 ? TP.fmt.date(+sec) + ' · ' + TP.fmt.rel(+sec) : t('apps.info.unknown'); }
+  async function openInfo(a) {
+    var st = a.state || 'follow', tr = AT.map[a.name], nw = isNew(a), recDiff = a.rec && a.rec !== st;
+    var head = h('div', { class: 'apps-card-h' }, (function () { var ic = mkIc(48); paintIc(ic, a.name, a.icon); return ic; })(),
+      h('div', { class: 'apps-card-t' }, h('div', { class: 'apps-card-n' }, a.name), h('div', { class: 'apps-card-b' }, nw ? ui.badge(t('apps.badge.new'), 'info') : null, a.custom ? ui.badge(t('apps.cu.badge'), 'info') : null, a.kind === 'bin' ? ui.badge(t('apps.cu.kind.bin'), 'neutral', 'terminal') : null)));
+    var kv = h('dl', { class: 'apps-kv' },
+      kvRow(t('apps.info.path'), a.path || t('apps.info.unknown'), !!a.path),
+      kvRow(t('apps.info.group'), groupName(groupOf(a))),
+      kvRow(t('apps.info.installed'), whenText(a.installed)),
+      kvRow(t('apps.info.seen'), whenText(a.seen)),
+      kvRow(t('apps.info.traffic'), AT.ok ? (tr ? t('apps.info.trafficVal', { total: TP.fmt.bytes(tr.up + tr.down), down: TP.fmt.bytes(tr.down), up: TP.fmt.bytes(tr.up) }) : t('apps.info.trafficNone')) : t('apps.info.unknown')),
+      kvRow(t('apps.info.policy'), TP.name.app(st) + (st === 'pin' && a.target ? ' · ' + tgName(a.target) : '')),
+      a.rec ? kvRow(t('apps.info.rec'), TP.name.app(a.rec) + (recDiff ? '' : ' · ' + t('apps.info.recSame'))) : null);
+    var acts = [{ label: t('common.close'), cancel: true }, { label: t('apps.info.logs'), icon: 'history', value: 'logs' }];
+    if (recDiff) acts.push({ label: t('apps.info.adopt', { state: TP.name.app(a.rec) }), kind: 'primary', icon: 'check', value: 'adopt' });
+    var choice = await ui.modal({ title: t('apps.info.title'), size: 'md', icon: 'info', iconKind: 'pri', body: h('div', null, head, kv, h('p', { class: 'muted sm apps-info-note' }, t('apps.info.note'))), actions: acts }).closed;
+    if (choice === 'logs') { if (TP.logs && TP.logs.search) TP.logs.search('access', a.name); else TP.go('logs'); }
+    else if (choice === 'adopt') { var row = { _a: a }; await askState(row, a.rec); }
   }
 
   /* ================= 删除自定义软件 (只删这条自定义记录和它的策略) ================= */

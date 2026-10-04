@@ -712,6 +712,13 @@
     });
   };
 
+  /* 从别的页面跳到「日志」并搜索 (应用详情的「查看访问记录」): 先设好标签和搜索词, 再切到日志页 (V.show 会按这个搜索读数据) */
+  LG.search = function (type, q) {
+    if (!el.q || TYPES.indexOf(type) < 0) { TP.go('logs'); return; }
+    pickTab(type, true);
+    T[type].q = String(q || '').trim(); el.q.value = T[type].q; setPage(type, 1);
+    TP.go('logs');
+  };
   V.show = function () {
     loadPrefs();
     render();
