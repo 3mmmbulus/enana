@@ -161,7 +161,7 @@ cmp "$W/system.json" "$H/config.json"
 settings_set NETWORK_MODE system
 load_settings || true
 echo 'PASS: administrator cancellation restores config without a second restart/prompt'
-# Rule-only edits change the snapshot even if the main JSON stays identical.
+# Core-affecting implementation changes change the snapshot fingerprint; policy-rule-only edits change only the rule-data fingerprint.
 SB=${SINGBOX:-/bin/true}
 before=$(enhanced_fingerprint)
 saved_lib=$LIB; mkdir "$W/changed-lib"
@@ -169,9 +169,12 @@ cp "$LIB/enhanced.sh" "$LIB/enhanced-root.sh" "$W/changed-lib/"
 LIB="$W/changed-lib"; [ "$before" = "$(enhanced_fingerprint)" ]
 printf '\n# snapshot implementation update\n' >> "$LIB/enhanced.sh"
 [ "$before" != "$(enhanced_fingerprint)" ]; LIB=$saved_lib
+# Policy rule-sets (ovr-*.json) are synced to the root snapshot as data by the rules helper (no restart), so they have their own fingerprint.
+before_ovr=$(enhanced_ovr_fingerprint)
 printf 'app|Google Chrome|auto|ack\napp|Gemini|pin|ack\n' > "$H/overrides.tsv"
 ovr_sync || exit 1
-[ "$before" != "$(enhanced_fingerprint)" ]
+[ "$before" = "$(enhanced_fingerprint)" ]
+[ "$before_ovr" != "$(enhanced_ovr_fingerprint)" ]
 txn_override app Claude pin '' || exit 1
 [ "$(ovr_get app Claude)" = pin ]
 # Root deployment refusal must roll back both saved policy and generated rules.

@@ -47,16 +47,19 @@ curl() {
 }
 
 # 本机监听端口 = 「服务器」; 另一个关闭的端口 = 「挂掉的服务器」
-python3 - "$W/port" <<'PY' &
-import socket, sys, time
-s = socket.socket(); s.bind(('127.0.0.1', 0)); s.listen(8); open(sys.argv[1], 'w').write(str(s.getsockname()[1]))
-s.settimeout(0.3); end = time.time() + 120
+# 监听器放在子 shell 里启动: health_canaries 里的 wait 会等本 shell 的所有后台任务, 监听器不能是它的子任务
+cat > "$W/listener.py" <<'PY'
+import os, socket, sys, time
+s = socket.socket(); s.bind(('127.0.0.1', 0)); s.listen(8)
+open(sys.argv[1] + '.pid', 'w').write(str(os.getpid())); open(sys.argv[1], 'w').write(str(s.getsockname()[1]))
+s.settimeout(0.3); end = time.time() + 900
 while time.time() < end:
     try: c, _ = s.accept(); c.close()
     except Exception: pass
 PY
-LPID=$!
+( python3 "$W/listener.py" "$W/port" >/dev/null 2>&1 & )
 for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$W/port" ] && break; sleep 0.25; done
+LPID=$(cat "$W/port.pid" 2>/dev/null)
 OPEN=$(cat "$W/port" 2>/dev/null); [ -n "$OPEN" ] || { echo "跳过: 起不来本机监听端口"; exit 77; }
 CLOSED=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()")
 setsrv() { printf '{"role":"pin","outbound":{"type":"socks","tag":"Tokyo-Fix","server":"127.0.0.1","server_port":%s}}\n' "$1" > "$H/servers.jsonl"; }
@@ -370,6 +373,61 @@ eq "应用选了固定出口 (ovr-apppin 规则集有内容): 算一个依赖" "
 printf '{"outbounds":[{"tag":"a","default":"PIN"},{"tag":"b","default":"PIN"}]}' > "$H/config.json"
 eq "再加 2 个默认走固定出口的服务: 共 3 个依赖" "$(pin_dependents)" "3"
 rm -rf "$H/rules" "$H/config.json"
+
+
+echo "== H9. 经某台服务器的连接超时 (node-connect-timeouts) · TUN 下的探测绑定物理网卡"
+python3 - "$SP" "$NOW" <<'PY'
+import sys, datetime as dt
+sp, now = sys.argv[1], int(sys.argv[2])
+def t(m): return dt.datetime.fromtimestamp(now - m * 60).strftime('%Y-%m-%d %H:%M:%S')
+def acc(rows):
+    out = "ts\tid\tnet\thost\tport\tapp\tuser\troute\tnode\treason\tresult\terr\tdur\tips\terrmsg\tpath\tcapture\n"
+    for i, (m, route, node, res, err) in enumerate(rows):
+        out += f"{t(m)}\t{i}\ttcp\th{i}.example\t443\tChatGPT\t<user>\t{route}\t{node}\t\t{res}\t{err}\t100\t\t\t\tmixed\n"
+    return out
+def mk(pin_n, pin_to, auto_n=200, auto_to=1, recent_to=None):
+    rows = []
+    for i in range(pin_n):
+        bad = i < pin_to
+        m = (2 + i % 20) if (bad and (recent_to is None or i < recent_to)) else (40 + i % 100)
+        rows.append((m, 'pin', 'Tokyo-Pin', 'error' if bad else 'ok', 'timeout' if bad else ''))
+    for i in range(auto_n): rows.append((40 + i % 100, 'auto', 'Auto-1', 'error' if i < auto_to else 'ok', 'timeout' if i < auto_to else ''))
+    return acc(rows)
+open(f'{sp}/acc.t6', 'w').write(mk(100, 6))                        # 固定出口 6% 超时, 一直在发生
+open(f'{sp}/acc.t1', 'w').write(mk(100, 1))                        # 固定出口 1%: 正常的偶发
+open(f'{sp}/acc.tfew', 'w').write(mk(20, 10))                      # 样本太少 (20 条)
+open(f'{sp}/acc.tauto', 'w').write(mk(100, 0, auto_n=200, auto_to=16))   # 自动线路节点 8% (=16/200): 达到自动线路的阈值
+open(f'{sp}/acc.tauto5', 'w').write(mk(100, 0, auto_n=200, auto_to=10))  # 自动线路节点 5%: 不够
+open(f'{sp}/acc.told', 'w').write(mk(100, 6, recent_to=0))         # 超时都发生在 30 分钟之前
+rows = ''
+for m in range(120, 0, -1):
+    rows += f"{t(m)}\tnode\tTokyo-Pin\tok\t4\trole=pin mode=tun\n"
+    if m % 5 == 0: rows += f"{t(m)}\tcanary\tgoogle_204\tok\t200\n{t(m)}\tcanary\tcn_direct\tok\t60\n"
+open(f'{sp}/H.tun', 'w').write(rows)
+open(f'{sp}/H.bound', 'w').write(rows.replace('role=pin mode=tun', 'role=pin mode=tun probe=bound'))
+open(f'{sp}/meta.tunok', 'w').write('proxy.enabled=1\nservice.running=1\ncapture.mode=tun\nports.proxy=9\naccount.logged_in=yes\n')
+open(f'{sp}/env.tunok', 'w').write('capture.tun.ready=yes\npin.servers=1\npin.app_policies=1\npin.selectors_on_pin=3\n')
+PY
+RPIN="Tokyo-Pin:pin,Auto-1:auto"
+V=$(V2 H.tun /dev/null "$SP/acc.t6" "$SP/meta.tunok" "$SP/env.tunok" "$RPIN")
+has "N1 固定出口 6% 连接超时 (健康探测显示 100% 可达): 主因是 node-connect-timeouts, 归因 node" "^verdict.cause=node-connect-timeouts" "$V"; has "N1: blame=node" "^verdict.blame=node" "$V"; has "N1: 一直在发生 → 置信 high" "^verdict.confidence=high" "$V"
+has "N1: 证据带连接数 / 超时数 / 百分比" "verdict.evidence.1=node=Tokyo-Pin conns=100 timeouts=6 [(]6[.]0%[)]" "$V"
+has "N1: 摘要点明固定出口不会漂移、直接影响 ChatGPT / Claude" "固定出口不会漂移到别的国家" "$V"
+V=$(V2 H.tun /dev/null "$SP/acc.t1" "$SP/meta.tunok" "$SP/env.tunok" "$RPIN"); hasnt "N2 固定出口 1% 超时 (偶发): 不报" "node-connect-timeouts" "$V"
+V=$(V2 H.tun /dev/null "$SP/acc.tfew" "$SP/meta.tunok" "$SP/env.tunok" "$RPIN"); hasnt "N3 样本太少 (20 条): 不下结论" "node-connect-timeouts" "$V"
+V=$(V2 H.tun /dev/null "$SP/acc.tauto" "$SP/meta.tunok" "$SP/env.tunok" "$RPIN"); has "N4 自动线路节点 8% 超时: 报" "^verdict.cause=node-connect-timeouts" "$V"
+V=$(V2 H.tun /dev/null "$SP/acc.tauto5" "$SP/meta.tunok" "$SP/env.tunok" "$RPIN"); hasnt "N5 自动线路节点 5% 超时: 不够, 不报 (自动选线会避开)" "node-connect-timeouts" "$V"
+V=$(V2 H.tun /dev/null "$SP/acc.told" "$SP/meta.tunok" "$SP/env.tunok" "$RPIN"); has "N6 超时都在 30 分钟之前: 仍报, 但置信降为 medium" "^verdict.confidence=medium" "$V"
+V=$(V2 H.tun /dev/null /dev/null "$SP/meta.tunok" "$SP/env.tunok" "$RPIN"); has "N7 TUN + 探测不是绑定网卡做的: 说明 100% 可达不可信 (note.node_probe_tun)" "^note.node_probe_tun=120" "$V"
+V=$(V2 H.bound /dev/null /dev/null "$SP/meta.tunok" "$SP/env.tunok" "$RPIN"); hasnt "N8 探测已绑定物理网卡: 没有这条说明" "node_probe_tun" "$V"
+export ENANA_PROBE_IFINDEX=$(ifconfig -v lo0 2>/dev/null | sed -n '1s/.* index \([0-9][0-9]*\).*/\1/p')
+if [ -n "$ENANA_PROBE_IFINDEX" ]; then
+  PB=$(printf 'o\t127.0.0.1\t%s\nc\t127.0.0.1\t%s\n' "$OPEN" "$CLOSED" | perl "$LIB/health.pl" probe 3)
+  has "绑定接口的探测 (lo0): 开着的端口 → ok" "^o	ok	" "$PB"; has "绑定接口的探测: 关着的端口 → refused" "^c	refused	" "$PB"
+  PB=$(printf 'o\t127.0.0.1\t%s\n' "$OPEN" | ENANA_PROBE_IFINDEX=65000 perl "$LIB/health.pl" probe 3)
+  has "接口序号无效: 退回原来的探测, 不会因此失败" "^o	ok	" "$PB"
+fi
+unset ENANA_PROBE_IFINDEX
 
 P=$(grep -c . "$W/.pass"); F=$(grep -c . "$W/.fail")
 echo; echo "健康记录测试: $P 通过, $F 失败"

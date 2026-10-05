@@ -200,14 +200,15 @@ os_sysproxy_helper_text() { # 把端口 / networksetup 路径 / 版本写死进�
   [[ $PORT =~ ^[0-9]+$ ]] && [[ $ns =~ ^/[A-Za-z0-9._/-]+$ ]] || return 1
   sed -e "s|@PORT@|$PORT|g" -e "s|@NETWORKSETUP@|$ns|g" -e "s|@VERSION@|$SYSPROXY_HELPER_VERSION|g" "$LIB/sysproxy-helper.tpl"
 }
-os_sysproxy_helper_ok() { # 已安装、归 root (测试里归当前用户)、别人改不了、版本对, 并且当前用户可以免密调用
-  local h v p want_uid=0; h=$(os_sysproxy_helper_path)
+os_helper_trusted() { # <路径> <版本>  已安装、归 root (测试里归当前用户)、别人改不了、不是符号链接、版本对, 并且当前用户可以免密调用 (系统代理助手和 TUN 规则同步助手共用)
+  local h=$1 want=$2 v p want_uid=0
   [ -z "${ENANA_ROOT_PREFIX:-}" ] || want_uid=$(id -u)
   [ -f "$h" ] && [ ! -L "$h" ] && [ "$(stat -f %u "$h" 2>/dev/null)" = "$want_uid" ] || return 1
   p=$(stat -f %Sp "$h" 2>/dev/null); [ "${p:5:1}" != w ] && [ "${p:8:1}" != w ] || return 1      # 组 / 其他人可写就不信任
   v=$(sudo -n "$h" version 2>/dev/null) || return 1
-  [ "$v" = "$SYSPROXY_HELPER_VERSION" ]
+  [ "$v" = "$want" ]
 }
+os_sysproxy_helper_ok() { os_helper_trusted "$(os_sysproxy_helper_path)" "$SYSPROXY_HELPER_VERSION"; }
 os_sysproxy_helper_install_cmds() { # 以 root 身份执行的命令串 (末尾带分号): 安装助手 + 免密规则; 任何一步失败都不影响后面的系统代理设置, 也不会留下半成品规则
   local h s u d sd text b64
   [ -z "${ENANA_NO_SYSPROXY_HELPER:-}" ] || return 1

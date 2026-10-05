@@ -1,5 +1,21 @@
 # Changelog / 更新日志
 
+## 2.3.10 (2026-10-06)
+
+### 中文
+- **TUN (增强) 模式: 改应用 / 网站的代理策略不再弹管理员密码框**。以前 TUN 下每改一次「应用 / 网站走不走代理、走哪条线」就要重启 root 服务, 每次都是一次新的系统授权 (打开应用、开启某些功能时反复弹出)。现在策略规则 (`ovr-*.json`) 只作为**数据**写进 root 快照里, 核心自己热加载, 不重启、不弹框。升级后**第一次**需要重启 TUN 服务时 (改策略或重新进入 TUN) 仍要授权一次 (安装规则同步助手), 之后改策略都免密。助手只接受固定名字的规则集文件和 4 种匹配键 (域名 / 域名后缀 / 进程路径正则 / 进程名), 值必须是不含控制字符的字符串, 先全部校验再写入; 不接受路径、命令、可执行文件或核心配置, 所以最坏结果是你自己的流量路由被改, 拿不到 root。核心配置本身的改动 (节点、端口、DNS 等) 仍需要授权, 因为那是可执行配置。卸载时一并删除助手。
+- **健康探测: TUN 模式下节点「100% 可达、几毫秒」是假象**。TUN 在本机直接应答 TCP 握手, 旧的服务器端口探测永远成功, 所以「日本节点 100% 可达」同时访问记录里却有连接超时。现在 TUN 下的探测绑定到物理网卡 (`IP_BOUND_IF`), 真正去连服务器; 新记录带 `probe=bound`。
+- **新增判定 `node-connect-timeouts`**: 经某台服务器的连接真的有较多连不上 (固定出口 ≥ 3%、其它 ≥ 8%, 且样本足够) 时, 直接指出是这台服务器 / 线路的问题 (`blame=node`), 并给出连接数 / 超时数 / 百分比; 最近 30 分钟仍在发生时置信度为 high。固定出口不会漂移到别的国家, 它不稳定时 ChatGPT / Claude 会直接受影响。
+- 导出里 TUN 下的 `listen.*` 现在写成 `root-service(not visible to lsof)`, 不再显示成 `none` 引起误会 (root 服务的监听端口普通用户的 `lsof` 看不到)。
+- 已知问题 (已能诊断, 尚未修复): TUN 模式下系统 DNS 是局域网路由器地址时, DNS 劫持看不到这些查询 (`tun-dns-bypass`); 临时办法是把系统 DNS 改成 `1.1.1.1` / `8.8.8.8` 之类的公共地址。
+
+### English
+- **TUN (Enhanced) mode: changing an app / site proxy policy no longer shows the administrator password dialog.** Before, every change of "does this app / site use the proxy, and which route" restarted the root service, and each restart was a fresh system authorisation (so it kept appearing when opening apps or enabling some features). Policy rules (`ovr-*.json`) are now written into the root snapshot as **data only** and the core hot-reloads them: no restart, no dialog. The **first** TUN restart after upgrading (a policy change or re-entering TUN) still asks once (to install the rule-sync helper); policy changes after that need no password. The helper accepts only the fixed rule-set file names and 4 match keys (domain / domain suffix / process-path regex / process name), values must be strings without control characters, and everything is validated before anything is written. It accepts no paths, commands, executables or core configuration, so the worst case is your own traffic routing being changed, never root. Changes to the core configuration itself (servers, ports, DNS …) still need authorisation because that is executable configuration. Uninstall removes the helper.
+- **Health probes: "100% reachable in a few ms" for a node was an illusion in TUN mode.** TUN answers the TCP handshake locally, so the old server-port probe always succeeded — a node could show 100% reachable while the access log had connect timeouts. Probes in TUN mode are now bound to the physical interface (`IP_BOUND_IF`) and really reach the server; new records carry `probe=bound`.
+- **New verdict `node-connect-timeouts`:** when connections through one server really do fail to connect (pinned exit ≥ 3%, others ≥ 8%, with enough samples) it says so directly (`blame=node`) with connections / timeouts / percentage; confidence is high if it is still happening in the last 30 minutes. A Fixed exit never drifts to another country, so when it is unstable ChatGPT / Claude are hit directly.
+- In TUN the exported `listen.*` now reads `root-service(not visible to lsof)` instead of `none` (an ordinary user's `lsof` cannot see a root service's listeners).
+- Known issue (diagnosable, not yet fixed): in TUN mode, when the system DNS is the LAN router, DNS hijack never sees those queries (`tun-dns-bypass`); a workaround is to set the system DNS to a public address such as `1.1.1.1` / `8.8.8.8`.
+
 ## 2.3.9 (2026-10-05)
 
 ### 中文

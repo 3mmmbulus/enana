@@ -25,14 +25,36 @@ enhanced_admin() {
     osascript -e "do shell script \"$cmd\" with administrator privileges" >&2
   fi
 }
+# The fingerprint of everything the root core was installed from EXCEPT the app/site policy rule sets (rules/ovr-*.json): those are plain routing data
+# that enhanced_sync_ovr can push into the root snapshot without a restart (see enhanced_ovr_fingerprint). A change to anything else needs a full,
+# administrator-authorised install.
 enhanced_fingerprint() {
   {
     printf 'autostart=%s\n' "${AUTOSTART:-1}"; shasum -a 256 "$SB" "$H/config.json"
     # Source checkouts and the installed copy must fingerprint identically.
     local impl
     for impl in enhanced.sh enhanced-root.sh; do printf 'implementation:%s %s\n' "$impl" "$(shasum -a 256 "$LIB/$impl" | awk '{print $1}')"; done
-    find "$H/rules" "$H/certs" -type f -exec shasum -a 256 {} \; 2>/dev/null
+    find "$H/rules" "$H/certs" -type f ! -name 'ovr-*.json' -exec shasum -a 256 {} \; 2>/dev/null
   } | LC_ALL=C sort | shasum -a 256 | awk '{print $1}'
+}
+enhanced_ovr_fingerprint() { # the app/site policy rule sets (written by ovr_sync); empty directory => a fixed hash
+  { find "$H/rules" -maxdepth 1 -type f -name 'ovr-*.json' -exec shasum -a 256 {} \; 2>/dev/null; echo ovr; } | LC_ALL=C sort | shasum -a 256 | awk '{print $1}'
+}
+
+# ---- rule-data helper: change an app/site policy in TUN mode without restarting the root core (= without an administrator prompt) ----
+TUNRULES_HELPER_VERSION=1
+enhanced_helper_path() { enhanced_paths; printf '%s/usr/local/libexec/enana/tunrules-%s' "${ENANA_ROOT_PREFIX:-}" "$TUN_UID"; }
+enhanced_helper_ok() { os_helper_trusted "$(enhanced_helper_path)" "$TUNRULES_HELPER_VERSION"; }
+enhanced_ovr_bundle() { # {"ovr-pin.json": {...}, ...} from $H/rules/ovr-*.json (the helper validates it again, strictly)
+  perl -MJSON::PP -MFile::Glob=:bsd_glob -e '
+    my %o; for my $f (bsd_glob("$ARGV[0]/rules/ovr-*.json")) { my ($n) = $f =~ m{([^/]+)$}; open my $fh, "<", $f or next; local $/; my $d = eval { JSON::PP->new->utf8->decode(scalar <$fh>) }; $o{$n} = $d if ref $d eq "HASH"; }
+    print JSON::PP->new->utf8->canonical->encode(\%o);' "$H"
+}
+enhanced_sync_ovr() { # 0 = synced (the running root core hot-reloads the files); non-zero = no/untrusted helper or rejected data -> caller does the full install
+  local h; h=$(enhanced_helper_path)
+  enhanced_helper_ok || return 1
+  enhanced_ovr_bundle | sudo -n "$h" sync >/dev/null 2>"$H/enhanced-sync.log" || return 1
+  enhanced_ovr_fingerprint > "$H/.enhanced-ovr-fingerprint"
 }
 enhanced_stage_config() {
   # Explicitly open the config: decode(<>) evaluates the diamond in list
@@ -57,9 +79,11 @@ enhanced_start() {
   # The privileged AppleScript process cannot read TCC-protected Desktop or
   # Downloads checkouts. Stage the reviewed helper beside its input snapshot.
   cp "$LIB/enhanced-root.sh" "$stage/enhanced-root.sh" || { rm -rf "$stage"; return 1; }
+  # The rule-data helper is installed by the same administrator authorisation (best effort, see enhanced-root.sh).
+  sed "s|@VERSION@|$TUNRULES_HELPER_VERSION|g" "$LIB/tunrules-helper.pl" > "$stage/tunrules-helper" 2>/dev/null || true
   # The root helper never sources settings.env and never installs user scripts
   # as launchd programs. The executable and configuration are root-owned copies.
-  enhanced_admin /bin/bash "$stage/enhanced-root.sh" install "$TUN_UID" "$stage" "$LABEL" "${AUTOSTART:-1}" > "$H/enhanced-check.log" 2>&1; rc=$?
+  enhanced_admin /bin/bash "$stage/enhanced-root.sh" install "$TUN_UID" "$stage" "$LABEL" "${AUTOSTART:-1}" "$(id -un)" > "$H/enhanced-check.log" 2>&1; rc=$?
   if [ "$rc" != 0 ]; then rm -rf "$stage"; cat "$H/enhanced-check.log" >> "$H/check.log"; return "$rc"; fi
   logs_rotate
   [ ! -f "$H/sing-box.log" ] || [ -L "$H/sing-box.log" ] || mv "$H/sing-box.log" "$H/sing-box.system.log"
@@ -68,7 +92,7 @@ enhanced_start() {
   # Restore selector choices through the authenticated API, never copy a live DB.
   enhanced_restore_selectors "$stage/selectors.json"
   rm -rf "$stage"
-  enhanced_fingerprint > "$H/.enhanced-fingerprint"
+  enhanced_fingerprint > "$H/.enhanced-fingerprint"; enhanced_ovr_fingerprint > "$H/.enhanced-ovr-fingerprint"
 }
 enhanced_restore_selectors() {
   local name choice

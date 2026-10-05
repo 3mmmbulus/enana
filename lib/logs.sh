@@ -300,6 +300,8 @@ _b_env() {
   detect_others 2>/dev/null; printf 'other_proxy_software=%s\n' "${OTHER_PROXY:-}"
   for p in "$PORT" "$UI_PORT" "$API_PORT" "$SPEED_PORT"; do
     out=$(lsof -nP -iTCP:"$p" -sTCP:LISTEN -Fc 2>/dev/null | sed -n 's/^c//p' | sort -u | paste -sd, -)
+    # TUN: 核心是 root 的系统服务, 当前用户的 lsof 看不到它的监听端口 —— 显示 none 会误导成「没有在监听」
+    [ -n "$out" ] || { [ "${NETWORK_MODE:-system}" = tun ] && enhanced_loaded 2>/dev/null && out='root-service(not visible to lsof)'; }
     printf 'listen.%s=%s\n' "$p" "${out:-none}"
   done
   pid=${SVC_PID:-$(os_service_pid 2>/dev/null)}

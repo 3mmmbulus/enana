@@ -177,6 +177,7 @@ python3 tools/diag-summary.py <文件> --app "Google Chrome" --host google.com
 | `tun-not-ready` | client | 接管方式 `tun` 但没有建立 utun 路由 |
 | `pin-empty` (2.3.9) | client | **固定出口是空的**: 没有任何服务器的角色是 `pin` (`env` 的 `pin.servers=0`), 但有应用 / 网站 / AI 服务选了「固定出口」(`pin.app_policies` / `pin.selectors_on_pin` > 0), 它们全部**直连** (真实 IP 出口)。OpenAI 返回 `unsupported_country_region_territory` 的典型原因, 而且表面上「总开关开着、节点都正常」。有 `policy` 直连连接时置信度 high |
 | `tun-dns-bypass` (2.3.9) | client | TUN 模式下系统 DNS 是局域网地址 (在 `route_exclude_address` 里, DNS 劫持看不到查询), 它对 `www.google.com` 的答案和核心完全不同, 且走 TUN 的 Google 探测失败而经代理端口的探测正常 |
+| `node-connect-timeouts` (2.3.10) | node | 访问记录里经某台服务器 (`node` 列) 的连接有较多**连接超时**: 固定出口 (`route=pin`) 样本 ≥ 30 且 ≥ 3%, 其它 (`auto` 等) 样本 ≥ 50 且 ≥ 8%; 最近 30 分钟内还有超时时置信 `high`, 否则 `medium`。证据 `node=… conns=… timeouts=… (x%) recent30m=a/b`。它补的是服务器端口探测的盲区: 端口探测只说明 TCP 能建立, 不代表每条连接都能建立 |
 | `local-network-down` | network | 最近 30 分钟服务器端口不通, 同时对照站点 `cn_direct` 也失败 |
 | `node-down` | node | 最近 30 分钟**固定出口 / 其它角色**的服务器端口可达率 < 50%, 或**一半以上的自动线路节点**都不可达 (且有对照数据正常; 没有对照数据时置信度降为 medium)。2.3.9 起个别自动线路节点坏了不算故障 (自动选线会避开它), 只作为 `note.node_degraded` 附带说明 —— 以前 38 台里坏 1 台就会被判成主因, 把真正的原因盖住 |
 | `proxy-path-failing` | node | 服务器端口是通的, 但经代理访问 `google_204` 最近 30 分钟失败过半 (服务端代理程序故障 / 配置被改 / 握手被干扰) |
@@ -199,6 +200,12 @@ python3 tools/diag-summary.py <文件> --app "Google Chrome" --host google.com
 - **固定出口事实** (`env` 的 `pin.servers` / `pin.app_policies` / `pin.selectors_on_pin` / `pin.group_members`, 以及 state 行里的 `pin=ok|empty` 和 `环境状态变化 item=pin`)。
 - **`verdict` 的排序**: 节点判断按角色 (见上表 `node-down`), 并新增 `pin-empty` / `tun-dns-bypass`; `verdict.pin` / `verdict.session` 汇总两项事实。
 - 授权方式: `开启系统代理` 的详情带 `helper=used|installed|failed` (见下面「系统代理助手」)。
+
+## 2.3.10 补强
+
+- **TUN 下的节点探测** (`health` 的 `node` 行): TUN 在本机应答 TCP 握手, 普通的探测在 TUN 下永远成功 (耗时 ~3-4 ms, 可达率 100%)。2.3.10 起 TUN 下的探测用 `IP_BOUND_IF` 绑定到默认路由的物理网卡 (`ENANA_PROBE_IFINDEX`), 绑定失败时回退到旧方式; `detail` 里带 `probe=bound` 表示可信。导出里旧记录 (`mode=tun` 没有 `probe=bound`) 会在 `verdict` 里多一条 `note.node_probe_tun`, 提醒「100% 可达」不能当证据。
+- **`listen.*`**: TUN 下核心是 root 服务, 普通用户的 `lsof` 看不到它的监听端口, 显示 `root-service(not visible to lsof)`。
+- **TUN 策略同步** (`ops` 的 `同步策略规则`): `via=helper restart=no` 表示通过免密规则助手同步、没有重启; `restart=yes err=no-helper|rejected` 表示助手不可用 / 被拒绝, 退回完整重启 (会弹授权)。完整重启前后的 `重启核心` 记录仍然带调用链。
 
 ## 诊断上传 (2.3.9)
 

@@ -94,11 +94,17 @@ health_nodes() { # 标准输出: node 行。只探测「固定出口」和「自
   local list res tag result ms role
   list=$(srv_list | awk -F'\t' '($5 == "pin" || $5 == "auto") && $3 != "" && $4 ~ /^[0-9]+$/ { print $5 "\t" $1 "\t" $3 "\t" $4 }' | LC_ALL=C sort -s -r -k1,1 | head -n "$HEALTH_NODE_MAX")
   [ -n "$list" ] || return 0
-  res=$(printf '%s\n' "$list" | awk -F'\t' '{ print $2 "\t" $3 "\t" $4 }' | perl "$LIB/health.pl" probe 4) || return 0
+  # TUN 模式: 探测绑定到物理网卡, 否则 TUN 会在本机应答握手, 「可达」就是假的 (耗时只有几毫秒)
+  local ifx=''
+  if [ "${NETWORK_MODE:-system}" = tun ]; then
+    ifx=$(route -n get default 2>/dev/null | awk '/interface:/ {print $2; exit}')
+    case $ifx in utun*|'') ifx='' ;; *) ifx=$(ifconfig -v "$ifx" 2>/dev/null | sed -n '1s/.* index \([0-9][0-9]*\).*/\1/p') ;; esac
+  fi
+  res=$(printf '%s\n' "$list" | awk -F'\t' '{ print $2 "\t" $3 "\t" $4 }' | ENANA_PROBE_IFINDEX="$ifx" perl "$LIB/health.pl" probe 4) || return 0
   while IFS=$'\t' read -r tag result ms _; do
     [ -n "$tag" ] || continue
     role=$(printf '%s\n' "$list" | awk -F'\t' -v t="$tag" '$2 == t { print $1; exit }')
-    _health_line node "$tag" "$result" "$ms" "$(kv role "$role" mode "${NETWORK_MODE:-system}")"
+    _health_line node "$tag" "$result" "$ms" "$(kv role "$role" mode "${NETWORK_MODE:-system}" probe "${ifx:+bound}")"
   done <<EOF
 $res
 EOF
