@@ -216,7 +216,16 @@ apply_config() {
       warn "社区规则集未通过校验, 已临时停用 (运行 enana update 重新下载)"
     else return 1; fi
   fi
-  if [ -f "$H/config.json" ] && cmp -s "$H/config.json" "$H/config.json.new" && { [ "${NETWORK_MODE:-system}" != tun ] || { enhanced_loaded && [ "$(enhanced_fingerprint)" = "$(cat "$H/.enhanced-fingerprint" 2>/dev/null)" ]; }; }; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi
+  if [ -f "$H/config.json" ] && cmp -s "$H/config.json" "$H/config.json.new"; then
+    if [ "${NETWORK_MODE:-system}" != tun ]; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi
+    if enhanced_loaded && [ "$(enhanced_fingerprint)" = "$(cat "$H/.enhanced-fingerprint" 2>/dev/null)" ]; then
+      # 核心、配置、规则库都没变: 只有应用 / 网站的代理策略 (rules/ovr-*.json, 纯路由数据) 可能变了。已经装过规则同步助手 (上一次管理员授权时顺带装的) 就免密同步到
+      # root 快照, 核心自己热加载 —— 不重启, 也就不用再输入管理员密码。没有助手 / 被拒绝就走下面的完整安装 (要管理员授权, 同时把助手装上)。
+      if ! type enhanced_ovr_fingerprint >/dev/null 2>&1 || [ "$(enhanced_ovr_fingerprint)" = "$(cat "$H/.enhanced-ovr-fingerprint" 2>/dev/null)" ]; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi
+      if enhanced_sync_ovr; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; oplog "${OP_WHO:-auto}" "同步策略规则" "$(kv mode tun via helper restart no)" ok; return 0; fi
+      oplog "${OP_WHO:-auto}" "同步策略规则" "$(kv mode tun via helper restart yes err "$(enhanced_helper_ok >/dev/null 2>&1 && echo rejected || echo no-helper)")" ok
+    fi
+  fi
   [ -f "$H/config.json" ] && cp -p "$H/config.json" "$H/config.json.bak"
   local previous_pid; previous_pid=$(os_service_pid)
   mv "$H/config.json.new" "$H/config.json"; APPLY_CHANGED=1

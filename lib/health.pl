@@ -42,10 +42,41 @@ sub dur { my ($s) = @_; $s = int($s + .5); return $s < 90 ? "${s}s" : $s < 5400 
 sub pct { my ($a, $b) = @_; return $b ? sprintf('%.1f%%', 100 * $a / $b) : '-'; }
 
 # ------------------------------------------------------------------ probe
+# TUN 模式下, 本机进程连服务器端口的 TCP 会被 TUN 在本机直接应答握手 (耗时只有几毫秒), 不管服务器死活都显示「可达」。
+# 给了 ENANA_PROBE_IFINDEX (物理网卡的接口序号, 由 health.sh 在 TUN 模式下给出) 就把探测的 socket 绑定到这块网卡 (IP_BOUND_IF / IPV6_BOUND_IF, 和核心自己绕开 TUN 的方式一样),
+# 探测才是真正连到服务器; 绑定失败 (序号无效 / 系统不支持) 时退回原来的方式, 探测本身绝不因此失败。
+sub tcp_probe_bound {
+  my ($host, $port, $to, $idx) = @_;
+  require Socket; Socket->import();
+  my ($e, @res) = Socket::getaddrinfo($host, $port, { socktype => Socket::SOCK_STREAM() });
+  return undef if $e || !@res;
+  my ($last, $bound) = ('', 0);
+  for my $ai (@res) {
+    my $s; socket($s, $ai->{family}, Socket::SOCK_STREAM(), 0) or next;
+    my ($lvl, $opt) = $ai->{family} == Socket::AF_INET6() ? (41, 125) : (0, 25);      # IPPROTO_IPV6 / IPV6_BOUND_IF, IPPROTO_IP / IP_BOUND_IF (macOS)
+    $bound = 1 if setsockopt($s, $lvl, $opt, pack('I', $idx));
+    my $ok = eval { local $SIG{ALRM} = sub { die "timeout\n" }; alarm($to + 1); my $c = connect($s, $ai->{addr}); my $m = $!; alarm 0; $last = "$m" unless $c; $c };
+    alarm 0; $last = $@ if !$ok && $@;
+    if ($ok) { close $s; return ('ok', $bound) }
+    close $s;
+  }
+  return ('fail', $bound, $last);
+}
 sub tcp_probe {
   my ($host, $port, $to) = @_;
   require IO::Socket::IP; require Socket;
   my $t0 = time; my ($sock, $err);
+  if (($ENV{ENANA_PROBE_IFINDEX} // '') =~ /^[0-9]{1,5}$/) {
+    my ($st, $bound, $why) = tcp_probe_bound($host, $port, $to, $ENV{ENANA_PROBE_IFINDEX} + 0);
+    if (defined $st && $bound) {
+      my $ms = int((time - $t0) * 1000 + .5);
+      return ('ok', $ms, '') if $st eq 'ok';
+      my $e2 = lc($why // '');
+      my $c2 = $e2 =~ /timed out|timeout/ ? 'timeout' : $e2 =~ /refused/ ? 'refused' : $e2 =~ /unreachable|no route/ ? 'unreachable' : 'other';
+      return ($c2, $ms, '');
+    }
+    $t0 = time;       # 绑定没成功: 退回原来的探测
+  }
   eval {
     local $SIG{ALRM} = sub { die "timeout\n" }; alarm($to + 1);
     $sock = IO::Socket::IP->new(PeerHost => $host, PeerPort => $port, Type => Socket::SOCK_STREAM(), Timeout => $to);
@@ -226,6 +257,34 @@ sub cmd_verdict {
       "「固定出口」是空的: 没有任何服务器被设为固定出口, 但有 $pin_apps 个应用策略和 $pin_sel 个网站 / 服务策略 (如 ChatGPT / Claude 一类) 选了它 —— 它们现在全部直连 (用你的真实 IP 出口), 根本不会走代理" . ($policy_direct > 0 ? " (最近 30 分钟有 $policy_direct 条这样的连接)" : "") . "。OpenAI 返回 unsupported_country_region_territory 就是这个原因, 不是线路不稳定。到仪表盘「服务器」页把一台服务器设为「固定出口」。",
       "The Fixed exit is empty: no server is set as the fixed exit, yet $pin_apps app polic" . ($pin_apps == 1 ? 'y' : 'ies') . " and $pin_sel site/service polic" . ($pin_sel == 1 ? 'y' : 'ies') . " (e.g. ChatGPT / Claude) point to it, so they connect directly with your real IP and never use the proxy" . ($policy_direct > 0 ? " ($policy_direct such connections in the last 30 minutes)" : "") . ". OpenAI's unsupported_country_region_territory comes from exactly this — it is not an unstable line. Set one server as the Fixed exit on the Servers page.",
       "pin.servers=0 pin.app_policies=$pin_apps pin.selectors_on_pin=$pin_sel policy_direct_30m=$policy_direct");
+  }
+  # 连接超时: 访问记录里经「固定出口 / 自动线路的某台服务器」的连接, 失败原因是 timeout (连不上那台服务器本身) 的比例。这是最直接的证据: TUN 模式下 (2.3.9 及更早)
+  # 本机对服务器端口的健康探测会被 TUN 在本机应答, 不管服务器死活都显示「可达」。固定出口不会漂移到别的国家, 所以固定出口的服务器连接超时直接影响 ChatGPT / Claude。
+  my %nc;
+  for my $a (@$acc) { next if @$a < 12 || $a->[0] eq 'ts';
+    my ($route, $node, $result, $err) = ($a->[7] // '', $a->[8] // '', $a->[10] // '', $a->[11] // '');
+    next unless $route =~ /^(?:pin|auto)$/ && length $node;
+    my $e = epoch_of($a->[0]) // 0; my $x = $nc{$node} //= { n => 0, to => 0, rn => 0, rto => 0 };
+    my $to = ($result eq 'error' && $err eq 'timeout') ? 1 : 0;
+    $x->{n}++; $x->{to} += $to; if ($e >= $recent_from) { $x->{rn}++; $x->{rto} += $to; } }
+  my (@nct, %nct_ev);
+  for my $t (sort keys %nc) { my $x = $nc{$t}; my $is_pin = (($role{$t} // '') eq 'pin');
+    my ($min_n, $min_pct) = $is_pin ? (30, .03) : (50, .08);
+    next unless $x->{n} >= $min_n && $x->{to} / $x->{n} >= $min_pct;
+    push @nct, $t; $nct_ev{$t} = sprintf('node=%s conns=%d timeouts=%d (%s) recent30m=%d/%d', $t, $x->{n}, $x->{to}, pct($x->{to}, $x->{n}), $x->{rto}, $x->{rn}); }
+  if (@nct) {
+    my ($w) = sort { $nc{$b}{to} / $nc{$b}{n} <=> $nc{$a}{to} / $nc{$a}{n} } @nct;
+    my $x = $nc{$w}; my $ongoing = ($x->{rn} >= 5 && $x->{rto} / $x->{rn} >= .03);
+    my $kind = (($role{$w} // '') eq 'pin') ? '固定出口' : '线路';
+    $push->('node-connect-timeouts', 'node', ($ongoing ? 'high' : 'medium'), '',
+      "经" . $kind . "「$w」的连接有 " . pct($x->{to}, $x->{n}) . " ($x->{to}/$x->{n}) 连不上这台服务器本身 (连接超时)" . ($ongoing ? ", 最近 30 分钟里仍在发生" : "") . ": 这台服务器或本机到它的线路不稳定。" . ((($role{$w} // '') eq 'pin') ? "固定出口不会漂移到别的国家, 所以会直接影响 ChatGPT / Claude 的使用; 想要更稳, 再设一台同国家的服务器作为固定出口, 让固定出口里自动选线。" : "") . "(TUN 模式下早期版本的健康探测会被 TUN 在本机应答, 所以健康记录里它可能显示 100% 可达 —— 以连接超时为准。)",
+      "Connections through the " . ((($role{$w} // '') eq 'pin') ? 'Fixed exit' : 'line') . " \"$w\" fail to reach that server itself (connect timeout) " . pct($x->{to}, $x->{n}) . " of the time ($x->{to}/$x->{n})" . ($ongoing ? ", and it is still happening in the last 30 minutes" : "") . ": the server, or the path from this computer to it, is unreliable." . ((($role{$w} // '') eq 'pin') ? " The Fixed exit never drifts to another country, so this directly affects ChatGPT / Claude; for resilience add a second server in the same country as a Fixed exit so it picks between them." : "") . " (In TUN mode the health probes of earlier versions were answered locally by TUN, so they may show 100% reachable — trust the connect timeouts.)",
+      map { $nct_ev{$_} } @nct);
+  }
+  # TUN 模式下用旧版本记录的节点探测不可信 (见 tcp_probe_bound): 有这样的记录就在判定里说一声, 别让「100% 可达」误导
+  if ($cap eq 'tun') {
+    my $unbound = scalar grep { $_->{kind} eq 'node' && $_->{detail} =~ /mode=tun/ && $_->{detail} !~ /probe=bound/ } @$H;
+    push @L, "note.node_probe_tun=$unbound 条节点探测是在 TUN 模式下用旧方式做的 (被 TUN 在本机应答, 耗时只有几毫秒, 不能证明服务器可达); 以访问记录里的连接超时为准" if $unbound;
   }
   # TUN: 系统 DNS 指向局域网地址 (路由器) 时, 这类地址在 TUN 的 route_exclude_address 里, DNS 劫持看不到查询, 拿到被污染的结果; 表现为: 经代理端口访问正常, 走 TUN 的探测却失败
   my %pr; for my $r (@$P) { next if @$r < 8 || $r->[0] eq 'probe'; $pr{"$r->[0]|$r->[1]"} = $r; }

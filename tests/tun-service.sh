@@ -11,6 +11,7 @@ import sys
 r,w=sys.argv[1:]; s=open(r+'/lib/enhanced-root.sh').read()
 s=s.replace('root="/Library/Application Support/enana-$uid"','root="'+w+'/runtime"')
 s=s.replace('plist="/Library/LaunchDaemons/$label.plist"','plist="'+w+'/daemon.plist"')
+s=s.replace('libexec="/usr/local/libexec/enana"; sudoers_dir="/etc/sudoers.d"','libexec="'+w+'/libexec"; sudoers_dir="'+w+'/sudoers.d"')
 open(w+'/helper.sh','w').write(s)
 PY
 for c in chown sleep; do printf '#!/bin/sh\nexit 0\n' > "$W/bin/$c"; done
@@ -60,4 +61,45 @@ rm -f "$W/daemon.plist"
 bash "$W/helper.sh" remove 501
 [ ! -e "$W/runtime" ] && [ ! -e "$W/daemon.plist" ]
 grep -q 'enable system/com.enana.proxy.tun.501' "$W/calls"
-echo 'PASS: root snapshot install, bootstrap rollback, GUI recovery, symlink rejection, foreign VPN route rollback, staging cleanup'
+# ---- the rule-data helper is installed by the same authorisation (best effort), validated first, and removed with the service ----
+printf '#!/bin/sh\necho "inet 172.19.0.1 netmask 0xfffffffc"\n' > "$W/bin/ifconfig"
+cat > "$W/bin/install" <<'MOCK'
+#!/bin/bash
+# fake install: ignore -o/-g (the test is not root), support -m and -d
+mode=''; args=(); while [ $# -gt 0 ]; do case $1 in -m) mode=$2; shift 2 ;; -o|-g) shift 2 ;; -d) shift ;; *) args+=("$1"); shift ;; esac; done
+cp "${args[0]}" "${args[1]}" && { [ -z "$mode" ] || chmod "$mode" "${args[1]}"; }
+MOCK
+chmod +x "$W/bin/install"
+mkdir -p "$W/stage/rules"; printf '{"snapshot":"third"}\n' > "$W/stage/config.json"
+sed 's|@VERSION@|1|g' "$R/lib/tunrules-helper.pl" > "$W/stage/tunrules-helper"
+bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1 tester
+[ -x "$W/libexec/tunrules-501" ]
+grep -qx "tester ALL=(root) NOPASSWD: $W/libexec/tunrules-501" "$W/sudoers.d/enana-tunrules-501"
+[ "$(wc -l < "$W/sudoers.d/enana-tunrules-501" | tr -d ' ')" = 1 ]
+[ "$(stat -f %Lp "$W/libexec/tunrules-501")" = 755 ] && [ "$(stat -f %Lp "$W/sudoers.d/enana-tunrules-501")" = 440 ]
+! grep -q '@ROOT@\|@ROOTUID@\|@VERSION@' "$W/libexec/tunrules-501"
+grep -q "my \$ROOT = '$W/runtime'" "$W/libexec/tunrules-501"
+grep -q 'my \$ROOT_UID = 0;' "$W/libexec/tunrules-501"
+/usr/bin/perl -c "$W/libexec/tunrules-501" >/dev/null 2>&1
+/usr/sbin/visudo -cf "$W/sudoers.d/enana-tunrules-501" >/dev/null
+[ ! -e "$W/stage/../runtime/.helper."* ] 2>/dev/null
+# A bad user name, a non-perl helper or a helper that does not compile never blocks or breaks the TUN install, and leaves no rule behind.
+rm -rf "$W/libexec" "$W/sudoers.d"
+bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1 'bad user;name'
+[ ! -e "$W/libexec/tunrules-501" ] && [ ! -e "$W/sudoers.d/enana-tunrules-501" ]
+printf '#!/bin/sh\necho pwned\n' > "$W/stage/tunrules-helper"
+bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1 tester
+[ ! -e "$W/libexec/tunrules-501" ] && [ ! -e "$W/sudoers.d/enana-tunrules-501" ]
+printf '#!/usr/bin/perl\nthis is not perl (\n' > "$W/stage/tunrules-helper"
+bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1 tester
+[ ! -e "$W/libexec/tunrules-501" ] && [ ! -e "$W/sudoers.d/enana-tunrules-501" ]
+rm -f "$W/stage/tunrules-helper"
+bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1 tester
+[ ! -e "$W/libexec/tunrules-501" ]
+# Installing a good helper again and then removing the service removes the helper and its sudoers rule.
+sed 's|@VERSION@|1|g' "$R/lib/tunrules-helper.pl" > "$W/stage/tunrules-helper"
+bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1 tester
+[ -x "$W/libexec/tunrules-501" ] && [ -f "$W/sudoers.d/enana-tunrules-501" ]
+bash "$W/helper.sh" remove 501
+[ ! -e "$W/libexec/tunrules-501" ] && [ ! -e "$W/sudoers.d/enana-tunrules-501" ] && [ ! -e "$W/libexec" ]
+echo 'PASS: root snapshot install, bootstrap rollback, GUI recovery, symlink rejection, foreign VPN route rollback, staging cleanup, rule-data helper install / validation / removal'

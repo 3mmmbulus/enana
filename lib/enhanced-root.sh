@@ -1,6 +1,10 @@
 #!/bin/bash
 # Runs only after explicit OS administrator authorization. Arguments are data;
-# no settings.env, eval, arbitrary launchd program or persistent sudoers helper.
+# no settings.env, eval or arbitrary launchd program. The one persistent
+# privilege it leaves behind is a narrowly scoped rule-data helper (see
+# install_tun_helper): it can only write validated routing-rule JSON into the
+# root snapshot, so changing an app/site policy does not need another
+# administrator prompt. It never accepts executables or core configuration.
 set -eu
 [ "$(id -u)" = 0 ] || { echo 'Administrator authorization required'; exit 1; }
 action=${1:-}; uid=${2:-}
@@ -8,16 +12,19 @@ case $uid in ''|*[!0-9]*) exit 2 ;; esac
 root="/Library/Application Support/enana-$uid"
 label="com.enana.proxy.tun.$uid"
 plist="/Library/LaunchDaemons/$label.plist"
+libexec="/usr/local/libexec/enana"; sudoers_dir="/etc/sudoers.d"      # fixed paths (tests substitute them in a temporary copy)
 case $action in
   stop) launchctl disable "system/$label"; launchctl bootout "system/$label" 2>/dev/null || true; exit 0 ;;
   remove)
     launchctl bootout "system/$label" 2>/dev/null || true
     launchctl enable "system/$label" 2>/dev/null || true
-    rm -f "$plist"; rm -rf "$root"; exit 0 ;;
+    rm -f "$plist"; rm -rf "$root"
+    rm -f "$sudoers_dir/enana-tunrules-$uid" "$libexec/tunrules-$uid"; rmdir "$libexec" 2>/dev/null || true
+    exit 0 ;;
   install) ;;
   *) exit 2 ;;
 esac
-stage=${3:-}; agent=${4:-}; autostart=${5:-0}
+stage=${3:-}; agent=${4:-}; autostart=${5:-0}; username=${6:-}
 [ "$agent" = com.enana.proxy ] || exit 2
 case $autostart in 0|1) ;; *) exit 2 ;; esac
 [ -d "$stage" ] && [ ! -L "$stage" ] || exit 2
@@ -92,6 +99,24 @@ for name in sing-box config.json rules certs; do
   [ -e "$work/$name" ] || continue
   rm -rf "$root/$name"; mv "$work/$name" "$root/$name"
 done
+# Best effort and never fatal: the rule-data helper + a one-line sudoers rule for this user (validated with visudo -cf before it is written).
+install_tun_helper() {
+  [ -n "$username" ] && [ -f "$stage/tunrules-helper" ] && [ ! -L "$stage/tunrules-helper" ] || return 0
+  case $username in *[!A-Za-z0-9._-]*) return 0 ;; esac
+  local t h s; t=$(mktemp -d "$root/.helper.XXXXXX") || return 0
+  h="$libexec/tunrules-$uid"; s="$sudoers_dir/enana-tunrules-$uid"
+  # Copy first (the stage directory is user-writable), then validate and install that same copy.
+  cp "$stage/tunrules-helper" "$t/in" || { rm -rf "$t"; return 0; }
+  R="$root" perl -pe 's/\@ROOT\@/$ENV{R}/g; s/\@ROOTUID\@/0/g' "$t/in" > "$t/h"
+  head -1 "$t/h" | grep -q '^#!/usr/bin/perl$' && /usr/bin/perl -c "$t/h" >/dev/null 2>&1 || { rm -rf "$t"; return 0; }
+  printf '%s ALL=(root) NOPASSWD: %s\n' "$username" "$h" > "$t/s"
+  /usr/sbin/visudo -cf "$t/s" >/dev/null 2>&1 || { rm -rf "$t"; return 0; }
+  mkdir -p "$libexec" && chown root:wheel "$libexec" && chmod 755 "$libexec" \
+    && install -m 755 -o root -g wheel "$t/h" "$h" \
+    && mkdir -p "$sudoers_dir" && install -m 440 -o root -g wheel "$t/s" "$s"
+  rm -rf "$t"
+}
+install_tun_helper || true
 run='<false/>'; [ "$autostart" = 1 ] && run='<true/>'
 # Fixed root-owned paths, no home path or arbitrary program in the daemon plist.
 cat > "$plist" <<PLIST
