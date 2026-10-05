@@ -880,3 +880,16 @@ macOS 没有允许 enana 弹出授权窗口。请在「系统设置 → 隐私�
 核心进程已重启	Core process restarted
 会话心跳失败	Session heartbeat failed
 会话心跳恢复	Session heartbeat recovered
+            %s⚠ 没有设置固定出口: 选了「固定出口」的应用 / 服务 (如 ChatGPT) 现在会直连 (真实 IP); 到仪表盘「服务器」页设置%s\n	            %s⚠ No Fixed exit set: apps/services pointed at it (e.g. ChatGPT) now connect directly (your real IP); set one on the dashboard Servers page%s\n
+总开关变更	Master switch changed
+重启核心	Core restart
+已通知云端释放这台设备的在线名额	Notified the cloud to free this device's online slot
+没能联系上云端: 这台设备的在线名额会在 10 分钟没有心跳后自动释放	Could not reach the cloud: this device's online slot is released automatically after 10 minutes without a heartbeat
+诊断上传	Diagnostics upload
+发送完整诊断	Full diagnostics sent
+删除已上传的诊断	Uploaded diagnostics deleted
+  enana diag-preview   看下一份自动上传的诊断摘要 (没有网站 / 应用名 / IP / 服务器地址); diag-upload 立刻传一份	  enana diag-preview   show the next diagnostics summary that is uploaded automatically (no sites / app names / IPs / server addresses); diag-upload sends one now
+  enana diag-send [小时数] 发送完整诊断给开发者 (含域名和应用名, 7 天后自动删除), 给一个报告编号; diag-delete 删除已上传的	  enana diag-send [hours] send full diagnostics to the developer (includes domains and app names, deleted after 7 days) and print a report code; diag-delete removes what you uploaded
+完整诊断包含你访问过的域名和应用名, 只发给 enana 开发者, 云端 7 天后自动删除; 不含密码和令牌。	Full diagnostics include the domains you visited and app names, are sent only to the enana developer, and are deleted from the cloud after 7 days; no passwords or tokens.
+确认发送?	Send?
+已发送。报告编号: %s (把它告诉开发者)	Sent. Report code: %s (give it to the developer)

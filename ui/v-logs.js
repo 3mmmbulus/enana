@@ -59,6 +59,7 @@
   function opsOn() { return flag('log_ops', true); }
   function accessOn() { var p = prefs(); return p && p.access_log != null ? boolOf(p.access_log) : null; }   // null = 还不知道
   function coreOn() { return flag('log_core', true); }
+  function diagOn() { return flag('diag_upload', true); }          // 诊断摘要自动上传 (官方云端, 不含网站 / 应用名 / IP / 服务器地址)
   function pad2(n) { return n < 10 ? '0' + n : String(n); }
   function ymd(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
   function stamp() { var d = new Date(); return ymd(d).replace(/-/g, '') + '-' + pad2(d.getHours()) + pad2(d.getMinutes()) + pad2(d.getSeconds()); }
@@ -229,7 +230,7 @@
   }
 
   /* ================= 日志详情弹窗 ================= */
-  var BOOL_KEYS = { on: 1, enabled: 1, auto: 1, force: 1, registered: 1, leak_guard: 1, ads_block: 1, access_log: 1, log_ops: 1, log_core: 1, auto_sites: 1, save: 1, was_enabled: 1 };
+  var BOOL_KEYS = { on: 1, enabled: 1, auto: 1, force: 1, registered: 1, leak_guard: 1, ads_block: 1, access_log: 1, log_ops: 1, log_core: 1, diag_upload: 1, auto_sites: 1, save: 1, was_enabled: 1 };
   var APP_STATES = { follow: 1, direct: 1, pin: 1, auto: 1 }, ROUTE_VALUES = { pin: 1, auto: 1, direct: 1 };
   /* 操作记录的「详情」是 key=value 对 (值里有空格时用引号): 解析成 [[key, value], …]; 不是这种格式 (例如旧版后端的自由文字) 或被截断了就返回 null */
   function kvParse(s) {
@@ -776,7 +777,7 @@
   function swRow(kind, helpTopic, inp) {
     return setRow([h('div', { class: 'log-set-hd' }, h('b', { class: 'log-set-t' }, L('logs.' + kind + '.title')), helpTopic ? ui.help(helpTopic) : null), h('div', { class: 'muted sm' }, L('logs.' + kind + '.desc'))], h('label', { class: 'sw' }, inp, h('span', { class: 'sw-ui' })));
   }
-  var KIND = { ops: opsOn, acc: function () { return accessOn() === true; }, core: coreOn };      // 开关 -> 当前值 (acc = 网站访问)
+  var KIND = { ops: opsOn, acc: function () { return accessOn() === true; }, core: coreOn, diag: diagOn };      // 开关 -> 当前值 (acc = 网站访问)
 
   function makePanel() {
     var P = { seen: false };
@@ -784,11 +785,13 @@
     P.keep = h('b', { class: 'log-set-t' });
     P.chg = ui.btn(L('logs.set.change'), { sm: true, icon: 'edit' }); ui.act(P.chg, openRetention);
     P.sw = {};
-    ['ops', 'acc', 'core'].forEach(function (k) {
+    ['ops', 'acc', 'core', 'diag'].forEach(function (k) {
       var inp = h('input', { type: 'checkbox', role: 'switch', 'aria-label': L('logs.' + k + '.aria') });
       ui.switchAct(inp, function () { return busy[k] ? want[k] : KIND[k](); }, function (w) { return toggleLog(k, w); });
       P.sw[k] = inp;
     });
+    P.send = ui.btn(L('logs.diag.send'), { sm: true, icon: 'upload' }); ui.act(P.send, sendDiag);
+    P.del = ui.btn(L('logs.diag.del'), { sm: true, icon: 'trash' }); ui.act(P.del, deleteDiag);
     P.useSum = h('span', { class: 'muted sm' });
     P.bar = h('div', { class: 'log-use-bar', role: 'img' });
     P.leg = h('ul', { class: 'log-use-leg' });
@@ -799,13 +802,16 @@
       swRow('ops', HT.ops, P.sw.ops),
       swRow('acc', HT.access, P.sw.acc),
       swRow('core', HT.core, P.sw.core),
+      swRow('diag', null, P.sw.diag),
+      setRow([h('div', { class: 'log-set-hd' }, h('b', { class: 'log-set-t' }, L('logs.diag.sendTitle'))), h('div', { class: 'muted sm' }, L('logs.diag.sendDesc'))], h('div', null, P.send, ' ', P.del)),
       h('div', { class: 'log-set-row log-use' }, h('div', { class: 'log-set-main' }, h('div', { class: 'log-use-h' }, h('b', { class: 'log-set-t' }, L('logs.use.title')), P.useSum), P.bar, P.leg, P.useNote)));
     P.render = function () {
       var p = prefs(), why = TP.why.helper(), wait = p ? '' : t('logs.set.loadingWhy');
       setText(P.keep, p ? t('logs.set.keep', { keep: hoursLabel(keepHours()) }) : t('logs.set.loading'));
       P.warn.hidden = !why; setText(P.warn, why);
       ui.avail(P.chg, why || wait);
-      ['ops', 'acc', 'core'].forEach(function (k) {
+      ui.avail(P.send, why || wait); ui.avail(P.del, why || wait);
+      ['ops', 'acc', 'core', 'diag'].forEach(function (k) {
         var on = busy[k] ? want[k] : KIND[k]();
         if (P.sw[k].checked !== on) P.sw[k].checked = on;
         ui.avail(P.sw[k], why || wait || (busy[k] ? t('logs.acc.busy') : ''));
@@ -909,9 +915,9 @@
   }
 
   /* ---- 三个开关: 操作记录 (立即生效) / 网站访问 · 代理核心日志 (改配置需要重启核心: 先确认, 再用任务卡片跟进) ---- */
-  var FORM = { ops: 'log_ops', acc: 'access_log', core: 'log_core' };
+  var FORM = { ops: 'log_ops', acc: 'access_log', core: 'log_core', diag: 'diag_upload' };
   async function toggleLog(kind, w) {
-    var why = TP.why.helper(), keep = hoursLabel(keepHours()), restart = kind !== 'ops', ok, detail;
+    var why = TP.why.helper(), keep = hoursLabel(keepHours()), restart = kind === 'acc' || kind === 'core', ok, detail;
     if (why) { ui.toast(why, 'warn'); return; }
     if (busy[kind]) return;
     detail = w ? [t('logs.' + kind + '.onD1'), t('logs.' + kind + '.onD2', { keep: keep })] : [t('logs.' + kind + '.offD1')];
@@ -930,6 +936,30 @@
     await loadPrefs();
     renderPanels();
     if (active()) { invalidate(); load(cur); }
+  }
+
+  /* 发送完整诊断给开发者 (含访问过的域名 / 应用名, 所以必须用户确认) → 报告编号; 删除已上传的诊断 */
+  function showReportCode(code) {
+    var copy = ui.btn(t('common.copy'), { sm: true, icon: 'copy' });
+    ui.act(copy, async function () { try { await navigator.clipboard.writeText(code); ui.toast(t('common.copied'), 'ok'); } catch (e) { ui.toast(t('common.copyFail'), 'warn'); } });
+    return ui.modal({ title: t('logs.diag.sentTitle'), icon: 'upload', iconKind: 'pri', size: 'sm', body: h('div', null, h('p', null, t('logs.diag.sentMsg')), h('p', null, h('code', { class: 'mono' }, code), ' ', copy)), actions: [{ label: t('common.close'), kind: 'primary', cancel: true }] });
+  }
+  async function sendDiag() {
+    var why = TP.why.helper(), ok, r, m;
+    if (why) { ui.toast(why, 'warn'); return; }
+    ok = await ui.confirmDialog({ title: t('logs.diag.sendTitle'), message: t('logs.diag.sendMsg'), detail: [t('logs.diag.sendD1'), t('logs.diag.sendD2')], confirmText: t('logs.diag.sendGo'), kind: 'warning' });
+    if (!ok) return;
+    r = await TP.jobs.runInDock(t('logs.diag.job'), function () { return TP.helper('POST', '/api/diag/send', { form: { hours: 24 } }); });
+    m = r && r.ok && r.job && /[A-Za-z0-9]{15}/.exec(r.job.msg || '');
+    if (m) showReportCode(m[0]);
+  }
+  async function deleteDiag() {
+    var why = TP.why.helper(), ok, r;
+    if (why) { ui.toast(why, 'warn'); return; }
+    ok = await ui.confirmDialog({ title: t('logs.diag.delTitle'), message: t('logs.diag.delMsg'), confirmText: t('logs.diag.delGo'), kind: 'warning' });
+    if (!ok) return;
+    try { r = await TP.helper('POST', '/api/diag/delete'); ui.toast(t('logs.diag.delDone', { n: (r && r.deleted) || 0 }), 'ok'); }
+    catch (e) { ui.toast(TP.errMsg(e) || t('logs.diag.delFail'), 'err'); }
   }
 
   LG.settingsCard = function () {

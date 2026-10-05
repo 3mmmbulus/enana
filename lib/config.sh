@@ -271,7 +271,11 @@ proxy_locked() { # <函数> [参数…]
   if [ "${OP_LOCK_HELD:-0}" = 1 ] || ! op_lock; then "$@"; return $?; fi
   "$@"; rc=$?; op_unlock; return $rc
 }
-_proxy_set() { settings_set "$1" "$2"; eval "$1=\$2"; proxy_apply_mode; }
+_proxy_set() { # <PROXY_ENABLED|PROXY_MODE> <值>: 每一次真的变化都记下来源 (switch_note), 不管是谁调用的
+  local old; eval "old=\${$1:-}"
+  settings_set "$1" "$2"; eval "$1=\$2"; proxy_apply_mode
+  if [ "$old" != "$2" ] && type switch_note >/dev/null 2>&1; then switch_note "$1" "$old" "$2"; fi
+}
 proxy_set_enabled() { proxy_locked _proxy_set PROXY_ENABLED "$1"; }                                           # 0|1
 proxy_set_mode() { case $1 in auto|global) ;; *) return 1 ;; esac; proxy_locked _proxy_set PROXY_MODE "$1"; }   # auto|global
 proxy_sync_mode() { # 核心刚(重新)启动后调用: 让运行时的模式与设置一致 (缓存文件里可能留着旧模式)

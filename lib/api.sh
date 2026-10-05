@@ -95,7 +95,7 @@ case $path in /favicon.ico) path="$ADMIN_PATH/favicon.png" ;; esac      # 浏览
 case $path in /|"$ADMIN_PATH"|"$ADMIN_PATH"/*) serve_static ;; esac
 
 # ---------- 以下是 JSON 接口: 到这里才加载其余模块 ----------
-for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan billing sync vps; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan billing sync vps diag; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 i18n_init
 OP_WHO=dashboard; export OP_WHO
@@ -613,12 +613,12 @@ ep_settings_get() {
   json "{\"ok\":true,\"lang\":\"${LANG_UI:-zh}\",$(settings_json),\"ports\":{\"proxy\":$PORT,\"ui\":$UI_PORT,\"api\":$API_PORT,\"speed\":$SPEED_PORT},\"proxy\":{\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\",\"network_mode\":\"${NETWORK_MODE:-system}\",\"tun_ready\":$(enhanced_ready && enhanced_configured && echo true || echo false)},\"account\":{\"email\":\"$(jesc "$(auth_current_email)")\"}}"
 }
 ep_settings_set() {
-  local lang hours days alog lcore lops asites job='' changed=0 oldh restart=''
-  lang=$(fp lang); hours=$(fp log_hours); alog=$(fp access_log); lcore=$(fp log_core); lops=$(fp log_ops); asites=$(fp auto_sites)
+  local lang hours days alog lcore lops asites dup job='' changed=0 oldh restart=''
+  lang=$(fp lang); hours=$(fp log_hours); alog=$(fp access_log); lcore=$(fp log_core); lops=$(fp log_ops); asites=$(fp auto_sites); dup=$(fp diag_upload)
   if [ -z "$hours" ]; then days=$(fp log_days); case $days in ''|*[!0-9]*) ;; *) hours=$((days * 24)) ;; esac; fi          # 旧版仪表盘按天提交
   if [ -n "$lang" ]; then case " $I18N_LANGS " in *" $lang "*) ;; *) fail "不支持的语言" ;; esac; fi
   if [ -n "$hours" ]; then case $hours in *[!0-9]*) fail "日志保留时长必须是 12 小时到 30 天" ;; esac; [ "$hours" -ge "$LOG_HOURS_MIN" ] && [ "$hours" -le "$LOG_HOURS_MAX" ] || fail "日志保留时长必须是 12 小时到 30 天"; fi
-  for _v in "$alog" "$lcore" "$lops"; do case $_v in ''|0|1) ;; *) fail "参数无效" ;; esac; done
+  for _v in "$alog" "$lcore" "$lops" "$dup"; do case $_v in ''|0|1) ;; *) fail "参数无效" ;; esac; done
   if [ -n "$asites" ]; then
     case $asites in 0|1) ;; *) fail "参数无效" ;; esac
     [ "$asites" = 0 ] || [ "$(srv_count)" -gt 0 ] || fail "需要先添加服务器: 自动识别出打不开的网站后, 才有代理可以加" E_NO_SERVERS
@@ -633,6 +633,10 @@ ep_settings_set() {
     settings_set LOG_OPS "$lops"; LOG_OPS=$lops; changed=1
     [ "$lops" = 1 ] && oplog_force dashboard "修改设置" "$(kv setting log_ops from 0 to 1)" ok
   fi
+  if [ -n "$dup" ] && [ "$dup" != "${DIAG_UPLOAD:-1}" ]; then                      # 诊断摘要上传: 开关本身的变化一定记下来 (隐私相关)
+    oplog_force dashboard "修改设置" "$(kv setting diag_upload from "${DIAG_UPLOAD:-1}" to "$dup")" ok
+    settings_set DIAG_UPLOAD "$dup"; DIAG_UPLOAD=$dup; changed=1
+  fi
   if [ -n "$asites" ] && [ "$asites" != "${AUTO_SITES:-0}" ]; then
     settings_set AUTO_SITES "$asites"; oplog dashboard "修改设置" "$(kv setting auto_sites from "${AUTO_SITES:-0}" to "$asites")" ok; AUTO_SITES=$asites; changed=1
     [ "$asites" = 1 ] || rm -f "$H/.autosite.off" "$H/.autosite.ev"
@@ -645,6 +649,18 @@ ep_settings_set() {
   fi
   [ "$changed" = 1 ] || fail "没有要修改的设置"
   okj "${job:+\"job\":\"$job\"}"
+}
+
+# ---------- 诊断上传 (设置 → 日志; 说明见 docs/DIAGNOSTICS.md) ----------
+ep_diag_send() { # POST /api/diag/send  hours=…  把完整诊断 (含访问过的域名 / 应用名) 发给开发者: 后台任务, 完成后任务结果里有报告编号
+  auth_logged_in || fail "需要登录" E_AUTH
+  local hours; hours=$(fp hours); case $hours in ''|*[!0-9]*) hours=24 ;; esac
+  okj "\"job\":\"$(job_spawn diag-send '打包完整诊断|上传' "$hours")\""
+}
+ep_diag_delete() { # POST /api/diag/delete  删除自己已经上传的全部诊断 (摘要 + 完整诊断)
+  auth_logged_in || fail "需要登录" E_AUTH
+  local n; n=$(OP_WHO=dashboard diag_delete) || fail "没能联系上云端, 稍后再试" E_ACCOUNT_UNREACHABLE
+  okj "\"deleted\":${n:-0}"
 }
 
 # ---------- 恢复官方默认规则 (设置 → 代理) ----------
@@ -869,6 +885,8 @@ case "$method $path" in
   "POST /api/rules/toggle")    ep_rules_toggle ;;
   "POST /api/rules/custom/add")    ep_rules_add ;;
   "POST /api/rules/custom/delete") ep_rules_delete ;;
+  "POST /api/diag/send")       ep_diag_send ;;
+  "POST /api/diag/delete")     ep_diag_delete ;;
   "POST /api/update-rules")    okj "\"job\":\"$(job_spawn update-rules '准备|下载规则集|应用规则集|完成')\"" ;;
   "GET /api/dns")              json "$(printf '{"ok":true,%s}' "$(dns_state_json)" | i18n_json 'name|desc|match|server|via|detail')" ;;
   "POST /api/dns")             ep_dns_set ;;

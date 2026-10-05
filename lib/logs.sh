@@ -35,7 +35,24 @@ oplog() { # oplog <来源 dashboard|terminal|auto> <动作> <详情 (用 kv 生�
   oplog_force "$@"
 }
 sysproxy_record() { # <来源> <on|off> <返回码>  把「开启 / 关闭系统代理」的结果写进操作记录: 用了哪种授权方式 (method) 和失败原因 (err) —— 以前系统代理没开成功时不留任何痕迹
-  oplog "$1" "$([ "$2" = on ] && echo 开启系统代理 || echo 关闭系统代理)" "$(kv method "${SYSPROXY_METHOD:-}" err "${SYSPROXY_ERR:-}" port "${PORT:-}" mode "${NETWORK_MODE:-system}")" "$([ "$3" = 0 ] && echo ok || echo error)"
+  oplog "$1" "$([ "$2" = on ] && echo 开启系统代理 || echo 关闭系统代理)" "$(kv method "${SYSPROXY_METHOD:-}" helper "${SYSPROXY_HELPER:-}" err "${SYSPROXY_ERR:-}" port "${PORT:-}" mode "${NETWORK_MODE:-system}")" "$([ "$3" = 0 ] && echo ok || echo error)"
+}
+
+# 调用链 (最近的在前, 用 < 连接, 最多 <最多层数> 层): 「核心为什么重启了 / 总开关为什么变了」这类事后很难追查的动作, 在动手前记下是谁触发的。
+call_chain() { # [跳过层数, 默认 1 = 不含 call_chain 自己] [最多层数, 默认 5]
+  local skip=${1:-1} max=${2:-5} i out='' n=0
+  [ -n "${FUNCNAME[*]+x}" ] || return 0
+  for ((i = skip; i < ${#FUNCNAME[@]}; i++)); do
+    case ${FUNCNAME[$i]} in main|source) continue ;; esac
+    out="$out${out:+<}${FUNCNAME[$i]}"; n=$((n + 1)); [ "$n" -ge "$max" ] && break
+  done
+  printf '%s' "$out"
+}
+core_restart_note() { # 核心重启前记一笔: 谁触发的 (调用链) · 当前核心 pid · 代理总开关
+  oplog "${OP_WHO:-auto}" "重启核心" "$(kv via "$(call_chain 2 6)" pid "$(os_service_pid 2>/dev/null || true)" proxy "${PROXY_ENABLED:-0}")" ok
+}
+switch_note() { # <设置名> <旧值> <新值>  代理总开关 / 模式的每一次变化都记下是谁改的; 「为什么自己关了」可以直接从操作记录读出来
+  oplog "${OP_WHO:-auto}" "总开关变更" "$(kv key "$1" from "$2" to "$3" via "$(call_chain 2 6)" pid "$$")" ok
 }
 oplog_force() {
   local f ts; mkdir -p "$LOGS"
@@ -229,8 +246,8 @@ logs_clear() { # <类型 ops|access|proxy|all> [before=YYYY-MM-DD] -> 打印释�
 }
 
 settings_json() { # GET /api/settings 的 settings 与 usage
-  printf '"settings":{"log_hours":%s,"log_hours_min":%s,"log_hours_max":%s,"log_ops":%s,"access_log":%s,"log_core":%s,"auto_sites":%s},"usage":%s' \
-    "$(logs_hours)" "$LOG_HOURS_MIN" "$LOG_HOURS_MAX" "$([ "${LOG_OPS:-1}" = 1 ] && echo true || echo false)" "$([ "${ACCESS_LOG:-1}" = 1 ] && echo true || echo false)" "$([ "${LOG_CORE:-1}" = 1 ] && echo true || echo false)" "$([ "${AUTO_SITES:-0}" = 1 ] && echo true || echo false)" "$(logs_usage_json)"
+  printf '"settings":{"log_hours":%s,"log_hours_min":%s,"log_hours_max":%s,"log_ops":%s,"access_log":%s,"log_core":%s,"auto_sites":%s,"diag_upload":%s},"usage":%s' \
+    "$(logs_hours)" "$LOG_HOURS_MIN" "$LOG_HOURS_MAX" "$([ "${LOG_OPS:-1}" = 1 ] && echo true || echo false)" "$([ "${ACCESS_LOG:-1}" = 1 ] && echo true || echo false)" "$([ "${LOG_CORE:-1}" = 1 ] && echo true || echo false)" "$([ "${AUTO_SITES:-0}" = 1 ] && echo true || echo false)" "$([ "${DIAG_UPLOAD:-1}" = 1 ] && echo true || echo false)" "$(logs_usage_json)"
 }
 
 # ======================================================================================================================
@@ -266,7 +283,7 @@ _b_meta() {
   printf 'service.loaded=%s\nservice.running=%s\nservice.pid=%s\n' "${SVC_LOADED:-0}" "${SVC_RUNNING:-0}" "${SVC_PID:-}"
   printf 'capture.mode=%s\n' "${NETWORK_MODE:-system}"
   printf 'proxy.enabled=%s\nproxy.mode=%s\nclash.mode=%s\n' "${PROXY_ENABLED:-0}" "${PROXY_MODE:-auto}" "${clash_mode:-unknown}"
-  printf 'settings.log_ops=%s\nsettings.access_log=%s\nsettings.log_core=%s\nsettings.log_hours=%s\nsettings.auto_sites=%s\nsettings.auto_update=%s\n' "${LOG_OPS:-1}" "${ACCESS_LOG:-1}" "${LOG_CORE:-1}" "$(logs_hours)" "${AUTO_SITES:-0}" "${AUTO_UPDATE:-1}"
+  printf 'settings.log_ops=%s\nsettings.access_log=%s\nsettings.log_core=%s\nsettings.log_hours=%s\nsettings.auto_sites=%s\nsettings.auto_update=%s\nsettings.diag_upload=%s\n' "${LOG_OPS:-1}" "${ACCESS_LOG:-1}" "${LOG_CORE:-1}" "$(logs_hours)" "${AUTO_SITES:-0}" "${AUTO_UPDATE:-1}" "${DIAG_UPLOAD:-1}"
   printf 'ports.proxy=%s\nports.clash=%s\nports.api=%s\nports.speed=%s\n' "$PORT" "$UI_PORT" "$API_PORT" "$SPEED_PORT"
   printf 'servers.total=%s\nservers.pin=%s\nservers.auto=%s\nservers.other=%s\n' "$(srv_count)" "$role_pin" "$role_auto" "$role_other"
   printf 'account.logged_in=%s\ncontent.seq=%s\ncontent.version=%s\nrules.updated=%s\n' "$(auth_logged_in && echo yes || echo no)" "$(cloud_seq)" "$(cloud_version)" "$(rules_updated_at)"
@@ -291,6 +308,7 @@ _b_env() {
   launchctl print "$GUI/$LABEL" 2>/dev/null | awk '/^[[:space:]]*(last exit code|runs) = / { k = $0; sub(/^[[:space:]]*/, "", k); gsub(/ = /, "=", k); gsub(/ /, "_", k); print "service." k }'
   [ -f "$H/hb.fail" ] && printf 'session.heartbeat_failing_since=%s\n' "$(os_date_at "$(cat "$H/hb.fail" 2>/dev/null)" 2>/dev/null || cat "$H/hb.fail")"
   [ -s "$H/notice" ] && printf 'session.last_end_reason=%s\n' "$(head -1 "$H/notice")"
+  _b_sessionfacts; _b_pinfacts
   stats_summary                         # 流量统计: 最近 7 天每天采样了多少分钟 (有数据的日子 samples=N; 没有行 = 那天一次都没采到, 不是「没流量」)
   printf 'disk.free_kb=%s\n' "$(df -k "$H" 2>/dev/null | awk 'NR==2 {print $4}')"
   printf 'logs.size_kb=%s\n' "$(du -sk "$LOGS" 2>/dev/null | awk '{print $1}')"
@@ -300,6 +318,30 @@ _b_env() {
   for p in api.log tick.log check.log worker.log launcher.log; do
     [ -s "$H/$p" ] && tail -n 40 "$H/$p" 2>/dev/null | grep -iE 'error|fail|fatal|warn|denied' | tail -n 8 | _b_mask_user | sed "s/^/helperlog.$p: /"
   done
+  return 0
+}
+
+_b_pinfacts() { # 「固定出口」是不是真的存在: 没有任何服务器的 role 是 pin 时, 选了「固定出口」的应用 / 服务全部直连 (verdict 的 pin-empty 读这里; *_names 只在本机导出里, 上传摘要时会去掉)
+  printf 'pin.servers=%s\n' "$(srv_list | awk -F'\t' '$5=="pin"' | wc -l | tr -d ' ')"
+  clash GET /proxies 2>/dev/null | perl -MJSON::PP -e '
+    local $/; my $j = eval { decode_json(<STDIN>) } or exit 0; my $p = $j->{proxies} || {};
+    print "pin.group_members=", join(",", @{ ($p->{PIN} || {})->{all} || [] }), "\n";
+    my @on = sort grep { (($p->{$_}{type} // "") =~ /^selector$/i) && (($p->{$_}{now} // "") eq "PIN") } keys %$p;
+    print "pin.selectors_on_pin=", scalar(@on), "\n";
+    print "pin.selectors_on_pin_names=", join(",", @on[0 .. ($#on > 15 ? 15 : $#on)]), "\n" if @on;'
+  [ -s "$H/.apps.now" ] || apps_installed > "$H/.apps.now" 2>/dev/null
+  apps_json 2>/dev/null | perl -MJSON::PP -e '
+    local $/; my $l = eval { decode_json(<STDIN>) } || []; my @a = map { $_->{name} // "" } grep { ($_->{state} // "") eq "pin" } @$l;
+    print "pin.app_policies=", scalar(@a), "\n"; print "pin.app_policy_names=", join(",", @a[0 .. ($#a > 15 ? 15 : $#a)]), "\n" if @a;'
+}
+_b_sessionfacts() { # 登录会话 + 心跳的现状: 最近一次心跳是什么时候 / 什么结果 / 最近一次成功是什么时候 (被退出登录前后最关键的证据)
+  local last code okts now_ sid; now_=$(date +%s)
+  auth_logged_in || { printf 'session.state=logged-out\n'; return 0; }
+  last=$(session_hb_get last); code=$(session_hb_get code); okts=$(session_hb_get ok); sid=$(session_id)
+  printf 'session.state=logged-in\nsession.id_tail=%s\nsession.device_tail=%s\n' "${sid: -4}" "$(device_uid | cut -c1-8)"
+  [ -z "$last" ] || printf 'session.last_heartbeat_age_s=%s\nsession.last_heartbeat_code=%s\n' "$((now_ - last))" "${code:-}"
+  [ -z "$okts" ] || printf 'session.last_heartbeat_ok_age_s=%s\n' "$((now_ - okts))"
+  [ ! -s "$H/cloud.token" ] || printf 'session.token_age_s=%s\n' "$(( now_ - $(stat -f %m "$H/cloud.token" 2>/dev/null || echo "$now_") ))"
   return 0
 }
 

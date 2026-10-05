@@ -1,0 +1,115 @@
+#ENANA-DIAGNOSTICS format=1
+#generated=2026-10-05 03:16:43 tz=+0800 app=enana version=2.3.9
+@@SECTION meta format=kv rows=24
+app=enana
+version=2.3.9
+core=1.14.2
+os=macOS 27.0.1
+arch=arm64
+lang=zh
+timezone=+0800
+now=2026-10-05 03:16:36
+epoch=1791141396
+service.loaded=1
+service.running=1
+service.pid=16419
+capture.mode=tun
+proxy.enabled=1
+proxy.mode=auto
+clash.mode=Rule
+settings.log_ops=1
+ports.proxy=7890
+servers.total=3
+servers.pin=0
+servers.auto=3
+account.logged_in=yes
+content.seq=202610030105
+secret.token=SHOULD_NOT_APPEAR_META
+@@SECTION verdict format=kv rows=20
+verdict.version=1
+verdict.generated=2026-10-05 03:16:43
+verdict.data=health_samples=94 state_lines=5 span=13m access_rows=979 ops_rows=18
+verdict.cause=pin-empty
+verdict.blame=client
+verdict.confidence=high
+verdict.since=2026-10-05 03:10:56
+verdict.summary.zh=「固定出口」是空的: SecretApp 直连了 secret-site.example, 节点 SecretNode-HK 203.0.113.9 也不通
+verdict.summary.en=The Fixed exit is empty: SecretApp connected directly to secret-site.example
+verdict.evidence.1=pin.servers=0 node=SecretNode-HK recent=3/11 ip=198.51.100.7
+verdict.also.1=chatgpt-direct (client): 最近 30 分钟里 SecretApp 访问 secret-site.example 全部直连
+verdict.also.2=node-down (node): SecretNode-HK 不可达
+verdict.now.proxy_enabled=yes
+verdict.now.capture=tun (tun ready)
+verdict.last_proxy_off=2026-10-05 03:03:27 auto 总开关变更 key=PROXY_ENABLED from=1 to=0 via=_proxy_set<auth_logout_local sub=sub.secret-provider.example user=e***@g***.com
+verdict.last_proxy_on=2026-10-05 03:10:56 dashboard 开启代理 enabled=1 mode=auto
+verdict.node.SecretNode-HK=role=auto reachable=27.3% (3/11) recent30m=27.3% avg_ms=87
+verdict.node.my-vps-203.0.113.9-prod=role=auto reachable=100.0% (11/11) recent30m=100.0% avg_ms=42
+verdict.canary.google_204=ok=100.0% (1/1) recent30m=100.0%
+verdict.outage.1=2026-10-05 03:05:29 ~ 2026-10-05 03:12:38 8min node/SecretNode-HK refused ONGOING
+verdict.chatgpt=conns=593 direct=593 proxy=0 errors=587 reasons=[policy×335,mode×258] apps=[SecretApp×570,Google Chrome×21] nodes=[SecretNode-HK×3] error_types=[timeout×565,other×14] last_ok=2026-10-05 03:16:43
+verdict.chatgpt.recent30m=conns=593 direct=593 proxy=0 errors=587
+verdict.pin=servers=0 app_policies=1 selectors_on_pin=7 policy_direct_30m=9
+verdict.session=state=logged-in last_heartbeat_ok_age_s=2 last_heartbeat_code=200
+note.node_degraded=1 台「自动线路」里的服务器端口不可达 (SecretNode-HK (27.3%))
+@@SECTION env format=kv rows=30
+capture.mode=tun
+capture.tun.configured=yes
+capture.tun.ready=yes
+sysproxy.HTTPEnable=1
+sysproxy.HTTPProxy=127.0.0.1
+sysproxy.HTTPPort=7890
+sysproxy.SOCKSProxy=10.20.30.40
+sysproxy.points_to_enana=yes
+dns.system=192.168.10.1 fe80::10%en0
+net.interface=en0
+net.gateway=192.168.10.1
+other_proxy_software=
+listen.7890=sing-box
+core.pid=16419
+core.uptime=01:24
+service.runs=4
+stats.last_sample=2026-10-05 03:16:31
+pin.servers=0
+pin.app_policies=1
+pin.app_policy_names=SecretApp
+pin.selectors_on_pin=7
+pin.group_members=direct,SecretNode-HK
+session.state=logged-in
+session.id_tail=9999
+session.device_tail=abcd1234
+config.check=error: unknown outbound SecretNode-HK
+helperlog.api.log: error contacting secret-site.example
+pid	app	policy	network	destination	observation	process_path
+870	SecretApp	follow	tcp	108.177.1.1:5228	bypass-system-proxy	/Applications/SecretApp.app/Contents/MacOS/SecretApp
+@@SECTION servers format=tsv rows=3
+tag	type	host	port	role	sub
+SecretNode-HK	vless	1.2.*.*	443	auto	sub.secret-provider.example
+my-vps-203.0.113.9-prod	vless	2.3.*.*	443	auto
+Plain	vless	3.4.*.*	443	auto
+@@SECTION health_summary format=tsv rows=3
+bucket	kind	target	n	ok	fail	ms_avg	ms_max	errors
+2026-10-05 03:00	node	SecretNode-HK	2	0	2	0	0	refused×2
+2026-10-05 03:00	node	my-vps-203.0.113.9-prod	2	2	0	42	47
+2026-10-05 03:00	canary	cn_direct	1	1	0	122	122
+@@SECTION outages format=tsv rows=1
+start	end	minutes	kind	target	result	samples
+2026-10-05 03:05:29	2026-10-05 03:12:38	8	node	SecretNode-HK	refused	3
+@@SECTION ops format=tsv rows=11
+ts	who	action	detail	result
+2026-10-05 03:03:27	terminal	开启系统代理	method=direct helper=used port=7890 mode=system	ok
+2026-10-05 03:03:41	dashboard	登录	user=e***@g***.com via=online	ok
+2026-10-05 03:05:23	dashboard	导入服务器	sub=sub.secret-provider.example mode=replace	ok
+2026-10-05 03:06:00	auto	订阅「secret-sub」刷新	count=38 tag=SecretNode-HK	ok
+2026-10-05 03:06:10	auto	总开关变更	key=PROXY_ENABLED from=1 to=0 via=_proxy_set<auth_logout_local<session_local_end pid=4242	ok
+2026-10-05 03:07:00	auto	已被退出登录	reason=kicked http=401 proxy_was=1 since_ok_s=130 session=9999 via=session_heartbeat resp_code=unauthorized	ok
+2026-10-05 03:08:00	dashboard	添加网站 secret-site.example	host=secret-site.example	ok
+2026-10-05 03:09:00	auto	环境状态变化	item=pin from=ok to=empty pin_servers=0 dependents=7	ok
+2026-10-05 03:10:00	dashboard	切换策略	kind=selector tag=Global site=secret-site.example from=AUTO to=DeletedNode-SG	ok
+2026-10-05 03:11:00	dashboard	切换策略	kind=selector tag=Global from=AUTO to=SecretNode-HK	ok
+2026-10-05 03:12:00	dashboard	修改应用/网站策略	kind=site name=secret-site.example from=follow to=pin target_to=SecretNode-HK src=user	ok
+@@SECTION access format=tsv rows=1
+ts	id	net	host	port	app	user	route	node	reason	result	err	dur	ips	errmsg	path	capture
+2026-10-05 03:16:38	1	tcp	secret-site.example	443	SecretApp	<user>	direct	direct	policy	error	timeout	10000	203.0.113.77			mixed
+@@SECTION proxy format=raw rows=1
++0800 2026-10-05 03:16:38 INFO inbound/mixed[in]: inbound connection to secret-site.example:443
+@@END

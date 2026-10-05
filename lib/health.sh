@@ -28,6 +28,18 @@ health_sysproxy_eff() { # 当前生效的系统代理 (主网络服务) 是否�
     /^[ \t]*HTTPEnable :/ { he = $3 } /^[ \t]*HTTPProxy :/ { hp = $3 } /^[ \t]*HTTPPort :/ { hpt = $3 }
     END { print (he == 1 && (hp == "127.0.0.1" || hp == "localhost") && hpt == p) ? 1 : 0 }'
 }
+pin_dependents() { # 有多少个选择器 / 规则会把流量交给「固定出口」: 默认走固定出口的服务 (config.json 里 default=PIN 的选择器) + 有内容的应用 / 网站固定出口规则集
+  local n=0 f
+  [ -s "$H/config.json" ] && n=$(grep -o '"default":"PIN"' "$H/config.json" 2>/dev/null | wc -l | tr -d ' ')
+  for f in ovr-apppin ovr-pin ovr-browserpin; do
+    if grep -qE '"(process_name|process_path|domain|domain_suffix)"' "$H/rules/$f.json" 2>/dev/null; then n=$((n + 1)); fi
+  done
+  printf '%s' "${n:-0}"
+}
+health_pin_state() { # empty = 没有任何服务器是固定出口, 但有应用 / 网站 / AI 服务选了它 → 它们全部直连 (真实 IP 出口, ChatGPT 会报 unsupported_country_region_territory); ok = 没问题
+  [ "$(srv_list | awk -F'\t' '$5 == "pin"' | wc -l | tr -d ' ')" = 0 ] || { printf ok; return 0; }
+  if [ "$(pin_dependents)" -gt 0 ]; then printf empty; else printf ok; fi
+}
 health_state_vector() { # -> core=1 pid=… api=1 proxy=1 mode=auto capture=system sysproxy=1 login=1 tun=- if=en0 gw=192.168.1.1
   local run=0 pid='' api=0 tun='-' ifc='' gw='' code
   os_service_info 2>/dev/null; run=${SVC_RUNNING:-0}; pid=${SVC_PID:-}
@@ -37,7 +49,7 @@ health_state_vector() { # -> core=1 pid=… api=1 proxy=1 mode=auto capture=syst
   fi
   [ "${NETWORK_MODE:-system}" != tun ] || { enhanced_ready >/dev/null 2>&1 && tun=1 || tun=0; }
   ifc=$(route -n get default 2>/dev/null | awk '/interface:/ {print $2; exit}'); gw=$(route -n get default 2>/dev/null | awk '/gateway:/ {print $2; exit}')
-  printf 'core=%s pid=%s api=%s proxy=%s mode=%s capture=%s sysproxy=%s login=%s tun=%s if=%s gw=%s' "$run" "${pid:--}" "$api" "${PROXY_ENABLED:-0}" "${PROXY_MODE:-auto}" "${NETWORK_MODE:-system}" "$(health_sysproxy_eff)" "$(auth_logged_in && echo 1 || echo 0)" "$tun" "${ifc:--}" "${gw:--}"
+  printf 'core=%s pid=%s api=%s proxy=%s mode=%s capture=%s sysproxy=%s login=%s tun=%s if=%s gw=%s pin=%s' "$run" "${pid:--}" "$api" "${PROXY_ENABLED:-0}" "${PROXY_MODE:-auto}" "${NETWORK_MODE:-system}" "$(health_sysproxy_eff)" "$(auth_logged_in && echo 1 || echo 0)" "$tun" "${ifc:--}" "${gw:--}" "$(health_pin_state)"
 }
 _health_event() { # <项目> <旧值> <新值> [额外 键 值…]  -> 操作记录 (来源 auto)
   local item=$1 from=$2 to=$3; shift 3
@@ -49,7 +61,7 @@ health_state_tick() { # 标准输出: 需要写进健康记录的 state 行 (变
   [ -f "$f" ] && IFS= read -r prev < "$f"
   [ -f "$w" ] && IFS= read -r lastw < "$w"
   if [ -n "$prev" ]; then
-    for k in core api proxy sysproxy login tun capture if gw; do
+    for k in core api proxy sysproxy login tun capture if gw pin; do
       pv=$(_hv "$k" "$prev"); cv=$(_hv "$k" "$cur"); [ "$pv" != "$cv" ] || continue
       write=1
       case $k in
@@ -61,13 +73,17 @@ health_state_tick() { # 标准输出: 需要写进健康记录的 state 行 (变
         tun) _health_event tun_ready "$pv" "$cv" ;;
         capture) _health_event capture_mode "$pv" "$cv" ;;
         if|gw) _health_event "net_$k" "$pv" "$cv" ;;
+        pin) _health_event pin "$pv" "$cv" pin_servers 0 dependents "$(pin_dependents)" ;;     # ok → empty: 固定出口没了 (删了服务器 / 重装后没重设), 选了它的应用 / 服务开始直连
       esac
     done
     pv=$(_hv pid "$prev"); cv=$(_hv pid "$cur")
     if [ "$(_hv core "$prev")" = 1 ] && [ "$(_hv core "$cur")" = 1 ] && [ "$pv" != "$cv" ] && [ "$pv" != - ] && [ "$cv" != - ]; then
       write=1; oplog auto "核心进程已重启" "$(kv old_pid "$pv" new_pid "$cv")" ok      # 崩溃后被 launchd 拉起 / 手动重启: 这是「为什么连接突然断了一下」的直接证据
     fi
-  else write=1; fi
+  else
+    write=1
+    [ "$(_hv pin "$cur")" != empty ] || _health_event pin - empty pin_servers 0 dependents "$(pin_dependents)"      # 第一次观察就已经是空的 (例如重装后): 也记一笔
+  fi
   [ "$(( $(now) - ${lastw:-0} ))" -lt "$HEALTH_STATE_EVERY" ] || write=1
   printf '%s\n' "$cur" > "$f"
   if [ "$write" = 1 ]; then now > "$w"; _health_line state capture ok 0 "$cur"; fi
@@ -178,5 +194,5 @@ _b_verdict() { # <起始时间|空>  自动判定: 读 health / meta / env (+ �
   local nodes
   nodes=$(srv_list | awk -F'\t' '$5 == "pin" || $5 == "auto" { printf "%s%s:%s", (n++ ? "," : ""), $1, $5 }')
   _health_rows "$1" > "$BT/v.health"
-  perl "$LIB/health.pl" verdict "$(now)" "$BT/v.health" "$BT/ops" "$BT/access" "$BT/meta" "$BT/env" "$nodes"
+  perl "$LIB/health.pl" verdict "$(now)" "$BT/v.health" "$BT/ops" "$BT/access" "$BT/meta" "$BT/env" "$nodes" "$BT/probes"
 }

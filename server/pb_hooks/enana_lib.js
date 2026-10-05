@@ -717,4 +717,5 @@ module.exports = {
   syncGet: syncGet, syncPut: syncPut, syncDelete: syncDelete,
   onUserCreated: onUserCreated, onUserCreateRequest: onUserCreateRequest, gc: gc,
   needSession: needSession, planFor: planFor, readJSON: readJSON,
+  reply: reply, fail: fail, clean: clean, nowSec: nowSec, iso: iso,       // 给 enana_diag.js 用
 }

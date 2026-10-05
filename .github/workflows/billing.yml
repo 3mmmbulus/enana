@@ -2,9 +2,9 @@ name: Cloud billing foundation
 on:
   push:
     branches: [main]
-    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'ui/billing.js', 'tests/billing-*', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
+    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'ui/billing.js', 'tests/billing-*', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
   pull_request:
-    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'ui/billing.js', 'tests/billing-*', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
+    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'ui/billing.js', 'tests/billing-*', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
   workflow_dispatch:
 permissions:
   contents: read
@@ -28,7 +28,7 @@ jobs:
       - name: Test real database transactions and local SMTP activation
         env:
           PB_BIN: ${{ runner.temp }}/enana-pb-test/pocketbase
-        run: node --test tests/billing-domain.test.js tests/billing-pocketbase.test.js tests/email-verification-ui.test.js tests/billing-ui.test.js tests/billing-smtp-admin.test.js
+        run: node --test tests/billing-domain.test.js tests/billing-pocketbase.test.js tests/diag-pocketbase.test.js tests/email-verification-ui.test.js tests/billing-ui.test.js tests/billing-smtp-admin.test.js
       - name: Check authenticated local bridge and exact amounts
         run: python3 tests/billing-bridge.py
       - name: Check deployment syntax

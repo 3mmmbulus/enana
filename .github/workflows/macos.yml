@@ -21,6 +21,10 @@ jobs:
         run: bash tests/stats.sh
       - name: Reset to the official default rules (official content refresh, backup, undo, rollback)
         run: bash tests/reset.sh
+      - name: sing-box fallback download source and signed compatibility manifest
+        run: bash tests/core.sh
+      - name: Diagnostics summary (allow-list privacy) and upload flow
+        run: bash tests/diag.sh
       - name: Dashboard system-proxy flow and sortable table headers
         run: |
           node tests/sysproxy-ui.test.js

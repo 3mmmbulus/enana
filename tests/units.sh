@@ -279,6 +279,14 @@ t "servers 分区: 不出现完整地址" nothas servers '203\.0\.113\.77'
 t "config 分区: 规则按顺序列出 (rule[0] …)" has config '^rule\[0\] '
 t "config 分区: 服务器只留类型 / 打码地址 / 端口" has config '^server tag=Pin-A type=socks host=203\.0\.\*\.\*'
 t "整个文件没有任何密码 / 令牌 / 完整服务器地址 / 真实用户名 (PW-SECRET-123 · u-secret · CLASH-SECRET-XYZ · 203.0.113.77 · someone)" sh -c "! grep -E 'PW-SECRET-123|u-secret|CLASH-SECRET-XYZ|203\.0\.113\.77|someone' '$UW/bundle.txt'"
+# 诊断摘要 (lib/diag.pl): 用真实导出做端到端检查 —— 格式没对上 (分区 / 列的位置) 或者有敏感内容漏出去, 这里会立刻发现
+perl "$LIB/diag.pl" summary < "$UW/bundle.txt" > "$UW/summary.json" 2>"$UW/summary.err"
+eq "诊断摘要: 真实导出可以生成合法 JSON (v=1, 带 meta / verdict / env / health / ops)" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["v"], sorted(k for k in ("meta","verdict","env","health","ops") if d.get(k)))' "$UW/summary.json" 2>&1)" "1 ['env', 'health', 'meta', 'ops', 'verdict']"
+eq "诊断摘要: 版本 / 服务器数量来自 meta, 判定原因来自 verdict" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(bool(d["meta"]["version"]), d["meta"]["servers.pin"], bool(d["verdict"]["cause"]))' "$UW/summary.json" 2>&1)" "True 1 True"
+eq "诊断摘要: 健康记录里的服务器换成了别名 (Pin-A → node1)" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sorted(set(r["target"] for r in d["health"] if r["kind"]=="node")))' "$UW/summary.json" 2>&1)" "['node1']"
+t "诊断摘要: 没有任何域名 / 应用名 / 服务器标签 / 地址 / 密码 / 用户名 (chatgpt.com · google.com · Foo · Pin-A · 203.0.113.77 · PW-SECRET-123 · u-secret · someone)" sh -c "! grep -E 'chatgpt[.]com|google[.]com|Foo|Pin-A|203[.]0[.]113|PW-SECRET-123|u-secret|CLASH-SECRET-XYZ|someone|/Users/' '$UW/summary.json'"
+t "诊断摘要: 操作记录里「修改应用/网站策略」这类动作还在, 详情里的 name= / kind= / target_to= 被丢弃" sh -c "python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); o=[x for x in d[\"ops\"] if x[\"action\"].startswith(\"修改\")]; assert o and all(\"name=\" not in x[\"detail\"] and \"target_to=\" not in x[\"detail\"] and \"kind=\" not in x[\"detail\"] for x in o)' '$UW/summary.json'"
+t "诊断摘要: 没有 stderr 输出 (没有 Perl 警告)" test ! -s "$UW/summary.err"
 logs_bundle 24 ops > "$UW/b2.txt" 2>/dev/null
 eq "只勾选「操作记录」时: 只有 meta + ops 两个分区 (没有 access / proxy / 当前状态)" "$(grep '^@@SECTION' "$UW/b2.txt" | awk '{print $2}' | paste -sd, -)" "meta,ops"
 logs_bundle 1 access,proxy > "$UW/b3.txt" 2>/dev/null

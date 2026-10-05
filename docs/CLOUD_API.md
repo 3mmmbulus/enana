@@ -6,7 +6,7 @@
 基地址 `https://api.enana.cc` (官网提供静态首页与邮箱验证页, 验证页调用受限的邮箱确认接口)。JSON, UTF-8。除登录 / 注册 / 邮箱确认外都要带:
 `Authorization: Bearer <token>` 与 `X-Enana-Session: <session id>`。时间一律是 Unix 秒 (整数)。平台 `platform` 取值 `macos | windows | linux`。
 
-## 数据表 (PocketBase 集合, 命名按领域, 方便以后扩展)
+## 数据表 (PocketBase 集合, 命名按领域, 方便以后扩展; 另有 2.3.9 起的 `diag_reports`, 见下面「诊断上传」)
 | 集合 | 用途 |
 |---|---|
 | `users` | 账号 (PocketBase 内置认证集合: 邮箱 + 密码哈希) |
@@ -46,6 +46,12 @@ Pro 订单、余额、到账记录与验证接口见 [BILLING_API.md](BILLING_AP
 - `GET /api/enana/v1/sync/snapshot[?payload=1]` → `{"exists":true,"version":7,"updated":1760000000,"size":2048,"device":"MacBook","payload":"<base64, 仅 payload=1>"}`
 - `PUT /api/enana/v1/sync/snapshot` `{"base_version":6,"payload":"<base64>","size":2048}` → `{"version":7}` 或 409 `{"code":"conflict","version":8}`
 - `DELETE /api/enana/v1/sync/snapshot` → `{"ok":true}`
+### 诊断上传 (2.3.9, 需要令牌 + 会话; 说明见 `DIAGNOSTICS.md`)
+- `POST /api/enana/v1/diag` `{"trigger":"login|register|manual|event:<类型>","payload":{"v":1,"meta":{…},"verdict":{…},"env":{…},"ops":[…],"health":[…],"outages":[…]}}` → `{"ok":true,"id":"<15 位>"}`。`payload` 只认这些顶层键, 限制深度 5 / 每个字符串 2000 字符 / 数组 600 项, 序列化后 ≤ 98304 字符 (400 / 413)。同一设备两次摘要至少隔 5 分钟 (`login` `register` `manual` 不受限), 每台设备每天最多 60 份 → 429 `{"code":"rate_limited","retry_after":…}`。
+- `POST /api/enana/v1/diag/full` (multipart: `bundle` = gzip 文件 ≤ 8 MiB, `app` = 版本) → `{"ok":true,"id":"<报告编号>"}`。每台设备每天最多 3 份。
+- `DELETE /api/enana/v1/diag` → `{"ok":true,"deleted":N}` 删除调用者在云端的全部诊断 (所有设备; 完整诊断的文件一并删除)。
+- 数据: 集合 `diag_reports` (`user` `device` `kind=summary|full` `trigger` `cause` `app_version` `payload` `bundle` `created`), API 规则全是 `null` (只有管理员能读)。保留 7 天 (每天 03:27 清理), 每台设备最多 200 份摘要 / 5 份完整诊断, 账号 / 设备删除时级联删除。nginx 只对这两个精确路径放宽请求体上限 (`server/update-nginx-diag.py`)。
+
 ### 签名内容 (登录后下发的精选数据与服务器部署脚本)
 `GET /v1/manifest.json` → `{"channel":"stable","bundles":{"content":{"version":"2026.10.02.1","url":"/v1/content-2026.10.02.1.tar.gz","sha256":"…","sig":"/v1/content-2026.10.02.1.sig","size":123456,"min_client":"2.1.0"}}}`
 每个包用 ECDSA P-256 / SHA-256 签名, 客户端用内置公钥 (`data/cloud-pub.pem`) 验签后才使用; 验签失败 → 丢弃并保留旧版本。
