@@ -1,10 +1,13 @@
 #!/bin/bash
 # Runs only after explicit OS administrator authorization. Arguments are data;
 # no settings.env, eval or arbitrary launchd program. The one persistent
-# privilege it leaves behind is a narrowly scoped rule-data helper (see
+# privilege it leaves behind is a narrowly scoped helper (see
 # install_tun_helper): it can only write validated routing-rule JSON into the
-# root snapshot, so changing an app/site policy does not need another
-# administrator prompt. It never accepts executables or core configuration.
+# root snapshot (so changing an app/site policy does not need another
+# administrator prompt) and bounce this user's own daemon with
+# `launchctl kickstart -k` on a label baked in here (so restarting an unchanged
+# core does not need one either). It never accepts executables, paths, labels
+# or core configuration from its caller.
 set -eu
 [ "$(id -u)" = 0 ] || { echo 'Administrator authorization required'; exit 1; }
 action=${1:-}; uid=${2:-}
@@ -13,6 +16,7 @@ root="/Library/Application Support/enana-$uid"
 label="com.enana.proxy.tun.$uid"
 plist="/Library/LaunchDaemons/$label.plist"
 libexec="/usr/local/libexec/enana"; sudoers_dir="/etc/sudoers.d"      # fixed paths (tests substitute them in a temporary copy)
+launchctl_bin="/bin/launchctl"                                         # baked into the root helper's `restart` action (tests substitute it too)
 case $action in
   stop) launchctl disable "system/$label"; launchctl bootout "system/$label" 2>/dev/null || true; exit 0 ;;
   remove)
@@ -107,7 +111,9 @@ install_tun_helper() {
   h="$libexec/tunrules-$uid"; s="$sudoers_dir/enana-tunrules-$uid"
   # Copy first (the stage directory is user-writable), then validate and install that same copy.
   cp "$stage/tunrules-helper" "$t/in" || { rm -rf "$t"; return 0; }
-  R="$root" perl -pe 's/\@ROOT\@/$ENV{R}/g; s/\@ROOTUID\@/0/g' "$t/in" > "$t/h"
+  # Everything the helper acts on is baked in here, by root, from this script's own fixed values: the snapshot directory, the daemon label (the only
+  # thing its `restart` action may kickstart) and the launchctl path. The helper itself accepts no path, label or program from its caller.
+  R="$root" L="$label" C="$launchctl_bin" perl -pe 's/\@ROOT\@/$ENV{R}/g; s/\@ROOTUID\@/0/g; s/\@LABEL\@/$ENV{L}/g; s/\@LAUNCHCTL\@/$ENV{C}/g' "$t/in" > "$t/h"
   head -1 "$t/h" | grep -q '^#!/usr/bin/perl$' && /usr/bin/perl -c "$t/h" >/dev/null 2>&1 || { rm -rf "$t"; return 0; }
   printf '%s ALL=(root) NOPASSWD: %s\n' "$username" "$h" > "$t/s"
   /usr/sbin/visudo -cf "$t/s" >/dev/null 2>&1 || { rm -rf "$t"; return 0; }

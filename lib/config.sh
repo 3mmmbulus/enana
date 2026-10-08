@@ -219,8 +219,10 @@ apply_config() {
   if [ -f "$H/config.json" ] && cmp -s "$H/config.json" "$H/config.json.new"; then
     if [ "${NETWORK_MODE:-system}" != tun ]; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi
     if enhanced_loaded && [ "$(enhanced_fingerprint)" = "$(cat "$H/.enhanced-fingerprint" 2>/dev/null)" ]; then
-      # 核心、配置、规则库都没变: 只有应用 / 网站的代理策略 (rules/ovr-*.json, 纯路由数据) 可能变了。已经装过规则同步助手 (上一次管理员授权时顺带装的) 就免密同步到
-      # root 快照, 核心自己热加载 —— 不重启, 也就不用再输入管理员密码。没有助手 / 被拒绝就走下面的完整安装 (要管理员授权, 同时把助手装上)。
+      # 核心、配置、规则库都没变 (指纹不含 default_mode 和 rules/.updated 这类记账内容, 见 enhanced_fingerprint): 只有应用 / 网站的代理策略 (rules/ovr-*.json, 纯路由数据)
+      # 可能变了。已经装过规则同步助手 (上一次管理员授权时顺带装的) 就免密同步到 root 快照, 核心自己热加载 —— 不重启, 也就不用再输入管理员密码。没有助手 /
+      # 被拒绝就走下面的完整安装 (要管理员授权, 同时把助手装上)。总开关 / 模式只改了 default_mode 的话, 运行中的核心靠接口和缓存记住模式, 这里补一次同步即可。
+      type enhanced_mode_resync >/dev/null 2>&1 && enhanced_mode_resync
       if ! type enhanced_ovr_fingerprint >/dev/null 2>&1 || [ "$(enhanced_ovr_fingerprint)" = "$(cat "$H/.enhanced-ovr-fingerprint" 2>/dev/null)" ]; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi
       if enhanced_sync_ovr; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; oplog "${OP_WHO:-auto}" "同步策略规则" "$(kv mode tun via helper restart no)" ok; return 0; fi
       oplog "${OP_WHO:-auto}" "同步策略规则" "$(kv mode tun via helper restart yes err "$(enhanced_helper_ok >/dev/null 2>&1 && echo rejected || echo no-helper)")" ok

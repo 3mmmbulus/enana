@@ -20,7 +20,7 @@ enhanced_start() {
   # Authorization is requested before touching the user core. Once authorized,
   # the task installer stops only the executable owned by this installation.
   win_bridge tun-install "$(cygpath -w "$stage")" > "$H/enhanced-check.log" 2>&1; rc=$?
-  if [ "$rc" = 0 ]; then os_system_service_stop; enhanced_restore_selectors "$stage/selectors.json"; enhanced_fingerprint > "$H/.enhanced-fingerprint"
+  if [ "$rc" = 0 ]; then os_system_service_stop; enhanced_restore_selectors "$stage/selectors.json"; enhanced_record_install
   else cat "$H/enhanced-check.log" >> "$H/check.log"; fi
   rm -rf "$stage"; return "$rc"
 }
@@ -28,8 +28,12 @@ enhanced_stop() { win_bridge tun-stop; }
 enhanced_remove() { win_bridge tun-remove; }
 enhanced_system_log() { :; }
 enhanced_ready() { enhanced_configured || return 0; win_bridge tun-ready; }
+# Same two bookkeeping flaws as macOS (see enhanced_fingerprint in enhanced.sh) made every `enana update` / master-switch toggle ask for UAC again, so the
+# config is hashed with default_mode blanked (enhanced_config_hash) and hidden / *.new / *.tmp files are ignored. Unlike macOS there is no unprivileged
+# rule-data helper here, so the policy rule sets (ovr-*.json) stay part of the fingerprint: a policy change still needs the elevated install.
 enhanced_fingerprint() {
-  { printf 'autostart=%s\n' "${AUTOSTART:-1}"; shasum -a 256 "$SB" "$H/config.json"; find "$H/rules" "$H/certs" -type f -exec sha256sum {} \; 2>/dev/null;
+  { printf 'autostart=%s\n' "${AUTOSTART:-1}"; shasum -a 256 "$SB"; printf 'config:%s\n' "$(enhanced_config_hash)"
+    find "$H/rules" "$H/certs" -type f ! -name '.*' ! -name '*.new' ! -name '*.tmp' -exec sha256sum {} \; 2>/dev/null;
     shasum -a 256 "$H/windows/tun.ps1" "$H/windows/common.ps1"; } | LC_ALL=C sort | shasum -a 256 | awk '{print $1}'
 }
 network_socket_diagnostics() { win_bridge diagnostics; }

@@ -295,6 +295,151 @@ logs_bundle abc ops > "$UW/b4.txt" 2>/dev/null; eq "时间范围写错 → 回�
 python3 "$REPO/tools/diag-summary.py" "$UW/bundle.txt" > "$UW/summary.txt" 2>&1; eq "tools/diag-summary.py 能解读导出文件 (有概览 / 自动判断)" "$(grep -c '^== 概览\|^== 自动判断' "$UW/summary.txt")" "2"
 echo
 
+echo "== U8. 订阅刷新 (srv_import replace): 就地更新, 顺序稳定; 内容没变的刷新不改动文件; 多个订阅只应用一次"
+SF="$H/servers.jsonl"
+sline() { # <角色> <订阅名 (没有就写 '')> <tag> <服务器> [端口]  -> 一行 servers.jsonl
+  if [ -n "$2" ]; then printf '{"role":"%s","sub":"%s","outbound":{"type":"trojan","tag":"%s","server":"%s","server_port":%s,"password":"pw"}}\n' "$1" "$2" "$3" "$4" "${5:-443}"
+  else printf '{"role":"%s","outbound":{"type":"trojan","tag":"%s","server":"%s","server_port":%s,"password":"pw"}}\n' "$1" "$3" "$4" "${5:-443}"; fi
+}
+srv_order() { srv_list | cut -f1 | paste -sd, -; }
+pin_first() { srv_emit | awk -F'\t' '$1=="pin" {print $2; exit}'; }          # 配置生成器的默认固定出口 = pin 列表的第一个
+mk_base() { # 两个订阅 (A B) 和两台手动服务器交错排列; 用户把订阅 A 的第一个节点固定成了 pin
+  { sline auto '' M1 m1.example; sline pin A A-1 a1.example; sline auto A A-2 a2.example; sline auto B B-1 b1.example; sline pin '' M2 m2.example; sline auto B B-2 b2.example; sline auto A A-3 a3.example; } > "$SF"
+}
+a_same() { sline pin A A-1 a1.example; sline auto A A-2 a2.example; sline auto A A-3 a3.example; }       # 订阅 A 没变的内容 (和 mk_base 里存的一模一样)
+b_same() { sline auto B B-1 b1.example; sline auto B B-2 b2.example; }
+stray() { ls "$SF.new" "$SF.tags" "$SF.pairs" "$SF.counts" "$SF.new.2" 2>/dev/null | wc -l | tr -d ' '; }
+rm -f "$H"/servers.sync "$H"/subs.sync
+mk_base; cp "$SF" "$UW/before"
+res=$(a_same | srv_import A replace)
+eq "订阅 A 内容完全相同的刷新: servers.jsonl 一个字节都没变 (以前 A 的行被挪到文件末尾)" "$(cmp -s "$SF" "$UW/before" && echo same || echo changed)" "same"
+eq "…计数: 0 新增 · 3 保留 (replaced) · 0 移除 —— 导入的调用方用「新增 + 保留 > 0」判断有没有有效节点" "$res" "0 3 0"
+res=$(b_same | srv_import B replace)
+eq "订阅 B 同样: 文件不变, 0 2 0" "$(cmp -s "$SF" "$UW/before" && echo same):$res" "same:0 2 0"
+eq "…文件里的顺序不变 (手动服务器和两个订阅交错), 默认固定出口仍是 A-1 (以前会变成 M2, 生成出不同的配置)" "$(srv_order):$(pin_first)" "M1,A-1,A-2,B-1,M2,B-2,A-3:A-1"
+res=$({ sline auto A A-3 a3.example; sline pin A A-1 a1.example; sline auto A A-2 a2.example; } | srv_import A replace)
+eq "订阅端调整了节点顺序: 已有节点保持原来的位置 (文件不变)" "$(cmp -s "$SF" "$UW/before" && echo same):$res" "same:0 3 0"
+eq "…没有留下临时文件; 文件权限 600" "$(stray):$(stat -f %Lp "$SF")" "0:600"
+
+mk_base
+res=$({ sline pin A A-1 a1.example; sline auto A A-2 a2-NEW.example 8443; sline auto A A-3 a3.example; } | srv_import A replace)
+eq "A-2 的服务器 / 端口变了: 原地覆盖 (仍在第 3 行), 其它每一行都原样不动" "$(sed -n 3p "$SF" | grep -c 'a2-NEW.example.*8443'):$(diff <(sed 3d "$UW/before") <(sed 3d "$SF") >/dev/null && echo rest-same):$res" "1:rest-same:0 3 0"
+eq "…顺序不变" "$(srv_order)" "M1,A-1,A-2,B-1,M2,B-2,A-3"
+
+mk_base
+res=$({ sline pin A A-1 a1.example; sline auto A A-3 a3.example; sline auto A A-4 a4.example; } | srv_import A replace)
+eq "A-2 从订阅里消失、A-4 新增: A-2 的行删掉, A-4 追加到末尾, 手动服务器和订阅 B 的位置不动" "$(srv_order)" "M1,A-1,B-1,M2,B-2,A-3,A-4"
+eq "…计数: 1 新增 · 2 保留 · 1 移除" "$res" "1 2 1"
+eq "…别的来源的行原样保留 (M1 M2 B-1 B-2)" "$(grep -c '"tag":"M1"\|"tag":"M2"\|"tag":"B-1"\|"tag":"B-2"' "$SF")" "4"
+
+mk_base
+res=$({ sline auto A A-1 a1.example; sline auto A M1 m1-via-sub.example; } | srv_import A replace)
+eq "订阅里的 tag 和手动服务器重名: 就地换成订阅的版本 (和 merge 一样「后来者取代」), 位置不变, 不会出现两行" "$(srv_order):$(sed -n 1p "$SF" | grep -c '"sub":"A".*m1-via-sub.example')" "M1,A-1,B-1,M2,B-2:1"
+eq "…计数: 0 新增 · 2 保留 (A-1 和 M1) · 2 移除 (A-2 A-3)" "$res" "0 2 2"
+
+mk_base
+res=$({ sline auto A A-1 first.example; sline auto A A-1 second.example; sline auto A N-1 n.example; } | srv_import A replace)
+eq "同一批里 tag 重复: 只留一行 (后一行的内容), 位置是已有的那一行" "$(srv_order):$(grep -c second.example "$SF"):$(grep -c first.example "$SF")" "M1,A-1,B-1,M2,B-2,N-1:1:0"
+eq "…计数: 1 新增 · 2 保留 (重复的算一次替换) · 2 移除" "$res" "1 2 2"
+
+mk_base
+res=$({ sline pin A A-1 a1.example; printf 'garbage\n'; sline auto A A-2 a2.example; } | srv_import A replace 2>"$UW/imp.err")
+eq "格式不对的行被忽略并报行号, 其余照常导入 (A-3 不在新数据里 → 移除)" "$(grep -c '第 2 行' "$UW/imp.err"):$res:$(srv_order)" "1:0 2 1:M1,A-1,A-2,B-1,M2,B-2"
+mk_base; cp "$SF" "$UW/before"
+JOB_BODY="$UW/jobbody"; printf 'garbage\n' > "$JOB_BODY"; printf 'A|https://a.example/s|0|3|12|0|0|0\n' > "$H/subs.tsv"
+txn_import A replace; rc=$?
+eq "txn_import: 整批都不合格 → 失败 (op_txn 据此回滚, 保留旧节点)" "$rc" "1"
+a_same > "$JOB_BODY"; mk_base; txn_import A replace; rc=$?
+eq "txn_import: 内容完全相同的刷新 → 成功 (「保留」的节点也算有效), 文件不变" "$rc:$(cmp -s "$SF" "$UW/before" && echo same)" "0:same"
+
+mk_base; res=$(sline pin '' M1 m1-new.example | srv_import '' merge)
+eq "merge (添加服务器 / 保存 VPS) 行为不变: 已有的 tag 被取代、新行追加到末尾, 计数 0 1 0" "$(srv_order):$res" "A-1,A-2,B-1,M2,B-2,A-3,M1:0 1 0"
+mk_base; res=$(a_same | srv_import A merge)
+eq "merge 带订阅名也不变 (只有 replace 才就地合并): A 的三行被重新追加到末尾" "$(srv_order):$res" "M1,B-1,M2,B-2,A-1,A-2,A-3:0 3 0"
+rm -f "$SF"; res=$(b_same | srv_import B replace)
+eq "还没有 servers.jsonl: 创建, 节点按订阅顺序, 2 0 0, 权限 600" "$(srv_order):$res:$(stat -f %Lp "$SF")" "B-1,B-2:2 0 0:600"
+mk_base; cp "$SF" "$UW/before"; cp "$SF" "$UW/plan"
+res=$({ sline pin A A-1 a1.example; sline auto A A-9 a9.example; } | SRV_FILE="$UW/plan" srv_import A replace)
+eq "干跑 (SRV_FILE 副本, 仪表盘预览数量用): 计数 1 1 2, 真实文件没动, 没有临时文件留下" "$res:$(cmp -s "$SF" "$UW/before" && echo real-same):$(ls "$UW"/plan.* 2>/dev/null | wc -l | tr -d ' ')" "1 1 2:real-same:0"
+eq "…干跑的副本里 A-9 追加在末尾, A-2 A-3 已移除" "$(sed -n 's/.*"tag":"\([^"]*\)".*/\1/p' "$UW/plan" | paste -sd, -)" "M1,A-1,B-1,M2,B-2,A-9"
+mk_base; : > "$H/servers.sync"
+a_same | SRV_SAVE=1 srv_import A replace >/dev/null
+eq "「保存到云端」(SRV_SAVE=1): 订阅的全部节点和订阅名进入同步清单 (刷新后也一样)" "$(sort "$H/servers.sync" | paste -sd, -):$(cat "$H/subs.sync")" "A-1,A-2,A-3:A"
+a_same | SRV_SAVE=0 srv_import A replace >/dev/null
+eq "…SRV_SAVE=0 把它们从清单里去掉" "$(grep -c . "$H/servers.sync" || true):$(grep -c . "$H/subs.sync" || true)" "0:0"
+rm -f "$H/servers.sync" "$H/subs.sync"
+
+# 命令行 / 定时刷新用导入器的默认角色 (auto) 解析订阅: srv_keep_roles 把订阅里已有节点的角色带回来, 否则用户固定的出口会被悄悄改回自动
+mk_base
+out=$({ sline auto A A-1 a1.example; sline auto A A-2 a2.example; sline auto A N-9 n9.example; sline auto A B-1 b1.example; } | srv_keep_roles A)
+eq "srv_keep_roles: 已有节点沿用现在的角色 (A-1=pin), 新节点保持 auto, 其它订阅的同名节点 (B-1) 不受影响" "$(printf '%s\n' "$out" | sed -n 's/^{"role":"\([a-z]*\)".*"tag":"\([^"]*\)".*/\2=\1/p' | paste -sd, -)" "A-1=pin,A-2=auto,N-9=auto,B-1=auto"
+eq "…除了角色, 每一行都原样 (订阅名 / 出站内容不变)" "$(printf '%s\n' "$out" | sed 's/^{"role":"[a-z]*"//')" "$({ sline auto A A-1 a1.example; sline auto A A-2 a2.example; sline auto A N-9 n9.example; sline auto A B-1 b1.example; } | sed 's/^{"role":"[a-z]*"//')"
+
+# op_subs_refresh: 先全部下载解析, 再「一个」事务里导入并应用一次; 内容没变的刷新不改动配置
+(
+  SUBFIX="$UW/subfix"; rm -rf "$SUBFIX"; mkdir -p "$SUBFIX"
+  APPLY_OK=0; APPLIED="$UW/applied"; ORDER_LOG="$UW/refresh.out"
+  sub_fetch() { case $1 in *b.example*) [ ! -f "$SUBFIX/b.fail" ] || return 1 ;; esac; echo x > "$3"; printf 'HTTP/1.1 200 OK\r\nsubscription-userinfo: upload=1; download=10; total=100; expire=2000000000\r\n' > "$4"; }
+  os_import_subscription() { cat "$SUBFIX/$3.jsonl" 2>/dev/null; }                  # 导入器给的角色一律是 auto
+  apply_config() { # 假的应用: 只要服务器文件和上次应用时不一样就算「配置变了」; 出现 POISON 节点就像 sing-box check 不通过一样失败
+    if grep -q POISON "$H/servers.jsonl"; then return 1; fi
+    APPLY_OK=$((APPLY_OK + 1)); if cmp -s "$H/servers.jsonl" "$APPLIED"; then APPLY_CHANGED=0; else APPLY_CHANGED=1; cp "$H/servers.jsonl" "$APPLIED"; fi; return 0
+  }
+  fixtures_same() { { sline auto A A-1 a1.example; sline auto A A-2 a2.example; sline auto A A-3 a3.example; } > "$SUBFIX/A.jsonl"; b_same > "$SUBFIX/B.jsonl"; }
+  fresh_state() { mk_base; cp "$SF" "$APPLIED"; APPLY_OK=0; fixtures_same; rm -f "$SUBFIX/b.fail"
+    printf 'A|https://a.example/s|0|3|12|0|0|0\nB|https://b.example/s|0|2|12|0|0|0\nC|https://c.example/s|%s|1|12|0|0|0\n' "$(now)" > "$H/subs.tsv"; rmdir "$H/.apply.lock" 2>/dev/null || true; }
+  touched() { awk -F'|' -v n="$1" '$1==n {print ($3 > 0 ? "yes" : "no")}' "$H/subs.tsv"; }
+  fresh_state; cp "$SF" "$UW/before"
+  SUBS_APPLIED=x; op_subs_refresh 1 > "$ORDER_LOG" 2>&1
+  eq "两个订阅都过期、内容没变: 一次应用 (以前每个订阅各一次, 调用方随后又一次); servers.jsonl 一个字节没变" "$APPLY_OK:$SUBS_APPLIED:$(cmp -s "$SF" "$UW/before" && echo same)" "1:1:same"
+  eq "…用户固定的角色保留 (A-1 仍是 pin; 导入器给的是 auto); 刚刷新过的订阅 C 没有被重新下载" "$(srv_list | awk -F'\t' '$1=="A-1" {print $5}'):$(grep -c '订阅「C」' "$ORDER_LOG" || true)" "pin:0"
+  eq "…两个订阅的刷新时间 / 节点数都记下了 (A B 已刷新, 节点数 3 和 2)" "$(touched A)$(touched B):$(awk -F'|' '$1=="A" {print $4} $1=="B" {print $4}' "$H/subs.tsv" | paste -sd, -)" "yesyes:3,2"
+  eq "…操作记录里是一条合并的事务 (订阅刷新), 不是每个订阅一条" "$(cat "$LOGS"/ops-*.log 2>/dev/null | grep -c '订阅刷新 (2 个)')" "1"
+  eq "…终端输出每个订阅一行「已刷新」" "$(grep -c '已刷新' "$ORDER_LOG")" "2"
+
+  fresh_state
+  { sline auto A A-1 a1-NEW.example; sline auto A A-2 a2.example; sline auto A A-3 a3.example; sline auto A A-4 a4.example; } > "$SUBFIX/A.jsonl"
+  { sline auto B B-1 b1.example; sline auto B B-2 b2-NEW.example; } > "$SUBFIX/B.jsonl"
+  op_subs_refresh 1 > "$ORDER_LOG" 2>&1
+  eq "两个订阅都有变化: 仍然只应用一次, 节点在原来的位置上更新 (顺序不变, 新节点追加)" "$APPLY_OK:$APPLY_CHANGED:$(srv_order)" "1:1:M1,A-1,A-2,B-1,M2,B-2,A-3,A-4"
+  eq "…A-1 内容更新但角色仍是 pin; B-2 更新" "$(srv_list | awk -F'\t' '$1=="A-1" {print $3 "/" $5} $1=="B-2" {print $3}' | paste -sd, -)" "a1-NEW.example/pin,b2-NEW.example"
+
+  fresh_state; awk -F'|' -v t="$(now)" 'BEGIN{OFS="|"} $1=="A" {$3=t} {print}' "$H/subs.tsv" > "$H/subs.tsv.x" && mv "$H/subs.tsv.x" "$H/subs.tsv"
+  op_subs_refresh 1 > "$ORDER_LOG" 2>&1
+  eq "只有一个订阅过期: 仍然是一次应用 (走单个订阅的事务)" "$APPLY_OK:$SUBS_APPLIED:$(touched B)" "1:1:yes"
+  fresh_state; awk -F'|' -v t="$(now)" 'BEGIN{OFS="|"} {$3=t; print}' "$H/subs.tsv" > "$H/subs.tsv.x" && mv "$H/subs.tsv.x" "$H/subs.tsv"
+  op_subs_refresh 1 > "$ORDER_LOG" 2>&1
+  eq "没有订阅过期: 什么都不做 (没有下载, 没有应用)" "$APPLY_OK:$SUBS_APPLIED" "0:0"
+  fresh_state; sline auto C C-1 c1.example > "$SUBFIX/C.jsonl"; op_subs_refresh 0 > "$ORDER_LOG" 2>&1
+  eq "不限过期 (enana update): 三个订阅都刷新, 仍是一次应用" "$APPLY_OK:$(grep -c '已刷新' "$ORDER_LOG")" "1:3"
+
+  fresh_state; touch "$SUBFIX/b.fail"
+  op_subs_refresh 1 > "$ORDER_LOG" 2>&1
+  eq "某个订阅下载失败: 它的旧节点保留, 其它订阅照常刷新并应用" "$(grep -c '订阅「B」刷新失败' "$ORDER_LOG"):$APPLY_OK:$SUBS_APPLIED:$(touched A)$(touched B)" "1:1:1:yesno"
+
+  fresh_state
+  { sline auto A A-1 a1.example; sline auto A A-2 a2-NEW.example; sline auto A A-3 a3.example; } > "$SUBFIX/A.jsonl"
+  { sline auto B B-1 b1.example; sline auto B POISON b-bad.example; } > "$SUBFIX/B.jsonl"
+  op_subs_refresh 1 > "$ORDER_LOG" 2>&1
+  eq "合并的事务没通过 (订阅 B 的节点让配置无效): 整体回滚, 再逐个订阅重试 —— A 照常刷新, B 保留旧节点" "$(grep -c POISON "$SF"):$(grep -c a2-NEW.example "$SF"):$(grep -c 'b2.example' "$SF"):$SUBS_APPLIED" "0:1:1:1"
+  eq "…B 的提示是「刷新后配置无效, 已保留旧节点」, 顺序没乱" "$(grep -c '订阅「B」刷新后配置无效' "$ORDER_LOG"):$(srv_order)" "1:M1,A-1,A-2,B-1,M2,B-2,A-3"
+)
+
+# 每日维护: 订阅那一步已经成功应用过配置 (带上了刚下载的规则集), 就不再单独应用一遍; 没有应用过才补一次
+(
+  logs_maintain() { :; }; stats_purge() { :; }; update_check() { :; }; auth_logged_in() { return 1; }
+  AUTO_UPDATE=1; AC=0; rules_update() { :; }; apply_config() { AC=$((AC + 1)); return 0; }
+  op_subs_refresh() { SUBS_APPLIED=$FAKE_APPLIED; }
+  rm -f "$H/.maintain-rules"; FAKE_APPLIED=1; op_maintain
+  eq "订阅刷新已经应用过 → 维护不再重复应用" "$AC" "0"
+  rm -f "$H/.maintain-rules"; FAKE_APPLIED=0; op_maintain
+  eq "订阅没有应用过 (没有订阅要刷新 / 没刷新成功) → 维护应用一次, 把刚下载的规则集带上" "$AC" "1"
+  FAKE_APPLIED=0; op_maintain
+  eq "3 天内刚做过: 什么都不做" "$AC" "1"
+)
+t "install.sh 的 enana update 同样: 订阅刷新应用过配置就不再 op_apply" grep -q 'SUBS_APPLIED' "$REPO/install.sh"
+echo
+
 echo "== U7. 仪表盘静态检查 (控制台报错的回归保护)"
 t "仪表盘不会自动去访问第三方网站查 IP (ipify / ipinfo): 出口 IP 由本机辅助服务查, 浏览器里不再出现 ERR_CONNECTION_RESET" sh -c "! grep -nE 'api\\.ipify\\.org|ipinfo\\.io' '$REPO'/ui/*.js"
 t "v-vps.js: 重置错误提示时只对有 setErr 的项调用 (「保存到云端」勾选框不是输入项; 以前这里抛 TypeError, 「添加自己的服务器」面板打不开)" grep -q 'b\[k\] && b\[k\].setErr' "$REPO/ui/v-vps.js"

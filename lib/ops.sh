@@ -57,6 +57,7 @@ _txn_detail() { # <变更函数> <参数…>
   local fn=$1 kvp k v out=''; shift
   case $fn in
     txn_import)        kv sub "${1:-}" mode "${2:-merge}" save "${TXN_SAVE:-}" ;;
+    txn_subs_refresh)  kv subs "$(cut -d'|' -f1 "$1/index" 2>/dev/null | paste -sd, -)" ;;
     txn_delete)        kv tag "$1" role "$(srv_list | awk -F'\t' -v t="$1" '$1==t {print $5; exit}')" ;;
     txn_role)          kv tag "$1" from "$(srv_list | awk -F'\t' -v t="$1" '$1==t {print $5; exit}')" to "$2" ;;
     txn_subdel)        kv sub "$1" ;;
@@ -137,6 +138,14 @@ txn_import() { # sub mode   (内容来自 $JOB_BODY; 订阅信息来自 TXN_* �
   rm -f "$JOB_BODY"
   if [ "${TXN_SAVE:-}" = 1 ]; then sync_after_save; fi                    # 勾选了「保存到云端」: 第一次用会自动打开云端同步, 马上上传
   return 0
+}
+txn_subs_refresh() { # <批次目录>  同一个事务里刷新一批订阅 (op_subs_refresh 准备好的: index 每行 名称|刷新间隔|已用|总量|到期|节点数, 第 N 行对应 N.jsonl); 一次应用、一次回滚
+  local dir=$1 i=0 name iv used total expire t
+  while IFS='|' read -r -u 3 name iv used total expire t; do
+    i=$((i+1))
+    cp "$dir/$i.jsonl" "$dir/$i.run" || return 1
+    JOB_BODY="$dir/$i.run" TXN_INTERVAL=$iv TXN_USED=$used TXN_TOTAL=$total TXN_EXPIRE=$expire TXN_SAVE='' txn_import "$name" replace || { TXN_ERR="订阅「$name」没有可导入的节点"; return 1; }
+  done 3< "$dir/index"
 }
 txn_delete() { srv_delete "$1"; }
 txn_role()   { srv_set_role "$1" "$2"; }
@@ -340,10 +349,25 @@ op_update_rules() { # 规则集 (本地规则集文件变化后 sing-box 自动�
   else oplog "${OP_WHO:-terminal}" "更新规则集" "全部下载失败" error; job_fail "所有规则集下载失败, 已保留旧规则" 1; return 1; fi
 }
 
-# 刷新已保存的订阅 (用 JXA 运行 importer.js, 无需 node). stale_only=1 时只刷新超过刷新间隔的
+# 一个订阅单独走一个事务 (和以前每个订阅各一个事务时完全一样): 只有一个订阅要刷新, 或者合并刷新没有通过时用
+_subs_refresh_one() { # <批次目录> <序号>
+  local dir=$1 i=$2 name iv used total expire t rc saved_body=${JOB_BODY:-}
+  IFS='|' read -r name iv used total expire t < <(sed -n "${i}p" "$dir/index")
+  cp "$dir/$i.jsonl" "$dir/$i.run" || return 1
+  JOB_BODY="$dir/$i.run"; TXN_INTERVAL=$iv; TXN_USED=$used; TXN_TOTAL=$total; TXN_EXPIRE=$expire; TXN_SAVE=''
+  if op_txn "订阅「$name」刷新" txn_import "$name" replace; then info "订阅「$name」已刷新: $t 个节点"; rc=0
+  else warn "订阅「$name」刷新后配置无效, 已保留旧节点"; rc=1; fi
+  rm -f "$dir/$i.run"; JOB_BODY=$saved_body; return "$rc"
+}
+# 刷新已保存的订阅 (用 JXA 运行 importer.js, 无需 node). stale_only=1 时只刷新超过刷新间隔的。
+# 先把所有要刷新的订阅都下载并解析好, 再放进「一个」事务里导入 + 应用 (以前每个订阅各应用一次, 调用方随后又应用一次): 内容没变的刷新不会改动 servers.jsonl,
+# 配置也就不变、不重启核心; 合并的事务没通过 (比如某个订阅的节点让配置无效) 就退回逐个订阅各自一个事务, 好的订阅照样刷新, 坏的保留旧节点。
+# 设置 SUBS_APPLIED=1 表示这次已经成功应用过配置 (调用方不用再应用一遍)。
 op_subs_refresh() {
-  local stale_only=${1:-0} name url updated count interval hdr out jsonl ua usage t
+  local stale_only=${1:-0} name url updated count interval hdr out jsonl ua usage t dir n=0 i used total expire
+  SUBS_APPLIED=0
   [ -s "$H/subs.tsv" ] || return 0
+  dir=$(mktemp -d); : > "$dir/index"
   while IFS='|' read -r name url updated count interval _; do
     [ -n "$name" ] || continue
     if [ "$stale_only" = 1 ] && [ $(( $(now) - ${updated:-0} )) -lt $(( ${interval:-12} * 3600 )) ]; then continue; fi
@@ -354,15 +378,25 @@ op_subs_refresh() {
       [ -n "$jsonl" ] && break
     done
     if [ -n "$jsonl" ]; then
-      JOB_BODY=$(mktemp); printf '%s\n' "$jsonl" > "$JOB_BODY"
+      n=$((n+1))
+      printf '%s\n' "$jsonl" | srv_keep_roles "$name" > "$dir/$n.jsonl"           # 用户给订阅里某个节点固定的角色 (pin 等) 不会被改回自动
       usage=$(grep -i '^subscription-userinfo:' "$hdr" | head -1 | tr -d '\r')
-      TXN_USED=$(printf '%s' "$usage" | sed -n 's/.*download=\([0-9]*\).*/\1/p'); TXN_TOTAL=$(printf '%s' "$usage" | sed -n 's/.*total=\([0-9]*\).*/\1/p'); TXN_EXPIRE=$(printf '%s' "$usage" | sed -n 's/.*expire=\([0-9]*\).*/\1/p')
-      TXN_INTERVAL=$interval; t=$(printf '%s\n' "$jsonl" | wc -l | tr -d ' ')
-      if op_txn "订阅「$name」刷新" txn_import "$name" replace; then info "订阅「$name」已刷新: $t 个节点"; else warn "订阅「$name」刷新后配置无效, 已保留旧节点"; fi
-      rm -f "$JOB_BODY"
+      used=$(printf '%s' "$usage" | sed -n 's/.*download=\([0-9]*\).*/\1/p'); total=$(printf '%s' "$usage" | sed -n 's/.*total=\([0-9]*\).*/\1/p'); expire=$(printf '%s' "$usage" | sed -n 's/.*expire=\([0-9]*\).*/\1/p')
+      t=$(printf '%s\n' "$jsonl" | wc -l | tr -d ' ')
+      printf '%s|%s|%s|%s|%s|%s\n' "$name" "$interval" "$used" "$total" "$expire" "$t" >> "$dir/index"
     else warn "订阅「$name」刷新失败 (保留旧节点)"; fi
     rm -f "$out" "$hdr"
   done < "$H/subs.tsv"
+  if [ "$n" = 1 ]; then _subs_refresh_one "$dir" 1 && SUBS_APPLIED=1
+  elif [ "$n" -gt 1 ]; then
+    if op_txn "订阅刷新 ($n 个)" txn_subs_refresh "$dir"; then
+      SUBS_APPLIED=1
+      while IFS='|' read -r -u 3 name interval used total expire t; do info "订阅「$name」已刷新: $t 个节点"; done 3< "$dir/index"
+    else
+      i=0; while [ "$i" -lt "$n" ]; do i=$((i+1)); if _subs_refresh_one "$dir" "$i"; then SUBS_APPLIED=1; fi; done
+    fi
+  fi
+  rm -rf "$dir"
   return 0
 }
 
@@ -473,7 +507,9 @@ op_maintain() {
   if [ $(( $(now) - ${last:-0} )) -ge 259200 ]; then
     rules_update >/dev/null 2>&1 || true
     op_subs_refresh 1
-    if op_lock; then apply_config >/dev/null 2>&1 || true; op_unlock; fi
+    # 订阅那一步成功应用过配置时, 它已经带上了刚下载的规则集 (规则集在它之前就下载好了), 这里不用再应用一遍; 没有订阅要刷新 / 没有刷新成功才单独应用一次
+    # (配置和规则都没变的话 apply_config 什么也不做: 不重启核心, TUN 下也不要管理员授权)。
+    if [ "${SUBS_APPLIED:-0}" != 1 ] && op_lock; then apply_config >/dev/null 2>&1 || true; op_unlock; fi
     now > "$H/.maintain-rules"
     oplog "${OP_WHO:-terminal}" "自动更新" "规则集与订阅" ok
   fi
