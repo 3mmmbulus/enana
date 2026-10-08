@@ -216,6 +216,20 @@ missing file never retires anything. `ENANA_OFFICIAL_CONFIG` overrides the path,
 allow-lists `nodes`; the operator routes below are not in the public allow-list and require a
 superuser, who is restricted to loopback.
 
+On a host where `deploy-billing.sh` already ran, do **not** run it again (its nginx step refuses an
+already-updated configuration and rolls back). Take the same backup it would, then copy only the
+changed hooks and restart the unit:
+
+```sh
+for f in enana_lib.js enana_official.pb.js enana_official.js enana_official_domain.js; do
+  install -m 644 -o root -g root server/pb_hooks/$f /opt/enana-cc/pb_hooks/$f
+done
+systemctl restart enana-pocketbase.service
+```
+
+Until `/etc/enana/official.json` exists with at least one working source, nothing changes for users:
+the official card keeps saying "coming soon".
+
 **3. Check it** (superuser token through the loopback/SSH tunnel; read the password without echoing it):
 
 ```sh

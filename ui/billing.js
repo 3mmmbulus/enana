@@ -46,7 +46,10 @@
     pending = TP.helper('GET', '/api/billing', { timeout: 15000 }).then(function (r) {
       if (mine !== epoch) return null;
       if (!r || !r.email || !r.wallet || !Array.isArray(r.catalog) || !Array.isArray(r.orders) || !Array.isArray(r.ledger)) throw TP.mkErr('api', t('error.generic'));
-      data = r; error = null; loadedAt = Date.now(); redraw(); return r;
+      var justVerified = !!(data && data.email && data.email.verified === false && r.email.verified === true);
+      data = r; error = null; loadedAt = Date.now(); redraw();
+      if (justVerified) TP.plan.load(true);                                   // 刚验证完邮箱: 套餐里「官方线路」的原因从 verify 变成可用, 不用等缓存过期
+      return r;
     }).catch(function (e) { if (mine === epoch) { error = e; redraw(); } return null; }).finally(function () { if (mine === epoch) { pending = null; } });
     return pending;
   };

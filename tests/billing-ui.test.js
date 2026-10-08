@@ -7,13 +7,13 @@ function find(root,label){const b=flatten(root).find(n=>n.tag==='button'&&n.labe
 const invoice={id:'abcdefghijklmno',kind:'plan',sku:'m1',price:'4.000000',amount:'4.000037',address:'TMiyPt3gfLQNJRPqUzGke9EJWhhyoHR8RU',status:'pending',created_at:Math.floor(Date.now()/1000),expires_at:Math.floor(Date.now()/1000)+1800};
 function status(extra={}){return {ok:true,payments_available:true,email:{verified:true,address:'one@example.test',mail_available:true},wallet:{balance:'10.000000',auto_renew:false},catalog:[{id:'m1',price:'4.000000',months:1},{id:'m3',price:'10.000000',months:3}],orders:[],ledger:[],...extra};}
 function fixture(handler,opts={}){
- const callbacks={},calls=[],modals=[],copies=[],timers=new Map(),toasts=[],confirmations=[],signIns=[];let id=0;
+ const callbacks={},calls=[],modals=[],copies=[],timers=new Map(),toasts=[],confirmations=[],signIns=[],planLoads=[];let id=0;
  const emit=(ev,arg)=>{(callbacks[ev]||[]).forEach(fn=>fn(arg));};
  const ui={btn(label){return Object.assign(node('button'),{label});},avail(b,why){b.reason=why;},actionBusy(b,on){b.disabled=on;},act(b,fn){b.click=async()=>b.reason||b.disabled?null:fn();},badge(label){return node('badge',null,label);},toast(...x){toasts.push(x);},copy(v){copies.push(v);},confirmDialog:async o=>{confirmations.push(o);return true;},modal(o){const d={body:o.body,actions:o.actions||[],setActions(a){d.actions=a;},close(){d.closed=true;o.onClose?.();}};modals.push(d);return d;}};
- const TP={S:{locked:false},h:node,ui,why:{helper:()=>''},clear:n=>{n.children=[];},on:(ev,fn)=>{(callbacks[ev]||=[]).push(fn);},emit,errMsg:e=>e.message||e.code||'error',mkErr:(kind,message)=>({kind,message}),helper:async(...args)=>{calls.push(args);return handler(...args);},plan:{load:()=>{}},fmt:{dateTime:String},auth:{logout:async(kind)=>{signIns.push(kind)}}};
+ const TP={S:{locked:false},h:node,ui,why:{helper:()=>''},clear:n=>{n.children=[];},on:(ev,fn)=>{(callbacks[ev]||=[]).push(fn);},emit,errMsg:e=>e.message||e.code||'error',mkErr:(kind,message)=>({kind,message}),helper:async(...args)=>{calls.push(args);return handler(...args);},plan:{load:(...a)=>{planLoads.push(a)}},fmt:{dateTime:String},auth:{logout:async(kind)=>{signIns.push(kind)}}};
  const document={hidden:false};const I={t:(k,args)=>k+(args?JSON.stringify(args):''),L:k=>k,has:k=>k.startsWith('billing.err.')};
  vm.runInNewContext(script,{window:{TP,I18N:I,crypto:'crypto' in opts?opts.crypto:crypto},document,setInterval:()=>0,setTimeout:fn=>{timers.set(++id,fn);return id},clearTimeout:i=>timers.delete(i),console});
- return {B:TP.billing,TP,calls,modals,copies,toasts,confirmations,timers,document,emit,signIns};
+ return {B:TP.billing,TP,calls,modals,copies,toasts,confirmations,timers,document,emit,signIns,planLoads};
 }
 test('receiving disabled and unverified email independently block checkout; free account remains usable',async()=>{
  for(const s of [status({payments_available:false}),status({email:{verified:false,address:'u@example.test',mail_available:false}})]){
@@ -93,6 +93,13 @@ test('without SMTP the send button explains itself and Check again recovers once
  assert.equal(find(root,'billing.sendVerification').reason,'billing.mailUnavailable');assert.ok(hasText(root,'billing.mailOffNote'));
  mail=true;await find(root,'billing.checkAgain').click();
  assert.equal(find(root,'billing.sendVerification').reason,'');assert.ok(hasText(root,'billing.verifyNote'));
+});
+test('verifying the email makes the dashboard re-read the plan at once (official routes move from "verify" to available)',async()=>{
+ let verified=false;
+ const f=fixture(async()=>status({email:{verified,address:'u@example.test',mail_available:true}})),root=f.B.mountEmail();await f.B.load(true);
+ assert.equal(f.planLoads.length,0);await f.B.load(true);assert.equal(f.planLoads.length,0,'still unverified: nothing to re-read');
+ verified=true;await find(root,'billing.checkVerification').click();assert.deepEqual(f.planLoads,[[true]]);
+ await f.B.load(true);assert.equal(f.planLoads.length,1,'only the unverified -> verified transition triggers it');
 });
 test('an unfinished invoice is announced with an action that opens it; payment buttons stay blocked meanwhile',async()=>{
  const f=fixture(async()=>status({orders:[invoice]})),root=f.B.mount();await f.B.load(true);
