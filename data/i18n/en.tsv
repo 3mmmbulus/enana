@@ -934,3 +934,14 @@ Windows 更新失败, 已保留当前版本 (详情见 api.log)	The Windows upda
 没有登录, 或者联系不上云端	Not signed in, or the cloud cannot be reached
 已删除云端上你的 * 份诊断	Deleted * of your diagnostics from the cloud
 enana * · * * * · bash * · 安装目录 * · 语言 *	enana * · * * * · bash * · install dir * · language *
+# --- billing bridge errors and official routes
+付款参数无效	Invalid payment details
+订单编号无效	Invalid order id
+账号服务暂时无法连接，请稍后重试	The account service is unreachable right now. Try again later
+云端登录已失效、已结束或这台电脑是离线登录，请联网并重新登录后再试	Your cloud sign-in has expired, ended, or this computer signed in offline. Go online, sign in again and retry
+enana.cc 服务器返回了错误，这次操作可能已生效也可能没有，请先刷新并查看订单和余额	The enana.cc server returned an error. The request may or may not have gone through: refresh and check your orders and balance first
+请求过于频繁，请稍后再试	Too many requests. Try again later
+官方线路同步	Official routes sync
+官方线路更新待应用	Official routes update pending
+官方线路同步没有完成, 稍后会自动重试	The official routes sync did not finish; it will retry automatically
+官方线路节点由会员权益提供，不能删除或修改角色	Official route nodes come with the membership and cannot be deleted or re-assigned

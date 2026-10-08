@@ -3,6 +3,15 @@ const assert = require('assert'); const I = require('../ui/importer.js');
 let n = 0; const t = (name, fn) => { fn(); n++; console.log('  ✓', name); };
 const b64 = s => Buffer.from(s).toString('base64');
 
+t('保留前缀: 别的订阅里以「官方-」开头的节点名被改成「官方 」开头 (安装端保留 官方- 给会员的官方线路, 整行被拒绝会丢节点)', () => {
+  const r = I.parse(JSON.stringify({ outbounds: [
+    { type: 'trojan', tag: '官方-香港', server: 'a.example.com', server_port: 443, password: 'p' },
+    { type: 'trojan', tag: '官方 香港', server: 'b.example.com', server_port: 443, password: 'p' },
+    { type: 'trojan', tag: 'enana-official-x', server: 'c.example.com', server_port: 443, password: 'p' },
+    { type: 'trojan', tag: '官方版', server: 'd.example.com', server_port: 443, password: 'p' }] }));
+  assert.deepStrictEqual(r.servers.map(s => s.outbound.tag), ['官方 香港', '官方 香港 2', 'enana official x', '官方版']);
+});
+
 t('Clash YAML (块式, 含嵌套列表与 TLS 上的 SOCKS5)', () => {
   const r = I.parse(`proxies:
 - name: A

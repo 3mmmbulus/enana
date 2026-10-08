@@ -1,7 +1,12 @@
 # Pro billing foundation (cloud service)
 
-This backend is implemented; customer checkout in the shared Mac/Windows
-dashboard is not yet released. Receiving stays disabled during integration.
+This backend is implemented and the shared Mac/Windows dashboard ships the
+membership page (prices, wallet, invoices, email verification). Receiving of
+new payments is **disabled by server configuration** (`payments_enabled=false` in
+`/etc/enana/billing.json`) until go-live: `GET billing` then reports
+`payments_available:false`, checkout answers `503 E_PAYMENTS_UNAVAILABLE`, and the
+dashboard shows an explicit "payments are not open yet" notice instead of a
+working pay button. Existing wallet balances stay readable and usable.
 All customer APIs require the same user token and device session as CLOUD_API.
 Billing collections have no public REST access. Verified email is required to
 create an invoice, buy from balance or change automatic renewal.
@@ -51,6 +56,12 @@ public nginx. User-submitted transaction IDs, frontend state, indexer token
 names and floating-point amounts cannot confirm payment. A healthy scanner
 heartbeat within 180 seconds is required for new invoices; existing balances
 remain accessible during provider outages.
+
+Official route nodes are delivered by `GET nodes` (see CLOUD_API.md) only to an active Pro
+plan with a verified email; nothing in the billing flow can unlock them early. When a
+payment, wallet purchase or renewal changes the plan, the dashboard asks the local helper
+for `GET /api/plan?refresh=1` (a synchronous cloud refresh) and the helper then syncs the
+official nodes in the background.
 
 Email activation uses PocketBase's native POST
 `/api/collections/users/confirm-verification`. Mail links carry the token in a

@@ -16,7 +16,7 @@ while [ -L "$_p" ]; do _l=$(readlink "$_p"); case $_l in /*) _p=$_l ;; *) _p=$(d
 _d=$(cd "$(dirname "$_p")" && pwd -P)
 . "$_d/lib/common.sh"
 init_paths "$_p"
-for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan sync vps diag menu detect console; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan official sync vps diag menu detect console; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 load_settings
 
@@ -387,6 +387,7 @@ cmd_tick() { # 每分钟一次 (launchd): 流量统计采样; 每 ~2 分钟一�
   [ -f "$H/.hb.last" ] && IFS= read -r last < "$H/.hb.last"
   if [ $(( $(now) - ${last:-0} )) -ge 110 ]; then now > "$H/.hb.last"; session_heartbeat; fi
   sync_auto_tick || true                       # 自动同步 (打开了才工作; 每 10 分钟检查一次)
+  official_tick || true                        # 官方线路 (会员): 每 4 小时向云端取一次节点, 失败退避; 节点没变化就什么都不做 (见 lib/official.sh)
   autosite_tick || true                        # 自动识别无法访问的网站 (设置里打开了才工作); 必须排在日志切分之前
   logs_tick || true                            # 日志: 每小时切分 / 压缩 / 按保留期 (最短 12 小时) 清理
   diag_tick || true                            # 诊断摘要: 操作记录里有「值得上报」的新事件才上传一次 (见 lib/diag.sh; 设置里可关)

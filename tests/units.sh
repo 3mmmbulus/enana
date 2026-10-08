@@ -17,7 +17,7 @@ export PORT=39700 UI_PORT=39701 API_PORT=39702 SPEED_PORT=39703
 mkdir -p "$UW/home/Applications" "$UW/h/rules" "$UW/h/logs"
 . "$REPO/lib/common.sh"; init_paths "$REPO/install.sh"
 LIB=$REPO/lib; DATA=$REPO/data
-for _f in i18n jobs servers apps autosites sites fetch os-darwin enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan sync vps; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os-darwin enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan official sync vps; do . "$LIB/$_f.sh"; done
 load_settings; QUIET=1
 [ "$H" = "$UW/h" ] || { echo "REFUSING: 数据目录不是临时目录 ($H)"; exit 1; }
 
@@ -449,6 +449,135 @@ echo "== U7. 仪表盘静态检查 (控制台报错的回归保护)"
 t "仪表盘不会自动去访问第三方网站查 IP (ipify / ipinfo): 出口 IP 由本机辅助服务查, 浏览器里不再出现 ERR_CONNECTION_RESET" sh -c "! grep -nE 'api\\.ipify\\.org|ipinfo\\.io' '$REPO'/ui/*.js"
 t "v-vps.js: 重置错误提示时只对有 setErr 的项调用 (「保存到云端」勾选框不是输入项; 以前这里抛 TypeError, 「添加自己的服务器」面板打不开)" grep -q 'b\[k\] && b\[k\].setErr' "$REPO/ui/v-vps.js"
 t "页面声明了标签页图标, 文件都在" sh -c "grep -q 'rel=\"icon\"' '$REPO/ui/index.html' && test -s '$REPO/ui/favicon.svg' && test -s '$REPO/ui/favicon.png'"
+echo "== U9. 官方线路 (会员): 云端响应整理 · 与用户服务器分开 · 只进自动线路池 · 没变化不重启 · 失败退避 / 宽限期 / 退出清除"
+# 只用占位数据: *.example.invalid 的主机、假的凭据、假的区域名。云端用桩函数代替 (不联网)。
+OFFD=$UW/off; mkdir -p "$OFFD"; : > "$OFFD/applies"
+cat > "$OFFD/mk.py" <<'PYEOF'
+import json, sys
+kind = sys.argv[1]
+def http(i, **kw):
+    o = {"type": "http", "tag": "官方-区域%d" % i, "server": "n%d.example.invalid" % i, "server_port": 443, "username": "u%d" % i, "password": "pw%d" % i, "tls": {"enabled": True, "server_name": "n%d.example.invalid" % i}}
+    o.update(kw); return {"outbound": o}
+nodes = [http(1), http(2)]
+nodes.append({"outbound": {"type": "tuic", "tag": "官方-图克", "server": "t.example.invalid", "server_port": 8443, "uuid": "00000000-0000-0000-0000-000000000001", "password": "pw", "congestion_control": "bbr", "tls": {"enabled": True, "alpn": ["h3"]}}})
+nodes.append({"outbound": {"type": "hysteria2", "tag": "官方-海星", "server": "y.example.invalid", "server_port": 8443, "password": "pw", "obfs": {"type": "salamander", "password": "ob"}, "tls": {"enabled": True}}})
+nodes.append({"outbound": {"type": "vless", "tag": "官方-维斯", "server": "v.example.invalid", "server_port": 443, "uuid": "00000000-0000-0000-0000-000000000002", "flow": "xtls-rprx-vision", "tls": {"enabled": True, "reality": {"enabled": True, "public_key": "PUB", "short_id": "ab"}}}})
+if kind == "ok":
+    bad = [http(9, tag="没有前缀"), http(10, detour="direct"), http(11, server="127.0.0.1"), http(12, type="wireguard"), http(13, server_port="443"), http(1), http(14, tag='官方-引"号'), http(15, tls={"certificate_path": "@CERTS@/x.crt"})]
+    print(json.dumps({"entitled": True, "nodes": nodes + bad}, ensure_ascii=False))
+elif kind == "ok2":    # 与 ok 同样的节点, 只是云端换了顺序和键的顺序
+    n = [dict(sorted(x["outbound"].items(), reverse=True)) for x in reversed(nodes)]
+    print(json.dumps({"entitled": True, "nodes": [{"outbound": o} for o in n]}, ensure_ascii=False))
+elif kind == "changed":
+    print(json.dumps({"entitled": True, "nodes": nodes[:3] + [http(7)]}, ensure_ascii=False))
+elif kind == "no":
+    print(json.dumps({"entitled": False, "nodes": []}))
+elif kind == "empty":
+    print(json.dumps({"entitled": True, "nodes": []}))
+elif kind == "junk":
+    print("<html>login</html>")
+PYEOF
+for k in ok ok2 changed no empty junk; do python3 "$OFFD/mk.py" $k > "$OFFD/$k.json"; done
+
+official_ingest "$OFFD/ok.json" "$OFFD/cand.jsonl"; eq "整理云端响应: 有资格且有节点 → 退出码 0" "$?" "0"
+eq "整理云端响应: 只留 5 个合格节点 (没有保留前缀 / detour / 回环地址 / 不支持的协议 / 端口不是数字 / 重复 / 引号 / 本机证书占位符 全部丢弃)" "$(wc -l < "$OFFD/cand.jsonl" | tr -d ' ')" "5"
+t "每一行都通过 official_check_lines (role=auto, official:true, type 和 tag 在最前)" official_check_lines "$OFFD/cand.jsonl"
+eq "行按节点名排序, 每行是合法 JSON" "$(python3 -c 'import json,sys; r=[json.loads(l) for l in open(sys.argv[1], encoding="utf-8")]; t=[x["outbound"]["tag"] for x in r]; assert t==sorted(t, key=lambda s: s.encode()); assert all(list(x["outbound"])[:2]==["type","tag"] and x["role"]=="auto" and x["official"] is True for x in r); print(len(t))' "$OFFD/cand.jsonl")" "5"
+official_ingest "$OFFD/ok2.json" "$OFFD/cand2.jsonl"; t "云端换了节点顺序 / 键顺序: 整理后的文件逐字节相同 (没变化就不会重启)" cmp -s "$OFFD/cand.jsonl" "$OFFD/cand2.jsonl"
+official_ingest "$OFFD/no.json" "$OFFD/x" ; eq "云端说没有资格 (entitled:false) → 退出码 3" "$?" "3"
+official_ingest "$OFFD/empty.json" "$OFFD/x" ; eq "有资格但云端暂时没有节点 → 退出码 4 (保留现有节点)" "$?" "4"
+official_ingest "$OFFD/junk.json" "$OFFD/x" ; eq "不是 JSON → 退出码 1" "$?" "1"
+t "拒绝过的内容不会写出文件 (没有部分写入)" test ! -e "$OFFD/x"
+
+# 与用户的服务器分开存放; 配置生成时只进自动线路池
+printf '%s\n' '{"role":"pin","outbound":{"type":"socks","tag":"Pin-A","server":"203.0.113.77","server_port":1080,"version":"5"}}' '{"role":"auto","outbound":{"type":"trojan","tag":"Auto-1","server":"198.51.100.4","server_port":443,"password":"x"}}' > "$H/servers.jsonl"
+cp "$OFFD/cand.jsonl" "$H/official.jsonl"
+eq "official_emit: 每个官方节点一行 (role=auto)" "$(official_emit | cut -f1 | sort | uniq -c | tr -s ' ')" " 5 auto"
+eq "official_emit: 第三列是去掉外层的出站 JSON, 不含 official 标记" "$(official_emit | cut -f3 | python3 -c 'import sys,json; print(all("official" not in json.loads(l) and list(json.loads(l))[:2]==["type","tag"] for l in sys.stdin))')" "True"
+eq "official_list: 第 7 列 = 1, 地址和端口留空 (界面不显示官方节点的地址)" "$(official_list | awk -F'\t' '$7=="1" && $3=="" && $4=="" && $5=="auto" {n++} END{print n}')" "5"
+eq "srv_list 不含官方节点 (它们不是用户的服务器): 数量 / 首次使用判断不受影响" "$(srv_count)" "2"
+t "official_has_tag" official_has_tag "官方-图克"
+printf '%s\n' '{"role":"auto","outbound":{"type":"trojan","tag":"官方-图克","server":"203.0.113.9","server_port":443,"password":"mine"}}' >> "$H/servers.jsonl"
+eq "用户自己有同名节点时, 官方的那一行不输出 (核心配置里不能出现重复标签)" "$(official_emit | cut -f2 | grep -c '^官方-图克$')" "0"
+sed -i.bak '$d' "$H/servers.jsonl"; rm -f "$H/servers.jsonl.bak"
+t "用户导入的节点不能占用保留前缀 官方-" sh -c ". '$LIB/servers.sh'; ! srv_check_line '{\"role\":\"auto\",\"outbound\":{\"type\":\"trojan\",\"tag\":\"官方-我的\",\"server\":\"203.0.113.9\",\"server_port\":443,\"password\":\"p\"}}'"
+t "也不能占用 enana-official- 前缀 (旧的模拟器 / 文档里用过)" sh -c ". '$LIB/servers.sh'; ! srv_check_line '{\"role\":\"auto\",\"outbound\":{\"type\":\"trojan\",\"tag\":\"enana-official-x\",\"server\":\"203.0.113.9\",\"server_port\":443,\"password\":\"p\"}}'"
+t "普通节点名照常接受" sh -c ". '$LIB/servers.sh'; srv_check_line '{\"role\":\"auto\",\"outbound\":{\"type\":\"trojan\",\"tag\":\"官方版本\",\"server\":\"203.0.113.9\",\"server_port\":443,\"password\":\"p\"}}'"
+srv_secret_fields "官方-图克" >/dev/null; eq "官方节点的凭据永远不显示 (srv_secret_fields 退出码 3)" "$?" "3"
+srv_secret_fields "Auto-1" >/dev/null; eq "用户自己的节点仍可查看 (退出码 0)" "$?" "0"
+printf '%s\n' '{"role":"auto","outbound":{"type":"trojan","tag":"香港节点","server":"198.51.100.8","server_port":443,"password":"cn-pw"}}' >> "$H/servers.jsonl"
+eq "含中文名字的用户节点也能查看凭据 (srv_secret_fields 以前拿字节和已解码的字符串比较, 中文名永远对不上)" "$(srv_secret_fields 香港节点 | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["value"])')" "cn-pw"
+sed -i.bak '$d' "$H/servers.jsonl"; rm -f "$H/servers.jsonl.bak"
+
+gen_config >/dev/null 2>&1; cp "$H/config.json.new" "$OFFD/cfg1.json"
+eq "配置: 官方节点在 AUTO 池和 Global 里, 不在 PIN 里 (只进自动线路)" "$(python3 - "$OFFD/cfg1.json" <<'PYEOF'
+import json, sys
+c = json.load(open(sys.argv[1], encoding="utf-8")); o = {x["tag"]: x for x in c["outbounds"]}
+off = sorted(t for t in o if t.startswith("官方-"))
+print(len(off), all(t in o["AUTO"]["outbounds"] and t in o["Global"]["outbounds"] and t not in o["PIN"]["outbounds"] for t in off), o["PIN"]["outbounds"], "official" in json.dumps(c))
+PYEOF
+)" "5 True ['Pin-A'] False"
+gen_config >/dev/null 2>&1; t "官方节点没变化: 重新生成的配置逐字节相同" cmp -s "$OFFD/cfg1.json" "$H/config.json.new"
+python3 "$OFFD/mk.py" changed > /dev/null; official_ingest "$OFFD/changed.json" "$OFFD/cand3.jsonl"; cp "$OFFD/cand3.jsonl" "$H/official.jsonl"
+gen_config >/dev/null 2>&1; t "官方节点变了: 配置也跟着变" sh -c "! cmp -s '$OFFD/cfg1.json' '$H/config.json.new'"
+: > "$H/official.jsonl"; gen_config >/dev/null 2>&1; eq "官方节点清空后: 配置里一个官方节点都没有" "$(grep -c '官方-' "$H/config.json.new" || true)" "0"
+
+# 同步流程 (云端、授权、配置校验都用桩函数)
+auth_logged_in() { return 0; }; session_id() { printf sid; }; session_token() { printf tok; }
+session_call() { local out=$1; if [ -n "${FAKE_BODY:-}" ]; then cp "$FAKE_BODY" "$out"; else : > "$out"; fi; printf '%s' "${FAKE_CODE:-200}"; }
+apply_config() { echo x >> "$OFFD/applies"; APPLY_CHANGED=1; [ -z "${STUB_FAIL:-}" ]; }
+napply() { wc -l < "$OFFD/applies" | tr -d ' '; }
+rm -f "$H/official.jsonl" "$H/official.state"; NETWORK_MODE=system; unset OP_WHO
+FAKE_BODY=$OFFD/ok.json FAKE_CODE=200 official_sync; eq "同步: 第一次 → 写入并应用 (apply_config 调用 1 次)" "$?:$(napply):$(wc -l < "$H/official.jsonl" | tr -d ' ')" "0:1:5"
+eq "同步: 文件权限 600, 状态里 entitled=1、fails=0" "$(ls -l "$H/official.jsonl" | cut -c1-10):$(official_state_get entitled):$(official_state_get fails)" "-rw-------:1:0"
+cp "$H/official.jsonl" "$OFFD/keep.jsonl"
+FAKE_BODY=$OFFD/ok2.json FAKE_CODE=200 official_sync; eq "同步: 云端内容没变 (顺序不同) → 不重新生成配置、不重启 (apply_config 仍是 1 次), 文件逐字节不变" "$?:$(napply):$(cmp -s "$OFFD/keep.jsonl" "$H/official.jsonl" && echo same)" "0:1:same"
+FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync; eq "同步: 节点变了 → 应用 (apply_config 共 2 次)" "$?:$(napply)" "0:2"
+FAKE_BODY=$OFFD/changed.json FAKE_CODE=503 official_sync; eq "同步: 云端 503 → 失败 (退出码 1), 现有节点原样保留, 没有应用, fails=1" "$?:$(napply):$(wc -l < "$H/official.jsonl" | tr -d ' '):$(official_state_get fails)" "1:2:4:1"
+FAKE_BODY=$OFFD/junk.json FAKE_CODE=200 official_sync; eq "同步: 云端回了网页 → 当作失败, 现有节点保留, fails=2" "$?:$(wc -l < "$H/official.jsonl" | tr -d ' '):$(official_state_get fails)" "1:4:2"
+FAKE_BODY=$OFFD/empty.json FAKE_CODE=200 official_sync; eq "同步: 有资格但云端暂时没有节点 → 保留现有节点, fails 归零" "$?:$(wc -l < "$H/official.jsonl" | tr -d ' '):$(official_state_get fails)" "0:4:0"
+now_=$(now); due() { official_due && echo due || echo wait; }
+official_state_set try="$now_" fails=0; eq "到点判断: 刚同步过 → 还没到点" "$(due)" wait
+official_state_set try=$((now_ - 14500)) fails=0; eq "到点判断: 超过 4 小时 → 到点" "$(due)" due
+official_state_set try=$((now_ - 1000)) fails=1; eq "失败退避: 第 1 次失败后 15 分钟到点" "$(due)" due
+official_state_set try=$((now_ - 800)) fails=1; eq "失败退避: 15 分钟内不重试" "$(due)" wait
+official_state_set try=$((now_ - 1000)) fails=2; eq "失败退避: 第 2 次失败后要等 30 分钟" "$(due)" wait
+official_state_set try=$((now_ - 3000)) fails=8; eq "失败退避: 多次失败后最长 4 小时一次" "$(due)" wait
+official_state_set ok=$((now_ - 100000)) try="$now_" fails=1
+FAKE_CODE=503 official_sync; eq "宽限期: 离线不到 3 天 → 节点保留" "$?:$(wc -l < "$H/official.jsonl" | tr -d ' '):$(napply)" "1:4:2"
+official_state_set ok=$((now_ - 270000)) try=0
+FAKE_CODE=503 official_sync; eq "宽限期: 离线超过 3 天 → 节点移除并应用 (apply_config 共 3 次)" "$?:$(test -e "$H/official.jsonl" && echo present || echo gone):$(napply)" "1:gone:3"
+FAKE_BODY=$OFFD/ok.json FAKE_CODE=200 official_sync; FAKE_BODY=$OFFD/no.json FAKE_CODE=200 official_sync
+eq "同步: 云端明确说没有资格 (订阅到期 / 邮箱未验证) → 下一次成功同步时全部移除" "$?:$(test -e "$H/official.jsonl" && echo present || echo gone):$(official_state_get entitled)" "0:gone:0"
+n0=$(napply); FAKE_BODY=$OFFD/no.json FAKE_CODE=200 official_sync; eq "同步: 本来就没有节点时 entitled:false 不触发任何应用" "$(napply)" "$n0"
+t "移除官方节点之后不留凭据副本 (op_txn 的备份 official.jsonl.prev 也删掉)" test ! -e "$H/official.jsonl.prev"
+
+# 配置没通过校验: 回滚到原来的节点, 同一份内容一天之内不再重试
+FAKE_BODY=$OFFD/ok.json FAKE_CODE=200 official_sync; cp "$H/official.jsonl" "$OFFD/good.jsonl"; n1=$(napply)
+STUB_FAIL=1 FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync
+eq "校验失败: 退出码 1, 回滚到原来的节点 (official.jsonl 没变), 记下被拒绝的内容" "$?:$(cmp -s "$OFFD/good.jsonl" "$H/official.jsonl" && echo same):$([ -n "$(official_state_get bad)" ] && echo marked)" "1:same:marked"
+n2=$(napply); STUB_FAIL=1 FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync
+eq "校验失败: 同一份被拒绝的内容不会再次尝试 (没有额外的 apply_config)" "$(napply)" "$n2"
+official_state_set bad_at=$(( $(now) - 90000 )); FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync; eq "拒绝记录超过一天后重新尝试并成功" "$?:$(wc -l < "$H/official.jsonl" | tr -d ' '):$(official_state_get bad)" "0:4:"
+
+# Enhanced/TUN: 后台 (auto) 不弹授权, 记下 deferred; 仪表盘里 (用户在场) 才应用
+FAKE_BODY=$OFFD/ok.json FAKE_CODE=200 official_sync; n3=$(napply); cp "$H/official.jsonl" "$OFFD/tun0.jsonl"
+NETWORK_MODE=tun OP_WHO=auto FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync
+eq "TUN + 后台: 节点有变化 → 不应用、不改文件、记下 deferred=1" "$?:$(napply):$(cmp -s "$OFFD/tun0.jsonl" "$H/official.jsonl" && echo same):$(official_state_get deferred)" "0:$n3:same:1"
+NETWORK_MODE=tun OP_WHO=dashboard FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync
+eq "TUN + 仪表盘: 用户在场 → 正常应用, deferred 清零" "$?:$(napply):$(official_state_get deferred)" "0:$((n3 + 1)):0"
+NETWORK_MODE=tun OP_WHO=auto FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync; eq "TUN + 后台: 内容没变 → 什么都不做 (也不记 deferred)" "$(napply):$(official_state_get deferred)" "$((n3 + 1)):0"
+NETWORK_MODE=system; unset OP_WHO
+
+# 套餐刷新后判断是否需要同步 / 退出账号清除
+printf '%s' '{"plan":{"code":"pro"},"features":{"core":{"enabled":true,"tier":"free"},"official_proxy":{"enabled":true,"tier":"pro"}},"official":{"available":true,"nodes":33}}' > "$H/plan.json"
+eq "plan_official_on: 套餐里 official_proxy.enabled=true → 1" "$(plan_official_on)" "1"
+printf '%s' '{"plan":{"code":"free"},"features":{"official_proxy":{"enabled":false,"tier":"pro","reason":"upgrade","coming_soon":true}}}' > "$H/plan.json"
+eq "plan_official_on: 免费版 / 即将推出 → 0" "$(plan_official_on)" "0"
+rm -f "$H/plan.json"; eq "plan_official_on: 没有缓存 → 0" "$(plan_official_on)" "0"
+t "退出账号 (auth_logout_local) 会删除 official.jsonl、它的备份和 official.state: 官方节点属于账号" sh -c "grep -q '\$H/official.jsonl\" \"\$H/official.jsonl.prev\" \"\$H/official.state' '$LIB/auth.sh'"
+unset -f auth_logged_in session_id session_token session_call apply_config
+echo
 PASS=$(wc -l < "$UW/.pass" 2>/dev/null | tr -d ' '); FAIL=$(wc -l < "$UW/.fail" 2>/dev/null | tr -d ' ')
 echo "单元测试: ${PASS:-0} 通过, ${FAIL:-0} 失败"
 [ "${FAIL:-0}" = 0 ]

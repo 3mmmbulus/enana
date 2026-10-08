@@ -68,7 +68,7 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
   while IFS=$'\t' read -r role tag ob; do
     case $role in pin) printf '%s\n' "$tag" >> "$T/pins" ;; auto) printf '%s\n' "$tag" >> "$T/autos" ;; *) continue ;; esac
     printf '%s\n' "$ob" >> "$T/ob"
-  done < <(srv_emit)
+  done < <(srv_emit; type official_emit >/dev/null 2>&1 && official_emit)       # 用户的服务器 + 官方线路 (后者一律是 auto, 见 lib/official.sh)
 
   local pin_list pin_def glob_list glob_def
   if [ -s "$T/pins" ]; then pin_list=$(json_list < "$T/pins"); pin_def=$(head -1 "$T/pins"); else pin_list='"direct"'; pin_def=direct; fi

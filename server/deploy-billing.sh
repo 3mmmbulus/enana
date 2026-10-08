@@ -17,6 +17,15 @@ const c=JSON.parse(fs.readFileSync(file));require(p.join(root,'server/payments/t
 if(c.payments_enabled!==false||typeof c.provider_key!=='string'||!c.provider_key||typeof c.scanner_secret!=='string'||c.scanner_secret.length<32)throw Error('private_configuration_invalid_or_receiving_enabled');
 console.log('Private configuration validated; receiving stays disabled.');
 JS
+# Optional: the private official-route source list. Validated structurally (never printed); absent = official lines stay "coming soon".
+if [ -e /etc/enana/official.json ]; then
+node - /etc/enana/official.json "$source_dir" <<'JS'
+const fs=require('fs'),p=require('path'),[file,root]=process.argv.slice(2);
+const D=require(p.join(root,'server/pb_hooks/enana_official_domain.js')),c=JSON.parse(fs.readFileSync(file));
+if(!c||!Array.isArray(c.sources)||D.normalizeConfig(c).sources.length!==c.sources.length)throw Error('official_source_configuration_invalid');
+console.log('Official source configuration validated ('+c.sources.length+' sources; contents not shown).');
+JS
+fi
 mkdir -p /var/backups/enana/releases
 exec 9>/var/backups/enana/billing-publish.lock
 flock -n 9 || { echo 'Another billing publication is running.' >&2; exit 2; }
@@ -38,6 +47,7 @@ cp -a "$root/pb_hooks" "$root/pb_migrations" "$backup/"
 cp -p "$nginx_file" "$backup/nginx.conf"
 cp -p "$root/site/site.css" "$backup/site.css"
 [ ! -e /etc/enana/billing.json ] || cp -p /etc/enana/billing.json "$backup/billing.json"
+[ ! -e /etc/enana/official.json ] || cp -p /etc/enana/official.json "$backup/official.json"
 [ ! -e "$root/payments" ] || cp -a "$root/payments" "$backup/payments"
 [ ! -e /etc/systemd/system/enana-payments.service ] || cp -p /etc/systemd/system/enana-payments.service "$backup/payments.service"
 committed=0;stopped=0;database_saved=0
@@ -74,9 +84,10 @@ cp -a "$data" "$backup/pb_data"
 database_saved=1
 install -d -m 750 -o root -g enana /etc/enana
 install -m 640 -o root -g enana "$private_config" /etc/enana/billing.json
+[ ! -e /etc/enana/official.json ] || { chown root:enana /etc/enana/official.json; chmod 640 /etc/enana/official.json; }
 install -d -m 700 -o enana -g enana /var/lib/enana-cc/payments
 install -d -m 755 -o root -g root "$root/payments"
-for file in enana_billing.pb.js enana_billing.js enana_billing_domain.js; do
+for file in enana_billing.pb.js enana_billing.js enana_billing_domain.js enana_official.pb.js enana_official.js enana_official_domain.js; do
   install -m 644 -o root -g root "$source_dir/server/pb_hooks/$file" "$root/pb_hooks/$file"
 done
 # Add helper exports to the tracked original service; no account behavior changes.

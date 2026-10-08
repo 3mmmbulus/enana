@@ -6,6 +6,11 @@
 .billing-wallet { justify-content:space-between; gap:10px }
 .billing-history { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--line) }
 .billing-email { margin-top:12px }
+.billing-notices { display:grid; gap:8px }
+.billing-notices:empty { display:none }
+.billing .billing-notice { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; margin:0 }
+.billing .billing-notice p { flex:1 1 260px; min-width:0; line-height:1.5 }
+.billing .billing-notice.info { border-left:3px solid var(--info) }
 .billing-invoice { display:grid; gap:16px }
 .billing-exact { display:flex; align-items:center; justify-content:space-between; gap:12px }
 .billing-exact label { display:grid; gap:8px; min-width:0 }

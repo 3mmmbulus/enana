@@ -95,7 +95,7 @@
 
 目前所有功能免费, 但接口和界面按「以后部分功能按月订阅」设计:
 - **套餐与权益** 在云端 (`plans` / `subscriptions`), 本机缓存一份 (登录时和每天维护时刷新); 本机只用于「界面提示」, **真正的限制在云端**: 受限内容 (如官方线路) 只有云端核对订阅后才会下发。
-- `GET /api/plan` (需登录) →
+- `GET /api/plan` (需登录; 可带 `?refresh=1`) →
 ```json
 {"ok":true,"plan":{"code":"free","title":"免费版"},"expires_at":null,"checked":1760000000,
  "limits":{"devices_per_platform":2},
@@ -103,9 +103,10 @@
              "official_proxy":{"enabled":false,"tier":"pro","reason":"upgrade","coming_soon":true}},
  "official":{"available":false,"nodes":0}}
 ```
-`features.<key>`: `tier` = `free | pro`; `enabled` = 当前账号能否使用; `coming_soon:true` = 还没上线 (前端显示「即将推出」灰色卡片, 不可点); `reason`: `upgrade` (需要升级) · `expired` (订阅已过期) 。`official` 描述官方线路是否可用 (以后订阅用户登录后自动出现「enana 官方线路」节点, 凭据不可查看/不可导出, 订阅过期后下次同步自动消失, 本机缓存最多再保留 3 天宽限)。
+`features.<key>`: `tier` = `free | pro`; `enabled` = 当前账号能否使用; `coming_soon:true` = 还没上线 (前端显示「即将推出」灰色卡片, 不可点); `reason`: `upgrade` (需要升级) · `expired` (订阅已过期) · `verify` (套餐包含这项功能, 但账号邮箱还没有验证; 目前只有 `official_proxy` 会这样)。官方线路 (`official_proxy`) 没有写死的「即将推出」: 云端至少有一个新鲜且已批准的官方节点时自动上线, 否则照旧 `coming_soon:true`。`official` 描述官方线路是否可用 (以后订阅用户登录后自动出现「enana 官方线路」节点, 凭据不可查看/不可导出, 订阅过期后下次同步自动消失, 本机缓存最多再保留 3 天宽限)。
+- `?refresh=1`: 同步向云端取最新套餐再返回 (3 秒内刚刷新过就直接用缓存)。仪表盘在付款成功 / 余额购买 / 手动刷新之后用它, 否则刚付款的用户最长 1 小时还会看到免费版。
 - 本机缓存 1 小时 (`plan.json`): 缓存过期时先返回旧的并在后台刷新, 从没取过才同步等; 登录后和每天维护时也会刷新; 连不上云端就用缓存, 什么都没有就是内置的「免费版」。`plan.title` 免费版 / 专业版按请求语言翻译, 其它套餐用云端给的名字。
-- 前端约定: 「设置 → 账号」里显示当前套餐卡片 (免费版 / 将来的 Pro: 到期日、设备上限、功能清单, 「升级」按钮暂时置灰并写明「即将开放」); 服务器页预留一张「enana 官方线路 (会员)」占位卡片 (`coming_soon`); 受限功能旁显示「Pro」小徽标 + 锁图标, 点击弹窗说明, 不做死按钮。所有功能开关都读 `GET /api/plan` 的 `features`, 不要在前端写死「免费 / 付费」。
+- 前端约定: 「设置 → 账号」里显示当前套餐卡片 (免费版 / Pro: 到期日、设备上限、功能清单; 「会员」页含价格、余额、订单与邮箱验证, 见 BILLING_API.md。新订单的收款由服务器配置关闭时 (`payments_available:false`), 付款按钮置灰, 旁边有一条常驻说明「收款暂未开放」; 邮箱未验证、已有未完成订单、云端登录失效等每一种不能付款的状态也都有各自的行内说明和下一步动作, 不再只靠置灰 + 点击后的短暂提示); 服务器页预留一张「enana 官方线路 (会员)」占位卡片 (`coming_soon`); 受限功能旁显示「Pro」小徽标 + 锁图标, 点击弹窗说明, 不做死按钮。所有功能开关都读 `GET /api/plan` 的 `features`, 不要在前端写死「免费 / 付费」。
 
 ## 设置 / 语言
 
@@ -152,6 +153,8 @@
 
 `GET /api/state` → `{ok,version,prefs_version★,core,platform:{os,osver,arch},ports:{proxy,ui,api,speed★},env:{core,rules,service,sysproxy,shortcut (快捷命令的安装位置, 没装是 null),shortcut_cmd★ (在终端里直接可运行、打开控制台的完整命令: 装了快捷命令 = `enana`, 没装 = 脚本的完整路径),rules_updated,rules_missing[]},servers[],subs[],overrides[],first_run,`
 `update★:{available,latest,checked},lang★,proxy★:{enabled,mode:"auto|global"},account★:{email}}`
+
+`servers[]` 的每一项是 `{tag,type,server,port,role,sub}`。**官方线路 (会员) 的节点**排在用户自己的服务器后面, 多一个 `"official":true`: `server` 为 `""`、`port` 为 `0` (界面不显示官方节点的地址), `role` 永远是 `auto` (只进「自动线路」池, 不能当固定出口)。它们保存在 `~/.enana/official.jsonl` (权限 600), **不在** `servers.jsonl`, 也不进配置快照 / 云端同步 / `GET /api/export`; 对它们 `GET /api/servers/secret`、`POST /api/servers/delete`、`POST /api/servers/role` 一律 `E_FORBIDDEN`。`first_run` 只看用户自己的服务器。官方节点的标签以保留前缀 `官方-` 开头: 用户导入的节点不能使用这个前缀 (安装端拒绝; 导入器会把别的订阅里的「官方-xx」改名为「官方 xx」)。
 
 `GET /api/apps` · `POST /api/apps/scan` · `POST /api/apps/adopt` (表单 `names` 可选: 换行分隔的应用名, 只处理这几个; 不带 = 所有 flag=new 的应用) · `POST /api/apps/ack?name=|all=1` · `POST /api/override?kind=&value=&state=[&target=]` ·
 `POST /api/servers/import?sub=&mode=merge|replace&save=0|1` (正文=JSONL; **save★**: 1 = 「保存到云端」, 这些节点 (和订阅) 进入云端同步清单, 第一次用时自动打开云端同步; 0 = 只留在本机; 不带 = 不改动, 例如订阅自动刷新) · `POST /api/servers/delete?tag=` · `POST /api/servers/role?tag=&role=pin|auto|off|dl` ·

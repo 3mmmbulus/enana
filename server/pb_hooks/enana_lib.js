@@ -26,12 +26,13 @@ const SMALL_BODY_MAX = 16384       // 其它接口请求体上限
 const SID_RE = /^[a-z0-9]{15}$/    // PocketBase 记录 id
 
 // 功能目录: 代码里写死「有哪些功能、属于哪一档、是否已上线」; 每个套餐能用哪些功能写在 plans.features (JSON 数组, 管理后台里可改)。
-// coming_soon = 还没上线: 即使套餐包含也不会 enabled (官方线路上线前, 任何套餐都拿不到)。
+// coming_soon = 还没上线: 即使套餐包含也不会 enabled。官方线路没有写死的 coming_soon: 只要 official_nodes 里至少有一个新鲜、已批准的节点就自动上线,
+// 否则照旧显示「即将推出」(needs_nodes)。needs_verified = 还要求邮箱已验证 (节点只发给已验证邮箱的 Pro 账号)。
 const FEATURES = {
   core:           { tier: 'free' },
   sync:           { tier: 'free' },
   vps_deploy:     { tier: 'free' },
-  official_proxy: { tier: 'pro', coming_soon: true },
+  official_proxy: { tier: 'pro', needs_nodes: true, needs_verified: true },
 }
 
 // ---------------------------------------------------------------- 基础工具
@@ -140,18 +141,55 @@ function planFor(app, user, t) {
   }
 }
 
-// 权益 (docs/API.md「会员 / 套餐」): features.<key> = {enabled, tier, [reason: upgrade|expired], [coming_soon]}
-function entitlements(p) {
+// 权益 (docs/API.md「会员 / 套餐」): features.<key> = {enabled, tier, [reason: upgrade|expired|verify], [coming_soon]}
+// ctx = {nodes: 新鲜且已批准的官方节点数, verified: 邮箱是否已验证}; 不传 ctx = 没有节点、未验证。
+function entitlements(p, ctx) {
+  const c = ctx || {}
   const out = {}
   for (const key in FEATURES) {
     const def = FEATURES[key]
     const granted = p.granted.indexOf(key) >= 0
-    const f = { enabled: granted && !def.coming_soon, tier: def.tier }
+    const soon = !!def.coming_soon || (!!def.needs_nodes && !(c.nodes > 0))
+    const needVerify = granted && !soon && !!def.needs_verified && !c.verified
+    const f = { enabled: granted && !soon && !needVerify, tier: def.tier }
     if (!granted) f.reason = p.expired ? 'expired' : 'upgrade'
-    if (def.coming_soon) f.coming_soon = true
+    else if (needVerify) f.reason = 'verify'
+    if (soon) f.coming_soon = true
     out[key] = f
   }
   return out
+}
+
+// ---------------------------------------------------------------- 官方线路节点 (official_nodes, 由 enana_official.js 定时从私有配置的订阅源同步)
+
+// 新鲜 (fresh_until 未过期)、已批准、已启用的官方节点。集合没有任何 API 规则 = 只有超级用户和这里的服务端代码能读。
+const OFFICIAL_FRESH = "origin = 'official' AND enabled = 1 AND approved = 1 AND fresh_until > {:t}"
+function officialCount(app, t) {
+  try { return app.countRecords('official_nodes', $dbx.exp(OFFICIAL_FRESH, { t: iso(t) })) } catch (_) { return 0 }
+}
+// 返回 [{outbound}], 按节点名排序 (同一份数据永远得到相同的字节, 客户端据此判断「没有变化」); outbound 的键顺序: type, tag, 其余按字母序。
+function officialRows(app, t) {
+  let rows = []
+  try { rows = app.findAllRecords('official_nodes', $dbx.exp(OFFICIAL_FRESH, { t: iso(t) })) } catch (_) { return [] }
+  const all = []
+  for (const r of rows) {
+    let o = null
+    try { o = JSON.parse(toString(r.get('outbound'))) } catch (_) { o = null }
+    if (!o || typeof o !== 'object' || typeof o.type !== 'string' || typeof o.tag !== 'string') continue
+    const ordered = { type: o.type, tag: o.tag }
+    Object.keys(o).filter((k) => k !== 'type' && k !== 'tag').sort().forEach((k) => { ordered[k] = o[k] })
+    all.push({ key: r.getString('node_key'), outbound: ordered })
+  }
+  // by tag, then by database key, so two sources that happen to produce the same tag always resolve the same way; the first one wins
+  all.sort((a, b) => (a.outbound.tag < b.outbound.tag ? -1 : a.outbound.tag > b.outbound.tag ? 1 : a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+  const out = [], seen = {}
+  for (const x of all) { if (seen[x.outbound.tag]) continue; seen[x.outbound.tag] = true; out.push({ outbound: x.outbound }) }
+  return out
+}
+// 谁有资格拿节点: 当前生效的套餐包含 official_proxy (订阅有效且套餐启用) 并且邮箱已验证。与「现在有没有节点」无关 (没有节点时返回空列表)。
+function officialAccess(p, verified) {
+  const granted = p.granted.indexOf('official_proxy') >= 0
+  return { granted: granted, entitled: granted && !!verified }
 }
 
 // ---------------------------------------------------------------- 设备与会话
@@ -548,23 +586,35 @@ function kick(e) {
 function plan(e) {
   const g = needSession(e)
   if (g.res) return g.res
-  const p = planFor($app, g.user, nowSec())
+  const t = nowSec()
+  const p = planFor($app, g.user, t)
+  const n = officialCount($app, t)
+  const ent = entitlements(p, { nodes: n, verified: g.user.verified() })
+  const on = ent.official_proxy.enabled
   return reply(e, 200, {
     plan: { code: p.code, title: p.title, max_devices_per_platform: p.limit },
     expires_at: p.expires_at,
     limits: { devices_per_platform: p.limit },
-    features: entitlements(p),
-    official: { available: false, nodes: 0 },
+    features: ent,
+    official: { available: on, nodes: on ? n : 0 },
   })
 }
 
-// 官方线路节点 (以后的会员功能) 的占位接口: 现在永远是空列表。
-// 上线后也只会在 official_proxy.enabled (套餐包含且功能已上线) 时才下发节点 —— 免费套餐永远拿不到。
+// 官方线路节点 (会员功能): 只发给「套餐有效 (Pro) 且邮箱已验证」的账号, 其它人永远得到空列表。
+// 响应 {entitled, nodes:[{outbound}]}; 没有新鲜节点 (订阅源暂时不可用) 时 entitled 仍然是 true、nodes 为空 —— 客户端据此保留本机已有的节点直到宽限期结束。
+// 不返回订阅源的任何信息 (编号 / 地址 / 令牌)。
 function nodes(e) {
   const g = needSession(e)
   if (g.res) return g.res
-  const ent = entitlements(planFor($app, g.user, nowSec()))
-  return reply(e, 200, { nodes: [], entitled: ent.official_proxy.enabled })
+  const t = nowSec()
+  const acc = officialAccess(planFor($app, g.user, t), g.user.verified())
+  // The body is serialised here and written as a string: e.json() hands the object to Go, which does not keep the
+  // key order, and the client's awk depends on `type` then `tag` being the first two keys of every outbound.
+  const out = acc.entitled ? { entitled: true, nodes: officialRows($app, t) } : { entitled: false, nodes: [] }
+  e.response.header().set('Cache-Control', 'no-store')
+  e.response.header().set('Content-Type', 'application/json; charset=utf-8')
+  e.string(200, JSON.stringify(out))
+  return true
 }
 
 // ---------------------------------------------------------------- POST /account/password
@@ -716,6 +766,6 @@ module.exports = {
   devices: devices, kick: kick, plan: plan, nodes: nodes, changePassword: changePassword,
   syncGet: syncGet, syncPut: syncPut, syncDelete: syncDelete,
   onUserCreated: onUserCreated, onUserCreateRequest: onUserCreateRequest, gc: gc,
-  needSession: needSession, planFor: planFor, readJSON: readJSON,
+  needSession: needSession, planFor: planFor, readJSON: readJSON, entitlements: entitlements, officialAccess: officialAccess,
   reply: reply, fail: fail, clean: clean, nowSec: nowSec, iso: iso,       // 给 enana_diag.js 用
 }

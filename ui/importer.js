@@ -439,7 +439,10 @@
       if (it.skip) { skipped.push({ name: it.name, reason: it.skip }); return; }
       var ob = it.outbound;
       if (isInfoNode(ob)) { skipped.push({ name: ob.tag, reason: '订阅提示节点(流量/到期信息), 已忽略' }); return; }
-      var base = ob.tag.slice(0, 60) || 'node', tag = base, n = 2;
+      var base = ob.tag.slice(0, 60) || 'node', tag, n = 2;
+      /* 官方-… 是官方线路 (会员) 的保留前缀, 安装端会拒绝用户导入占用它的节点: 别的订阅里叫「官方-xx」的节点改成「官方 xx」, 不要整行丢掉 */
+      base = base.replace(/^官方-/, '官方 ').replace(/^enana-official-/i, 'enana official ');
+      tag = base;
       while (used[tag] || existing[tag] || RESERVED.indexOf(tag) >= 0 || /^svc-/.test(tag)) tag = base + ' ' + (n++);
       used[tag] = 1; ob.tag = tag;
       servers.push({ role: role, outbound: ob, summary: summary(ob), warn: it.warn || '' });

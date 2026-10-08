@@ -31,7 +31,8 @@
     if (S.locked) return Promise.resolve(data);
     if (loading) return loading;
     if (!force && data && Date.now() - loadedAt < 300000) return Promise.resolve(data);
-    loading = TP.helper('GET', '/api/plan', { timeout: 8000 }).then(function (r) {
+    /* force = 向云端重新取一次 (付款成功 / 余额购买 / 手动刷新之后): 本机辅助服务默认只回本地缓存 (最长 1 小时), 带 refresh=1 才会同步向云端取最新套餐 */
+    loading = TP.helper('GET', '/api/plan', { timeout: force ? 14000 : 8000, q: force ? { refresh: '1' } : undefined }).then(function (r) {
       data = r && r.ok !== false ? r : data; loadedAt = Date.now(); TP.emit('plan', data); return data;
     }, function (e) { if (!(e && e.kind === 'auth')) TP.emit('plan', data); return data; }).then(function (x) { loading = null; return x; });
     return loading;
@@ -44,17 +45,24 @@
     var f = P.feature(key), name = P.name(key), why, kind = 'info';
     if (f.comingSoon) { why = t('plan.why.soon'); }
     else if (!f.enabled && f.reason === 'expired') { why = t('plan.why.expired'); kind = 'warn'; }
+    else if (!f.enabled && f.reason === 'verify') { why = t('plan.why.verify'); kind = 'warn'; }
     else if (!f.enabled) { why = t('plan.why.upgrade'); }
     else if (f.pro) { why = t('plan.why.included'); kind = 'ok'; }
     else { why = t('plan.why.free'); kind = 'ok'; }
-    var up = ui.btn(L('plan.upgrade'), { kind: 'primary', icon: 'pro' });
-    ui.act(up, function () { if (TP.billing && TP.settingsTab) { TP.settingsTab('plan'); return; } ui.toast(t('plan.upgradeSoon'), 'warn', 4200); });
+    var dlg = null, canBuy = !!(TP.billing && TP.settingsTab), verify = f.reason === 'verify';
+    var up = ui.btn(L(verify ? 'plan.verifyGo' : canBuy ? 'plan.upgradeGo' : 'plan.upgrade'), { kind: 'primary', icon: 'pro' });
+    /* 这个按钮在弹窗里: 先关掉弹窗再切换到「会员」页, 否则页面在弹窗后面变了、弹窗还盖在上面, 看起来像按钮没反应 */
+    ui.act(up, function () {
+      if (canBuy) { if (dlg) dlg.close('upgrade'); TP.settingsTab(verify ? 'account' : 'plan'); return; }       // 邮箱验证在「账号」页 (也在「会员」页)
+      ui.toast(t('plan.upgradeSoon'), 'warn', 4200);
+    });
     var body = h('div', { class: 'plan-ex' },
       h('p', { class: 'cfm-m' }, why),
       h('p', { class: 'muted sm' }, t('plan.why.free.now')),
       h('div', { class: 'plan-ex-b' }, ui.badge(f.pro ? L('plan.pro') : L('plan.tier.free'), f.pro ? 'pro' : 'neutral', f.pro ? 'pro' : null), f.comingSoon ? ui.badge(L('plan.soon'), 'info', 'clock') : null),
-      h('div', { class: 'plan-ex-a' }, up));
-    return ui.modal({ title: t('plan.exTitle', { name: name }), icon: 'pro', iconKind: kind, size: 'sm', body: body, actions: [{ label: t('common.close'), cancel: true }] });
+      f.enabled ? null : h('div', { class: 'plan-ex-a' }, up));                // 功能已包含在当前套餐里时不需要「升级」按钮
+    dlg = ui.modal({ title: t('plan.exTitle', { name: name }), icon: 'pro', iconKind: kind, size: 'sm', body: body, actions: [{ label: t('common.close'), cancel: true }] });
+    return dlg;
   };
   /* 把控件接到功能开关: 不可用时点击弹出说明; 可用但属于 Pro 时只显示小徽标 */
   P.gate = function (el, key) {

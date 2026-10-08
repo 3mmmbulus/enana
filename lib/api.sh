@@ -95,7 +95,7 @@ case $path in /favicon.ico) path="$ADMIN_PATH/favicon.png" ;; esac      # 浏览
 case $path in /|"$ADMIN_PATH"|"$ADMIN_PATH"/*) serve_static ;; esac
 
 # ---------- 以下是 JSON 接口: 到这里才加载其余模块 ----------
-for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan billing sync vps diag; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan billing official sync vps diag; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 i18n_init
 OP_WHO=dashboard; export OP_WHO
@@ -133,9 +133,9 @@ bool() { [ "$1" = 1 ] && printf true || printf false; }
 valid_day() { case $1 in '') return 0 ;; [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) return 0 ;; *) return 1 ;; esac; }
 
 # ---------- JSON 片段 ----------
-servers_json() {
-  srv_list | awk -F'\t' 'BEGIN{printf "["} { gsub(/["\\]/, "", $1); gsub(/["\\]/, "", $3);
-    printf "%s{\"tag\":\"%s\",\"type\":\"%s\",\"server\":\"%s\",\"port\":%s,\"role\":\"%s\",\"sub\":\"%s\"}", (NR>1?",":""), $1, $2, $3, ($4==""?0:$4), $5, $6 } END{printf "]"}'
+servers_json() { # 用户自己的服务器, 后面接官方线路 (第 7 列 = 1: 带 "official":true, 地址 / 端口为空, 界面据此不允许编辑 / 删除 / 查看凭据)
+  { srv_list; official_list; } | awk -F'\t' 'BEGIN{printf "["} { gsub(/["\\]/, "", $1); gsub(/["\\]/, "", $3);
+    printf "%s{\"tag\":\"%s\",\"type\":\"%s\",\"server\":\"%s\",\"port\":%s,\"role\":\"%s\",\"sub\":\"%s\"%s}", (NR>1?",":""), $1, $2, $3, ($4==""?0:$4), $5, $6, ($7=="1"?",\"official\":true":"") } END{printf "]"}'
 }
 
 # ---------- 账号 / 代理总开关 ----------
@@ -249,6 +249,7 @@ ep_auth_verify() { # 敏感操作前再次输入密码 -> 5 分钟有效的 sudo
 }
 ep_servers_secret() { # 查看某个节点的密码 / UUID / 密钥 (需 sudo)
   local tag fields rc; tag=$(qp tag)
+  [ -n "$tag" ] && ! srv_has_tag "$tag" && official_has_tag "$tag" && fail "官方线路的凭据不能查看" E_FORBIDDEN
   [ -n "$tag" ] && srv_has_tag "$tag" || fail "找不到这个服务器" E_NOT_FOUND
   fields=$(srv_secret_fields "$tag"); rc=$?
   case $rc in 0) ;; 3) fail "官方线路的凭据不能查看" E_FORBIDDEN ;; *) fail "找不到这个服务器" E_NOT_FOUND ;; esac
@@ -408,15 +409,18 @@ ep_prefs_set() { # 正文是 JSON 对象文本
   okj "\"version\":$PREFS_VERSION"
 }
 ep_plan() {
-  local c; c=$(plan_checked)
-  if [ -n "$(session_id)" ] && [ $(( $(now) - c )) -gt "$PLAN_TTL" ]; then
-    if [ "$c" = 0 ]; then plan_refresh || true; else ( plan_refresh >/dev/null 2>&1 & ); fi      # 从没取过: 等一下; 过期了: 先用旧的, 后台刷新
+  local c age; c=$(plan_checked); age=$(( $(now) - c ))
+  if [ -n "$(session_id)" ]; then
+    if [ "$(qp refresh)" = 1 ] && [ "$age" -ge 3 ]; then plan_refresh || true      # ?refresh=1 (付款 / 余额购买成功后、手动刷新): 同步向云端取最新套餐, 否则刚付款的用户最长 1 小时还看到免费版 (3 秒内刚刷新过就不重复)
+    elif [ "$age" -gt "$PLAN_TTL" ]; then
+      if [ "$c" = 0 ]; then plan_refresh || true; else ( plan_refresh >/dev/null 2>&1 & ); fi      # 从没取过: 等一下; 过期了: 先用旧的, 后台刷新
+    fi
   fi
   json "{\"ok\":true,$(plan_json)}"
 }
 
 ep_billing() {
-  local op=$1 route=$2 verb=$3 body='' result id
+  local op=$1 route=$2 verb=$3 body='' result id tmp
   if [ "$op" = order ]; then
     id=$(qp id); printf '%s' "$id" | LC_ALL=C grep -Eq '^[a-z0-9]{15}$' || fail "订单编号无效" E_INVALID
     route="$route?id=$id"
@@ -425,8 +429,16 @@ ep_billing() {
     if [ "$op" = email-send ] && [ ! -s "$BODY" ]; then body='{}'
     else body=$(billing_body "$op" "$BODY") || fail "付款参数无效" E_INVALID; fi
   fi
-  result=$(billing_request "$verb" "$route" "$body") || fail "账号服务暂时无法连接，请稍后重试" E_ACCOUNT_UNREACHABLE
-  json "$result"
+  # 不能写成 result=$(billing_request …): 命令替换在子 shell 里运行, 设置的 BILLING_CODE 会丢; 所以先写到临时文件, 再在当前 shell 里读出。
+  tmp=$(mktemp)
+  if billing_request "$verb" "$route" "$body" > "$tmp"; then result=$(cat "$tmp"); rm -f "$tmp"; json "$result"; return 0; fi
+  rm -f "$tmp"
+  case ${BILLING_CODE:-} in
+    E_AUTH)          fail "云端登录已失效、已结束或这台电脑是离线登录，请联网并重新登录后再试" E_AUTH ;;                       # 不用 deny 401: 那会让本机仪表盘也锁住; 这里只是云端会话的问题
+    E_SERVER_ERROR)  fail "enana.cc 服务器返回了错误，这次操作可能已生效也可能没有，请先刷新并查看订单和余额" E_SERVER_ERROR ;;
+    E_RATE_LIMITED)  fail "请求过于频繁，请稍后再试" E_RATE_LIMITED ;;
+    *)               fail "账号服务暂时无法连接，请稍后重试" E_ACCOUNT_UNREACHABLE ;;
+  esac
 }
 
 # ---------- 状态 ----------
@@ -571,6 +583,7 @@ ep_servers_import() { # 先对副本「干跑」, 立即返回数量与逐行错
 
 ep_servers_change() { # delete | role  (校验后交给后台任务)
   local tag role; tag=$(qp tag); role=$(qp role)
+  [ -n "$tag" ] && ! srv_has_tag "$tag" && official_has_tag "$tag" && fail "官方线路节点由会员权益提供，不能删除或修改角色" E_FORBIDDEN
   [ -n "$tag" ] && srv_has_tag "$tag" || fail "找不到这台服务器" E_NOT_FOUND
   if [ "$1" = delete ]; then okj "\"job\":\"$(job_spawn servers-delete "$APPLY_STEPS" "$tag")\""
   else case $role in pin|auto|off|dl) okj "\"job\":\"$(job_spawn servers-role "$APPLY_STEPS" "$tag" "$role")\"" ;; *) fail "角色无效" ;; esac; fi

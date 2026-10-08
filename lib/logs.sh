@@ -170,7 +170,7 @@ _AWK_ESC='function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/[
 _logs_access_input() { # <日期…>  -> access.awk 的标准输入: 固定出口 / 自动线路节点名 + 这些天的核心日志
   local d
   printf '%s\n' "@@PINS"; srv_list | awk -F'\t' '$5=="pin"{print $1}'
-  printf '%s\n' "@@AUTOS"; srv_list | awk -F'\t' '$5=="auto"{print $1}'
+  printf '%s\n' "@@AUTOS"; { srv_list; type official_list >/dev/null 2>&1 && official_list; } | awk -F'\t' '$5=="auto"{print $1}'
   printf '%s\n' "@@LOG"
   for d in "$@"; do _logs_stream access "$d"; done
 }

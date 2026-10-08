@@ -458,6 +458,7 @@
       if (f.enabled) st = ui.badge(L('plan.f.on'), 'ok', 'success');
       else if (f.comingSoon) st = ui.badge(L('plan.soon'), 'info', 'clock');
       else if (f.reason === 'expired') st = ui.badge(L('plan.f.expired'), 'warn', 'warning');
+      else if (f.reason === 'verify') st = ui.badge(L('plan.f.verify'), 'warn', 'warning');
       else st = ui.badge(L('plan.f.upgrade'), 'warn', 'lock');
       var b = ui.btn(L('plan.f.more'), { sm: true, kind: 'ghost', icon: 'help-i' }); ui.act(b, function () { TP.plan.explain(k); });
       list.appendChild(h('li', { class: 'plan-f' }, h('span', { class: 'plan-fn' }, f.pro ? ui.icon('pro', 15, 'ci pro-ic') : ui.icon('check', 15, 'ci'), h('span', null, TP.plan.name(k))), h('span', { class: 'plan-fb' }, ui.badge(f.pro ? L('plan.pro') : L('plan.tier.free'), f.pro ? 'pro' : 'neutral'), st, b)));
