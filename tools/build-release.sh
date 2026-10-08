@@ -12,7 +12,7 @@ bundle="enana-$version"; mkdir "$stage/$bundle"
 for name in install.sh lib data ui VERSION CHANGELOG.md get.sh get.ps1 windows LICENSE THIRD_PARTY_NOTICES.md; do
   [ ! -e "$repo/$name" ] || cp -R "$repo/$name" "$stage/$bundle/$name"
 done
-COPYFILE_DISABLE=1 tar -C "$stage" -czf "$out/$bundle.tar.gz" "$bundle"
+COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -C "$stage" -czf "$out/$bundle.tar.gz" "$bundle"
 sum=$(shasum -a 256 "$out/$bundle.tar.gz" | awk '{print $1}')
 size=$(wc -c < "$out/$bundle.tar.gz" | tr -d ' ')
 printf '{"version":"%s","sha256":"%s","size":%s,"url":"/dl/%s.tar.gz","released":"%s"}\n' \

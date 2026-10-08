@@ -19,13 +19,13 @@ ovr_valid() { # kind value
   local k=$1 v=$2
   [ -n "$v" ] && [ ${#v} -le 80 ] || return 1
   case $k in
-    app)  printf '%s' "$v" | LC_ALL=C grep -q '[|"\\/[:cntrl:]]' && return 1; return 0 ;;
-    site) printf '%s' "$v" | LC_ALL=C grep -Eq '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$' ;;
+    app)  case $v in *'|'*|*'"'*|*'\'*|*/*|*[[:cntrl:]]*) return 1 ;; esac; return 0 ;;   # 整串检查 (不按行): 换行 / 控制字符也挡住
+    site) [[ $v =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] ;;
     *) return 1 ;;
   esac
 }
 
-OVR_PIN_MAX=32      # 可以单独指定的固定出口个数上限: 每个固定出口 3 个规则集 (网站 / 应用 / 浏览器), 32 个 = 96 + 11 个文件。要和 lib/config.sh、ui/data.js (TP.PIN_MAX)、lib/tunrules-helper.pl (一次最多同步的文件数) 保持一致
+OVR_PIN_MAX=32      # 可以单独指定的固定出口个数上限: 每个固定出口 3 个规则集 (网站 / 应用 / 浏览器), 32 个 = 96 + 12 个文件。要和 lib/config.sh、ui/data.js (TP.PIN_MAX)、lib/tunrules-helper.pl (一次最多同步的文件数) 保持一致
 ovr_pins() { srv_list 2>/dev/null | awk -F'\t' -v max="$OVR_PIN_MAX" '$5=="pin" && n < max { print $1; n++ }'; }      # 可以单独指定的固定出口 (按配置里的顺序, 最多 OVR_PIN_MAX 个; 和 config.sh 里的规则集序号一致)
 ovr_target_valid() { # 出口: 空 / PINAUTO / 现有的某个固定出口 (固定出口不到 2 个时只能是空)
   local t=$1
@@ -86,7 +86,7 @@ ovr_sync() {
         }
       }
       if (st == "direct") return (kind == "site") ? "direct" : "appdirect"
-      if (st == "auto") return "auto"
+      if (st == "auto") return (kind == "site") ? "auto" : "appauto"     # 应用自动单独成集 (N1): 排在网站规则之后
       if (np < 2) return "pin"
       if (tg == "PINAUTO") return "pinauto"
       if (tg in pidx) return "pin-" pidx[tg]
@@ -95,7 +95,7 @@ ovr_sync() {
     function appjson(n) { return (n in winrx) ? winrx[n] : "\"" js(rx(n)) "\"" }
     BEGIN { while ((getline l < rf) > 0) { split(l, wr, "\t"); winrx[wr[1]]=wr[2] }
             while ((getline l < bf) > 0) browsers[l] = 1; np = 0; while ((getline l < pf) > 0) if (l != "") { P[++np] = l; pidx[l] = np }
-            nk = split("direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto auto", K, " "); for (i = 1; i <= np; i++) { K[++nk] = "pin-" i; K[++nk] = "apppin-" i; K[++nk] = "browserpin-" i }
+            nk = split("direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto appauto auto", K, " "); for (i = 1; i <= np; i++) { K[++nk] = "pin-" i; K[++nk] = "apppin-" i; K[++nk] = "browserpin-" i }
             for (i = 1; i <= nk; i++) known[K[i]] = 1 }
     ($1 == "site" || $1 == "app") && $3 != "follow" && $3 != "" {
       k = key($3, $1, $5, $2)
@@ -121,7 +121,7 @@ ovr_sync() {
       }
     }' "$H/overrides.tsv" 2>/dev/null
   # 没有 overrides.tsv 时 awk 不会产出文件: 补齐占位, 保证每个规则集文件都存在
-  for name in direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto auto; do [ -f "$T/$name.json" ] || printf '%s\n' '{"version":3,"rules":[{"domain":["enana-placeholder.invalid"]}]}' > "$T/$name.json"; done
+  for name in direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto appauto auto; do [ -f "$T/$name.json" ] || printf '%s\n' '{"version":3,"rules":[{"domain":["enana-placeholder.invalid"]}]}' > "$T/$name.json"; done
   for f in "$T"/*.json; do
     name=$(basename "$f"); body=$(cat "$f")
     if [ ! -f "$H/rules/ovr-$name" ] || [ "$(cat "$H/rules/ovr-$name")" != "$body" ]; then printf '%s\n' "$body" > "$H/rules/ovr-$name.tmp" && cat "$H/rules/ovr-$name.tmp" > "$H/rules/ovr-$name" && rm -f "$H/rules/ovr-$name.tmp"; fi

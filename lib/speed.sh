@@ -321,7 +321,7 @@ speed_start() {
   if [ "$mode" != direct ]; then
     # 节点: 必须是现有的 pin/auto 服务器 (白名单), 最多 12 个; 缺省取计划里的默认选择
     if [ -z "$nodes" ]; then nodes=$(speed_plan_json | sed 's/.*"defaults":{[^}]*"nodes":\[\([^]]*\)\].*/\1/' | tr -d '"' | tr ',' '\n'); fi
-    local IFS=$'\n'; for n in $nodes; do
+    local IFS=$'\n'; case $nodes in *$'\n'*) ;; *) IFS=',' ;; esac; for n in $nodes; do   # 换行分隔 (界面); 没有换行时兼容旧的逗号写法
       [ -n "$n" ] || continue
       speed_nodes | awk -F'\t' -v t="$n" '$1==t{f=1} END{exit f?0:1}' || { bad=1; continue; }
       list="$list${list:+$'\n'}$n"

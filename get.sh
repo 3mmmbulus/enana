@@ -100,8 +100,8 @@ if [ -n "$OLD" ] && [ "$OLD" = "$VER" ] && [ "$FORCE" = 0 ] && [ "$UPGRADE" = 1 
 # ---------- 确认 ----------
 if [ "$YES" = 0 ]; then
   printf '\n  %s%s%s\n' "$B" "$(T "即将安装 enana v$VER 到 $HOME_DIR (只写你的用户目录; 设置系统代理时才会要管理员密码)。" "About to install enana v$VER into $HOME_DIR (user directory only; the admin password is asked only to set the system proxy).")" "$N"
-  if [ ! -r /dev/tty ]; then die "需要确认, 但当前没有可交互的终端: 请加 --yes (curl -fsSL $INSTALL_BASE | bash -s -- --yes)" "Confirmation needed but there is no interactive terminal: add --yes (curl -fsSL $INSTALL_BASE | bash -s -- --yes)"; fi
-  printf '  %s [Y/n] ' "$(T "继续安装?" "Continue?")"; read -r ans < /dev/tty || ans=n
+  if ! (exec </dev/tty) 2>/dev/null; then die "需要确认, 但当前没有可交互的终端: 请加 --yes (curl -fsSL $INSTALL_BASE | bash -s -- --yes)" "Confirmation needed but there is no interactive terminal: add --yes (curl -fsSL $INSTALL_BASE | bash -s -- --yes)"; fi
+  printf '  %s [Y/n] ' "$(T "继续安装?" "Continue?")"; read -r ans < /dev/tty || die "读取确认失败: 请加 --yes" "Could not read the confirmation: add --yes"
   case $ans in ''|y|Y|yes|YES|是) ;; *) echo; info "已取消" "Cancelled"; exit 0 ;; esac
 fi
 

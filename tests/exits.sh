@@ -198,7 +198,7 @@ eq "ovr_pins 只列前 32 个" "$(ovr_pins | wc -l | tr -d ' '):$(ovr_pins | tai
 ovr 'site|x.io|pin|ack|Node-32' 'site|y.io|pin|ack|Node-33' 'app|Z|pin|ack|Node-34'
 ovr_sync
 eq "第 32 个出口有自己的规则集; 第 33 个没有 (超出上限的退回默认 ovr-pin)" "$([ -f "$H/rules/ovr-pin-32.json" ] && echo y):$([ -f "$H/rules/ovr-pin-33.json" ] && echo y || echo n):$(rs pin-32 | grep -c x.io):$(rs pin | grep -c y.io)" "y:n:1:1"
-eq "三类规则集 (网站 / 应用 / 浏览器) 都按序号生成: 32 个出口 = 96 + 11 个文件" "$(ls "$H"/rules/ovr-*.json | wc -l | tr -d ' ')" "107"
+eq "三类规则集 (网站 / 应用 / 浏览器) 都按序号生成: 32 个出口 = 96 + 12 个文件" "$(ls "$H"/rules/ovr-*.json | wc -l | tr -d ' ')" "108"
 exits_json | sed 's/^/{/; s/$/}/' | chk "总览: 第 33 / 34 个 targetable=false; 指定了它们的是孤儿, 原因 cap" 'p=d["pins"]; assert len(p)==34 and p[31]["targetable"] and not p[32]["targetable"] and not p[33]["targetable"]; o={x["name"]:x["reason"] for x in d["orphans"]}; assert o=={"y.io":"cap","Z":"cap"}'
 ovr_target_valid Node-33; eq "ovr_target_valid 也拒绝超出上限的出口" "$?" "1"
 rm -f "$H"/rules/ovr-*-3[2-9].json "$H"/rules/ovr-*-[4-9][0-9].json

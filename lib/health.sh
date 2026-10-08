@@ -121,7 +121,7 @@ health_chain() { # <选择器> -> a>b>c: 沿着选择器当前的选择最多跟
   local cur=$1 out=$1 i nxt enc
   for i in 1 2 3; do
     case $cur in *[!A-Za-z0-9_.~-]*) enc=$(printf '%s' "$cur" | perl -pe 's/([^A-Za-z0-9_.~-])/sprintf("%%%02X", ord($1))/ge') ;; *) enc=$cur ;; esac
-    nxt=$(clash GET "/proxies/$enc" 2>/dev/null | sed -n 's/.*"now":"\([^"]*\)".*/\1/p' | head -1)
+    nxt=$(clash GET "/proxies/$enc" 2>/dev/null | sed -n 's/.*"now": *"\([^"]*\)".*/\1/p' | head -1)
     [ -n "$nxt" ] || break
     out="$out>$nxt"; cur=$nxt
   done

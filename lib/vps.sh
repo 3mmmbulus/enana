@@ -277,7 +277,7 @@ vps_probe_json() {
   saved=$(vps_saved_field "$V_HOST" "$V_PORT" hostkey); { [ -n "$saved" ] && [ -z "$V_HOSTKEY" ] && [ "$saved" != "$VPS_HOSTKEY" ]; } && hk_changed=true
   # 上一次部署已经完成、但验证没通过 (本机还没有这些节点): 服务器上其实已经有节点了, 不能再显示「尚未部署」。
   pid=$(vps_pending_find "$V_HOST" "$V_PORT"); [ -z "$pid" ] || pend=$(vps_pending_one_json "$pid")
-  node_inst=false; { [ "$(vps_kv node_installed)" = 1 ] || [ "$pend" != null ]; } && node_inst=true
+  node_inst=false; { [ "$(vps_kv deployed)" = 1 ] || [ "$pend" != null ]; } && node_inst=true   # 以 enana 是否已部署为准 (node_installed 只表示装了 Node.js)
   # 云端 probe.sh 可以(可选)告诉我们「按现在的占用情况, 将要用哪个端口」: 有就在部署前显示, 没有界面就不假设端口。
   pport=$(vps_kv plan_port); case $pport in ''|*[!0-9]*) ;; *) preason=$(vps_kv plan_reason); case $preason in ''|*[!A-Za-z0-9_-]*) preason='' ;; esac; plan="{\"port\":$pport,\"reason\":\"$preason\"}" ;; esac
   printf '{"host":"%s","port":%s,"user":"%s","hostkey":"%s","hostkey_changed":%s,"os":{"id":"%s","version":"%s","codename":"%s","pretty":"%s"},"arch":"%s","supported":%s,"support":"%s","support_note":"%s","privilege":"%s","init":"%s","deps":[%s],"missing":[%s],"all_missing":%s,"singbox":{"installed":%s,"version":"%s"},"node":{"installed":%s},"deployed":%s,"firewall":"%s","listening":[%s],"ips":[%s],"ipv6":[%s],"actions":[%s],"pending":%s,"plan":%s}' \

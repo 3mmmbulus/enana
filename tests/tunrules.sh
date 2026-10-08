@@ -147,12 +147,12 @@ fi
 touch "$W/lc-fail"; : > "$W/lc.calls"; H restart >"$W/out" 2>&1; rc=$?
 eq "launchctl 失败: 助手退出码非 0 (不假装成功)" "$([ "$rc" != 0 ] && echo failed || echo ok):$(cat "$W/lc.calls")" "failed:kickstart -k system/$LBL"
 rm -f "$W/lc-fail"
-echo "== T3c. 固定出口很多时: 11 个固定名字的规则集 + 每个固定出口 3 个 (网站 / 应用 / 浏览器) —— OVR_PIN_MAX=32 个出口 = 107 个文件, 一个数据包同步完; 超过上限的数据包被拒"
+echo "== T3c. 固定出口很多时: 12 个固定名字的规则集 + 每个固定出口 3 个 (网站 / 应用 / 浏览器) —— OVR_PIN_MAX=32 个出口 = 108 个文件, 一个数据包同步完; 超过上限的数据包被拒"
 big() { # big <文件数> <域名>  -> 数据包 JSON: 11 个固定名字 + ovr-pin-N / ovr-apppin-N / ovr-browserpin-N (N 从 1 起, 最多两位)
   python3 -c '
 import json, sys
 n, dom = int(sys.argv[1]), sys.argv[2]
-names = ["ovr-" + b + ".json" for b in "direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto auto".split()]
+names = ["ovr-" + b + ".json" for b in "direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto appauto auto".split()]
 i = 1
 while len(names) < n:
     for p in ("pin", "apppin", "browserpin"):
@@ -160,8 +160,8 @@ while len(names) < n:
     i += 1
 print(json.dumps({x: {"version": 3, "rules": [{"domain": [dom]}]} for x in names}))' "$1" "$2"
 }
-big 107 a.example | H sync >"$W/out" 2>&1; rc=$?
-eq "32 个固定出口 (107 个文件): 一次同步完" "$rc:$(cat "$W/out")" "0:107 files synced"
+big 108 a.example | H sync >"$W/out" 2>&1; rc=$?
+eq "32 个固定出口 (108 个文件): 一次同步完" "$rc:$(cat "$W/out")" "0:108 files synced"
 eq "…序号最大的 ovr-browserpin-32 / ovr-pin-32 都写进去了" "$(snap ovr-browserpin-32.json | grep -c a.example):$(snap ovr-pin-32.json | grep -c a.example)" "1:1"
 big 160 a.example | H sync >"$W/out" 2>&1; rc=$?
 eq "上限 160 个文件: 通过 (留有余量)" "$rc:$(cat "$W/out")" "0:160 files synced"
