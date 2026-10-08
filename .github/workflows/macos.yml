@@ -41,5 +41,9 @@ jobs:
           bash tests/vps-probe.sh
           node tests/vps-ui.test.js
           node tests/vps-verify-ui.test.js
+      - name: Unit tests (log parsing, app scan and times, subscription refresh stability, diagnostics)
+        run: bash tests/units.sh
+      - name: Enhanced/TUN isolated regressions (fingerprint, stop/restart decisions)
+        run: bash tests/enhanced.sh
       - name: Stop owned detached jobs while preserving unrelated processes
         run: python3 tests/stop-jobs.py
