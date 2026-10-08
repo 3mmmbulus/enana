@@ -12,7 +12,9 @@ plan_refresh() { # 从云端取最新套餐 (短超时); 0 = 已刷新; 没有�
   if [ "$code" = 200 ] && grep -q '"plan":{' "$out"; then
     tr -d '\000-\037' < "$out" | cut -c1-8000 > "$H/plan.json.new" && chmod 600 "$H/plan.json.new" && mv "$H/plan.json.new" "$H/plan.json" && now > "$H/plan.checked" && rc=0
   fi
-  rm -f "$out"; return $rc
+  rm -f "$out"
+  [ "$rc" = 0 ] && type official_kick >/dev/null 2>&1 && official_kick      # 套餐里官方线路的状态变了 (买了 Pro / 到期 / 节点上线) → 马上同步官方节点 (后台任务)
+  return $rc
 }
 
 plan_json() { # GET /api/plan 的主体 (不含最外层 ok); 没有缓存时是内置的「免费版」

@@ -164,3 +164,6 @@
   .apps-opt,.apps-cand{min-height:44px}
   .apps-cand input,.apps-opt input{width:22px;height:22px}
 }
+
+/* 指定的出口已经不是固定出口 / 没有固定出口: 在应用 / 网站行里醒目标出 */
+.apps-tg-gone{white-space:normal;max-width:100%;border-radius:8px;padding:3px 9px;line-height:1.4;text-align:left;overflow-wrap:anywhere}

@@ -4,7 +4,8 @@
 #   direct                      直连
 #   <用户的服务器…>              来自 servers.jsonl
 #   AUTO   (urltest)            自动池里最快的节点; 只有别的节点快过当前 50ms 以上才切换 (tolerance=50)
-#   PIN    (selector)           固定出口: 只含 role=pin 的服务器, 故障时不会漂移到别的国家 (避免账号风控)
+#   PIN    (selector)           固定出口: 只含 role=pin 的服务器, 故障时不会漂移到别的国家 (避免账号风控)。它当前选中的那一台 = 「默认固定出口」(跟随默认的应用 / 网站 / 服务走它);
+#                               配置里的 default 只是第一个固定出口, 用户的选择由核心记住 (cache.db) 并另存一份在 $H/pin-default, 核心重启后由 proxy_sync_mode 校正 (lib/exits.sh)
 #   Global (selector)           「自动线路」: AUTO + 自动池节点 + 固定出口节点, 可在仪表盘手动指定某个节点
 #   svc-<id> (selector)         每个网站/服务一个开关, 选项 PIN / Global / direct (仪表盘一键热切换); 固定出口有 2 个以上时还多出
 #                               PINAUTO 和每个固定出口各一项 (这个网站固定走哪一个固定出口 / 在固定出口里自动选一个)
@@ -68,7 +69,7 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
   while IFS=$'\t' read -r role tag ob; do
     case $role in pin) printf '%s\n' "$tag" >> "$T/pins" ;; auto) printf '%s\n' "$tag" >> "$T/autos" ;; *) continue ;; esac
     printf '%s\n' "$ob" >> "$T/ob"
-  done < <(srv_emit)
+  done < <(srv_emit; type official_emit >/dev/null 2>&1 && official_emit)       # 用户的服务器 + 官方线路 (后者一律是 auto, 见 lib/official.sh)
 
   local pin_list pin_def glob_list glob_def
   if [ -s "$T/pins" ]; then pin_list=$(json_list < "$T/pins"); pin_def=$(head -1 "$T/pins"); else pin_list='"direct"'; pin_def=direct; fi
@@ -105,11 +106,11 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
       done < "$H/custom-rulesets.tsv"
     fi
   fi
-  # 固定出口有 2 个以上时: 每个应用 / 网站可以指定走哪一个固定出口 (ovr-pin-<序号>, 最多 16 个) 或「在固定出口里自动选」(ovr-pinauto → PINAUTO)。
+  # 固定出口有 2 个以上时: 每个应用 / 网站可以指定走哪一个固定出口 (ovr-pin-<序号>, 最多 OVR_PIN_MAX 个, 见 lib/apps.sh) 或「在固定出口里自动选」(ovr-pinauto → PINAUTO)。
   # 规则集的内容由 ovr_sync 按用户的设置写成文件, 切换时核心自己监视文件变化, 不用重启
   : > "$T/pinx"; npinx=0; pinx_opts=''
   if [ -s "$T/pins" ] && [ "$(wc -l < "$T/pins" | tr -d ' ')" -ge 2 ]; then
-    head -16 "$T/pins" > "$T/pinx"; npinx=$(wc -l < "$T/pinx" | tr -d ' ')
+    head -n "${OVR_PIN_MAX:-32}" "$T/pins" > "$T/pinx"; npinx=$(wc -l < "$T/pinx" | tr -d ' ')
     printf '{"type":"urltest","tag":"PINAUTO","outbounds":[%s],"url":"http://www.gstatic.com/generate_204","interval":"10m","tolerance":50,"idle_timeout":"30m"}\n' "$(json_list < "$T/pinx")" >> "$T/ob"
     pinx_opts=",\"PINAUTO\",$(json_list < "$T/pinx")"
   fi
@@ -219,8 +220,10 @@ apply_config() {
   if [ -f "$H/config.json" ] && cmp -s "$H/config.json" "$H/config.json.new"; then
     if [ "${NETWORK_MODE:-system}" != tun ]; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi
     if enhanced_loaded && [ "$(enhanced_fingerprint)" = "$(cat "$H/.enhanced-fingerprint" 2>/dev/null)" ]; then
-      # 核心、配置、规则库都没变: 只有应用 / 网站的代理策略 (rules/ovr-*.json, 纯路由数据) 可能变了。已经装过规则同步助手 (上一次管理员授权时顺带装的) 就免密同步到
-      # root 快照, 核心自己热加载 —— 不重启, 也就不用再输入管理员密码。没有助手 / 被拒绝就走下面的完整安装 (要管理员授权, 同时把助手装上)。
+      # 核心、配置、规则库都没变 (指纹不含 default_mode 和 rules/.updated 这类记账内容, 见 enhanced_fingerprint): 只有应用 / 网站的代理策略 (rules/ovr-*.json, 纯路由数据)
+      # 可能变了。已经装过规则同步助手 (上一次管理员授权时顺带装的) 就免密同步到 root 快照, 核心自己热加载 —— 不重启, 也就不用再输入管理员密码。没有助手 /
+      # 被拒绝就走下面的完整安装 (要管理员授权, 同时把助手装上)。总开关 / 模式只改了 default_mode 的话, 运行中的核心靠接口和缓存记住模式, 这里补一次同步即可。
+      type enhanced_mode_resync >/dev/null 2>&1 && enhanced_mode_resync
       if ! type enhanced_ovr_fingerprint >/dev/null 2>&1 || [ "$(enhanced_ovr_fingerprint)" = "$(cat "$H/.enhanced-ovr-fingerprint" 2>/dev/null)" ]; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi
       if enhanced_sync_ovr; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; oplog "${OP_WHO:-auto}" "同步策略规则" "$(kv mode tun via helper restart no)" ok; return 0; fi
       oplog "${OP_WHO:-auto}" "同步策略规则" "$(kv mode tun via helper restart yes err "$(enhanced_helper_ok >/dev/null 2>&1 && echo rejected || echo no-helper)")" ok
@@ -287,6 +290,7 @@ _proxy_set() { # <PROXY_ENABLED|PROXY_MODE> <值>: 每一次真的变化都记�
 }
 proxy_set_enabled() { proxy_locked _proxy_set PROXY_ENABLED "$1"; }                                           # 0|1
 proxy_set_mode() { case $1 in auto|global) ;; *) return 1 ;; esac; proxy_locked _proxy_set PROXY_MODE "$1"; }   # auto|global
-proxy_sync_mode() { # 核心刚(重新)启动后调用: 让运行时的模式与设置一致 (缓存文件里可能留着旧模式)
+proxy_sync_mode() { # 核心刚(重新)启动后调用: 让运行时的模式与设置一致 (缓存文件里可能留着旧模式); 默认固定出口也一样 (见 lib/exits.sh)
   clash PATCH /configs "{\"mode\":\"$(proxy_clash_mode)\"}" >/dev/null 2>&1 || true
+  if type exits_sync_default >/dev/null 2>&1; then exits_sync_default || true; fi
 }

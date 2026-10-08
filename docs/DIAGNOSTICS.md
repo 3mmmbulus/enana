@@ -82,13 +82,19 @@ ts<TAB>who<TAB>action<TAB>detail<TAB>result      ← tsv 的第一行是列名, 
 | `更新规则集` `升级核心` `更新 enana` `自动更新` `重启服务` `应用配置` `更新云端内容` | 版本 / 结果 | 更新与重启 |
 | `登录` `登录失败` `退出账号` `下线设备` `二次验证` … | — | 账号 (不含密码或令牌) |
 | `开启系统代理` / `关闭系统代理` | `method=direct port=7890 mode=system` / `err=user-canceled` | 系统代理的每一次修改 (2.3.8 起仪表盘也能开): `method` = `already direct sudo sudo-nopass dialog user`; 失败时 `err` = `user-canceled wrong-password not-admin no-gui-session not-authorized backup-failed no-network-service not-applied failed machine-policy`, 结果 `error` |
-| `环境状态变化` | `item=sysproxy from=1 to=0 capture=system` | **来源 `auto`**, 由每分钟的健康检查发现: `item` = `core_running` `core_api` `proxy` (总开关) `sysproxy` `login` `tun_ready` `capture_mode` `net_if` `net_gw` (默认网络接口 / 网关变了) —— 回答「什么时候开始不对的」 |
+| `环境状态变化` | `item=sysproxy from=1 to=0 capture=system` | **来源 `auto`**, 由每分钟的健康检查发现: `item` = `core_running` `core_api` `proxy` (总开关) `sysproxy` `login` `tun_ready` `capture_mode` `net_if` `net_gw` (默认网络接口 / 网关变了) `pin` (固定出口没了) `exit_orphans` (见下) —— 回答「什么时候开始不对的」 |
+| `环境状态变化` (`item=exit_orphans`) | `item=exit_orphans from=- to=2 names=g1.io->Gone-1(deleted),role.io->Auto-1(role)` | **来源 `auto`**: **指定了「已经不是固定出口的服务器」的应用 / 网站个数**变了 (`state` 行里的 `orphans=N`)。这些项目的规则集暂时退回默认固定出口 (不断网), 但出口 IP / 国家可能和你以为的不一样。`names` 是 `名称->指定的出口(原因)`, 原因 `deleted` 已删除 · `role` 不再是固定出口 · `cap` 超出可单独指定的数量上限 (32)。订阅刷新删掉了节点、角色被改、云同步拉取都会造成, 仪表盘「服务器 → 出口分配」会把它们列出来 |
+| `移动固定出口` | `from=DEFAULT to=Pin-B kind= apps=3 sites=1 services=13` | **出口分配**: 批量改派 / 钉住 (`POST /api/exits/move\|freeze`): `from` = `DEFAULT` (跟随默认的) / `PINAUTO` / `ORPHAN` / 某个固定出口, `to` = 去向, `kind` 空 = 全部; 后面是各改了几个 |
+| `固定出口移除前改派` / `固定出口移除时没有改派` | `tag=Pin-A to=Pin-B freeze=1 affected=5` / `tag=Pin-A affected=5 default_changes=1 why=accept_orphans` | 删除 / 改角色的保护: 指明了去向 (`to`; `freeze=1` = 跟随默认的也钉在去向上) / 用户明确接受后果 (`accept_orphans`)。`删除订阅时没有改派固定出口` (`sub=… affected=…`) 同理 |
+| `恢复默认固定出口` | `from=Pin-A to=Pin-B why="core restarted with a different selection"` | **来源 `auto`**: 核心重启后选择被重置 (缓存丢了 / 重装), 按 `$H/pin-default` 里记的默认固定出口切回去 |
 | `核心进程已重启` | `old_pid=4001 new_pid=4002` | 核心进程 PID 变了 (崩溃后被 launchd 拉起 / 手动重启); 同时看 env 里的 `service.runs` / `service.last_exit_code` |
 | `会话心跳失败` / `会话心跳恢复` | `http=000 note=…` / `down_s=612` | 本机连不上 enana 云端 (只在开始和恢复时各记一次; 离线超过 7 天会被自动退出登录) |
 | `已被退出登录` | `reason=kicked http=401 proxy_was=1` | **来源 `auto`** (2.3.8 起; 以前误记为 terminal, 详情也不是 key=value): 云端撤销了会话 (`kicked` 被同账号其它设备下线 · `limit` 超过设备数 · `expired` · `logout`) 或离线超过 7 天 (`offline_expired`)。**本机会随之关闭代理 (全部直连)**, 重新登录后总开关仍是关闭的 |
 | `开启代理` / `关闭代理` (来源 `terminal`) | `enabled=1 via=console` | 终端 / 控制台里改总开关 (以前不留记录) |
 | `导出诊断日志` / `清除日志` | `hours=24 sections=ops,access,proxy,snapshot bytes=…` / `type=all before=… freed=…` | 日志本身的操作也会留痕 |
 | `服务器检测重试` / `取消服务器检测` | `attempt=1 max=3 code=E_SSH_UNREACHABLE` / `id=vps-probe-…` | 只读检测的重试与取消; 实时阶段和耗时见任务接口 `result.connection`, 不包含 SSH 凭据 |
+| `添加自己的服务器` (失败, `result=error`) | `host=1.2.3.4 code=E_VPS_VERIFY reason=blocked_cloud tcp=timeout` | 部署 / 重新验证失败: `reason` 是本机判断的原因 (`handshake` `not_listening` `refused` `unreachable` `blocked_server` `blocked_cloud` `blocked_unknown` `unknown`, 含义见 API.md「待验证的部署」), `tcp` 是本机到节点端口的 TCP 预检结果; 不含端口以外的服务器信息和任何凭据 |
+| `放弃待验证的部署` | `id=p-0a1b2c` | 用户放弃了「部署完成但验证没通过」的记录 (只删本机保存的待验证节点) |
 
 - 排查「为什么昨晚突然不走代理了」: 先看 `ops` 里的时间线 (**谁、什么时候、把什么从什么改成了什么**), 再对照 `access` 里同一时间之后的 `route` / `reason`。
 - `result=error` 的操作, `detail` 里会带原因。
@@ -131,7 +137,7 @@ ts<TAB>who<TAB>action<TAB>detail<TAB>result      ← tsv 的第一行是列名, 
 |---|---|
 | `state` | `follow` 跟随规则 (= 界面里的「开」) / `direct` 直连 (= 「关」) / `pin` 全部走固定出口 / `auto` 全部走自动线路 |
 | `flag` | `new` 新发现、用户还没处理 / `ack` 用户设置过或已知晓 / `def` 首次扫描时按云端推荐给的默认值 (用户没动过, 云端推荐更新后会刷新) |
-| `target` | 只对 `pin` 有意义: 空 = 默认固定出口; `PINAUTO` = 在多个固定出口里自动选一个; 否则是指定的某一个固定出口 (固定出口 ≥ 2 个才可以指定; 被删除时回落到默认) |
+| `target` | 只对 `pin` 有意义: 空 = **跟随默认固定出口** (默认出口换了它也跟着换); `PINAUTO` = 在多个固定出口里自动选一个; 否则是指定的某一个固定出口 (固定出口 ≥ 2 个才可以指定, 最多 32 个; 指定的出口被删除 / 改了角色 / 超出上限时回落到默认 —— 这样的项目是「孤儿」, 见 `环境状态变化 item=exit_orphans`) |
 | `known` `rec` `group` | 云端内容里是否认识这个应用 / 推荐设置 / 分组 (浏览器、终端、开发工具 …) |
 
 ## 自动给出判断: `tools/diag-summary.py`

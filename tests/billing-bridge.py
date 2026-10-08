@@ -42,29 +42,48 @@ class BillingBridge(unittest.TestCase):
               mode=$5; fixture=$3; http=$2
               session_id() { [ "$mode" = yes ] && printf sid; }
               session_token() { [ "$mode" = yes ] && printf token; }
-              session_call() { cp "$fixture" "$1"; printf %s "$http"; }
+              session_call() { cp "$fixture" "$1"; if [ "$http" = 0 ]; then printf 000; else printf %s "$http"; fi; }
               billing_request GET billing; rc=$?; printf "\\ncode=%s" "${BILLING_CODE:-}" >&2; exit "$rc"
             '''
             return subprocess.run(['/bin/bash','-c',code,'test',str(repo),str(status),str(f),'unused','yes' if session else 'no'],capture_output=True,text=True)
 
     def test_no_offline_payment_or_html_credentials_relay(self):
-        for status, value, session in [(200,'<html>private</html>',True),(200,'{"ok":true,"token":"secret"}',True),(401,'{"ok":false,"code":"E_AUTH"}',True),(200,'{"ok":true}',False)]:
-            r=self.response(status,value,session); self.assertNotEqual(r.returncode,0); self.assertEqual(r.stdout,''); self.assertIn('E_ACCOUNT_UNREACHABLE',r.stderr)
+        # Nothing from an unexpected body is relayed; each failure maps to the code that tells the user what to do next.
+        for status, value, session, code in [
+            (200,'<html>private</html>',True,'E_ACCOUNT_UNREACHABLE'),        # captive portal / proxy page
+            (200,'{"ok":true,"token":"secret"}',True,'E_ACCOUNT_UNREACHABLE'),
+            (302,'<html>login</html>',True,'E_ACCOUNT_UNREACHABLE'),
+            (0,'',True,'E_ACCOUNT_UNREACHABLE'),                              # curl could not connect (000)
+            (401,'{"ok":false,"code":"E_AUTH"}',True,'E_AUTH'),               # token / session no longer valid
+            (401,'{"code":"session_revoked","reason":"kicked"}',True,'E_AUTH'),
+            (401,'<html>unauthorized</html>',True,'E_AUTH'),
+            (200,'{"ok":true}',False,'E_AUTH'),                               # offline login: no cloud session, sign in again online
+            (500,'<html>private</html>',True,'E_SERVER_ERROR'),               # reachable but broken: not "unreachable"
+            (502,'<html>bad gateway</html>',True,'E_SERVER_ERROR'),
+            (504,'',True,'E_SERVER_ERROR'),
+            (500,'{"status":500,"message":"internal"}',True,'E_SERVER_ERROR'),
+            (503,'<html>maintenance</html>',True,'E_SERVER_ERROR'),
+            (404,'<html>not found</html>',True,'E_SERVER_ERROR'),
+            (429,'{"status":429,"message":"rate"}',True,'E_RATE_LIMITED'),
+        ]:
+            r=self.response(status,value,session); self.assertNotEqual(r.returncode,0,(status,value)); self.assertEqual(r.stdout,'',(status,value)); self.assertIn('code='+code,r.stderr,(status,value))
+        r=self.response(500,'{"ok":false,"code":"E_BILLING_INTERNAL","message":"private"}')   # our own error body is still relayed (whitelisted fields only)
+        self.assertEqual(r.returncode,0); self.assertEqual(json.loads(r.stdout),{'ok':False,'code':'E_BILLING_INTERNAL'})
         r=self.response(503,'{"ok":false,"code":"E_PAYMENTS_UNAVAILABLE","message":"private provider error"}')
         self.assertEqual(r.returncode,0); self.assertEqual(json.loads(r.stdout),{'ok':False,'code':'E_PAYMENTS_UNAVAILABLE'})
         r=self.response(200,'{"ok":true,"wallet":{"balance":"4.000037"}}')
         self.assertEqual(json.loads(r.stdout)['wallet']['balance'],'4.000037')
 
     def test_actual_cgi_auth_routes_and_cloud_identity(self):
-        calls=[]
+        calls=[]; mode={'status':200,'payload':{'ok':True,'wallet':{'balance':'4.000037'}}}
         class Cloud(http.server.BaseHTTPRequestHandler):
             def do_GET(self): self.respond()
             def do_POST(self): self.respond()
             def respond(self):
                 raw=self.rfile.read(int(self.headers.get('Content-Length','0')))
                 calls.append((self.path,self.headers.get('Authorization'),self.headers.get('X-Enana-Session'),raw))
-                body=json.dumps({'ok':True,'wallet':{'balance':'4.000037'}}).encode()
-                self.send_response(200); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+                body=json.dumps(mode['payload']).encode()
+                self.send_response(mode['status']); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
             def log_message(self,*args): pass
         server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Cloud)
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
@@ -85,6 +104,12 @@ class BillingBridge(unittest.TestCase):
                 self.assertEqual(json.loads(calls[-1][3]),{'kind':'plan','sku':'m1','request_key':'a'*32})
                 cgi('/api/email/send',{})
                 self.assertEqual(calls[-1][0],'/api/enana/v1/email/send');self.assertEqual(json.loads(calls[-1][3]),{})
+                # The cloud answers 401 / 5xx / junk: the dashboard gets a precise, translated code (HTTP 200 so the local dashboard stays unlocked).
+                for status,payload,code in [(401,{'code':'session_revoked','reason':'kicked'},'E_AUTH'),(502,{'message':'bad gateway'},'E_SERVER_ERROR'),(429,{'status':429},'E_RATE_LIMITED')]:
+                    mode['status']=status; mode['payload']=payload
+                    r=cgi('/api/billing'); self.assertEqual(r['ok'],False); self.assertEqual(r['code'],code); self.assertTrue(r['error'])
+                mode['status']=200; mode['payload']={'ok':True,'wallet':{'balance':'4.000037'}}
+                self.assertEqual(cgi('/api/billing')['wallet']['balance'],'4.000037')
         finally: server.shutdown();server.server_close();thread.join()
 
 if __name__ == '__main__': unittest.main()

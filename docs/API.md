@@ -95,7 +95,7 @@
 
 目前所有功能免费, 但接口和界面按「以后部分功能按月订阅」设计:
 - **套餐与权益** 在云端 (`plans` / `subscriptions`), 本机缓存一份 (登录时和每天维护时刷新); 本机只用于「界面提示」, **真正的限制在云端**: 受限内容 (如官方线路) 只有云端核对订阅后才会下发。
-- `GET /api/plan` (需登录) →
+- `GET /api/plan` (需登录; 可带 `?refresh=1`) →
 ```json
 {"ok":true,"plan":{"code":"free","title":"免费版"},"expires_at":null,"checked":1760000000,
  "limits":{"devices_per_platform":2},
@@ -103,9 +103,10 @@
              "official_proxy":{"enabled":false,"tier":"pro","reason":"upgrade","coming_soon":true}},
  "official":{"available":false,"nodes":0}}
 ```
-`features.<key>`: `tier` = `free | pro`; `enabled` = 当前账号能否使用; `coming_soon:true` = 还没上线 (前端显示「即将推出」灰色卡片, 不可点); `reason`: `upgrade` (需要升级) · `expired` (订阅已过期) 。`official` 描述官方线路是否可用 (以后订阅用户登录后自动出现「enana 官方线路」节点, 凭据不可查看/不可导出, 订阅过期后下次同步自动消失, 本机缓存最多再保留 3 天宽限)。
+`features.<key>`: `tier` = `free | pro`; `enabled` = 当前账号能否使用; `coming_soon:true` = 还没上线 (前端显示「即将推出」灰色卡片, 不可点); `reason`: `upgrade` (需要升级) · `expired` (订阅已过期) · `verify` (套餐包含这项功能, 但账号邮箱还没有验证; 目前只有 `official_proxy` 会这样)。官方线路 (`official_proxy`) 没有写死的「即将推出」: 云端至少有一个新鲜且已批准的官方节点时自动上线, 否则照旧 `coming_soon:true`。`official` 描述官方线路是否可用 (以后订阅用户登录后自动出现「enana 官方线路」节点, 凭据不可查看/不可导出, 订阅过期后下次同步自动消失, 本机缓存最多再保留 3 天宽限)。
+- `?refresh=1`: 同步向云端取最新套餐再返回 (3 秒内刚刷新过就直接用缓存)。仪表盘在付款成功 / 余额购买 / 手动刷新之后用它, 否则刚付款的用户最长 1 小时还会看到免费版。
 - 本机缓存 1 小时 (`plan.json`): 缓存过期时先返回旧的并在后台刷新, 从没取过才同步等; 登录后和每天维护时也会刷新; 连不上云端就用缓存, 什么都没有就是内置的「免费版」。`plan.title` 免费版 / 专业版按请求语言翻译, 其它套餐用云端给的名字。
-- 前端约定: 「设置 → 账号」里显示当前套餐卡片 (免费版 / 将来的 Pro: 到期日、设备上限、功能清单, 「升级」按钮暂时置灰并写明「即将开放」); 服务器页预留一张「enana 官方线路 (会员)」占位卡片 (`coming_soon`); 受限功能旁显示「Pro」小徽标 + 锁图标, 点击弹窗说明, 不做死按钮。所有功能开关都读 `GET /api/plan` 的 `features`, 不要在前端写死「免费 / 付费」。
+- 前端约定: 「设置 → 账号」里显示当前套餐卡片 (免费版 / Pro: 到期日、设备上限、功能清单; 「会员」页含价格、余额、订单与邮箱验证, 见 BILLING_API.md。新订单的收款由服务器配置关闭时 (`payments_available:false`), 付款按钮置灰, 旁边有一条常驻说明「收款暂未开放」; 邮箱未验证、已有未完成订单、云端登录失效等每一种不能付款的状态也都有各自的行内说明和下一步动作, 不再只靠置灰 + 点击后的短暂提示); 服务器页预留一张「enana 官方线路 (会员)」占位卡片 (`coming_soon`); 受限功能旁显示「Pro」小徽标 + 锁图标, 点击弹窗说明, 不做死按钮。所有功能开关都读 `GET /api/plan` 的 `features`, 不要在前端写死「免费 / 付费」。
 
 ## 设置 / 语言
 
@@ -143,8 +144,8 @@
 `GET /enana/admin/…` (无需 `X-Enana` 头; 只读, 白名单扩展名, 只给 GET / HEAD): 仪表盘静态文件由辅助服务直接提供 (`/enana/admin/` = index.html, `/enana/admin/<页面>` 也给 index.html, 页面名 = overview apps sites rules dns servers conns traffic speed logs settings login register; 不带斜杠的 `/enana/admin` 与 `/` 跳转到 `/enana/admin/`)。核心控制接口 (Clash API) 在 `ports.ui` 上, 只允许这个来源跨域访问, 地址写在 `env.json` 的 `clashBase`, 接口同源 (`apiBase` 为空)。
 
 **应用 / 覆盖的新字段 ★ 2.1.1**:
-- `apps[]` 每项多了 `target` (状态是 pin 时: 空 = 默认固定出口, `PINAUTO` = 在固定出口里自动选, 其它 = 指定走这一个固定出口) 和 `target_ok` (指定的固定出口还在吗); `flag` 多了一种值 `def` (首次扫描按推荐给的默认值: 云端推荐更新后会自动刷新, 不算「新应用」)。
-- `POST /api/override` 的 `target` 只对 `state=pin` 有意义 (其它状态忽略); 固定出口不到 2 个时只能留空; 取值必须是空 / `PINAUTO` / 现有的某个固定出口, 否则 `E_INVALID`。固定出口最多 16 个可以单独指定 (按配置里的顺序)。
+- `apps[]` 每项多了 `target` (状态是 pin 时: 空 = **跟随默认固定出口**, 默认出口换了它也跟着换; `PINAUTO` = 在固定出口里自动选, 其它 = 指定走这一个固定出口) 和 `target_ok` (指定的固定出口还在吗); `flag` 多了一种值 `def` (首次扫描按推荐给的默认值: 云端推荐更新后会自动刷新, 不算「新应用」)。
+- `POST /api/override` 的 `target` 只对 `state=pin` 有意义 (其它状态忽略); 固定出口不到 2 个时只能留空; 取值必须是空 / `PINAUTO` / 现有的某个固定出口, 否则 `E_INVALID`。固定出口最多 32 个可以单独指定 (按配置里的顺序; 常量 `OVR_PIN_MAX`, 2.3.10 及更早是 16 个; 超出的仍是固定出口, 但不能指定, 指定了的项目是「孤儿」, 见「出口分配」)。
 - `state.overrides[]` (网站覆盖) 每项: `{kind:"site",value,state,target,target_ok,src:"user|auto",at,why,fails,app}` —— `src=auto` 是「自动识别」添加的 (`at` 添加时间 unix 秒, `why` 失败类型 timeout|reset|refused|eof, `fails` 失败次数, `app` 触发的应用)。
 - `POST /api/override` 把自动识别添加的网站设成「跟随规则」= 删除它, 并且以后不再自动添加这个网站。
 - 新应用 (`flag=new`): 浏览器 (声明能打开 http / https 链接的应用) 默认「跟随规则」, 其它新应用默认「关」(直连); 仪表盘打开「应用」页就算已知晓, 会 `POST /api/apps/ack?all=1` 把新标记确认掉, 导航上的数字随之消失。
@@ -153,12 +154,62 @@
 `GET /api/state` → `{ok,version,prefs_version★,core,platform:{os,osver,arch},ports:{proxy,ui,api,speed★},env:{core,rules,service,sysproxy,shortcut (快捷命令的安装位置, 没装是 null),shortcut_cmd★ (在终端里直接可运行、打开控制台的完整命令: 装了快捷命令 = `enana`, 没装 = 脚本的完整路径),rules_updated,rules_missing[]},servers[],subs[],overrides[],first_run,`
 `update★:{available,latest,checked},lang★,proxy★:{enabled,mode:"auto|global"},account★:{email}}`
 
+`servers[]` 的每一项是 `{tag,type,server,port,role,sub}`。**官方线路 (会员) 的节点**排在用户自己的服务器后面, 多一个 `"official":true`: `server` 为 `""`、`port` 为 `0` (界面不显示官方节点的地址), `role` 永远是 `auto` (只进「自动线路」池, 不能当固定出口)。它们保存在 `~/.enana/official.jsonl` (权限 600), **不在** `servers.jsonl`, 也不进配置快照 / 云端同步 / `GET /api/export`; 对它们 `GET /api/servers/secret`、`POST /api/servers/delete`、`POST /api/servers/role` 一律 `E_FORBIDDEN`。`first_run` 只看用户自己的服务器。官方节点的标签以保留前缀 `官方-` 开头: 用户导入的节点不能使用这个前缀 (安装端拒绝; 导入器会把别的订阅里的「官方-xx」改名为「官方 xx」)。
+
 `GET /api/apps` · `POST /api/apps/scan` · `POST /api/apps/adopt` (表单 `names` 可选: 换行分隔的应用名, 只处理这几个; 不带 = 所有 flag=new 的应用) · `POST /api/apps/ack?name=|all=1` · `POST /api/override?kind=&value=&state=[&target=]` ·
-`POST /api/servers/import?sub=&mode=merge|replace&save=0|1` (正文=JSONL; **save★**: 1 = 「保存到云端」, 这些节点 (和订阅) 进入云端同步清单, 第一次用时自动打开云端同步; 0 = 只留在本机; 不带 = 不改动, 例如订阅自动刷新) · `POST /api/servers/delete?tag=` · `POST /api/servers/role?tag=&role=pin|auto|off|dl` ·
-`POST /api/cert?name=` · `POST /api/sub/fetch` · `POST /api/sub/save?name=&save=0|1` · `POST /api/sub/delete?name=` · `POST /api/restart` — 形状不变。
+`POST /api/servers/import?sub=&mode=merge|replace&save=0|1` (正文=JSONL; **save★**: 1 = 「保存到云端」, 这些节点 (和订阅) 进入云端同步清单, 第一次用时自动打开云端同步; 0 = 只留在本机; 不带 = 不改动, 例如订阅自动刷新) · `POST /api/servers/delete?tag=[&reassign=][&freeze=1][&accept_orphans=1]` · `POST /api/servers/role?tag=&role=pin|auto|off|dl[&reassign=][&freeze=1][&accept_orphans=1]` (删除 / 改角色的新参数见「出口分配」: 固定出口有人在用时必须先指明去向) ·
+`POST /api/cert?name=` · `POST /api/sub/fetch` · `POST /api/sub/save?name=&save=0|1` · `POST /api/sub/delete?name=[&accept_orphans=1]` · `POST /api/restart` — 形状不变 (订阅里有被使用的固定出口时的新参数见「出口分配」)。
+
+`servers/import` 的 `mode=replace` + `sub` (订阅刷新) 是**就地**合并: 订阅里已有的 tag 留在 `servers.jsonl` 里原来的那一行 (内容变了就原地覆盖), 新的 tag 追加到末尾, 订阅里已经没有的 tag 删掉; 其它来源的行 (手动添加的服务器、别的订阅) 原样不动。内容完全相同的刷新不改动文件, 所以生成的配置不变、核心不重启 (TUN 下也不用管理员授权)。返回的 `added` = 全新的 tag · `replaced` = 文件里已有的 tag (不论内容有没有变; 和 `merge` 一致) · `removed` = 这个订阅里有、新数据里没有的 tag (以前是「先删光再追加」, 订阅整个刷新一次就是 `removed` = 旧节点数、`added` = 新节点数)。`mode=merge` 不变: 已有的 tag 被新行取代并移到末尾。命令行 / 定时刷新 (`enana update`、每日维护) 会把订阅里已有节点的角色 (pin / off / dl) 带回来, 不会被导入器的默认 `auto` 覆盖; 同一批要刷新的多个订阅在一个事务里导入、只应用一次 (合并的事务没通过时退回逐个订阅各一个事务)。
 
 ### `GET /api/job?id=`
 `{"ok":true,"id","name","state":"running|done|error","pct":0-100,"msg":"…","steps":[{"label":"…","state":"todo|run|done|error"}],"result":{}}`; `msg`/`label` 按 `X-Enana-Lang` 翻译。
+
+## 出口分配 ★ (固定出口不是全局的一个开关)
+
+不同的应用 / 网站 / 服务可以走不同的固定出口 (应用 A 走出口 1, 应用 B 走出口 2)。`overrides.tsv` 里状态是 `pin` 的应用 / 网站, 第 5 列 `target` 把它们分成四类, 服务 (`svc-<id>` 选择器, 在核心里) 同理:
+
+| 归属 | 应用 / 网站的 `target` | 服务选择器当前选的 | 说明 |
+|---|---|---|---|
+| 指定 (`bound`) | 某个固定出口的名字 | 某个固定出口的名字 | 只走它; 它不可用时不会换别的出口 |
+| 跟随默认 (`follow`) | 空 | `PIN` | **默认固定出口换了, 它们的出口 IP 也跟着换** —— 所以换默认前必须让用户先看到谁会受影响 |
+| 自动选 (`auto`) | `PINAUTO` | `PINAUTO` | 在固定出口里自动选最快的 |
+| 孤儿 (`orphan`) | 指定的出口已经不是固定出口 | (不会出现: 核心会让选择器回到它的默认) | 被删除 (`deleted`) / 改了角色 (`role`) / 超出 `OVR_PIN_MAX` 个 (`cap`)。**路由语义没变**: 规则集里暂时退回默认固定出口 (不会断网, 没有固定出口时才直连), 但出口 IP / 国家可能变了, 所以现在会被标出来 (界面徽标 · `GET /api/exits` 的 `orphans` · 健康记录 `环境状态变化 item=exit_orphans`) |
+
+**默认固定出口** = 选择器 `PIN` 当前选中的服务器。除了核心自己记住 (`cache.db`), 还另存一份在 `$H/pin-default` (一行服务器名, 属于配置事务的备份范围): 核心没运行时也知道默认是谁; 核心重启后选择被重置 (缓存丢了 / 重装) 时, `proxy_sync_mode` 会按它切回去 (操作记录 `恢复默认固定出口`); 不再靠「文件里的第一个固定出口」(重新导入订阅会改变顺序)。老安装没有这个文件: 默认 = 核心里正在用的, 第一次 `GET /api/exits` 时记下来 (只信核心里读到的值, 核心读不到时绝不拿第一个固定出口去覆盖用户的选择)。`POST /api/policy tag=PIN` 切换时同步记下。
+
+### `GET /api/exits`
+→ `{"ok":true,"default":{"tag":"Tokyo-1","source":"live|stored|first|none","live":"Tokyo-1","stored":"Tokyo-1"},"max":32,"count":3,"pins":[{"tag":"Tokyo-1","targetable":true,"default":true,"apps":["Cursor"],"sites":["a.io"],"services":["svc-claude"]},…],"follow":{"apps":[],"sites":[],"services":["svc-chatgpt"],"dns":false},"auto":{"apps":[],"sites":["b.io"],"services":[]},"orphans":[{"kind":"site","name":"gone.io","target":"Old-1","reason":"deleted|role|cap"}],"orphan_count":1,"services_known":true}`
+- `pins` 是全部 `role=pin` 的服务器 (按配置顺序); `targetable=false` = 排在 `max` 之后, 不能单独指定。`apps` / `sites` 是指定走它的应用名 / 网站域名, `services` 是选择器名 (`svc-<id>`, 显示名用网站目录里的名字)。
+- `follow.dns` = DNS 的「线路」设成了固定出口 (跟着默认出口走, 不能钉住, 只作为影响提示)。
+- `services_known=false` = 核心没运行, 读不到服务的选择 (`services` 全是空, 应用 / 网站照常)。
+- 副作用: 老安装第一次读到时把核心里的默认固定出口记进 `$H/pin-default`。
+
+### `GET /api/exits/impact?op=remove|default&tag=`
+删除 / 改角色 (`remove`) 或把默认固定出口换成 `tag` (`default`) 会让谁换出口 IP —— 仪表盘在确认框里列出来。
+→ `{"ok":true,"op":"remove","tag":"Tokyo-1","is_pin":true,"default":"Tokyo-1","default_changes":true,"bound":{"apps":[],"sites":["a.io"],"services":[]},"follow":{"apps":["ChatGPT"],"sites":[],"services":["svc-chatgpt"],"dns":false},"affected":3,"remaining":2,"candidates":[{"tag":"Osaka-2","targetable":true},…],"services_known":true}`
+- `bound` = 指定了它的 (只有 `remove` 且它现在是固定出口时才有); `follow` = 跟随默认的 (只有默认出口会变时才列: `remove` 的是默认出口, 或 `default` 换成了另一个); `affected` = 两者之和 (+ DNS 算 1); `remaining` = 其余固定出口个数; `candidates` = 可以当去向的其它固定出口。
+
+### `POST /api/exits/move?from=&to=[&kind=]`
+一次改写应用 / 网站 / 服务的出口 (换节点时不用逐个修改)。`from` = `DEFAULT` (跟随默认的) | `PINAUTO` | `ORPHAN` (全部孤儿) | 某个服务器名 (所有指定了它的); `to` = `DEFAULT` (改成跟随默认) | `PINAUTO` | 某个固定出口 (后两者要求固定出口 ≥ 2 个且在 `max` 之内, 否则 `E_INVALID`); `kind` 空 = 全部 | `app` | `site` | `service`。只动状态是 `pin` 的行, 标记设为 `ack`; 幂等。
+- **非 TUN**: 同步完成, 和 `POST /api/override` 一样只写规则集文件 (核心热加载, **不重启**), 服务通过 `PUT /proxies/<svc>` 切换: → `{"ok":true,"moved":{"apps":1,"sites":2,"services":3},"services_known":true,"services_failed":0}`。
+- **TUN**: → `{"ok":true,"job":"exits-move-…"}` (后台任务, 经 `op_txn` → `apply_config` → 免密规则同步助手, **不重启核心**, 也就不要管理员密码; 没有助手时和其它策略改动一样走完整安装)。事务失败 (例如取消了管理员授权) 时覆盖整体回滚, 服务的选择器也切回原来的。
+- 操作记录: `移动固定出口 from=… to=… kind=… apps=… sites=… services=…`。
+
+### `POST /api/exits/freeze[?kind=]`
+「钉住」: 把跟随默认的 (应用 / 网站 / 服务) 全部改成明确指定**当前的默认固定出口** —— 等于 `move from=DEFAULT to=<当前默认>`。之后换默认固定出口不会再带着它们换。只有一个固定出口时没有什么可钉的: `{"ok":true,"moved":{…0},"skipped":"single"}`; 没有固定出口 → `E_INVALID`。
+
+### 删除 / 改角色 / 删订阅的保护 (有人在用时不再悄悄换 IP)
+`POST /api/servers/delete`、`POST /api/servers/role` (新角色不是 `pin`) 作用在一个**现在是固定出口**的服务器上、而有应用 / 网站 / 服务指定了它 (或它是默认固定出口、有项目在跟随它) 时, 必须带下面之一, 否则 **什么也不改**, 返回
+`{"ok":false,"code":"E_EXIT_IN_USE","error":"…","impact":{同 /api/exits/impact 的明细}}`:
+- `reassign=<另一个固定出口 | PINAUTO | DEFAULT>`: 指定了它的应用 / 网站 / 服务改派到这里。`DEFAULT` = 改成跟随默认 (被移除的不是默认出口时才行); `PINAUTO` 要求其余固定出口 ≥ 2 个且被移除的不是默认出口。被移除的**是**默认固定出口时, 默认固定出口同时换成这个去向 (跟随默认的随它走, 仍然跟随); 再加 `freeze=1` = 跟随默认的也钉在去向上 (以后默认再换也不动它们)。去向不合法 (自己 / 不存在 / 超出上限) → `E_INVALID`。
+- `accept_orphans=1`: 明确接受后果, 不改派: 指定了它的项目成为孤儿 (规则集退回默认固定出口), 没有固定出口时直连 (和 2.3.9 起的警告一致)。
+改派发生在**同一个事务**里 (`txn_delete` / `txn_role`: 改写 `overrides.tsv` → 改默认出口 → 删除 / 改角色 → `apply_config`, 失败整体回滚); 核心里的部分 (默认固定出口切到去向、指定了它的服务改选去向) 在任务启动前趁两个出口都还在时用 `PUT /proxies/…` 切好, 响应里带 `services_failed` (仅当 > 0)。服务器本来不是固定出口 / 没人用它时不需要任何参数, 和以前完全一样。
+**兼容性**: 老的调用方 (没带新参数) 对「有人在用的固定出口」的删除 / 改角色现在会得到 `E_EXIT_IN_USE` 而不是一个悄悄换 IP 的任务 —— 这是有意的; `accept_orphans=1` 就是旧行为。命令行 / 任务入口 `txn_delete` `txn_role` `txn_subdel` 同样受保护。
+`POST /api/sub/delete?name=` 删除订阅时, 如果订阅里有被使用的固定出口 (或其中一个是默认出口且有项目在跟随它), 同样返回 `E_EXIT_IN_USE` (`impact` = `{"servers":["Sub-1",…],"affected":N}`), 带 `accept_orphans=1` 才执行 (订阅整体消失, 没有逐个改派; 要改派先在服务器页里逐个处理)。订阅**刷新**删掉节点是自动的、无法询问, 事后由 `exit_orphans` 事件和总览里的孤儿组提示。
+
+### 上限
+可以单独指定的固定出口最多 `OVR_PIN_MAX` = 32 个 (lib/apps.sh; 每个固定出口 3 个规则集文件: 网站 / 应用 / 浏览器, 32 个 = 96 + 11 个固定名字的文件)。TUN 的规则同步助手 (`lib/tunrules-helper.pl`) 一次最多接受 160 个文件; 升级前装好的旧助手上限是 60 (= 最多 16 个固定出口), 超过时它会拒绝, 退回完整安装 (管理员授权), 那一次授权会把助手一并换成新版。保留字: `DEFAULT` `PINAUTO` `ORPHAN` 在这些接口里是特殊值, 不要用它们给服务器命名。
 
 ## 策略切换 / 审计 / 自动识别 ★ (v2.1.1 新增)
 
@@ -306,8 +357,10 @@
  "singbox":{"installed":false,"version":""},"node":{"installed":false},"deployed":false,
  "firewall":"ufw_active|ufw_inactive|firewalld_active|none","listening":[22,80],
  "ips":[{"local":"10.0.0.5","public":"1.2.3.4","v":4,"dev":"eth0"}],"ipv6":["2001:db8::5"],
- "actions":[{"id":"deps","text":"安装依赖 (apt-get): ca-certificates"},{"id":"core","text":"下载并安装服务端 sing-box 1.14.2 (SHA-256 校验) …"},{"id":"config","text":"…"},{"id":"service","text":"…"},{"id":"firewall","text":"…"}]}
+ "actions":[{"id":"deps","text":"安装依赖 (apt-get): ca-certificates"},{"id":"core","text":"下载并安装服务端 sing-box 1.14.2 (SHA-256 校验) …"},{"id":"config","text":"…"},{"id":"service","text":"…"},{"id":"firewall","text":"…"}],
+ "pending":null,"plan":null}
 ```
+`pending` = 本机保存着这台服务器 (同 host:ssh 端口) 上一次「部署完成但验证没通过」的记录时的摘要 (见下面的 `/api/vps/pending`, 不含节点凭据), 这时 `node.installed` 也是 `true` —— 服务器上其实已经有节点了, 界面不能再说「尚未部署」; `plan` = 云端探测脚本 (可选字段 `plan_port` / `plan_reason`) 告诉的「按现在的占用情况将要使用的节点端口」`{"port":2053,"reason":"default_busy"}`, 没有就是 `null` —— **界面和放行指引不假设任何固定端口**, 只用 `plan.port` (部署前) 和部署结果里节点实际使用的端口 (部署后)。
 `deps` 固定检查 `curl ca-certificates tar iproute2 gzip`; `deployed:true` = 这台服务器上已经有 enana 的部署 (可以重新识别出口 IP); `ips` = 服务器上所有可用的公网 IPv4 出口 (云厂商的内网 IP + 一对一 NAT 的会绑定源地址问外部服务得到各自的公网 IP; 同一公网 IP 只算一次, 最多 16 个; `ipv6` 只列出, 不建节点); **`actions` = 将要执行的操作清单** (按服务器当前状态生成: 已经具备的不列), 前端的「确认安装」弹窗逐条列出让用户确认。不支持的系统探测照样成功, 但 `supported:false`、`actions:[]`。
 失败 (`job.state=error`, 接口里的 `code` 在 `job.result.code`, `job.msg` 是已翻译的原因): `E_SSH_NO_CLIENT` (本机没有 ssh) · `E_SSH_UNREACHABLE` (连不上 / 超时 / 被拒 / 服务器没拿到主机密钥) · `E_SSH_AUTH` (用户名 / 密码 / 私钥不对) · `E_SSH_KEY` (私钥格式不对 / 口令不对) · `E_SSH_HOSTKEY` (指纹与固定的不一致) · `E_VPS_NO_PLAYBOOK` (云端还没有下发部署脚本; 这个错误在接口里就直接返回, 不进任务)。
 前端流程: (确认指纹) → 探测成功 → 弹窗展示「系统 / 依赖 / 出口 IP / 指纹」; `missing` 非空 → 问用户是否安装依赖; 要安装依赖或服务端时 → **二次弹窗** 逐条列出 `actions` 再让用户确认 → 调 provision。
@@ -318,11 +371,38 @@
 ### `POST /api/vps/provision` (通用凭据 + `hostkey` 必填 + `name` + `role=pin|auto` (默认 pin) + `install_deps=0|1` + `save=0|1`★ (同 `servers/import`)) → `{"ok":true,"job":"…"}`
 任务步骤 (9 步): `连接服务器` → `检测系统与环境` → `安装依赖` (apt-get: curl, ca-certificates, tar, iproute2, gzip; 只在 `install_deps=1` 时, 否则缺依赖 → `E_VPS_DEPS`) → `安装服务端` (sing-box, 固定版本 + SHA-256 校验, 装到 `/usr/local/bin/enana-sing-box`, 不覆盖用户已有的 sing-box) → `生成配置与密钥` (VLESS + Reality, 无需域名; 每个公网出口 IP 一个入站, 出口 IP = 入站 IP; 密钥 / 端口 / 伪装域名保存在服务器 `/etc/enana/state.json`, **重复部署沿用它们, 已有节点不会失效**) → `开放端口并启动` (专用系统用户 + systemd 服务 `enana-singbox`, 开机自启; ufw 活跃时放行端口; 云厂商安全组需用户自己放行) → `验证连通` (本机起一个**临时核心**, 逐个节点真实访问一次, 对比出口 IP; 全部不通 → `E_VPS_VERIFY` + 提示放行 `端口/tcp`) → `识别出口 IP` → `保存到本机` (走和导入服务器一样的事务: 校验 → 应用 → 失败自动回滚)。
 权限: root 直接执行; 非 root 用 `sudo -n` (免密) 或 `sudo -S` (密码经标准输入传递, 不进命令行), 没有 sudo → `E_VPS_PRIVILEGE` (sudo 密码不对也是)。系统 / 架构不支持 → `E_VPS_UNSUPPORTED` (不改动服务器); 没有 systemd / apt-get 同理。服务端启动失败 → `E_VPS_VERIFY` (带最近的日志片段)。
-完成时 `job.result` (节点 tag 规则: `<name>-<出口公网 IP>`, `name` 默认 `my-vps-<host>`; 同一台服务器的多个出口 IP 各一个节点): `{"nodes":[{"tag":"My-VPS-1.2.3.4","server":"1.2.3.4","port":443,"type":"vless","egress":"1.2.3.4"}],"ips":["1.2.3.4"],"vps":"v-1a2b3c"}`; `egress` 是验证时从这个节点出去实际看到的 IP。节点已写入本机服务器列表并生效。同一 host:port 再部署 = 更新同一条记录 (`vps` 编号不变)。
+**部署完成但验证没通过** (远端已经部署好, 本机经新节点真实访问失败): 这不是「部署失败」。任务以 `E_VPS_VERIFY` 结束, 但失败结果带结构化字段, 并且**服务器上的部署结果被保存为「待验证的部署」** (见下), 本机的服务器列表不添加任何节点:
+`{"code":"E_VPS_VERIFY","pending":"p-0a1b2c","reason":"blocked_cloud","port":2053,"ports":[2053],"host":"1.2.3.4","tcp":"timeout","remote":{"checked":true,"listening":true,"firewall":"ufw_inactive"},"nodes":2,"failed":2}`。`port(s)` 取自**节点实际使用的端口** (节点的 `server_port`), 不是任何默认值; `tcp` = 本机到节点端口的 TCP 预检 (`ok|timeout|refused|unreachable|mixed|none`; TUN 模式下探测绑定物理网卡, 否则 TUN 会在本机应答握手, 任何端口都显示通); `remote` = 登录凭据还在时重新跑一遍云端的只读 `probe.sh` 得到的服务器端证据 (服务有没有在监听、服务器上有没有启用 ufw / firewalld; 取不到时 `checked:false`, `listening:null`)。`reason` 只断言证据支持的结论:
+| `reason` | 依据 | 含义 / 处理 |
+|---|---|---|
+| `handshake` | 至少有一个节点端口 TCP 能连上 | **不是防火墙问题**: 服务端配置 / 密钥、服务器时间 (Reality 对时间敏感)、服务器出站被限制; 先「重新验证」, 不行再「重新部署」(沿用原来的密钥) |
+| `not_listening` | 服务器端证据: 节点端口没有进程在监听 | 服务没有启动成功, 与防火墙无关 |
+| `refused` | 本机收到连接被拒 (RST) | 没有监听, 或服务器防火墙设成了拒绝; 云安全组通常是静默丢弃, 不是典型表现 |
+| `unreachable` | 本机没有可用路由 | 本机网络 / VPN |
+| `blocked_server` | 超时 + 服务在监听 + 服务器上启用了 ufw / firewalld | 服务器防火墙或云安全组都可能, 两处都要检查 |
+| `blocked_cloud` | 超时 + 服务在监听 + 没发现服务器自己的防火墙 | 多半是云服务商的安全组 / 网络 ACL |
+| `blocked_unknown` | 超时, 但没有服务器端证据 | **无法确定** (可能是安全组 / 防火墙, 也可能是本机网络), 明确说不确定, 不断言 |
+| `unknown` | 其它 (例如只有 UDP 协议的节点, 不做 TCP 预检) | 原因无法确定 |
+没有任何节点能连上时不再等「真实访问」(每个节点最长 36 秒), TCP 预检不通的节点直接记为失败, 一个都不通就不启动本机的临时核心。部分节点通过验证时保存全部节点, 没通过的在结果里 `verified:false` (界面标出来)。
+完成时 `job.result` (节点 tag 规则: `<name>-<出口公网 IP>`, `name` 默认 `my-vps-<host>`; 同一台服务器的多个出口 IP 各一个节点): `{"nodes":[{"tag":"My-VPS-1.2.3.4","server":"1.2.3.4","port":443,"type":"vless","egress":"1.2.3.4"}],"ips":["1.2.3.4"],"vps":"v-1a2b3c"}`; `egress` 是验证时从这个节点出去实际看到的 IP; `verified` = 这个节点是否通过了验证 (部分通过时没通过的是 `false`, `egress` 为空)。节点已写入本机服务器列表并生效。同一 host:port 再部署 = 更新同一条记录 (`vps` 编号不变)。
 ### `GET /api/vps` → `{"ok":true,"vps":[{"id":"v-1a2b3c","name":"My-VPS","host":"1.2.3.4","ssh_port":22,"user":"root","os":"Debian GNU/Linux 12 (bookworm)","hostkey":"SHA256:…","ips":["1.2.3.4"],"nodes":["My-VPS-1.2.3.4"],"updated":1760000000}]}` (本机保存的服务器记录, **不含任何密码 / 私钥**)
 ### `POST /api/vps/forget` 表单 `id` → `{ok}` (只删除这条记录, 不删节点; 编号无效 → 被拒, 找不到 → `E_NOT_FOUND`)
 ### `POST /api/vps/redetect` (通用凭据 + `id`) → `{ok,job}`
 重新识别服务器的出口 IP (比如云厂商给机器加了一个 IP): **主机 / 指纹以本机保存的记录为准** (固定校验, 指纹变了 → `E_SSH_HOSTKEY`), 前端只需要重新带上凭据。服务器上更新配置并重启服务 (IP 没变就不重启), 本机只补充「还没有的」节点 (沿用已有节点的角色), 验证通过后保存。`job.result` = `{"nodes":[…新增的],"ips":[…全部],"vps":"<id>","added":1}`; 没有新增时 `added:0` 且不改动核心配置。服务器上还没有部署 → `E_VPS_NOT_DEPLOYED`; 记录不存在 → `E_NOT_FOUND`。
+
+### 待验证的部署 (部署完成但验证没通过) ★ (v2.3.11)
+远端已经部署好、本机还没验证通过的节点, 保存在本机 `$H/vps-pending/<编号>` (目录 700 / 文件 600; 内含节点凭据, 和 `servers.jsonl` 同样敏感; **不进配置快照、导出和云端同步**; 同一个 host:ssh 端口只留最新一条; 7 天后自动清理; 验证并保存成功 / 放弃时删除)。用户放行端口 (或修好别的问题) 后只需「重新验证」: **不再 SSH、不再部署、不需要重新输入任何凭据**。
+- `GET /api/vps/pending` → `{"ok":true,"pending":[{"id":"p-0a1b2c","name":"My-VPS","host":"1.2.3.4","ssh_port":22,"user":"root","os":"…","ports":[2053],"ips":["1.2.3.4"],"nodes":1,"created":1760000000,"updated":1760000300,"tries":1,"reason":"blocked_cloud"}]}` (不含节点凭据)。
+- `POST /api/vps/verify` 表单 `id=p-xxxxxx` → `{"ok":true,"job":"…"}`; 任务步骤 `读取部署记录` → `检查端口` → `验证连通` → `识别出口 IP` → `保存到本机`。通过 → 保存 (走和部署成功后相同的事务), 结果 `{"nodes":[…],"ips":[…],"vps":"v-…","added":1,"unchanged":0,"updated":0}`。**和本机已有的节点逐个比较**: 完全一样的原样保留 (不重复添加), 同名但内容不同的 (服务器重新部署换了密钥) 才更新并**保留你给它设的角色**, 本机都已经有了就只补上服务器记录、不动核心配置。再次失败 → 记录保留 (`tries+1`), 结果和部署时同一种结构 (`reason` / `port(s)` / `tcp`; 这个任务没有 SSH, 所以 `remote.checked:false`, 只给本机能确认的原因)。编号格式不对 → `E_INVALID`; 记录不存在 → `E_NOT_FOUND`; 同一条记录正在验证 → `E_BUSY`。
+- `POST /api/vps/pending/discard` 表单 `id` → `{ok}`: 只删本机保存的待验证节点, 不改动服务器 (节点服务仍在服务器上运行)。
+
+### 云端部署脚本约定 (给云端内容的维护者; 公开仓库里的 `tests/fixtures/content/vps/` 是遵守这份约定的模拟脚本)
+本机只做 SSH 编排和校验, 下面这些由云端 `vps/*.sh` 保证; 本机不依赖固定端口, 以脚本报告的节点 (`##node` 的 `server_port`) 为准:
+1. **保护已有服务**: 不停止 / 不替换 / 不改写服务器上已有的网站、代理和其他业务及其配置; 已有的 sing-box 保持原样 (本服务端装在独立的路径和 systemd 服务里)。
+2. **端口选择**: 默认端口 (443) 被占用时不去抢, 选一个空闲端口 (已有服务占着的端口一律不碰), 并如实报告: `##kv port <实际端口>`, 以及 (可选) `##kv port_requested <请求的端口>` `##kv port_reason default_busy`; 重复部署沿用已选的端口。
+3. **部署前告知端口** (可选): `probe.sh` 输出 `##kv plan_port <将要用的端口>` 和 `##kv plan_reason default|default_busy`, 本机在「确认安装」之前就能列出具体端口、让用户提前放行云安全组; 没有这两个字段, 界面只说「部署完成后会告诉你具体端口」。
+4. **服务器自己的防火墙**: ufw / firewalld 启用时只放行节点实际使用的端口 (授权范围 = 用户在「确认安装」里看到并确认的操作); 云服务商的安全组脚本改不了, 由用户操作, 本机给出带实际端口的指引。
+5. `probe.sh` 的 `listening` / `firewall` 字段要准确 (本机在验证失败后用它判断「服务有没有在监听」「服务器上有没有防火墙」)。
 
 ## 云端同步 (端到端加密) ★ (v2.1 新增)
 
@@ -412,7 +492,7 @@
 
 `POST /api/network-mode` 表单 `mode=system|tun` → `{ok:true,job}`。设置是本机独有, 不进入跨设备同步; 升级缺省 `system`。`GET /api/state` 与 `/api/settings` 的 `proxy` 增加 `network_mode`、`tun_ready`。
 
-TUN 使用管理员授权后的规则快照。此模式下 `/api/override`、`/api/apps/adopt`、`/api/apps/scan`、`/api/sites/auto/clear` 返回异步 `{ok:true,job}`, 前端必须等 job 完成再显示成功, 取消授权时事务撤销。System Proxy 下这些接口沿用立即响应/文件热加载。自动识别网站也必须先应用快照, 再验证实际连接; 不能把用户目录文件已更改当成 root 核心规则已生效。
+TUN 使用管理员授权后的规则快照。此模式下 `/api/override`、`/api/exits/move`、`/api/exits/freeze`、`/api/apps/adopt`、`/api/apps/scan`、`/api/sites/auto/clear` 返回异步 `{ok:true,job}`, 前端必须等 job 完成再显示成功, 取消授权时事务撤销。System Proxy 下这些接口沿用立即响应/文件热加载。自动识别网站也必须先应用快照, 再验证实际连接; 不能把用户目录文件已更改当成 root 核心规则已生效。
 
 访问记录新增 `capture:"mixed|tun"` (老记录可能为空)。
 

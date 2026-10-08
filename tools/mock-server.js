@@ -41,11 +41,14 @@
  *   sync=reset                    云端同步恢复初始状态: 未开启, 云端有数据 (版本 7), 本机版本 6 且有未上传的改动 (--first-run 时本机版本 0)
  *   syncremote=none|exists|newer  云端没有数据 / 有且不比本机新 / 比本机新 (推送会冲突)     synckey=ok|bad   密钥场景: bad = 拉取时 E_SYNC_KEY, 要带 old_password=oldpass1234
  *   syncoffline=0|1               同步时 enana.cc 不可达 (GET /api/sync 的 online=false; 推送 / 拉取 / 清除 -> E_ACCOUNT_UNREACHABLE)
- *   plan=soon|free|pro|expired    套餐 (GET /api/plan): soon (默认) = 免费版, 官方线路「即将推出」; free = 免费版, Pro 功能已上线但需要升级; pro = 专业版 (30 天后到期, 设备上限 5, 服务器列表多出 2 个 official:true 的官方节点); expired = 订阅已过期 (reason "expired", 官方节点消失)
+ *   billing=closed|open|unverified|nomail|pending|auth|server   会员付款页 (GET /api/billing 等): closed (默认, 和线上一致: 服务器关闭收款) / open / unverified (邮箱未验证) / nomail (未验证且服务器发不出验证邮件) / pending (有未完成的订单) / auth (云端会话失效 E_AUTH) / server (云端 5xx E_SERVER_ERROR)
+ *   plan=soon|free|pro|expired|verify 套餐 (GET /api/plan; verify = Pro 但邮箱未验证, 官方线路 reason "verify"): soon (默认) = 免费版, 官方线路「即将推出」; free = 免费版, Pro 功能已上线但需要升级; pro = 专业版 (30 天后到期, 设备上限 5, 服务器列表多出 2 个 official:true 的官方节点); expired = 订阅已过期 (reason "expired", 官方节点消失)
  *   prefs=reset|bump              偏好设置 (GET / POST /api/prefs): reset = 清空 (version 0); bump = 模拟「另一台设备同步来了改动」: version +1, 并写入 "ui.fromOtherDevice": true (state.prefs_version 随之变化)
  *   sudottl=N                     步骤验证令牌 (X-Enana-Sudo) 的有效期, 真实秒数 (默认 300; 设成 1-2 来测「过期后重新弹出密码框」)       sudo=clear   让所有步骤验证令牌立刻失效
  *   icons=progressive|all|none    应用图标: progressive (默认) = 启动 / 重置时的应用 0-6 秒内陆续出现, 新扫描到的应用 2-6 秒后出现 (按 --fast 缩短); all = 立刻都有; none = 都没有 (图片也 404)
  *   vpsport=open|closed           203.0.113.70 的部署: closed (默认) = 「验证连通」失败 E_VPS_VERIFY, open = 成功 (测「放行端口后重新验证」)
+ * 出口分配 (docs/API.md「出口分配」): GET /api/exits (每个固定出口上的应用 / 网站 / 服务 · 跟随默认 · 自动选 · 孤儿 · 默认出口) · GET /api/exits/impact?op=remove|default&tag= · POST /api/exits/move?from=&to=[&kind=] · POST /api/exits/freeze;
+ *   POST /api/servers/delete | role (新角色不是 pin) 和 POST /api/sub/delete 在有应用 / 网站 / 服务用着固定出口时返回 E_EXIT_IN_USE + impact, 除非带 reassign= (改派; freeze=1) / accept_orphans=1; 固定出口上限 32 (和 lib/apps.sh 的 OVR_PIN_MAX 一致)。
  * 步骤验证 (sudo): 8 个敏感接口 (POST /api/servers/delete | sub/delete | logs/clear | devices/kick | sync/clear, GET /api/servers/secret | sub/url | export) 没带有效的 X-Enana-Sudo 头 -> HTTP 403
  *   {ok:false, code:"E_SUDO_REQUIRED", error} (检查顺序: 401 令牌 -> 403 sudo -> 接口自己的校验; 白名单是 SUDO_ROUTES 这张表)。POST /api/auth/verify (表单 password = 当前账号的密码, 和登录 / 注册共用失败计数) -> {sudo, ttl:300};
  *   退出 / 登录 / 注册 / 改密码 / expire=1 / kickme / sudo=clear 都会让所有 sudo 令牌失效。GET /api/servers/secret?tag= 返回按节点类型生成的确定性占位凭据 (官方节点 -> E_INVALID); GET /api/sub/url?name= 返回保存订阅时的链接;
@@ -117,7 +120,7 @@ const HELP = [
   '  &lock=reset&locksec=N&expire=1&update=on|off|fail&failnext=/api/x&speedlast=seed&env=bad&tick=N&newapp=Name&reset=1',
   '  &vps=reset&sync=reset&syncremote=none|exists|newer&synckey=ok|bad&syncoffline=0|1&devices=free|full|reset&kickme=1&notice=text',
   '  &stats=normal|short|empty (traffic statistics history: 41 days / 2 days / none)&statsfail=1 (next /api/stats fails once)',
-  '  &plan=soon|free|pro|expired&prefs=reset|bump&sudottl=N (seconds)&sudo=clear&icons=progressive|all|none&vpsport=open|closed&kickme=1|password',
+  '  &plan=soon|free|pro|expired|verify&billing=closed|open|unverified|nomail|pending|auth|server&prefs=reset|bump&sudottl=N (seconds)&sudo=clear&icons=progressive|all|none&vpsport=open|closed&kickme=1|password',
   'Sudo (step-up password): POST /api/auth/verify -> X-Enana-Sudo for servers/delete, sub/delete, servers/secret, sub/url, logs/clear, devices/kick, sync/clear, export (403 E_SUDO_REQUIRED without it)',
   'Magic VPS hosts (probe/provision): 203.0.113.10 20 30 31 40 50 51 60-65 70 (70 fails with E_VPS_VERIFY until vpsport=open; see the file header)',
   'Magic app inspect inputs: /Applications/Cursor.app /Applications/Slack.app (exists) /usr/local/bin/mytool (unsigned bin) /opt/homebrew/bin/node /etc/hosts /private/var/root/secret.app; names: cursor (1 hit) code (5) zzz (none)',
@@ -190,6 +193,8 @@ const S = {
   'e.loginFormat': ['邮箱或密码格式不正确', 'The email or password format is not valid.'],
   'e.noJob': ['找不到该任务', 'Task not found.'], 'e.badJobId': ['任务编号无效', 'Invalid task id.'],
   'e.noServer': ['找不到这台服务器', 'Server not found.'], 'e.badRole': ['角色无效', 'Invalid role.'],
+  'e.exitInUse': ['有应用 / 网站 / 服务正在使用这个固定出口 (或跟随它作默认出口): 先选择让它们改走哪一个出口, 或者明确接受后果再继续', 'Apps, sites or services are using this Fixed exit (or follow it as the default exit): choose where they go first, or explicitly accept the consequences to continue'],
+  'e.badMove': ['参数无效', 'Invalid parameter.'], 'e.noPin': ['还没有固定出口', 'There is no Fixed exit yet.'],
   'e.dlOnly': ['下载专用只能用于 HTTP / SOCKS5 服务器', 'Download-only can only be used with HTTP / SOCKS5 servers.'],
   'e.noSub': ['找不到这个订阅', 'Subscription not found.'],
   'e.badSubName': ['订阅名称只能包含字母、数字、. _ - 和空格 (最多 40 个字符)', 'A subscription name may only contain letters, digits, . _ - and spaces (up to 40 characters).'],
@@ -222,6 +227,7 @@ const S = {
   'e.vpsUser': ['用户名不正确', 'The user name is not valid.'], 'e.vpsMode': ['登录方式只能是 password 或 key', 'The login mode must be password or key.'], 'e.vpsPassword': ['请填写 SSH 密码', 'Enter the SSH password.'],
   'e.vpsKey': ['请粘贴私钥全文 (以 -----BEGIN 开头)', 'Paste the full private key (starting with -----BEGIN).'], 'e.vpsHostkey': ['缺少主机指纹: 请先探测并确认指纹', 'The host key fingerprint is missing: probe the server and confirm it first.'],
   'e.vpsName': ['节点名称只能包含字母、数字、. _ - (最多 40 个字符)', 'The name may only contain letters, digits, . _ - (up to 40 characters).'], 'e.vpsRole': ['角色只能是 pin 或 auto', 'The role must be pin or auto.'],
+  'e.vpsPendId': ['待验证的部署编号无效', 'The pending-deployment ID is invalid.'], 'e.noVpsPend': ['找不到这次部署的记录 (可能已经放弃、已经添加, 或超过 7 天被清理了)', 'This deployment record was not found (it may have been discarded, already added, or cleaned up after 7 days).'],
   'e.noVps': ['找不到这条服务器记录', 'Server record not found.'], 'e.vpsId': ['缺少服务器记录的 id', 'The server record id is missing.'],
   'vps.noteFull': ['{os} 受支持', '{os} is supported'], 'vps.noteBest': ['{os} 已停止维护, 软件源可能失效, 将尽力安装; 失败时请先升级系统。', '{os} is end-of-life and its package sources may be broken. Installation is best-effort; upgrade the system first if it fails.'],
   'vps.noteNo': ['不支持的系统: {os}。目前支持 Debian 11 / 12 / 13 与 Ubuntu 20.04 / 22.04 / 24.04。', 'Unsupported system: {os}. Debian 11 / 12 / 13 and Ubuntu 20.04 / 22.04 / 24.04 are supported.'],
@@ -231,12 +237,16 @@ const S = {
   'e.netBusy': ['测速任务正在使用线路, 请稍后重试', 'A speed test is using the routes. Please try again shortly.'], 'e.badNet': ['未知的 IP 检测场景', 'Unknown IP check scenario.'],
   /* 新增: 步骤验证 (sudo) / 密码修改 / 偏好 / 凭据显示 / 套餐 (文案与 lib/*.sh + data/i18n/en.tsv 里真实辅助服务的保持一致) */
   'err.E_SUDO_REQUIRED': ['此操作需要再次输入登录密码', 'This action needs your sign-in password again'],
-  'err.E_VPS_VERIFY': ['部署完成了, 但从这台电脑连不上新节点: 多半是云服务商的安全组 / 防火墙没有放行端口 {port}/tcp, 放行后点「重新验证」', 'The deployment finished, but this computer cannot reach the new node: most likely the cloud provider\'s security group / firewall does not allow port {port}/tcp. Open it, then click "Verify again".'],
+  'err.E_VPS_VERIFY': ['部署完成了, 但新节点没有通过验证 (TCP {port}): 服务在监听, 没有发现服务器自己的防火墙拦截, 多半是云服务商的安全组 / 网络 ACL 没有放行这个端口; 放行或修复后点「重新验证」', 'Deployment finished, but the new nodes did not pass verification (TCP {port}): the service is listening and no firewall on the server itself was found blocking it, so most likely the cloud provider\'s security group / network ACL does not allow this port; once it is open or fixed, click "Verify again".'],
   'e.pwEmpty': ['请输入登录密码', 'Enter your sign-in password'], 'e.pwWrong': ['密码不正确', 'Incorrect password'], 'e.pwWrongCur': ['当前密码不正确', 'The current password is incorrect'],
   'e.pwWeakNew': ['新密码至少 8 位, 并且不能和旧密码相同', 'The new password must be at least 8 characters and different from the old one'],
   'e.pwOffline': ['连不上 enana.cc, 修改密码必须在线 (离线登录时不能修改)。请检查网络后重试', 'Cannot reach enana.cc; changing the password requires being online (not possible after an offline sign-in). Check your network and retry'],
   'e.prefsJson': ['偏好设置必须是一个 JSON 对象', 'The preferences must be a JSON object'], 'e.prefsSize': ['偏好设置太大 (最多 32 KB)', 'The preferences are too large (32 KB at most)'],
   'e.officialSecret': ['官方线路的凭据不能查看', 'Credentials of the official route cannot be viewed'], 'e.officialDel': ['官方线路节点由会员权益提供, 不能删除', 'Official route nodes come with the membership and cannot be deleted.'],
+  'e.billAuth': ['云端登录已失效、已结束或这台电脑是离线登录，请联网并重新登录后再试', 'Your cloud sign-in has expired, ended, or this computer signed in offline. Go online, sign in again and retry'],
+  'e.billServer': ['enana.cc 服务器返回了错误，这次操作可能已生效也可能没有，请先刷新并查看订单和余额', 'The enana.cc server returned an error. The request may or may not have gone through: refresh and check your orders and balance first'],
+  'e.billUnverified': ['请先验证账号邮箱', 'Verify your account email first'], 'e.billClosed': ['收款暂未开放', 'Receiving payments is not open yet'], 'e.billPending': ['已有待付款订单', 'You already have a pending invoice'],
+  'e.billNotFound': ['找不到这笔订单', 'Invoice not found'], 'e.billBalance': ['余额不足', 'Insufficient funds'], 'e.billNoMail': ['验证邮件暂时无法发送', 'Verification mail could not be sent'],
   'plan.free': ['免费版', 'Free'], 'plan.pro': ['专业版', 'Pro'],
   'notice.pwChanged': ['你的登录密码已在另一台设备上修改, 请用新密码重新登录, 代理已关闭', 'Your password was changed on another device. Sign in again with the new password; the proxy was turned off.'],
   /* 新增: 网站域名 (也用于 DNS 自定义解析) */
@@ -292,11 +302,11 @@ const S = {
   'jd.toggle': ['规则集设置已应用', 'Rule set setting applied'], 'jd.customAdd': ['自定义规则集已添加', 'Custom rule set added'], 'jd.customDel': ['自定义规则集已删除', 'Custom rule set removed'],
   'js.sshConnect': ['连接服务器', 'Connect to the server'], 'js.sshDetect': ['检测系统与环境', 'Detect the system and environment'], 'js.sshEnv': ['检测依赖与防火墙', 'Check dependencies and firewall'],
   'js.sshDeps': ['安装依赖', 'Install dependencies'], 'js.sshServer': ['安装服务端', 'Install the server software'], 'js.sshConfig': ['生成配置与密钥', 'Generate the config and keys'],
-  'js.sshStart': ['开放端口并启动', 'Open the port and start'], 'js.sshVerify': ['验证连通', 'Verify the connection'], 'js.sshIps': ['识别出口 IP', 'Detect the exit IPs'], 'js.sshSave': ['保存到本机', 'Save to this computer'],
+  'js.sshStart': ['开放端口并启动', 'Open the port and start'], 'js.sshVerify': ['验证连通', 'Verify the connection'], 'js.vpsRead': ['读取部署记录', 'Read the deployment record'], 'js.vpsPort': ['检查端口', 'Check the port'], 'js.sshIps': ['识别出口 IP', 'Detect the exit IPs'], 'js.sshSave': ['保存到本机', 'Save to this computer'],
   'js.syncCollect': ['收集本机配置', 'Collect the local settings'], 'js.syncEncrypt': ['加密', 'Encrypt'], 'js.syncUpload': ['上传到 enana.cc', 'Upload to enana.cc'],
   'js.syncDownload': ['下载云端数据', 'Download the cloud data'], 'js.syncDecrypt': ['解密', 'Decrypt'], 'js.syncValidate': ['校验', 'Validate'], 'js.syncApply': ['应用到本机', 'Apply to this computer'],
   'jd.vpsProbe': ['检测完成', 'Detection finished'], 'jd.vpsProvision': ['服务器已部署, 已添加 {n} 个节点', 'The server is deployed and {n} node(s) were added'],
-  'jd.vpsRedetect': ['已重新识别出口 IP (新增 {n} 个节点)', 'Exit IPs re-detected ({n} new node(s))'], 'jd.syncPush': ['已上传到云端 (版本 {v})', 'Uploaded to the cloud (version {v})'],
+  'jd.vpsVerify': ['验证通过, 已添加 {n} 个节点', 'Verified, {n} node(s) were added'], 'jd.vpsRedetect': ['已重新识别出口 IP (新增 {n} 个节点)', 'Exit IPs re-detected ({n} new node(s))'], 'jd.syncPush': ['已上传到云端 (版本 {v})', 'Uploaded to the cloud (version {v})'],
   'jd.syncPull': ['已从云端同步 (版本 {v})', 'Synced from the cloud (version {v})'],
   'jd.restart': ['服务已重启', 'Service restarted'], 'jd.sysproxy': ['系统代理已指向 enana', 'The system proxy now points to enana'], 'jd.sysproxyCancel': ['已取消授权, 系统代理没有改动。需要时再点一次「开启系统代理」。', 'Authorization cancelled; the system proxy was not changed. Try again whenever you like.'], 'jd.rules': ['规则集已更新 ({n} 个有变化, 0 个失败)', 'Rule sets updated ({n} changed, 0 failed)'], 'jd.net': ['已更新', 'Updated'],
   'jd.updApp': ['已更新到 {v}, 辅助服务已重启', 'Updated to {v}; the helper service was restarted.'], 'jd.updCore': ['核心已更新到 {v}', 'Core updated to {v}.'],
@@ -559,7 +569,7 @@ function reset(mode) {
   Object.assign(M, { secret, firstRun: first, os: 'darwin', helperDown: false, helperWin: null, clashDown: false, clashWins: [], central: 'up', failNext: [], failJob: false, jobs: {}, jobSeq: 0,
     mode: 'Rule', connTarget: 45, conns: [], delayHist: {}, fails: [], regs: [], lockUntil: 0, locksec: 300, langSet: null, logHours: 72, logOps: true, accessLog: true, logCore: true, autoSites: false, autoSimAt: 0, autoSimIdx: 0, dismissed: [], net: 'normal', netChecked: t - 60, stats: 'normal',
     upd: { cur: BASE_APP, coreCur: BASE_CORE, on: true, fail: false, checked: t - 2 * 3600 }, speed: { running: null, last: null, seq: 0, byId: {} }, custom: [], pendingNames: {}, pendingApps: [], apps: [], appsScanned: 0,
-    prefs: { obj: {}, version: 0, updated: 0 }, sudo: Object.create(null), sudoTtl: 300, plan: 'soon', siteMods: {}, tgt: { custom: [], over: {}, hidden: {} }, hosts: [], subUrls: Object.create(null), inspected: Object.create(null), icons: 'progressive', vpsOpen: false });
+    prefs: { obj: {}, version: 0, updated: 0 }, sudo: Object.create(null), sudoTtl: 300, plan: 'soon', billing: 'closed', siteMods: {}, tgt: { custom: [], over: {}, hidden: {} }, hosts: [], subUrls: Object.create(null), inspected: Object.create(null), icons: 'progressive', vpsOpen: false });
   M.dir = clone(ACCOUNTS);                                                // 模拟的 enana.cc 账号库 (注册会往里加); 重置会让种子账号的密码回到 demo1234 / other1234
   if (keepAcc) M.dir[account] = keepAcc;                                  // 但不会让已登录的 (注册来的) 账号消失
   M.lastAcct = flag('unbound') ? null : cacheRec('demo@example.com', ACCOUNTS['demo@example.com'].pw); M.account = account; M.proxyOn = false; M.proxyMode = 'auto';   // 令牌与「当前账号」不随重置变化
@@ -577,7 +587,7 @@ function reset(mode) {
   M.rulesUpdated = first ? 0 : t - 2 * 86400;
   M.rs = RULESETS.map((r) => { const present = (r.essential || r.def) && !(first && (r.tag === 'geosite-cn' || r.tag === 'geosite-ai')); return { tag: r.tag, enabled: r.essential || r.def, present, bytes: present ? ruleSize(r.tag) : 0, updated: present ? (M.rulesUpdated || t - 3 * 86400) - hash(r.tag) % 3600 : 0 }; });
   M.dns = { cn: 'alidns', cn_custom: '', global: 'cloudflare', global_custom: '', via: 'Global', strategy: 'prefer_ipv4', leak_guard: true, ads_block: false };
-  M.vps = []; M.sync = syncInit(first); M.autoUpdate = true;
+  M.vps = []; M.vpsPending = []; M.sync = syncInit(first); M.autoUpdate = true;
   M.devices = seedDevices(); M.notice = null; if (account) setThisOnline(account, true);                // 重置不会把已登录的浏览器踢下线
   M.L = genLogs();
 }
@@ -758,7 +768,7 @@ function genLogs() {
 }
 /* 会改动「同步内容」的操作码: 记录后本机的 sync.local.dirty = true */
 const DIRTY = { 'servers.import': 1, 'servers.delete': 1, 'servers.role': 1, 'sub.save': 1, 'sub.delete': 1, 'sub.refresh': 1, 'override.set': 1, 'override.delete': 1, 'apps.adopt': 1, 'apps.ack': 1, 'dns.set': 1, 'rules.toggle': 1,
-  'rules.custom.add': 1, 'rules.custom.delete': 1, 'settings.set': 1, 'vps.provision': 1, 'vps.forget': 1, 'vps.redetect': 1, 'sites.domain': 1, 'sites.reset': 1, 'apps.custom.add': 1, 'apps.custom.delete': 1, 'dns.hosts': 1, 'dns.hosts.reset': 1 };
+  'rules.custom.add': 1, 'rules.custom.delete': 1, 'settings.set': 1, 'vps.provision': 1, 'vps.forget': 1, 'vps.redetect': 1, 'vps.verify': 1, 'vps.discard': 1, 'sites.domain': 1, 'sites.reset': 1, 'apps.custom.add': 1, 'apps.custom.delete': 1, 'dns.hosts': 1, 'dns.hosts.reset': 1 };
 function oplog(who, action, detail, result) {
   if (!M.logOps) return;
   oplogForce(who, action, detail, result);
@@ -1074,18 +1084,47 @@ route('POST', '/api/prefs', (c) => {
 });
 
 /* ---- 会员 / 套餐 (GET /api/plan; ctl plan=soon (默认) | free | pro | expired) ---- */
-const OFFICIAL_NODES = [{ tag: 'enana-official-tokyo', type: 'vless', server: 'official-jp.example.net', port: 443, role: 'auto', sub: '', official: true }, { tag: 'enana-official-singapore', type: 'vless', server: 'official-sg.example.net', port: 443, role: 'auto', sub: '', official: true }];
+const OFFICIAL_NODES = [{ tag: '官方-东京', type: 'vless', server: '', port: 0, role: 'auto', sub: '', official: true }, { tag: '官方-新加坡', type: 'vless', server: '', port: 0, role: 'auto', sub: '', official: true }];     // 官方节点的地址 / 端口不返回给界面 (lib/api.sh 的 servers_json); 保留前缀 官方-
 function applyPlan() {                                                     // 套餐 -> 官方线路: pro 时服务器列表多出 2 个 official:true 的节点 (进核心配置), 其它套餐 (含过期) 没有
   M.servers = M.servers.filter((s) => !s.official); M.applied = M.applied.filter((s) => !s.official);
   if (M.plan === 'pro') OFFICIAL_NODES.forEach((n) => { M.servers.push(Object.assign({}, n)); M.applied.push(Object.assign({}, n)); });
 }
-const devLimit = () => (M.plan === 'pro' ? 5 : DEVICE_LIMIT);
+const devLimit = () => (M.plan === 'pro' || M.plan === 'verify' ? 5 : DEVICE_LIMIT);
 route('GET', '/api/plan', (c) => {
-  const p = M.plan, pro = p === 'pro', exp = p === 'expired', t = sec(), free = { enabled: true, tier: 'free' };
+  const p = M.plan, pro = p === 'pro' || p === 'verify', exp = p === 'expired', t = sec(), free = { enabled: true, tier: 'free' };
   const gated = () => (pro ? { enabled: true, tier: 'pro' } : { enabled: false, tier: 'pro', reason: exp ? 'expired' : 'upgrade', coming_soon: p === 'soon' });
+  const official = p === 'verify' ? { enabled: false, tier: 'pro', reason: 'verify' } : gated();               // verify: Pro, official routes are live, but the account email is not verified yet
   return { ok: true, plan: { code: pro ? 'pro' : 'free', title: tr(c.lang, pro ? 'plan.pro' : 'plan.free') }, expires_at: pro ? t + 30 * 86400 : exp ? t - 2 * 86400 : null, checked: t - 120, limits: { devices_per_platform: devLimit() },
-    features: { core: free, sync: free, vps_deploy: free, custom_dns: free, official_proxy: gated(), unlimited_devices: gated(), priority_support: gated() }, official: { available: pro, nodes: pro ? OFFICIAL_NODES.length : 0 } };
+    features: { core: free, sync: free, vps_deploy: free, custom_dns: free, official_proxy: official, unlimited_devices: gated(), priority_support: gated() }, official: { available: p === 'pro', nodes: p === 'pro' ? OFFICIAL_NODES.length : 0 } };
 });
+
+/* ---- 会员付款页 (GET /api/billing 等; ctl billing=closed (默认) | open | unverified | nomail | pending | auth | server) ----
+ * 对照 lib/billing.sh + lib/api.sh 的 ep_billing: 云端自己的错误码 (E_PAYMENTS_UNAVAILABLE ...) 原样透传; 本机辅助服务自己的 E_AUTH (云端会话失效) / E_SERVER_ERROR (云端 5xx) 带翻译后的 error。
+ * closed = 服务器关闭收款 (payments_available:false, 付款按钮置灰并有常驻说明); unverified = 邮箱未验证且能发邮件; nomail = 邮箱未验证且服务器发不出验证邮件;
+ * pending = 有一笔未完成的订单; auth = 云端会话已失效 (所有请求 E_AUTH); server = 云端返回 5xx (所有请求 E_SERVER_ERROR)。 */
+const BILL_SKUS = [['m1', 1, 4], ['m3', 3, 10], ['m6', 6, 19], ['y1', 12, 35], ['y2', 24, 56], ['y3', 36, 72], ['y5', 60, 100]];
+const billOrder = (status) => ({ id: 'abcdefghijklmno', kind: 'plan', sku: 'm1', price: '4.000000', amount: '4.000037', network: 'TRC20', currency: 'USDT', address: 'TMiyPt3gfLQNJRPqUzGke9EJWhhyoHR8RU', status: status || 'pending', created_at: sec() - 60, expires_at: sec() + 1740, paid_at: null, event_key: null });
+const billGate = (fn) => (c) => {
+  if (M.billing === 'auth') throw E('E_AUTH', 'e.billAuth');
+  if (M.billing === 'server') throw E('E_SERVER_ERROR', 'e.billServer');
+  return fn(c);
+};
+const billVerified = () => M.billing !== 'unverified' && M.billing !== 'nomail';
+route('GET', '/api/billing', billGate(() => ({ ok: true, payments_available: M.billing !== 'closed', email: { address: M.account || 'demo@example.com', verified: billVerified(), mail_available: M.billing !== 'nomail' },
+  wallet: { balance: '0.000000', auto_renew: false, monthly_price: '4.000000' }, catalog: BILL_SKUS.map((k) => ({ id: k[0], months: k[1], price: k[2] + '.000000' })), plan: { code: M.plan === 'pro' ? 'pro' : 'free', expires_at: null },
+  orders: M.billing === 'pending' ? [billOrder()] : [], ledger: [], order_ttl: 1800 })));
+route('POST', '/api/billing/checkout', billGate(() => {
+  if (!billVerified()) throw E('E_EMAIL_UNVERIFIED', 'e.billUnverified');
+  if (M.billing === 'closed') throw E('E_PAYMENTS_UNAVAILABLE', 'e.billClosed');
+  if (M.billing === 'pending') throw E('E_ORDER_PENDING', 'e.billPending');
+  M.billing = 'pending'; return { ok: true, order: billOrder() };
+}));
+route('GET', '/api/billing/order', billGate((c) => { if (c.p('id') !== 'abcdefghijklmno') throw E('E_NOT_FOUND', 'e.billNotFound'); return { ok: true, order: billOrder(M.billing === 'pending' ? 'pending' : 'cancelled') }; }));
+route('POST', '/api/billing/cancel', billGate(() => { M.billing = 'open'; return { ok: true, order: billOrder('cancelled') }; }));
+route('POST', '/api/billing/purchase', billGate(() => { if (!billVerified()) throw E('E_EMAIL_UNVERIFIED', 'e.billUnverified'); throw E('E_BALANCE', 'e.billBalance'); }));
+route('POST', '/api/billing/auto-renew', billGate(() => { if (!billVerified()) throw E('E_EMAIL_UNVERIFIED', 'e.billUnverified'); return { ok: true, auto_renew: true }; }));
+route('GET', '/api/email/status', billGate(() => ({ ok: true, email: M.account || 'demo@example.com', verified: billVerified(), mail_available: M.billing !== 'nomail' })));
+route('POST', '/api/email/send', billGate(() => { if (billVerified()) return { ok: true, verified: true }; if (M.billing === 'nomail') throw E('E_MAIL_UNAVAILABLE', 'e.billNoMail'); return { ok: true, sent: true, retry_after: 60 }; }));
 
 /* ---- 状态 / 设置 ---- */
 const ovOut = () => M.overrides.map((o) => Object.assign({ target: '', src: 'user', at: 0, why: '', fails: 0, app: '' }, o, { target_ok: targetOk(o.target || '') }));
@@ -1123,7 +1162,8 @@ route('POST', '/api/apps/ack', (c) => {
   M.apps.forEach((a) => { if (all || a.name === name) a.flag = 'ack'; });
   oplog('dashboard', 'apps.ack', all ? kv({ all: 1 }) : kv({ name })); return { ok: true };
 });
-const pinTags = () => M.applied.filter((x) => x.role === 'pin').map((x) => x.tag).slice(0, 16);
+const PIN_MAX = 32;                                                        // = lib/apps.sh 的 OVR_PIN_MAX
+const pinTags = () => M.applied.filter((x) => x.role === 'pin').map((x) => x.tag).slice(0, PIN_MAX);
 const targetOk = (tg) => !tg || (pinTags().length >= 2 && (tg === 'PINAUTO' || pinTags().indexOf(tg) >= 0));
 route('POST', '/api/override', (c) => {
   const kind = c.p('kind'), value = c.p('value'), state = c.p('state'); let target = c.p('target');
@@ -1157,6 +1197,73 @@ route('POST', '/api/policy', (c) => {
   oplog('dashboard', 'policy.switch', kv({ kind: 'selector', tag, site: e ? (e.name || '') : '', from, to: name }));
   return { ok: true, from, to: name };
 });
+/* ---- 出口分配 (docs/API.md 的 /api/exits*, 对照 lib/exits.sh): 每个固定出口上有哪些应用 / 网站 / 服务 · 跟随默认的 · 孤儿 (指定的出口已不是固定出口); 批量移动 / 钉住; 删除 / 改角色 / 删订阅之前的保护 ---- */
+const exitPinsAll = () => M.servers.filter((s) => s.role === 'pin').map((s) => s.tag);
+const exitDefault = () => { const P = buildProxies(); return P.PIN ? P.PIN.now : ''; };
+function exitItems() {                                                     // 每项: {kind: app|site|svc, name, cls: follow|auto|bound|orphan, target, why}
+  const all = exitPinsAll(), cap = all.slice(0, PIN_MAX), out = [];
+  const cl = (kind, name, t) => (!t ? { kind, name, cls: 'follow', target: '' } : t === 'PINAUTO' ? { kind, name, cls: 'auto', target: t } : cap.indexOf(t) >= 0 ? { kind, name, cls: 'bound', target: t }
+    : { kind, name, cls: 'orphan', target: t, why: all.indexOf(t) >= 0 ? 'cap' : (M.servers.some((s) => s.tag === t) ? 'role' : 'deleted') });
+  M.apps.forEach((a) => { if (a.state === 'pin') out.push(cl('app', a.name, a.target || '')); });
+  M.overrides.forEach((o) => { if (o.kind === 'site' && o.state === 'pin') out.push(cl('site', o.value, o.target || '')); });
+  svcList().forEach((e) => { const v = M.svc[e.id]; if (v === 'PIN') out.push({ kind: 'svc', name: e.tag, cls: 'follow', target: '' }); else if (v === 'PINAUTO') out.push({ kind: 'svc', name: e.tag, cls: 'auto', target: v }); else if (cap.indexOf(v) >= 0) out.push({ kind: 'svc', name: e.tag, cls: 'bound', target: v }); });
+  return out;
+}
+const exitLists = (items, pred) => ({ apps: items.filter((x) => x.kind === 'app' && pred(x)).map((x) => x.name), sites: items.filter((x) => x.kind === 'site' && pred(x)).map((x) => x.name), services: items.filter((x) => x.kind === 'svc' && pred(x)).map((x) => x.name) });
+const exitDns = () => !!(M.dns && M.dns.via === 'PIN' && M.dns.leak_guard);
+function exitsPayload() {
+  const all = exitPinsAll(), cap = all.slice(0, PIN_MAX), def = exitDefault(), items = exitItems(), orphans = items.filter((x) => x.cls === 'orphan');
+  return { ok: true, default: { tag: def, source: 'live', live: def, stored: def }, max: PIN_MAX, count: all.length,
+    pins: all.map((t) => Object.assign({ tag: t, targetable: cap.indexOf(t) >= 0, default: t === def }, exitLists(items, (x) => x.cls === 'bound' && x.target === t))),
+    follow: Object.assign(exitLists(items, (x) => x.cls === 'follow'), { dns: exitDns() }), auto: exitLists(items, (x) => x.cls === 'auto'),
+    orphans: orphans.map((x) => ({ kind: x.kind, name: x.name, target: x.target, reason: x.why })), orphan_count: orphans.length, services_known: !M.clashDown };
+}
+function exitImpact(op, x) {
+  const all = exitPinsAll(), cap = all.slice(0, PIN_MAX), def = exitDefault(), items = exitItems(), ispin = all.indexOf(x) >= 0, change = op === 'remove' ? (ispin && x === def) : (!!x && x !== def);
+  const bound = op === 'remove' && ispin ? exitLists(items, (i) => i.cls === 'bound' && i.target === x) : { apps: [], sites: [], services: [] }, follow = change ? exitLists(items, (i) => i.cls === 'follow') : { apps: [], sites: [], services: [] };
+  const dns = change && exitDns(), n = (l) => l.apps.length + l.sites.length + l.services.length, rest = all.filter((t) => t !== x);
+  return { op, tag: x, is_pin: ispin, default: def, default_changes: change, bound, follow: Object.assign(follow, { dns }), affected: n(bound) + n(follow) + (dns ? 1 : 0), remaining: rest.length, candidates: rest.map((t) => ({ tag: t, targetable: cap.indexOf(t) >= 0 })), services_known: !M.clashDown };
+}
+function exitMove(from, to, kind) {                                       // 一次改写应用 / 网站 / 服务的出口 (和 lib/exits.sh 的 exits_move_rows + exits_services_move 一样)
+  const cap = exitPinsAll().slice(0, PIN_MAX);
+  if (['', 'app', 'site', 'service'].indexOf(kind) < 0 || !from || /[|"\\]/.test(from) || from.length > 80) throw E('E_INVALID', 'e.badMove');
+  if (to !== 'DEFAULT' && !(cap.length >= 2 && (to === 'PINAUTO' || cap.indexOf(to) >= 0))) throw E('E_INVALID', 'e.badTarget');
+  const tgt = to === 'DEFAULT' ? '' : to, hit = (t) => (from === 'DEFAULT' ? t === '' : from === 'PINAUTO' ? t === 'PINAUTO' : from === 'ORPHAN' ? (t !== '' && t !== 'PINAUTO' && cap.indexOf(t) < 0) : t === from);
+  let apps = 0, sites = 0, services = 0;
+  if (kind !== 'service') {
+    M.apps.forEach((a) => { if (a.state === 'pin' && (!kind || kind === 'app') && hit(a.target || '') && (a.target || '') !== tgt) { a.target = tgt; a.flag = 'ack'; apps++; } });
+    M.overrides.forEach((o) => { if (o.kind === 'site' && o.state === 'pin' && (!kind || kind === 'site') && hit(o.target || '') && (o.target || '') !== tgt) { o.target = tgt; sites++; } });
+  }
+  if (kind === '' || kind === 'service') svcList().forEach((e) => { const v = M.svc[e.id], want = from === 'DEFAULT' ? 'PIN' : from, nv = tgt === '' ? 'PIN' : tgt; if (v === want && v !== nv) { M.svc[e.id] = nv; services++; } });
+  return { apps, sites, services };
+}
+route('GET', '/api/exits', () => exitsPayload());
+route('GET', '/api/exits/impact', (c) => { const op = c.p('op'), tag = c.p('tag'); if (['remove', 'default'].indexOf(op) < 0 || !tag || tag.length > 80) throw E('E_INVALID', 'e.badMove'); return Object.assign({ ok: true }, exitImpact(op, tag)); });
+route('POST', '/api/exits/move', (c) => { const r = exitMove(c.p('from'), c.p('to'), c.p('kind')); oplog('dashboard', 'override.set', kv({ kind: 'exits', from: c.p('from'), to: c.p('to'), apps: r.apps, sites: r.sites, services: r.services })); return { ok: true, moved: r, services_known: !M.clashDown, services_failed: 0 }; });
+route('POST', '/api/exits/freeze', (c) => {
+  const all = exitPinsAll(); if (!all.length) throw E('E_INVALID', 'e.noPin');
+  if (all.length < 2) return { ok: true, moved: { apps: 0, sites: 0, services: 0 }, skipped: 'single' };
+  const r = exitMove('DEFAULT', exitDefault(), c.p('kind')); oplog('dashboard', 'override.set', kv({ kind: 'exits', from: 'DEFAULT', to: exitDefault(), apps: r.apps, sites: r.sites, services: r.services }));
+  return { ok: true, moved: r, services_known: !M.clashDown, services_failed: 0 };
+});
+/* 删除 / 改角色之前 (lib/exits.sh 的 exits_guard_check + exits_runtime_reassign): 有人在用 → 必须带 reassign (改派; freeze=1 再把跟随默认的钉在去向上) 或 accept_orphans=1, 否则 E_EXIT_IN_USE + impact */
+function exitGuard(tag, reassign, freeze, accept) {
+  const im = exitImpact('remove', tag); if (!im.is_pin) return;
+  if (reassign) {
+    const cand = im.candidates.filter((x) => x.targetable).map((x) => x.tag);
+    const bad = reassign === tag || (reassign === 'DEFAULT' && im.default_changes) || (reassign === 'PINAUTO' && (im.default_changes || im.remaining < 2)) || (reassign !== 'DEFAULT' && reassign !== 'PINAUTO' && cand.indexOf(reassign) < 0);
+    if (bad) throw E('E_INVALID', 'e.badMove');
+    exitMove(tag, reassign, '');
+    if (im.default_changes) { M.pin = reassign; if (freeze) exitMove('DEFAULT', reassign, ''); }
+    return;
+  }
+  if (im.affected > 0 && !accept) throw E('E_EXIT_IN_USE', 'e.exitInUse', null, { impact: im });
+}
+function exitSubGuard(name, accept) {
+  const pins = M.servers.filter((s) => s.sub === name && s.role === 'pin').map((s) => s.tag); if (!pins.length) return;
+  const items = exitItems(), def = exitDefault(), n = items.filter((x) => (x.cls === 'bound' && pins.indexOf(x.target) >= 0) || (x.cls === 'follow' && pins.indexOf(def) >= 0)).length;
+  if (n > 0 && !accept) throw E('E_EXIT_IN_USE', 'e.exitInUse', null, { impact: { servers: pins, affected: n } });
+}
 route('POST', '/api/audit', (c) => {
   const ev = c.p('ev'); if (ev !== 'kill') throw E('E_INVALID', 'e.badKind');
   const scope = ['all', 'one', 'host'].indexOf(c.p('scope')) >= 0 ? c.p('scope') : 'all', host = /^[A-Za-z0-9._:-]{0,120}$/.test(c.p('host')) ? c.p('host') : '';
@@ -1378,7 +1485,7 @@ function importJsonl(lang, sub, mode, body) {
     let j; try { j = JSON.parse(line); } catch (e) { return bad(); }
     const ob = j && typeof j === 'object' ? j.outbound : null;
     if (!ob || typeof ob !== 'object' || ['pin', 'auto', 'dl', 'off'].indexOf(j.role) < 0 || (j.sub && !subNameOk(String(j.sub))) || SRV_TYPES.indexOf(ob.type) < 0 || typeof ob.tag !== 'string' || !/^[^"\\\x00-\x1f]{1,64}$/.test(ob.tag)
-      || !ob.server || !ob.server_port || RESERVED.indexOf(ob.tag) >= 0 || /^svc-/.test(ob.tag) || /^enana-official-/.test(ob.tag) || 'detour' in ob) return bad();
+      || !ob.server || !ob.server_port || RESERVED.indexOf(ob.tag) >= 0 || /^svc-/.test(ob.tag) || /^(官方-|enana-official-)/.test(ob.tag) || 'detour' in ob) return bad();
     const rec = { tag: ob.tag, type: ob.type, server: String(ob.server), port: +ob.server_port, role: j.role, sub: sub || j.sub || '' }, k = work.findIndex((s) => s.tag === ob.tag);
     if (k >= 0) { work[k] = rec; out.replaced++; } else { work.push(rec); out.added++; }
   });
@@ -1402,6 +1509,7 @@ route('POST', '/api/servers/import', (c) => {
 route('POST', '/api/servers/delete', (c) => {
   const tag = c.p('tag'), cur = M.servers.filter((s) => s.tag === tag)[0]; if (!cur) throw E('E_NOT_FOUND', 'e.noServer');
   if (cur.official) throw E('E_INVALID', 'e.officialDel');
+  exitGuard(tag, c.p('reassign'), c.p('freeze') === '1', c.p('accept_orphans') === '1');
   const undo = snapshot(); M.servers = M.servers.filter((s) => s.tag !== tag); oplog('dashboard', 'servers.delete', kv({ tag }));
   return { ok: true, job: newJob('servers-delete', APPLY, 3600, { done: applyNow, rollback: undo, msg: 'jd.delete' }) };
 });
@@ -1410,6 +1518,7 @@ route('POST', '/api/servers/role', (c) => {
   if (!s) throw E('E_NOT_FOUND', 'e.noServer');
   if (['pin', 'auto', 'off', 'dl'].indexOf(role) < 0) throw E('E_INVALID', 'e.badRole');
   if (role === 'dl' && s.type !== 'http' && s.type !== 'socks') throw E('E_INVALID', 'e.dlOnly');
+  if (role !== 'pin') exitGuard(tag, c.p('reassign'), c.p('freeze') === '1', c.p('accept_orphans') === '1');
   const undo = snapshot(); s.role = role; oplog('dashboard', 'servers.role', kv({ tag, role }));
   return { ok: true, job: newJob('servers-role', APPLY, 3600, { done: applyNow, rollback: undo, msg: 'jd.role' }) };
 });
@@ -1446,6 +1555,7 @@ route('POST', '/api/sub/save', (c) => {
 route('POST', '/api/sub/delete', (c) => {
   const name = c.p('name'); if (!subNameOk(name)) throw E('E_INVALID', 'e.badSubName');
   if (!M.subs.some((x) => x.name === name)) throw E('E_NOT_FOUND', 'e.noSub');
+  exitSubGuard(name, c.p('accept_orphans') === '1');
   const undo = snapshot(); M.subs = M.subs.filter((x) => x.name !== name); M.servers = M.servers.filter((s) => s.sub !== name); delete M.subUrls[name]; oplog('dashboard', 'sub.delete', kv({ name }));
   return { ok: true, job: newJob('sub-delete', APPLY, 3600, { done: applyNow, rollback: undo, msg: 'jd.subdel' }) };
 });
@@ -2024,6 +2134,11 @@ function vpsCreds(c, needHostkey) {
   if (needHostkey && !hostkey) throw E('E_INVALID', 'e.vpsHostkey');
   return { host, port, user, mode, hostkey, wrongPass: mode === 'password' && pw === 'wrong-pass', hasSudo: String(c.form.sudo_password || '').length > 0, last: m ? +m[1] : -1 };
 }
+const VPS_ALT_PORT = 2053;                                                                       // .70: 默认端口被占用时云端脚本选的端口 (界面不应该假设 443)
+const vpsPendId = (host, port) => 'p-' + crypto.createHash('sha1').update(host + ':' + port).digest('hex').slice(0, 6);
+const vpsPendView = (x) => ({ id: x.id, name: x.name, host: x.host, ssh_port: x.ssh_port, user: x.user, os: x.os, ports: [x.port], ips: x.ips.slice(), nodes: x.ips.length, created: x.created, updated: x.updated, tries: x.tries, reason: x.reason });
+/* 验证没通过的结构化结果 (和 lib/vps.sh 的 vps_verify_extra 一致): 原因 / 实际端口 / 本机 TCP 结果 / 服务器端证据 */
+const vpsVerifyFailResult = (x) => ({ code: 'E_VPS_VERIFY', pending: x.id, reason: 'blocked_cloud', port: x.port, ports: [x.port], host: x.host, tcp: 'timeout', remote: { checked: true, listening: true, firewall: 'ufw_inactive' }, nodes: x.ips.length, failed: x.ips.length });
 /* 探测的结果 (语言无关的部分); support_note 在每次查询任务时按 X-Enana-Lang 翻译 */
 function vpsData(cr) {
   const host = cr.host, last = cr.last, pub = pubIp(host);
@@ -2033,14 +2148,18 @@ function vpsData(cr) {
   else if (last === 50) { os = { id: 'centos', version: '7', codename: '', pretty: 'CentOS Linux 7 (Core)' }; support = 'no'; have = [true, true, true]; fw = 'none'; }
   else if (last === 51) { os = { id: 'debian', version: '10', codename: 'buster', pretty: 'Debian GNU/Linux 10 (buster)' }; support = 'best_effort'; have = [true, true, false]; fw = 'ufw_inactive'; }
   const deps = VPS_DEPS.map((d, i) => (have[i] ? { name: d[0], installed: true, version: d[1] } : { name: d[0], installed: false })), missing = deps.filter((d) => !d.installed).map((d) => d.name);
+  let plan = null;
+  if (last === 70) { listening = [22, 80, 443, 2019]; sb = { installed: true, version: BASE_CORE }; plan = { port: VPS_ALT_PORT, reason: 'default_busy' }; }          // 443 已被占用: 云端脚本改用另一个端口 (不碰占用它的服务)
+  const pend = (M.vpsPending || []).filter((x) => x.host === host && x.ssh_port === cr.port)[0];
+  if (pend) node = { installed: true };
   let ips = [{ local: localIp(pub), public: pub, v: 4 }], ipv6 = [];
   if (last === 31) { ips = [{ local: '10.0.0.31', public: '198.51.100.31', v: 4 }, { local: '10.0.0.32', public: '198.51.100.32', v: 4 }]; ipv6 = ['2001:db8::31']; }     // 两个公网 IPv4 (NAT 式内网地址) + 一个 IPv6
   return { host, port: cr.port, user: cr.user, hostkey: fingerprint(host), hostkey_changed: last === 40, os, arch, supported: support !== 'no', support, privilege: last === 65 ? 'sudo_password' : (cr.user === 'root' ? 'root' : 'sudo_nopass'),
-    init: 'systemd', deps, missing, all_missing: missing.length === deps.length, singbox: sb, node, firewall: fw, listening, ips, ipv6 };
+    init: 'systemd', deps, missing, all_missing: missing.length === deps.length, singbox: sb, node, firewall: fw, listening, ips, ipv6, plan, pending: pend ? vpsPendView(pend) : null };
 }
 const probeResult = (r, lang) => ({ host: r.host, port: r.port, user: r.user, hostkey: r.hostkey, hostkey_changed: r.hostkey_changed, os: r.os, arch: r.arch, supported: r.supported, support: r.support,
   support_note: tr(lang, r.support === 'full' ? 'vps.noteFull' : r.support === 'best_effort' ? 'vps.noteBest' : 'vps.noteNo', { os: r.os.pretty }), privilege: r.privilege, init: r.init, deps: r.deps, missing: r.missing,
-  all_missing: r.all_missing, singbox: r.singbox, node: r.node, firewall: r.firewall, listening: r.listening, ips: r.ips, ipv6: r.ipv6 });
+  all_missing: r.all_missing, singbox: r.singbox, node: r.node, firewall: r.firewall, listening: r.listening, ips: r.ips, ipv6: r.ipv6, pending: r.pending || null, plan: r.plan || null });
 /* 先判「连不上 / 认证 / 指纹 / 权限」这些会让任务失败的场景: {err:{code, ms (多久后失败), step (失败在第几步)}}, 否则 {res: 探测结果} */
 function vpsPlan(cr) {
   const last = cr.last, err = (code, ms, step) => ({ err: { code, ms, step } });
@@ -2057,7 +2176,7 @@ const PROV_STEPS = ['js.sshConnect', 'js.sshDetect', 'js.sshDeps', 'js.sshServer
 /* 失败的任务: state=error, msg 已翻译, 失败的那一步标 error, result:{code} 且顶层也带 code */
 function vpsErrJob(name, steps, e, action, detail) {
   const at = (e.step + 0.5) / steps.length;
-  return newJob(name, steps, e.ms / at, { outage: false, fail: true, failAt: at, code: e.code, failMsg: e.msg || ('err.' + e.code), failVars: e.vars, failResult: e.result, rollback: () => oplog('dashboard', action, kv(Object.assign({}, detail, { code: e.code })), 'error') });
+  return newJob(name, steps, e.ms / at, { outage: false, fail: true, failAt: at, code: e.code, failMsg: e.msg || ('err.' + e.code), failVars: e.vars, failResult: e.result, rollback: () => { if (e.onFail) e.onFail(); oplog('dashboard', action, kv(Object.assign({}, detail, { code: e.code })), 'error'); } });
 }
 function vpsProbeJob(plan, detail) {
   if (plan.err) return { ok: true, job: vpsErrJob('vps-probe', PROBE_STEPS, plan.err, 'vps.probe', detail) };
@@ -2070,14 +2189,18 @@ function vpsProvisionJob(plan, o) {
   if (!e) {
     if (!plan.res.supported) e = { code: 'E_VPS_UNSUPPORTED', ms: 3500, step: 1 };
     else if (!o.installDeps && plan.res.missing.length) e = { code: 'E_VPS_DEPS', ms: 4500, step: 2 };
-    else if (o.last === 70 && !M.vpsOpen) e = { code: 'E_VPS_VERIFY', ms: 9000, step: 6, vars: { port: 443 }, result: { port: 443 } };       // 云厂商安全组没放行 443: 失败在「验证连通」; ctl vpsport=open 之后同一台就能成功 (测「放行端口后重新验证」)
+    else if (o.last === 70 && !M.vpsOpen) {                                       // 云厂商安全组没放行节点端口 (2053): 失败在「验证连通」, 但服务器上已经部署好 → 留下「待验证的部署」; ctl vpsport=open 之后「重新验证」或再部署都能成功
+      const ips = plan.res.ips.map((x) => x.public), pend = { id: vpsPendId(o.host, o.port), name: o.name, host: o.host, ssh_port: o.port, user: o.user, os: plan.res.os.pretty, port: VPS_ALT_PORT, ips, role: o.role, created: sec(), updated: sec(), tries: 1, reason: 'blocked_cloud' };
+      e = { code: 'E_VPS_VERIFY', ms: 9000, step: 6, vars: { port: VPS_ALT_PORT }, result: vpsVerifyFailResult(pend), onFail: () => { M.vpsPending = (M.vpsPending || []).filter((x) => x.id !== pend.id); M.vpsPending.push(pend); } };
+    }
   }
   if (e) return { ok: true, job: vpsErrJob('vps-provision', PROV_STEPS, e, 'vps.provision', detail) };
   const res = plan.res, ips = res.ips.map((x) => x.public), id = vpsId(o.host, o.port);       // 每个公网 IPv4 出口一个节点 (VLESS + Reality)
   return { ok: true, job: newJob('vps-provision', PROV_STEPS, rnd(10000, 14000), { outFrac: 0.88, msg: 'jd.vpsProvision', rollback: () => oplog('dashboard', 'vps.provision', kv(detail), 'error'),
     done: () => {
-      const nodes = ips.map((ip) => ({ tag: o.name + '-' + ip, server: ip, port: 443, type: 'vless', egress: ip }));
-      nodes.forEach((n) => { M.servers = M.servers.filter((x) => x.tag !== n.tag); M.servers.push({ tag: n.tag, type: 'vless', server: n.server, port: 443, role: o.role, sub: '' }); });
+      const port = o.last === 70 ? VPS_ALT_PORT : 443, nodes = ips.map((ip) => ({ tag: o.name + '-' + ip, server: ip, port, type: 'vless', egress: ip, verified: true }));
+      M.vpsPending = (M.vpsPending || []).filter((x) => !(x.host === o.host && x.ssh_port === o.port));
+      nodes.forEach((n) => { M.servers = M.servers.filter((x) => x.tag !== n.tag); M.servers.push({ tag: n.tag, type: 'vless', server: n.server, port, role: o.role, sub: '' }); });
       applyNow();
       const row = { id, name: o.name, host: o.host, ssh_port: o.port, user: o.user, os: res.os.pretty, hostkey: fingerprint(o.host), ips: ips.slice(), nodes: nodes.map((n) => n.tag), updated: sec() }, old = M.vps.filter((v) => v.id === id)[0];
       if (old) Object.assign(old, row); else M.vps.push(Object.assign(row, { extra: false }));
@@ -2109,6 +2232,28 @@ route('POST', '/api/vps/provision', (c) => {
   return vpsProvisionJob(vpsPlan(cr), { host: cr.host, port: cr.port, user: cr.user, name, role, installDeps: deps === '1', last: cr.last });
 });
 route('GET', '/api/vps', () => ({ ok: true, vps: M.vps.map((v) => ({ id: v.id, name: v.name, host: v.host, ssh_port: v.ssh_port, user: v.user, os: v.os, hostkey: v.hostkey, ips: v.ips, nodes: v.nodes, updated: v.updated })) }));
+route('GET', '/api/vps/pending', () => ({ ok: true, pending: (M.vpsPending || []).map(vpsPendView) }));
+route('POST', '/api/vps/pending/discard', (c) => {
+  const id = c.p('id'); if (!/^p-[0-9a-f]{6}$/.test(id)) throw E('E_INVALID', 'e.vpsPendId');
+  const x = (M.vpsPending || []).filter((y) => y.id === id)[0]; if (!x) throw E('E_NOT_FOUND', 'e.noVpsPend');
+  M.vpsPending = M.vpsPending.filter((y) => y !== x); oplog('dashboard', 'vps.discard', kv({ id })); return { ok: true };
+});
+route('POST', '/api/vps/verify', (c) => {                                                       // 只在本机重新验证: 没有凭据、不 SSH、不重新部署
+  const id = c.p('id'); if (!/^p-[0-9a-f]{6}$/.test(id)) throw E('E_INVALID', 'e.vpsPendId');
+  const x = (M.vpsPending || []).filter((y) => y.id === id)[0]; if (!x) throw E('E_NOT_FOUND', 'e.noVpsPend');
+  const steps = ['js.vpsRead', 'js.vpsPort', 'js.sshVerify', 'js.sshIps', 'js.sshSave'], detail = { id, host: x.host };
+  if (!M.vpsOpen) { x.tries++; x.updated = sec(); return { ok: true, job: vpsErrJob('vps-verify', steps, { code: 'E_VPS_VERIFY', ms: 4000, step: 2, vars: { port: x.port }, result: vpsVerifyFailResult(x) }, 'vps.verify', detail) }; }
+  return { ok: true, job: newJob('vps-verify', steps, rnd(3000, 4500), { outage: false, msg: 'jd.vpsVerify', rollback: () => oplog('dashboard', 'vps.verify', kv(detail), 'error'),
+    done: () => {
+      const nodes = x.ips.map((ip) => ({ tag: x.name + '-' + ip, server: ip, port: x.port, type: 'vless', egress: ip, verified: true }));
+      nodes.forEach((n) => { M.servers = M.servers.filter((y) => y.tag !== n.tag); M.servers.push({ tag: n.tag, type: 'vless', server: n.server, port: n.port, role: x.role || 'pin', sub: '' }); });
+      applyNow();
+      const row = { id: vpsId(x.host, x.ssh_port), name: x.name, host: x.host, ssh_port: x.ssh_port, user: x.user, os: x.os, hostkey: fingerprint(x.host), ips: x.ips.slice(), nodes: nodes.map((n) => n.tag), updated: sec() }, old = M.vps.filter((v) => v.id === row.id)[0];
+      if (old) Object.assign(old, row); else M.vps.push(Object.assign(row, { extra: false }));
+      M.vpsPending = M.vpsPending.filter((y) => y !== x); oplog('dashboard', 'vps.verify', kv(detail));
+      return { vars: { n: nodes.length }, result: { nodes, ips: x.ips.slice(), vps: row.id, added: nodes.length, unchanged: 0, updated: 0 } };
+    } }) };
+});
 route('POST', '/api/vps/forget', (c) => {
   const id = c.p('id'); if (!id) throw E('E_INVALID', 'e.vpsId');
   const v = M.vps.filter((x) => x.id === id)[0]; if (!v) throw E('E_NOT_FOUND', 'e.noVps');
@@ -2202,8 +2347,8 @@ function buildProxies() {
   }
   const pol = ['PIN', 'Global', 'direct'].filter((t) => P[t]);
   P.Final = { name: 'Final', type: 'Selector', now: pol.indexOf(M.final) >= 0 ? M.final : 'direct', all: ['Global', 'PIN', 'direct'].filter((t) => P[t]), history: [] };
-  const pinx = pins.length >= 2 ? ['PINAUTO'].concat(pins.slice(0, 16).map((x) => x.tag)) : [];
-  if (pinx.length) P.PINAUTO = { name: 'PINAUTO', type: 'URLTest', now: pins[0].tag, all: pins.slice(0, 16).map((x) => x.tag), history: [] };
+  const pinx = pins.length >= 2 ? ['PINAUTO'].concat(pins.slice(0, PIN_MAX).map((x) => x.tag)) : [];
+  if (pinx.length) P.PINAUTO = { name: 'PINAUTO', type: 'URLTest', now: pins[0].tag, all: pins.slice(0, PIN_MAX).map((x) => x.tag), history: [] };
   svcList().forEach((e) => { const opts = pol.concat(pinx); P[e.tag] = { name: e.tag, type: 'Selector', now: opts.indexOf(M.svc[e.id]) >= 0 ? M.svc[e.id] : 'direct', all: opts, history: [] }; });
   return P;
 }
@@ -2427,9 +2572,10 @@ async function mockCtl(req, res, u) {
     const t = now(); M.clashWins.push([t + D(150), t + D(150 + 2500)]);
   }
   if (q.has('notice')) M.notice = g('notice') ? { text: g('notice').slice(0, 300) } : null;
-  sw('vps', ['reset'], () => { M.vps = []; });
+  sw('vps', ['reset'], () => { M.vps = []; M.vpsPending = []; });
   sw('vpsport', ['open', 'closed'], (v) => { M.vpsOpen = v === 'open'; });                     // 203.0.113.70 部署: closed (默认) = 验证连通失败 E_VPS_VERIFY, open = 成功
-  sw('plan', ['soon', 'free', 'pro', 'expired'], (v) => { M.plan = v; applyPlan(); });          // 套餐: soon (默认, 官方线路即将推出) / free / pro (多出 2 个官方节点) / expired
+  sw('plan', ['soon', 'free', 'pro', 'expired', 'verify'], (v) => { M.plan = v; applyPlan(); });          // 套餐: soon (默认, 官方线路即将推出) / free / pro (多出 2 个官方节点) / expired / verify (Pro, 但邮箱未验证)
+  sw('billing', ['closed', 'open', 'unverified', 'nomail', 'pending', 'auth', 'server'], (v) => { M.billing = v; });       // 会员付款页: closed (默认, 和线上一致: 服务器关闭收款) / open / unverified / nomail / pending / auth / server
   if (q.has('prefs')) {                                                    // prefs=reset: 清空 (version 0); prefs=bump: 模拟另一台设备同步来的改动 (version + 1, 并写入 "ui.fromOtherDevice": true)
     const v = g('prefs');
     if (v === 'reset') M.prefs = { obj: {}, version: 0, updated: 0 };
@@ -2533,7 +2679,7 @@ const listenOn = (srv, port) => new Promise((ok, bad) => { const onErr = (e) => 
 /* ===================== 11. 自测: node tools/mock-server.js --selftest (在 18090-18099 里找空闲端口, 时间加速, 失败则退出码非 0) ===================== */
 const OPS_CODES = ['rules.reset', 'rules.reset.undo', 'policy.switch', 'conns.kill', 'logs.bundle', 'autosite.add', 'autosite.clear', 'apps.found', 'login', 'login.fail', 'logout', 'proxy.on', 'proxy.off', 'proxy.mode', 'override.set', 'override.delete', 'apps.scan', 'apps.adopt', 'apps.ack', 'servers.import', 'servers.delete', 'servers.role', 'sub.save', 'sub.delete',
   'sub.refresh', 'rules.update', 'rules.toggle', 'rules.custom.add', 'rules.custom.delete', 'dns.set', 'dns.test', 'settings.set', 'logs.clear', 'update.apply', 'restart', 'install', 'upgrade', 'uninstall', 'start', 'stop',
-  'net.refresh', 'speedtest.start', 'speedtest.stop', 'vps.probe', 'vps.provision', 'vps.forget', 'vps.redetect', 'sync.settings', 'sync.push', 'sync.pull', 'sync.clear', 'devices.kick',
+  'net.refresh', 'speedtest.start', 'speedtest.stop', 'vps.probe', 'vps.provision', 'vps.forget', 'vps.redetect', 'vps.verify', 'vps.discard', 'sync.settings', 'sync.push', 'sync.pull', 'sync.clear', 'devices.kick',
   'auth.verify', 'secret.view', 'backup.export', 'password.change', 'sites.domain', 'sites.reset', 'apps.custom.add', 'apps.custom.delete', 'speed.target', 'speed.targets.reset', 'dns.hosts', 'dns.hosts.reset', 'dns.bench'];
 async function selftest() {
   let srv = null, helperSrv = null;
@@ -2787,6 +2933,24 @@ async function selftest() {
     const appN = jx(await api('GET', '/api/apps')).apps.filter((a) => !a.custom)[0].name;
     r = await api('POST', '/api/override', { q: { kind: 'app', value: appN, state: 'pin', target: pinTags[1] } }); const aT = jx(await api('GET', '/api/apps')).apps.filter((a) => a.name === appN)[0];
     ck('override: an app on "pin" can be pinned to one fixed exit (target) — apps carry target + target_ok; the record has from/to/target_to', jx(r).ok === true && aT.state === 'pin' && aT.target === pinTags[1] && aT.target_ok === true && jx(await logs({ type: 'ops', day: dayOf(now()), limit: '3' })).rows.some((x) => x.action === 'override.set' && x.detail.indexOf('to=pin') >= 0 && x.detail.indexOf('target_to=') >= 0));
+    // 出口分配: GET /api/exits · impact · 批量移动 · 删除前的保护 (reassign / accept_orphans)
+    await api('POST', '/api/override', { q: { kind: 'site', value: 'exit-test.example.com', state: 'pin', target: pinTags[1] } });
+    const ex = jx(await api('GET', '/api/exits')), ex1 = ex.pins.filter((x) => x.tag === pinTags[1])[0];
+    ck('exits: GET /api/exits groups apps / sites / services by fixed exit (+ follow / auto / orphans), with the default exit and the cap', ex.ok === true && ex.max === 32 && ex.count === pinTags.length && ex.default.tag === px.PIN.now && ex1.apps.indexOf(appN) >= 0 && ex1.sites.indexOf('exit-test.example.com') >= 0 && Array.isArray(ex.follow.services) && Array.isArray(ex.orphans) && ex.orphan_count === 0);
+    const im = jx(await api('GET', '/api/exits/impact', { q: { op: 'remove', tag: pinTags[1] } }));
+    ck('exits: impact(remove) lists what is assigned to that exit, and the candidates it could be moved to', im.ok === true && im.is_pin === true && im.bound.apps.indexOf(appN) >= 0 && im.affected >= 2 && im.candidates.length === pinTags.length - 1 && im.candidates.every((x) => x.tag !== pinTags[1]));
+    r = await api('POST', '/api/servers/delete', { q: { tag: pinTags[1] } });
+    ck('exits: deleting an exit that apps / sites use, without reassign or accept_orphans -> E_EXIT_IN_USE + impact, nothing changes', jx(r).ok === false && jx(r).code === 'E_EXIT_IN_USE' && jx(r).impact.affected >= 2 && jx(await api('GET', '/api/state')).servers.some((x) => x.tag === pinTags[1]));
+    r = await api('POST', '/api/servers/role', { q: { tag: pinTags[1], role: 'auto' } }); ck('exits: the same guard protects changing the role away from "pin"', jx(r).code === 'E_EXIT_IN_USE');
+    r = await api('POST', '/api/exits/move', { q: { from: pinTags[1], to: pinTags[0] } }); const mv = jx(r);
+    ck('exits: POST /api/exits/move re-assigns everything on one exit (apps + sites + services) in one go and says how many', mv.ok === true && mv.moved.apps >= 1 && mv.moved.sites >= 1 && jx(await api('GET', '/api/exits')).pins.filter((x) => x.tag === pinTags[0])[0].sites.indexOf('exit-test.example.com') >= 0);
+    r = await api('POST', '/api/exits/move', { q: { from: pinTags[0], to: 'Nope' } }); ck('exits: moving to an exit that does not exist -> E_INVALID', jx(r).ok === false && jx(r).code === 'E_INVALID');
+    r = await api('POST', '/api/exits/move', { q: { from: pinTags[0], to: pinTags[1], kind: 'bogus' } }); ck('exits: kind must be app | site | service', jx(r).code === 'E_INVALID');
+    await api('POST', '/api/exits/move', { q: { from: pinTags[0], to: pinTags[1], kind: 'site' } });
+    const ex3 = jx(await api('GET', '/api/exits'));
+    ck('exits: kind=site moves only the sites (the app stays where it was)', ex3.pins.filter((x) => x.tag === pinTags[1])[0].sites.indexOf('exit-test.example.com') >= 0 && ex3.pins.filter((x) => x.tag === pinTags[0])[0].apps.indexOf(appN) >= 0);
+    await api('POST', '/api/exits/move', { q: { from: pinTags[0], to: pinTags[1], kind: 'app' } });
+    await api('POST', '/api/override', { q: { kind: 'site', value: 'exit-test.example.com', state: 'follow' } });
     r = await api('POST', '/api/override', { q: { kind: 'app', value: appN, state: 'pin', target: 'PINAUTO' } }); r2 = await api('POST', '/api/override', { q: { kind: 'app', value: appN, state: 'pin', target: 'No Such Server' } });
     ck('override: target PINAUTO is accepted; an unknown fixed exit -> E_INVALID', jx(r).ok === true && jx(r2).code === 'E_INVALID');
     r = await api('POST', '/api/override', { q: { kind: 'app', value: appN, state: 'direct', target: pinTags[1] } }); ck('override: the target is dropped when the state is not "pin"', jx(r).ok === true && jx(await api('GET', '/api/apps')).apps.filter((a) => a.name === appN)[0].target === '');
@@ -3000,7 +3164,7 @@ async function selftest() {
   ck('vps/probe: invalid host / port / user / mode / missing password / key without -----BEGIN -> synchronous E_INVALID', r.every((x) => jx(x).code === 'E_INVALID' && !jx(x).job));
   let pr = await probe('203.0.113.10', {}, 'en'), res = pr.job.result;
   ck('vps/probe default host: job done with EXACTLY the documented result keys (Debian 12 amd64, root, ca-certificates + iproute2 missing, ufw_active, one public IP = the host)', pr.job.state === 'done' && pr.job.steps.length >= 3 && pr.job.steps[0].label === 'Connect to the server'
-    && Object.keys(res).sort().join() === ['all_missing', 'arch', 'deps', 'firewall', 'host', 'hostkey', 'hostkey_changed', 'init', 'ips', 'ipv6', 'listening', 'missing', 'node', 'os', 'port', 'privilege', 'singbox', 'support', 'support_note', 'supported', 'user'].join()
+    && Object.keys(res).sort().join() === ['all_missing', 'arch', 'deps', 'firewall', 'host', 'hostkey', 'hostkey_changed', 'init', 'ips', 'ipv6', 'listening', 'missing', 'node', 'os', 'pending', 'plan', 'port', 'privilege', 'singbox', 'support', 'support_note', 'supported', 'user'].join()
     && res.os.id === 'debian' && res.os.version === '12' && res.os.codename === 'bookworm' && res.arch === 'amd64' && res.supported === true && res.support === 'full' && res.privilege === 'root' && res.init === 'systemd' && res.deps[0].installed === true && !!res.deps[0].version
     && res.missing.join() === 'ca-certificates,iproute2' && res.all_missing === false && res.singbox.installed === false && res.node.installed === false && res.firewall === 'ufw_active' && res.ips.length === 1 && res.ips[0].public === '203.0.113.10' && res.ips[0].v === 4 && res.ipv6.length === 0
     && /^SHA256:[A-Za-z0-9+\/]{43}$/.test(res.hostkey) && res.hostkey_changed === false, pr.job);
@@ -3024,12 +3188,12 @@ async function selftest() {
   r = await api('POST', '/api/vps/provision', { form: vcred('203.0.113.10', { hostkey: fp10, role: 'boss' }) }); ck('vps/provision: role must be pin|auto -> E_INVALID', jx(r).code === 'E_INVALID');
   const e1 = (await prov('203.0.113.10', { install_deps: '0' })).job, e2 = (await prov('203.0.113.50', {})).job, e3 = (await prov('203.0.113.70', {}, 'en')).job, e4 = (await prov('203.0.113.10', { hostkey: 'SHA256:other' })).job;
   ck('vps/provision failures: install_deps=0 with missing deps -> E_VPS_DEPS; unsupported OS -> E_VPS_UNSUPPORTED; .70 fails at 验证连通 (E_VPS_VERIFY, security-group hint, 9 steps, step 7 error); wrong hostkey -> E_SSH_HOSTKEY', e1.state === 'error' && e1.code === 'E_VPS_DEPS'
-    && e2.state === 'error' && e2.code === 'E_VPS_UNSUPPORTED' && e3.state === 'error' && e3.code === 'E_VPS_VERIFY' && e3.result.code === 'E_VPS_VERIFY' && e3.result.port === 443 && /does not allow port 443\/tcp/.test(e3.msg) && e3.steps.length === 9 && e3.steps[6].state === 'error' && e3.steps.slice(0, 6).every((x) => x.state === 'done') && e3.steps.slice(7).every((x) => x.state === 'todo')
+    && e2.state === 'error' && e2.code === 'E_VPS_UNSUPPORTED' && e3.state === 'error' && e3.code === 'E_VPS_VERIFY' && e3.result.code === 'E_VPS_VERIFY' && e3.result.port === 2053 && e3.result.pending && /^p-[0-9a-f]{6}$/.test(e3.result.pending) && e3.result.reason === 'blocked_cloud' && e3.result.ports[0] === 2053 && /\(TCP 2053\)/.test(e3.msg) && !/443/.test(e3.msg) && e3.steps.length === 9 && e3.steps[6].state === 'error' && e3.steps.slice(0, 6).every((x) => x.state === 'done') && e3.steps.slice(7).every((x) => x.state === 'todo')
     && e3.steps[6].label === 'Verify the connection' && e4.code === 'E_SSH_HOSTKEY', [e1.code, e2.code, e3.code, e4.code]);
   r = await api('GET', '/api/vps'); ck('vps: nothing is recorded by probes or failed provisioning', jx(r).ok === true && jx(r).vps.length === 0);
   const nBefore = jx(await api('GET', '/api/state')).servers.length; let pv = await prov('203.0.113.10', {}, 'en'); const pj = pv.job, st1 = jx(await api('GET', '/api/state')), vl = jx(await api('GET', '/api/vps')).vps;
-  ck('vps/provision happy path: 9 translated steps, result {nodes[{tag,server,port:443,type:vless,egress}], ips, vps}, VLESS node added with the chosen role', pj.state === 'done' && pj.steps.length === 9 && pj.steps.every((x) => x.state === 'done') && pj.result.nodes.length === 1
-    && JSON.stringify(pj.result.nodes[0]) === JSON.stringify({ tag: 'my-vps-203.0.113.10', server: '203.0.113.10', port: 443, type: 'vless', egress: '203.0.113.10' }) && pj.result.ips.join() === '203.0.113.10' && /^vps_[0-9a-f]{8}$/.test(pj.result.vps)
+  ck('vps/provision happy path: 9 translated steps, result {nodes[{tag,server,port:443,type:vless,egress,verified}], ips, vps}, VLESS node added with the chosen role', pj.state === 'done' && pj.steps.length === 9 && pj.steps.every((x) => x.state === 'done') && pj.result.nodes.length === 1
+    && JSON.stringify(pj.result.nodes[0]) === JSON.stringify({ tag: 'my-vps-203.0.113.10', server: '203.0.113.10', port: 443, type: 'vless', egress: '203.0.113.10', verified: true }) && pj.result.ips.join() === '203.0.113.10' && /^vps_[0-9a-f]{8}$/.test(pj.result.vps)
     && st1.servers.length === nBefore + 1 && st1.servers.filter((x) => x.tag === 'my-vps-203.0.113.10')[0].type === 'vless' && st1.servers.filter((x) => x.tag === 'my-vps-203.0.113.10')[0].role === 'pin', pj);
   ck('vps: GET /api/vps lists the record (id, name, host, ssh_port, user, os, hostkey, ips, nodes, updated) and nothing secret', vl.length === 1 && Object.keys(vl[0]).sort().join() === ['host', 'hostkey', 'id', 'ips', 'name', 'nodes', 'os', 'ssh_port', 'updated', 'user'].join() && vl[0].hostkey === fingerprint('203.0.113.10') && vl[0].id === pj.result.vps && vl[0].ssh_port === 22 && vl[0].user === 'root'
     && /Debian/.test(vl[0].os) && vl[0].nodes.join() === 'my-vps-203.0.113.10' && vl[0].ips.join() === '203.0.113.10' && vl[0].updated > 0);
@@ -3120,12 +3284,24 @@ async function selftest() {
     await ctl('plan=pro'); const pf2 = jx(await api('GET', '/api/plan')), pf2en = jx(await api('GET', '/api/plan', { lang: 'en' })), sv2 = jx(await api('GET', '/api/state')).servers, px2 = jx(await clashR('GET', '/proxies')).proxies;
     ck('plan=pro: 专业版 / Pro, expires in 30 days, Pro features enabled, official {available:true, nodes:2}, device limit 5', pf2.plan.code === 'pro' && pf2.plan.title === '专业版' && pf2en.plan.title === 'Pro' && Math.abs(pf2.expires_at - (sec() + 30 * 86400)) <= 5 && JSON.stringify(pf2.features.official_proxy) === '{"enabled":true,"tier":"pro"}'
       && pf2.features.unlimited_devices.enabled === true && pf2.official.available === true && pf2.official.nodes === 2 && pf2.limits.devices_per_platform === 5 && jx(await api('GET', '/api/devices')).limit === 5, pf2);
-    ck('plan=pro: state.servers gains 2 servers flagged official:true (the others carry no such flag) and they are live in the core (AUTO pool)', sv2.length === n0 + 2 && sv2.filter((x) => x.official === true).length === 2 && sv2.filter((x) => !('official' in x)).length === n0 && px2.AUTO.all.indexOf('enana-official-tokyo') >= 0 && jx(await api('GET', '/api/state')).first_run === false);
-    r = await api('GET', '/api/servers/secret', { q: { tag: 'enana-official-tokyo' } }); r2 = await api('POST', '/api/servers/delete', { q: { tag: 'enana-official-tokyo' } }); const ex0 = await api('GET', '/api/export');
-    ck('official nodes: secret -> E_INVALID (translated), delete -> E_INVALID, and they are excluded from the export', jx(r).code === 'E_INVALID' && !!jx(r).error && jx(r2).code === 'E_INVALID' && !!jx(r2).error && ex0.status === 200 && ex0.text.indexOf('official') < 0 && JSON.parse(ex0.text).servers.length === n0);
+    ck('plan=pro: state.servers gains 2 servers flagged official:true (the others carry no such flag) and they are live in the core (AUTO pool)', sv2.length === n0 + 2 && sv2.filter((x) => x.official === true).length === 2 && sv2.filter((x) => !('official' in x)).length === n0 && px2.AUTO.all.indexOf('官方-东京') >= 0 && sv2.filter((x) => x.official).every((x) => x.server === '' && x.port === 0) && jx(await api('GET', '/api/state')).first_run === false);
+    r = await api('GET', '/api/servers/secret', { q: { tag: '官方-东京' } }); r2 = await api('POST', '/api/servers/delete', { q: { tag: '官方-东京' } }); const ex0 = await api('GET', '/api/export');
+    ck('official nodes: secret -> E_INVALID (translated), delete -> E_INVALID, and they are excluded from the export', jx(r).code === 'E_INVALID' && !!jx(r).error && jx(r2).code === 'E_INVALID' && !!jx(r2).error && ex0.status === 200 && ex0.text.indexOf('官方-') < 0 && ex0.text.indexOf('official') < 0 && JSON.parse(ex0.text).servers.length === n0);
     await ctl('plan=expired'); const pf3 = jx(await api('GET', '/api/plan')), sv3 = jx(await api('GET', '/api/state')).servers;
     ck('plan=expired: free again, official_proxy {enabled:false, reason:expired, coming_soon:false}, expires_at in the past, the official nodes are gone', pf3.plan.code === 'free' && JSON.stringify(pf3.features.official_proxy) === '{"enabled":false,"tier":"pro","reason":"expired","coming_soon":false}' && pf3.expires_at < sec() && pf3.official.nodes === 0 && sv3.length === n0 && pf3.limits.devices_per_platform === 2);
     await ctl('plan=soon'); ck('plan=soon restores the default', jx(await api('GET', '/api/plan')).features.official_proxy.coming_soon === true);
+    await ctl('plan=verify'); const pf4 = jx(await api('GET', '/api/plan')), sv4 = jx(await api('GET', '/api/state')).servers;
+    ck('plan=verify: Pro, official_proxy {enabled:false, reason:verify} (no coming_soon), official {available:false, nodes:0}, no official nodes', pf4.plan.code === 'pro' && JSON.stringify(pf4.features.official_proxy) === '{"enabled":false,"tier":"pro","reason":"verify"}' && pf4.official.available === false && pf4.official.nodes === 0 && sv4.every((x) => !x.official));
+    await ctl('plan=soon');
+    /* 会员付款页: 默认和线上一致 (关闭收款), 其余每个状态各有自己的返回 */
+    const bl = async (v) => { await ctl('billing=' + v); return jx(await api('GET', '/api/billing')); };
+    const b0 = await bl('closed'), b0c = jx(await api('POST', '/api/billing/checkout', { body: JSON.stringify({ kind: 'plan', sku: 'm1', request_key: 'k'.repeat(16) }) }));
+    ck('billing=closed (default): payments_available:false, email verified, catalog of 7 terms, checkout -> E_PAYMENTS_UNAVAILABLE', b0.ok === true && b0.payments_available === false && b0.email.verified === true && b0.catalog.length === 7 && b0.orders.length === 0 && b0c.code === 'E_PAYMENTS_UNAVAILABLE');
+    const b1 = await bl('unverified'), b2 = await bl('nomail'), b2s = jx(await api('POST', '/api/email/send', { body: '{}' })), b3 = await bl('pending'), b3c = jx(await api('POST', '/api/billing/checkout', { body: JSON.stringify({ kind: 'plan', sku: 'm1', request_key: 'k'.repeat(16) }) }));
+    ck('billing=unverified / nomail / pending: unverified email (mail_available true / false, send -> E_MAIL_UNAVAILABLE), one unfinished invoice (checkout -> E_ORDER_PENDING)', b1.email.verified === false && b1.email.mail_available === true && b2.email.verified === false && b2.email.mail_available === false && b2s.code === 'E_MAIL_UNAVAILABLE' && b3.orders.length === 1 && b3.orders[0].status === 'pending' && b3c.code === 'E_ORDER_PENDING');
+    const b4 = jx(await (async () => { await ctl('billing=auth'); return api('GET', '/api/billing'); })()), b5 = jx(await (async () => { await ctl('billing=server'); return api('GET', '/api/billing'); })());
+    ck('billing=auth / server: the helper answers E_AUTH (cloud session ended) / E_SERVER_ERROR (cloud 5xx) with a translated error, HTTP 200 so the local dashboard stays unlocked', b4.ok === false && b4.code === 'E_AUTH' && !!b4.error && b5.ok === false && b5.code === 'E_SERVER_ERROR' && !!b5.error);
+    await ctl('billing=closed');
 
     /* 步骤验证 (sudo) */
     const WL = [['POST', '/api/servers/delete', { form: { tag: 'no-such' } }], ['POST', '/api/sub/delete', { form: { name: 'no-such' } }], ['GET', '/api/servers/secret', {}], ['GET', '/api/sub/url', {}], ['POST', '/api/logs/clear', { form: { type: 'bogus' } }],
@@ -3400,7 +3576,20 @@ async function selftest() {
     FAST = 80; const vc = (host, extra) => Object.assign({ host, port: '22', user: 'root', mode: 'password', password: 'S3cretPw-xyz', hostkey: fingerprint(host) }, extra);
     const vprov = async (form, lang) => { const x = await api('POST', '/api/vps/provision', { form, lang }); return jx(x).job ? waitJob(jx(x).job, lang) : { state: 'nojob', start: jx(x) }; };
     let v1 = await vprov(vc('203.0.113.70'), 'en');
-    ck('vps: the magic host .70 fails at the verify step with E_VPS_VERIFY (job code + result.code + result.port, translated hint to allow the port, step 7 marked)', v1.state === 'error' && v1.code === 'E_VPS_VERIFY' && v1.result.code === 'E_VPS_VERIFY' && v1.result.port === 443 && /does not allow port 443\/tcp/.test(v1.msg) && v1.steps[6].state === 'error' && v1.steps.length === 9, v1);
+    ck('vps: the magic host .70 fails at the verify step with E_VPS_VERIFY (job code + result.code + result.port, translated hint to allow the port, step 7 marked)', v1.state === 'error' && v1.code === 'E_VPS_VERIFY' && v1.result.code === 'E_VPS_VERIFY' && v1.result.port === 2053 && v1.result.reason === 'blocked_cloud' && /\(TCP 2053\)/.test(v1.msg) && !/443/.test(v1.msg) && v1.steps[6].state === 'error' && v1.steps.length === 9, v1);
+    // 部署完成但验证没通过: 留下「待验证的部署」; 端口还没放行时再验证仍失败 (同一个原因, 不重新部署); 放弃 / 放行后验证通过都会清掉它
+    const pend1 = jx(await api('GET', '/api/vps/pending')).pending;
+    ck('vps: the failed verification leaves a pending deployment (real port, node count, no credentials) and nothing is saved locally', pend1.length === 1 && pend1[0].id === v1.result.pending && pend1[0].ports[0] === 2053 && pend1[0].nodes === 1 && !JSON.stringify(pend1).match(/password|S3cretPw|uuid/i) && jx(await api('GET', '/api/vps')).vps.length === 0, pend1);
+    const pr70 = jx(await api('POST', '/api/vps/probe', { form: vc('203.0.113.70') })), pj70 = await waitJob(pr70.job, 'en');
+    ck('vps/probe on a host with a pending deployment: node.installed + pending, and the planned port (443 busy) is reported', pj70.state === 'done' && pj70.result.node.installed === true && pj70.result.pending && pj70.result.pending.id === v1.result.pending && pj70.result.plan.port === 2053 && pj70.result.plan.reason === 'default_busy', pj70.result);
+    const vf1 = await waitJob(jx(await api('POST', '/api/vps/verify', { form: { id: v1.result.pending } })).job, 'en');
+    ck('vps/verify while the port is still closed: fails again with the same structured reason and the pending record stays (no redeploy)', vf1.state === 'error' && vf1.result.code === 'E_VPS_VERIFY' && vf1.result.pending === v1.result.pending && vf1.result.port === 2053 && jx(await api('GET', '/api/vps/pending')).pending.length === 1, vf1);
+    r = await api('POST', '/api/vps/verify', { form: { id: 'p-nothere' } }); ck('vps/verify: invalid id -> E_INVALID; unknown id -> E_NOT_FOUND', jx(r).code === 'E_INVALID' && jx(await api('POST', '/api/vps/verify', { form: { id: 'p-ffffff' } })).code === 'E_NOT_FOUND');
+    await ctl('vpsport=open');
+    const vf2 = await waitJob(jx(await api('POST', '/api/vps/verify', { form: { id: v1.result.pending } })).job, 'en');
+    ck('vps/verify after the port is opened: done, the nodes are added, the pending record is gone and the server record exists', vf2.state === 'done' && vf2.result.added === 1 && vf2.result.nodes[0].port === 2053 && vf2.result.nodes[0].verified === true && jx(await api('GET', '/api/vps/pending')).pending.length === 0 && jx(await api('GET', '/api/vps')).vps.filter((x) => x.host === '203.0.113.70').length === 1, vf2);
+    await ctl('vps=reset'); await ctl('vpsport=closed'); v1 = await vprov(vc('203.0.113.70'), 'en');
+    r = await api('POST', '/api/vps/pending/discard', { form: { id: v1.result.pending } }); ck('vps/pending/discard removes only the pending record', jx(r).ok === true && jx(await api('GET', '/api/vps/pending')).pending.length === 0 && jx(await api('POST', '/api/vps/pending/discard', { form: { id: v1.result.pending } })).code === 'E_NOT_FOUND');
     await ctl('vpsport=open'); v1 = await vprov(vc('203.0.113.70')); const vl = jx(await api('GET', '/api/vps')).vps.filter((x) => x.host === '203.0.113.70')[0];
     ck('ctl vpsport=open: provisioning .70 again succeeds; without a name the server name is my-vps-<host> and the node tag <name>-<egress ip>; the record has name + hostkey', v1.state === 'done' && v1.result.nodes[0].tag === 'my-vps-203.0.113.70-203.0.113.70' && v1.result.nodes[0].egress === '203.0.113.70' && !!vl && vl.name === 'my-vps-203.0.113.70' && vl.hostkey === fingerprint('203.0.113.70') && Object.keys(v1.result).sort().join() === 'ips,nodes,vps', v1.result);
     const rdx = await api('POST', '/api/vps/redetect', { form: vc('203.0.113.70', { id: vl.id }) }), rdj = await waitJob(jx(rdx).job);

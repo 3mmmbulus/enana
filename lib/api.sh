@@ -95,7 +95,7 @@ case $path in /favicon.ico) path="$ADMIN_PATH/favicon.png" ;; esac      # 浏览
 case $path in /|"$ADMIN_PATH"|"$ADMIN_PATH"/*) serve_static ;; esac
 
 # ---------- 以下是 JSON 接口: 到这里才加载其余模块 ----------
-for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan billing sync vps diag; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops exits speed stats prefs snapshot plan billing official sync vps diag; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 i18n_init
 OP_WHO=dashboard; export OP_WHO
@@ -133,9 +133,9 @@ bool() { [ "$1" = 1 ] && printf true || printf false; }
 valid_day() { case $1 in '') return 0 ;; [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) return 0 ;; *) return 1 ;; esac; }
 
 # ---------- JSON 片段 ----------
-servers_json() {
-  srv_list | awk -F'\t' 'BEGIN{printf "["} { gsub(/["\\]/, "", $1); gsub(/["\\]/, "", $3);
-    printf "%s{\"tag\":\"%s\",\"type\":\"%s\",\"server\":\"%s\",\"port\":%s,\"role\":\"%s\",\"sub\":\"%s\"}", (NR>1?",":""), $1, $2, $3, ($4==""?0:$4), $5, $6 } END{printf "]"}'
+servers_json() { # 用户自己的服务器, 后面接官方线路 (第 7 列 = 1: 带 "official":true, 地址 / 端口为空, 界面据此不允许编辑 / 删除 / 查看凭据)
+  { srv_list; official_list; } | awk -F'\t' 'BEGIN{printf "["} { gsub(/["\\]/, "", $1); gsub(/["\\]/, "", $3);
+    printf "%s{\"tag\":\"%s\",\"type\":\"%s\",\"server\":\"%s\",\"port\":%s,\"role\":\"%s\",\"sub\":\"%s\"%s}", (NR>1?",":""), $1, $2, $3, ($4==""?0:$4), $5, $6, ($7=="1"?",\"official\":true":"") } END{printf "]"}'
 }
 
 # ---------- 账号 / 代理总开关 ----------
@@ -249,6 +249,7 @@ ep_auth_verify() { # 敏感操作前再次输入密码 -> 5 分钟有效的 sudo
 }
 ep_servers_secret() { # 查看某个节点的密码 / UUID / 密钥 (需 sudo)
   local tag fields rc; tag=$(qp tag)
+  [ -n "$tag" ] && ! srv_has_tag "$tag" && official_has_tag "$tag" && fail "官方线路的凭据不能查看" E_FORBIDDEN
   [ -n "$tag" ] && srv_has_tag "$tag" || fail "找不到这个服务器" E_NOT_FOUND
   fields=$(srv_secret_fields "$tag"); rc=$?
   case $rc in 0) ;; 3) fail "官方线路的凭据不能查看" E_FORBIDDEN ;; *) fail "找不到这个服务器" E_NOT_FOUND ;; esac
@@ -383,6 +384,21 @@ ep_vps_redetect() {
   [ -n "$F_HOSTKEY" ] || F_HOSTKEY=$(vps_rec_field "$id" hostkey)
   vps_launch vps-redetect '连接服务器|检测系统与环境|生成配置与密钥|开放端口并启动|验证连通|保存到本机' '' pin 0 "$id" 0
 }
+ep_vps_verify() { # 部署完成但验证没通过的节点: 只在本机重新验证 (不 SSH、不部署、不需要任何凭据)
+  local pid id; pid=$(fp id)
+  vps_pending_id_ok "$pid" || fail "待验证的部署编号无效" E_INVALID
+  [ -f "$(vps_pending_file "$pid")" ] || fail "找不到这次部署的记录 (可能已经放弃、已经添加, 或超过 7 天被清理了)" E_NOT_FOUND
+  id=$(job_new vps-verify '读取部署记录|检查端口|验证连通|识别出口 IP|保存到本机')
+  job_launch vps-verify "$id" "$pid"
+  okj "\"job\":\"$id\""
+}
+ep_vps_pending_discard() {
+  local pid; pid=$(fp id)
+  vps_pending_id_ok "$pid" || fail "待验证的部署编号无效" E_INVALID
+  [ -f "$(vps_pending_file "$pid")" ] || fail "找不到这次部署的记录 (可能已经放弃、已经添加, 或超过 7 天被清理了)" E_NOT_FOUND
+  vps_pending_delete "$pid"
+  oplog dashboard "放弃待验证的部署" "$(kv id "$pid")" ok; okj
+}
 ep_vps_forget() {
   local id; id=$(fp id); case $id in v-[0-9a-f]*) ;; *) fail "服务器编号无效" ;; esac
   vps_forget "$id" || fail "找不到这台服务器的记录" E_NOT_FOUND
@@ -393,15 +409,18 @@ ep_prefs_set() { # 正文是 JSON 对象文本
   okj "\"version\":$PREFS_VERSION"
 }
 ep_plan() {
-  local c; c=$(plan_checked)
-  if [ -n "$(session_id)" ] && [ $(( $(now) - c )) -gt "$PLAN_TTL" ]; then
-    if [ "$c" = 0 ]; then plan_refresh || true; else ( plan_refresh >/dev/null 2>&1 & ); fi      # 从没取过: 等一下; 过期了: 先用旧的, 后台刷新
+  local c age; c=$(plan_checked); age=$(( $(now) - c ))
+  if [ -n "$(session_id)" ]; then
+    if [ "$(qp refresh)" = 1 ] && [ "$age" -ge 3 ]; then plan_refresh || true      # ?refresh=1 (付款 / 余额购买成功后、手动刷新): 同步向云端取最新套餐, 否则刚付款的用户最长 1 小时还看到免费版 (3 秒内刚刷新过就不重复)
+    elif [ "$age" -gt "$PLAN_TTL" ]; then
+      if [ "$c" = 0 ]; then plan_refresh || true; else ( plan_refresh >/dev/null 2>&1 & ); fi      # 从没取过: 等一下; 过期了: 先用旧的, 后台刷新
+    fi
   fi
   json "{\"ok\":true,$(plan_json)}"
 }
 
 ep_billing() {
-  local op=$1 route=$2 verb=$3 body='' result id
+  local op=$1 route=$2 verb=$3 body='' result id tmp
   if [ "$op" = order ]; then
     id=$(qp id); printf '%s' "$id" | LC_ALL=C grep -Eq '^[a-z0-9]{15}$' || fail "订单编号无效" E_INVALID
     route="$route?id=$id"
@@ -410,8 +429,16 @@ ep_billing() {
     if [ "$op" = email-send ] && [ ! -s "$BODY" ]; then body='{}'
     else body=$(billing_body "$op" "$BODY") || fail "付款参数无效" E_INVALID; fi
   fi
-  result=$(billing_request "$verb" "$route" "$body") || fail "账号服务暂时无法连接，请稍后重试" E_ACCOUNT_UNREACHABLE
-  json "$result"
+  # 不能写成 result=$(billing_request …): 命令替换在子 shell 里运行, 设置的 BILLING_CODE 会丢; 所以先写到临时文件, 再在当前 shell 里读出。
+  tmp=$(mktemp)
+  if billing_request "$verb" "$route" "$body" > "$tmp"; then result=$(cat "$tmp"); rm -f "$tmp"; json "$result"; return 0; fi
+  rm -f "$tmp"
+  case ${BILLING_CODE:-} in
+    E_AUTH)          fail "云端登录已失效、已结束或这台电脑是离线登录，请联网并重新登录后再试" E_AUTH ;;                       # 不用 deny 401: 那会让本机仪表盘也锁住; 这里只是云端会话的问题
+    E_SERVER_ERROR)  fail "enana.cc 服务器返回了错误，这次操作可能已生效也可能没有，请先刷新并查看订单和余额" E_SERVER_ERROR ;;
+    E_RATE_LIMITED)  fail "请求过于频繁，请稍后再试" E_RATE_LIMITED ;;
+    *)               fail "账号服务暂时无法连接，请稍后重试" E_ACCOUNT_UNREACHABLE ;;
+  esac
 }
 
 # ---------- 状态 ----------
@@ -512,9 +539,38 @@ ep_policy() { # 切换一个策略开关 (网站 / 默认出口 / 节点选择):
   [ "${res%%$'\t'*}" = ok ] || fail "这个选项不存在 (可能节点已经被删除或改名)" E_NOT_FOUND
   from=${res#*$'\t'}
   [ "$from" = "$name" ] || { [ -z "$(clash PUT "/proxies/$tag" "{\"name\":\"$(jesc "$name")\"}")" ] || fail "切换失败, 请稍后重试" E_NOT_RUNNING; }
+  if [ "$tag" = PIN ] && exits_has_pin "$name"; then exits_default_save "$name" || true; fi       # 默认固定出口: 另存一份 (核心重启后校正; 见 lib/exits.sh)
   case $tag in svc-rs-*) ;; svc-*) sitename=$(awk -F'|' -v id="${tag#svc-}" '$1==id {print $2; exit}' "$(content_file services.conf)" 2>/dev/null) ;; esac
   oplog dashboard "切换策略" "$(kv kind selector tag "$tag" site "$sitename" from "$from" to "$name")" ok
   okj "\"from\":\"$(jesc "$from")\",\"to\":\"$(jesc "$name")\""
+}
+
+# ---------- 固定出口分配 (设计与语义见 lib/exits.sh) ----------
+ep_exits() { # GET /api/exits: 每个固定出口上有哪些应用 / 网站 / 服务 · 跟随默认的 · 自动选的 · 孤儿 (指定的出口已经不是固定出口); 顺便让持久化的默认固定出口跟上核心里正在用的 (老安装第一次)
+  if lock_take; then exits_adopt; lock_drop; fi
+  json "{\"ok\":true,$(exits_json)}"
+}
+ep_exits_impact() { # GET /api/exits/impact?op=remove|default&tag=: 删除 / 改角色 (remove) 或换默认 (default) 会让谁换出口 —— 仪表盘在确认框里列出来
+  local op tag; op=$(qp op); tag=$(qp tag)
+  case $op in remove|default) ;; *) fail "参数无效" ;; esac
+  [ -n "$tag" ] && [ ${#tag} -le 80 ] || fail "参数无效"
+  json "{\"ok\":true,$(exits_impact_json "$op" "$tag")}"
+}
+ep_exits_apply() { # POST /api/exits/move (from to [kind]) 和 POST /api/exits/freeze ([kind]) 共用: 校验后, 非 TUN 同步改 + 热加载 (和 ep_override 一样不重启核心), TUN 交给后台任务
+  local from=$1 to=$2 kind=$3
+  exits_move_check "$from" "$to" "$kind" || fail "$EXITS_ERR" "$EXITS_CODE"
+  if [ "${NETWORK_MODE:-system}" = tun ]; then okj "\"job\":\"$(job_spawn exits-move "$APPLY_STEPS" "$from" "$to" "$kind")\""; return; fi
+  lock_take || fail "系统繁忙, 请重试" E_BUSY
+  exits_move_run "$from" "$to" "$kind"; lock_drop
+  okj "\"moved\":{\"apps\":$EXITS_M_APPS,\"sites\":$EXITS_M_SITES,\"services\":$EXITS_M_SVC},\"services_known\":$([ "$EXITS_SVC_KNOWN" = 1 ] && echo true || echo false),\"services_failed\":$EXITS_M_SVCFAIL"
+}
+ep_exits_move() { ep_exits_apply "$(fp from)" "$(fp to)" "$(fp kind)"; }
+ep_exits_freeze() { # 把「跟随默认」的应用 / 网站 / 服务钉在当前的默认固定出口上 (之后默认再换也不动它们)
+  local kind; kind=$(fp kind)
+  exits_resolve
+  [ -n "$EXITS_DEF" ] || fail "还没有固定出口" E_INVALID
+  if [ "$(exits_pins_all | wc -l | tr -d ' ')" -lt 2 ]; then okj '"moved":{"apps":0,"sites":0,"services":0},"skipped":"single"'; return; fi      # 只有一个固定出口: 谁都不会因为换默认而变, 没什么可钉的
+  ep_exits_apply DEFAULT "$EXITS_DEF" "$kind"
 }
 
 ep_audit() { # 仪表盘直接对代理核心做的、不经过辅助服务的操作 (目前只有「断开连接」), 事后来这里补一条操作记录
@@ -555,10 +611,21 @@ ep_servers_import() { # 先对副本「干跑」, 立即返回数量与逐行错
 }
 
 ep_servers_change() { # delete | role  (校验后交给后台任务)
-  local tag role; tag=$(qp tag); role=$(qp role)
+  # 保护 (固定出口分配, lib/exits.sh): 删除一个固定出口 / 把它改成别的角色之前, 先看有没有应用 / 网站 / 服务指定了它 (或正在跟随它作默认出口)。
+  #   有 → 必须带 reassign=<另一个固定出口 | PINAUTO | DEFAULT> (改派; freeze=1 再把「跟随默认」的钉在去向上) 或 accept_orphans=1 (明确接受后果), 否则 E_EXIT_IN_USE + impact 明细, 什么也不改。
+  local tag role reassign freeze accept; tag=$(qp tag); role=$(qp role); reassign=$(fp reassign); freeze=$(fp freeze); accept=$(fp accept_orphans)
+  [ -n "$tag" ] && ! srv_has_tag "$tag" && official_has_tag "$tag" && fail "官方线路节点由会员权益提供，不能删除或修改角色" E_FORBIDDEN
   [ -n "$tag" ] && srv_has_tag "$tag" || fail "找不到这台服务器" E_NOT_FOUND
-  if [ "$1" = delete ]; then okj "\"job\":\"$(job_spawn servers-delete "$APPLY_STEPS" "$tag")\""
-  else case $role in pin|auto|off|dl) okj "\"job\":\"$(job_spawn servers-role "$APPLY_STEPS" "$tag" "$role")\"" ;; *) fail "角色无效" ;; esac; fi
+  case $freeze in ''|0|1) ;; *) fail "参数无效" ;; esac; case $accept in ''|0|1) ;; *) fail "参数无效" ;; esac
+  [ "$1" = delete ] || case $role in pin|auto|off|dl) ;; *) fail "角色无效" ;; esac
+  if [ "$1" = delete ] || [ "$role" != pin ]; then
+    exits_guard_check "$tag" "$reassign" "${accept:-0}" || fail "$EXITS_ERR" "$EXITS_CODE" "\"impact\":{$EXITS_IMPACT_JSON}"
+    if [ -n "$reassign" ] && [ "$EXITS_ISPIN" = 1 ]; then exits_runtime_reassign "$tag" "$reassign" "${freeze:-0}"; fi       # 核心里的部分 (默认固定出口 / 服务) 必须趁两个出口都还在时切好
+  fi
+  local job sf=''; [ "${EXITS_SVC_FAILED:-0}" -gt 0 ] && sf=",\"services_failed\":$EXITS_SVC_FAILED"
+  if [ "$1" = delete ]; then job=$(job_spawn servers-delete "$APPLY_STEPS" "$tag" "$reassign" "${freeze:-0}" "${accept:-0}")
+  else job=$(job_spawn servers-role "$APPLY_STEPS" "$tag" "$role" "$reassign" "${freeze:-0}" "${accept:-0}"); fi
+  okj "\"job\":\"$job\"$sf"
 }
 
 ep_cert() {
@@ -596,10 +663,12 @@ ep_sub_save() { # name + body=url
   oplog dashboard "保存订阅" "$(kv sub "$name")" ok
   okj
 }
-ep_sub_delete() {
-  local name; name=$(qp name)
+ep_sub_delete() { # 订阅里有被使用的固定出口时: 必须带 accept_orphans=1 (明确接受后果), 否则 E_EXIT_IN_USE + impact{servers,affected} (lib/exits.sh)
+  local name accept; name=$(qp name); accept=$(fp accept_orphans)
   sub_valid_name "$name" || fail "订阅名称不合法"
-  okj "\"job\":\"$(job_spawn sub-delete "$APPLY_STEPS" "$name")\""
+  case $accept in ''|0|1) ;; *) fail "参数无效" ;; esac
+  exits_sub_check "$name" "${accept:-0}" || fail "$EXITS_ERR" "$EXITS_CODE" "\"impact\":{$EXITS_IMPACT_JSON}"
+  okj "\"job\":\"$(job_spawn sub-delete "$APPLY_STEPS" "$name" "${accept:-0}")\""
 }
 
 ep_log() { # 兼容旧接口: 核心实时日志的最后 n 行 (纯文本)
@@ -832,6 +901,9 @@ case "$method $path" in
   "POST /api/vps/cancel")      ep_vps_cancel ;;
   "POST /api/vps/provision")   ep_vps_provision ;;
   "POST /api/vps/redetect")    ep_vps_redetect ;;
+  "POST /api/vps/verify")      ep_vps_verify ;;
+  "GET /api/vps/pending")      json "{\"ok\":true,\"pending\":[$(vps_pending_json)]}" ;;
+  "POST /api/vps/pending/discard") ep_vps_pending_discard ;;
   "POST /api/vps/forget")      ep_vps_forget ;;
   "GET /api/vps")              json "{\"ok\":true,\"vps\":[$(vps_json)]}" ;;
   "GET /api/sync")             json "{\"ok\":true,$(sync_state_json)}" ;;
@@ -872,6 +944,10 @@ case "$method $path" in
   "POST /api/apps/ack")        n=$(qp name); [ "$(qp all)" = 1 ] && n=all; [ -n "$n" ] || fail "缺少应用名"; lock_take && { apps_ack "$n"; lock_drop; }; okj ;;
   "POST /api/override")        ep_override ;;
   "POST /api/policy")          ep_policy ;;
+  "GET /api/exits")            ep_exits ;;
+  "GET /api/exits/impact")     ep_exits_impact ;;
+  "POST /api/exits/move")      ep_exits_move ;;
+  "POST /api/exits/freeze")    ep_exits_freeze ;;
   "POST /api/audit")           ep_audit ;;
   "POST /api/sites/auto/clear") ep_sites_auto_clear ;;
   "POST /api/servers/import")  ep_servers_import ;;

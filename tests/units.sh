@@ -17,7 +17,7 @@ export PORT=39700 UI_PORT=39701 API_PORT=39702 SPEED_PORT=39703
 mkdir -p "$UW/home/Applications" "$UW/h/rules" "$UW/h/logs"
 . "$REPO/lib/common.sh"; init_paths "$REPO/install.sh"
 LIB=$REPO/lib; DATA=$REPO/data
-for _f in i18n jobs servers apps autosites sites fetch os-darwin enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan sync vps; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os-darwin enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan official sync vps; do . "$LIB/$_f.sh"; done
 load_settings; QUIET=1
 [ "$H" = "$UW/h" ] || { echo "REFUSING: 数据目录不是临时目录 ($H)"; exit 1; }
 
@@ -160,6 +160,11 @@ ChatGPT|pin|AI' > "$UW/apps.conf"
 content_file() { case $1 in apps.conf) echo "$UW/apps.conf" ;; *) echo "$DATA/$1" ;; esac; }
 n=$(apps_scan)
 eq "首次扫描: 识别到 4 个 (Utilities 子目录里的 Terminal 也在; 太深的和应用内部的辅助程序不算)" "$n:$(apps_installed | cut -f1 | paste -sd, -)" "4:ChatGPT,Odd Browser,Plain App,Terminal"
+eq "首次扫描: 每个应用都有「识别时间」(apps.times 不是空的; 以前 NR==FNR 写法在旧文件为空时把整个文件清空, 应用页的安装 / 识别时间全是空白)" "$(awk -F'\t' '$2 + 0 > 0 {n++} END {print n + 0}' "$H/apps.times"):$(wc -l < "$H/apps.times" | tr -d ' ')" "4:4"
+t_seen=$(awk -F'\t' '$1 == "Plain App" {print $2}' "$H/apps.times"); apps_scan >/dev/null
+eq "再扫描: 已有应用的识别时间不变 (只记第一次看到的时间)" "$(awk -F'\t' '$1 == "Plain App" {print $2}' "$H/apps.times")" "$t_seen"
+: > "$H/apps.times"; apps_scan >/dev/null
+eq "apps.times 被清空 (旧版本留下的) 后, 下一次扫描自动补回" "$(awk -F'\t' '$2 + 0 > 0 {n++} END {print n + 0}' "$H/apps.times")" "4"
 eq "首次扫描: 标记全是 def (不弹「新应用」), 新应用数 0" "$(awk -F'|' '$1=="app" {print $4}' "$H/overrides.tsv" | sort -u | paste -sd, -):$(apps_new_count)" "def:0"
 eq "首次扫描: 已知应用按推荐 (ChatGPT=pin, Terminal=follow); 浏览器 (声明能打开 http/https) = follow; 其它 = direct" "$(awk -F'|' '$1=="app" {print $2 "=" $3}' "$H/overrides.tsv" | sort | paste -sd, -)" "ChatGPT=pin,Odd Browser=follow,Plain App=direct,Terminal=follow"
 # ---- 之后新装的应用: 浏览器跟随 / 其它直连, 标记 new, 弹提示
@@ -295,10 +300,284 @@ logs_bundle abc ops > "$UW/b4.txt" 2>/dev/null; eq "时间范围写错 → 回�
 python3 "$REPO/tools/diag-summary.py" "$UW/bundle.txt" > "$UW/summary.txt" 2>&1; eq "tools/diag-summary.py 能解读导出文件 (有概览 / 自动判断)" "$(grep -c '^== 概览\|^== 自动判断' "$UW/summary.txt")" "2"
 echo
 
+echo "== U8. 订阅刷新 (srv_import replace): 就地更新, 顺序稳定; 内容没变的刷新不改动文件; 多个订阅只应用一次"
+SF="$H/servers.jsonl"
+sline() { # <角色> <订阅名 (没有就写 '')> <tag> <服务器> [端口]  -> 一行 servers.jsonl
+  if [ -n "$2" ]; then printf '{"role":"%s","sub":"%s","outbound":{"type":"trojan","tag":"%s","server":"%s","server_port":%s,"password":"pw"}}\n' "$1" "$2" "$3" "$4" "${5:-443}"
+  else printf '{"role":"%s","outbound":{"type":"trojan","tag":"%s","server":"%s","server_port":%s,"password":"pw"}}\n' "$1" "$3" "$4" "${5:-443}"; fi
+}
+srv_order() { srv_list | cut -f1 | paste -sd, -; }
+pin_first() { srv_emit | awk -F'\t' '$1=="pin" {print $2; exit}'; }          # 配置生成器的默认固定出口 = pin 列表的第一个
+mk_base() { # 两个订阅 (A B) 和两台手动服务器交错排列; 用户把订阅 A 的第一个节点固定成了 pin
+  { sline auto '' M1 m1.example; sline pin A A-1 a1.example; sline auto A A-2 a2.example; sline auto B B-1 b1.example; sline pin '' M2 m2.example; sline auto B B-2 b2.example; sline auto A A-3 a3.example; } > "$SF"
+}
+a_same() { sline pin A A-1 a1.example; sline auto A A-2 a2.example; sline auto A A-3 a3.example; }       # 订阅 A 没变的内容 (和 mk_base 里存的一模一样)
+b_same() { sline auto B B-1 b1.example; sline auto B B-2 b2.example; }
+stray() { ls "$SF.new" "$SF.tags" "$SF.pairs" "$SF.counts" "$SF.new.2" 2>/dev/null | wc -l | tr -d ' '; }
+rm -f "$H"/servers.sync "$H"/subs.sync
+mk_base; cp "$SF" "$UW/before"
+res=$(a_same | srv_import A replace)
+eq "订阅 A 内容完全相同的刷新: servers.jsonl 一个字节都没变 (以前 A 的行被挪到文件末尾)" "$(cmp -s "$SF" "$UW/before" && echo same || echo changed)" "same"
+eq "…计数: 0 新增 · 3 保留 (replaced) · 0 移除 —— 导入的调用方用「新增 + 保留 > 0」判断有没有有效节点" "$res" "0 3 0"
+res=$(b_same | srv_import B replace)
+eq "订阅 B 同样: 文件不变, 0 2 0" "$(cmp -s "$SF" "$UW/before" && echo same):$res" "same:0 2 0"
+eq "…文件里的顺序不变 (手动服务器和两个订阅交错), 默认固定出口仍是 A-1 (以前会变成 M2, 生成出不同的配置)" "$(srv_order):$(pin_first)" "M1,A-1,A-2,B-1,M2,B-2,A-3:A-1"
+res=$({ sline auto A A-3 a3.example; sline pin A A-1 a1.example; sline auto A A-2 a2.example; } | srv_import A replace)
+eq "订阅端调整了节点顺序: 已有节点保持原来的位置 (文件不变)" "$(cmp -s "$SF" "$UW/before" && echo same):$res" "same:0 3 0"
+eq "…没有留下临时文件; 文件权限 600" "$(stray):$(stat -f %Lp "$SF")" "0:600"
+
+mk_base
+res=$({ sline pin A A-1 a1.example; sline auto A A-2 a2-NEW.example 8443; sline auto A A-3 a3.example; } | srv_import A replace)
+eq "A-2 的服务器 / 端口变了: 原地覆盖 (仍在第 3 行), 其它每一行都原样不动" "$(sed -n 3p "$SF" | grep -c 'a2-NEW.example.*8443'):$(diff <(sed 3d "$UW/before") <(sed 3d "$SF") >/dev/null && echo rest-same):$res" "1:rest-same:0 3 0"
+eq "…顺序不变" "$(srv_order)" "M1,A-1,A-2,B-1,M2,B-2,A-3"
+
+mk_base
+res=$({ sline pin A A-1 a1.example; sline auto A A-3 a3.example; sline auto A A-4 a4.example; } | srv_import A replace)
+eq "A-2 从订阅里消失、A-4 新增: A-2 的行删掉, A-4 追加到末尾, 手动服务器和订阅 B 的位置不动" "$(srv_order)" "M1,A-1,B-1,M2,B-2,A-3,A-4"
+eq "…计数: 1 新增 · 2 保留 · 1 移除" "$res" "1 2 1"
+eq "…别的来源的行原样保留 (M1 M2 B-1 B-2)" "$(grep -c '"tag":"M1"\|"tag":"M2"\|"tag":"B-1"\|"tag":"B-2"' "$SF")" "4"
+
+mk_base
+res=$({ sline auto A A-1 a1.example; sline auto A M1 m1-via-sub.example; } | srv_import A replace)
+eq "订阅里的 tag 和手动服务器重名: 就地换成订阅的版本 (和 merge 一样「后来者取代」), 位置不变, 不会出现两行" "$(srv_order):$(sed -n 1p "$SF" | grep -c '"sub":"A".*m1-via-sub.example')" "M1,A-1,B-1,M2,B-2:1"
+eq "…计数: 0 新增 · 2 保留 (A-1 和 M1) · 2 移除 (A-2 A-3)" "$res" "0 2 2"
+
+mk_base
+res=$({ sline auto A A-1 first.example; sline auto A A-1 second.example; sline auto A N-1 n.example; } | srv_import A replace)
+eq "同一批里 tag 重复: 只留一行 (后一行的内容), 位置是已有的那一行" "$(srv_order):$(grep -c second.example "$SF"):$(grep -c first.example "$SF")" "M1,A-1,B-1,M2,B-2,N-1:1:0"
+eq "…计数: 1 新增 · 2 保留 (重复的算一次替换) · 2 移除" "$res" "1 2 2"
+
+mk_base
+res=$({ sline pin A A-1 a1.example; printf 'garbage\n'; sline auto A A-2 a2.example; } | srv_import A replace 2>"$UW/imp.err")
+eq "格式不对的行被忽略并报行号, 其余照常导入 (A-3 不在新数据里 → 移除)" "$(grep -c '第 2 行' "$UW/imp.err"):$res:$(srv_order)" "1:0 2 1:M1,A-1,A-2,B-1,M2,B-2"
+mk_base; cp "$SF" "$UW/before"
+JOB_BODY="$UW/jobbody"; printf 'garbage\n' > "$JOB_BODY"; printf 'A|https://a.example/s|0|3|12|0|0|0\n' > "$H/subs.tsv"
+txn_import A replace; rc=$?
+eq "txn_import: 整批都不合格 → 失败 (op_txn 据此回滚, 保留旧节点)" "$rc" "1"
+a_same > "$JOB_BODY"; mk_base; txn_import A replace; rc=$?
+eq "txn_import: 内容完全相同的刷新 → 成功 (「保留」的节点也算有效), 文件不变" "$rc:$(cmp -s "$SF" "$UW/before" && echo same)" "0:same"
+
+mk_base; res=$(sline pin '' M1 m1-new.example | srv_import '' merge)
+eq "merge (添加服务器 / 保存 VPS) 行为不变: 已有的 tag 被取代、新行追加到末尾, 计数 0 1 0" "$(srv_order):$res" "A-1,A-2,B-1,M2,B-2,A-3,M1:0 1 0"
+mk_base; res=$(a_same | srv_import A merge)
+eq "merge 带订阅名也不变 (只有 replace 才就地合并): A 的三行被重新追加到末尾" "$(srv_order):$res" "M1,B-1,M2,B-2,A-1,A-2,A-3:0 3 0"
+rm -f "$SF"; res=$(b_same | srv_import B replace)
+eq "还没有 servers.jsonl: 创建, 节点按订阅顺序, 2 0 0, 权限 600" "$(srv_order):$res:$(stat -f %Lp "$SF")" "B-1,B-2:2 0 0:600"
+mk_base; cp "$SF" "$UW/before"; cp "$SF" "$UW/plan"
+res=$({ sline pin A A-1 a1.example; sline auto A A-9 a9.example; } | SRV_FILE="$UW/plan" srv_import A replace)
+eq "干跑 (SRV_FILE 副本, 仪表盘预览数量用): 计数 1 1 2, 真实文件没动, 没有临时文件留下" "$res:$(cmp -s "$SF" "$UW/before" && echo real-same):$(ls "$UW"/plan.* 2>/dev/null | wc -l | tr -d ' ')" "1 1 2:real-same:0"
+eq "…干跑的副本里 A-9 追加在末尾, A-2 A-3 已移除" "$(sed -n 's/.*"tag":"\([^"]*\)".*/\1/p' "$UW/plan" | paste -sd, -)" "M1,A-1,B-1,M2,B-2,A-9"
+mk_base; : > "$H/servers.sync"
+a_same | SRV_SAVE=1 srv_import A replace >/dev/null
+eq "「保存到云端」(SRV_SAVE=1): 订阅的全部节点和订阅名进入同步清单 (刷新后也一样)" "$(sort "$H/servers.sync" | paste -sd, -):$(cat "$H/subs.sync")" "A-1,A-2,A-3:A"
+a_same | SRV_SAVE=0 srv_import A replace >/dev/null
+eq "…SRV_SAVE=0 把它们从清单里去掉" "$(grep -c . "$H/servers.sync" || true):$(grep -c . "$H/subs.sync" || true)" "0:0"
+rm -f "$H/servers.sync" "$H/subs.sync"
+
+# 命令行 / 定时刷新用导入器的默认角色 (auto) 解析订阅: srv_keep_roles 把订阅里已有节点的角色带回来, 否则用户固定的出口会被悄悄改回自动
+mk_base
+out=$({ sline auto A A-1 a1.example; sline auto A A-2 a2.example; sline auto A N-9 n9.example; sline auto A B-1 b1.example; } | srv_keep_roles A)
+eq "srv_keep_roles: 已有节点沿用现在的角色 (A-1=pin), 新节点保持 auto, 其它订阅的同名节点 (B-1) 不受影响" "$(printf '%s\n' "$out" | sed -n 's/^{"role":"\([a-z]*\)".*"tag":"\([^"]*\)".*/\2=\1/p' | paste -sd, -)" "A-1=pin,A-2=auto,N-9=auto,B-1=auto"
+eq "…除了角色, 每一行都原样 (订阅名 / 出站内容不变)" "$(printf '%s\n' "$out" | sed 's/^{"role":"[a-z]*"//')" "$({ sline auto A A-1 a1.example; sline auto A A-2 a2.example; sline auto A N-9 n9.example; sline auto A B-1 b1.example; } | sed 's/^{"role":"[a-z]*"//')"
+
+# op_subs_refresh: 先全部下载解析, 再「一个」事务里导入并应用一次; 内容没变的刷新不改动配置
+(
+  SUBFIX="$UW/subfix"; rm -rf "$SUBFIX"; mkdir -p "$SUBFIX"
+  APPLY_OK=0; APPLIED="$UW/applied"; ORDER_LOG="$UW/refresh.out"
+  sub_fetch() { case $1 in *b.example*) [ ! -f "$SUBFIX/b.fail" ] || return 1 ;; esac; echo x > "$3"; printf 'HTTP/1.1 200 OK\r\nsubscription-userinfo: upload=1; download=10; total=100; expire=2000000000\r\n' > "$4"; }
+  os_import_subscription() { cat "$SUBFIX/$3.jsonl" 2>/dev/null; }                  # 导入器给的角色一律是 auto
+  apply_config() { # 假的应用: 只要服务器文件和上次应用时不一样就算「配置变了」; 出现 POISON 节点就像 sing-box check 不通过一样失败
+    if grep -q POISON "$H/servers.jsonl"; then return 1; fi
+    APPLY_OK=$((APPLY_OK + 1)); if cmp -s "$H/servers.jsonl" "$APPLIED"; then APPLY_CHANGED=0; else APPLY_CHANGED=1; cp "$H/servers.jsonl" "$APPLIED"; fi; return 0
+  }
+  fixtures_same() { { sline auto A A-1 a1.example; sline auto A A-2 a2.example; sline auto A A-3 a3.example; } > "$SUBFIX/A.jsonl"; b_same > "$SUBFIX/B.jsonl"; }
+  fresh_state() { mk_base; cp "$SF" "$APPLIED"; APPLY_OK=0; fixtures_same; rm -f "$SUBFIX/b.fail"
+    printf 'A|https://a.example/s|0|3|12|0|0|0\nB|https://b.example/s|0|2|12|0|0|0\nC|https://c.example/s|%s|1|12|0|0|0\n' "$(now)" > "$H/subs.tsv"; rmdir "$H/.apply.lock" 2>/dev/null || true; }
+  touched() { awk -F'|' -v n="$1" '$1==n {print ($3 > 0 ? "yes" : "no")}' "$H/subs.tsv"; }
+  fresh_state; cp "$SF" "$UW/before"
+  SUBS_APPLIED=x; op_subs_refresh 1 > "$ORDER_LOG" 2>&1
+  eq "两个订阅都过期、内容没变: 一次应用 (以前每个订阅各一次, 调用方随后又一次); servers.jsonl 一个字节没变" "$APPLY_OK:$SUBS_APPLIED:$(cmp -s "$SF" "$UW/before" && echo same)" "1:1:same"
+  eq "…用户固定的角色保留 (A-1 仍是 pin; 导入器给的是 auto); 刚刷新过的订阅 C 没有被重新下载" "$(srv_list | awk -F'\t' '$1=="A-1" {print $5}'):$(grep -c '订阅「C」' "$ORDER_LOG" || true)" "pin:0"
+  eq "…两个订阅的刷新时间 / 节点数都记下了 (A B 已刷新, 节点数 3 和 2)" "$(touched A)$(touched B):$(awk -F'|' '$1=="A" {print $4} $1=="B" {print $4}' "$H/subs.tsv" | paste -sd, -)" "yesyes:3,2"
+  eq "…操作记录里是一条合并的事务 (订阅刷新), 不是每个订阅一条" "$(cat "$LOGS"/ops-*.log 2>/dev/null | grep -c '订阅刷新 (2 个)')" "1"
+  eq "…终端输出每个订阅一行「已刷新」" "$(grep -c '已刷新' "$ORDER_LOG")" "2"
+
+  fresh_state
+  { sline auto A A-1 a1-NEW.example; sline auto A A-2 a2.example; sline auto A A-3 a3.example; sline auto A A-4 a4.example; } > "$SUBFIX/A.jsonl"
+  { sline auto B B-1 b1.example; sline auto B B-2 b2-NEW.example; } > "$SUBFIX/B.jsonl"
+  op_subs_refresh 1 > "$ORDER_LOG" 2>&1
+  eq "两个订阅都有变化: 仍然只应用一次, 节点在原来的位置上更新 (顺序不变, 新节点追加)" "$APPLY_OK:$APPLY_CHANGED:$(srv_order)" "1:1:M1,A-1,A-2,B-1,M2,B-2,A-3,A-4"
+  eq "…A-1 内容更新但角色仍是 pin; B-2 更新" "$(srv_list | awk -F'\t' '$1=="A-1" {print $3 "/" $5} $1=="B-2" {print $3}' | paste -sd, -)" "a1-NEW.example/pin,b2-NEW.example"
+
+  fresh_state; awk -F'|' -v t="$(now)" 'BEGIN{OFS="|"} $1=="A" {$3=t} {print}' "$H/subs.tsv" > "$H/subs.tsv.x" && mv "$H/subs.tsv.x" "$H/subs.tsv"
+  op_subs_refresh 1 > "$ORDER_LOG" 2>&1
+  eq "只有一个订阅过期: 仍然是一次应用 (走单个订阅的事务)" "$APPLY_OK:$SUBS_APPLIED:$(touched B)" "1:1:yes"
+  fresh_state; awk -F'|' -v t="$(now)" 'BEGIN{OFS="|"} {$3=t; print}' "$H/subs.tsv" > "$H/subs.tsv.x" && mv "$H/subs.tsv.x" "$H/subs.tsv"
+  op_subs_refresh 1 > "$ORDER_LOG" 2>&1
+  eq "没有订阅过期: 什么都不做 (没有下载, 没有应用)" "$APPLY_OK:$SUBS_APPLIED" "0:0"
+  fresh_state; sline auto C C-1 c1.example > "$SUBFIX/C.jsonl"; op_subs_refresh 0 > "$ORDER_LOG" 2>&1
+  eq "不限过期 (enana update): 三个订阅都刷新, 仍是一次应用" "$APPLY_OK:$(grep -c '已刷新' "$ORDER_LOG")" "1:3"
+
+  fresh_state; touch "$SUBFIX/b.fail"
+  op_subs_refresh 1 > "$ORDER_LOG" 2>&1
+  eq "某个订阅下载失败: 它的旧节点保留, 其它订阅照常刷新并应用" "$(grep -c '订阅「B」刷新失败' "$ORDER_LOG"):$APPLY_OK:$SUBS_APPLIED:$(touched A)$(touched B)" "1:1:1:yesno"
+
+  fresh_state
+  { sline auto A A-1 a1.example; sline auto A A-2 a2-NEW.example; sline auto A A-3 a3.example; } > "$SUBFIX/A.jsonl"
+  { sline auto B B-1 b1.example; sline auto B POISON b-bad.example; } > "$SUBFIX/B.jsonl"
+  op_subs_refresh 1 > "$ORDER_LOG" 2>&1
+  eq "合并的事务没通过 (订阅 B 的节点让配置无效): 整体回滚, 再逐个订阅重试 —— A 照常刷新, B 保留旧节点" "$(grep -c POISON "$SF"):$(grep -c a2-NEW.example "$SF"):$(grep -c 'b2.example' "$SF"):$SUBS_APPLIED" "0:1:1:1"
+  eq "…B 的提示是「刷新后配置无效, 已保留旧节点」, 顺序没乱" "$(grep -c '订阅「B」刷新后配置无效' "$ORDER_LOG"):$(srv_order)" "1:M1,A-1,A-2,B-1,M2,B-2,A-3"
+)
+
+# 每日维护: 订阅那一步已经成功应用过配置 (带上了刚下载的规则集), 就不再单独应用一遍; 没有应用过才补一次
+(
+  logs_maintain() { :; }; stats_purge() { :; }; update_check() { :; }; auth_logged_in() { return 1; }
+  AUTO_UPDATE=1; AC=0; rules_update() { :; }; apply_config() { AC=$((AC + 1)); return 0; }
+  op_subs_refresh() { SUBS_APPLIED=$FAKE_APPLIED; }
+  rm -f "$H/.maintain-rules"; FAKE_APPLIED=1; op_maintain
+  eq "订阅刷新已经应用过 → 维护不再重复应用" "$AC" "0"
+  rm -f "$H/.maintain-rules"; FAKE_APPLIED=0; op_maintain
+  eq "订阅没有应用过 (没有订阅要刷新 / 没刷新成功) → 维护应用一次, 把刚下载的规则集带上" "$AC" "1"
+  FAKE_APPLIED=0; op_maintain
+  eq "3 天内刚做过: 什么都不做" "$AC" "1"
+)
+t "install.sh 的 enana update 同样: 订阅刷新应用过配置就不再 op_apply" grep -q 'SUBS_APPLIED' "$REPO/install.sh"
+echo
+
 echo "== U7. 仪表盘静态检查 (控制台报错的回归保护)"
 t "仪表盘不会自动去访问第三方网站查 IP (ipify / ipinfo): 出口 IP 由本机辅助服务查, 浏览器里不再出现 ERR_CONNECTION_RESET" sh -c "! grep -nE 'api\\.ipify\\.org|ipinfo\\.io' '$REPO'/ui/*.js"
 t "v-vps.js: 重置错误提示时只对有 setErr 的项调用 (「保存到云端」勾选框不是输入项; 以前这里抛 TypeError, 「添加自己的服务器」面板打不开)" grep -q 'b\[k\] && b\[k\].setErr' "$REPO/ui/v-vps.js"
 t "页面声明了标签页图标, 文件都在" sh -c "grep -q 'rel=\"icon\"' '$REPO/ui/index.html' && test -s '$REPO/ui/favicon.svg' && test -s '$REPO/ui/favicon.png'"
+echo "== U9. 官方线路 (会员): 云端响应整理 · 与用户服务器分开 · 只进自动线路池 · 没变化不重启 · 失败退避 / 宽限期 / 退出清除"
+# 只用占位数据: *.example.invalid 的主机、假的凭据、假的区域名。云端用桩函数代替 (不联网)。
+OFFD=$UW/off; mkdir -p "$OFFD"; : > "$OFFD/applies"
+cat > "$OFFD/mk.py" <<'PYEOF'
+import json, sys
+kind = sys.argv[1]
+def http(i, **kw):
+    o = {"type": "http", "tag": "官方-区域%d" % i, "server": "n%d.example.invalid" % i, "server_port": 443, "username": "u%d" % i, "password": "pw%d" % i, "tls": {"enabled": True, "server_name": "n%d.example.invalid" % i}}
+    o.update(kw); return {"outbound": o}
+nodes = [http(1), http(2)]
+nodes.append({"outbound": {"type": "tuic", "tag": "官方-图克", "server": "t.example.invalid", "server_port": 8443, "uuid": "00000000-0000-0000-0000-000000000001", "password": "pw", "congestion_control": "bbr", "tls": {"enabled": True, "alpn": ["h3"]}}})
+nodes.append({"outbound": {"type": "hysteria2", "tag": "官方-海星", "server": "y.example.invalid", "server_port": 8443, "password": "pw", "obfs": {"type": "salamander", "password": "ob"}, "tls": {"enabled": True}}})
+nodes.append({"outbound": {"type": "vless", "tag": "官方-维斯", "server": "v.example.invalid", "server_port": 443, "uuid": "00000000-0000-0000-0000-000000000002", "flow": "xtls-rprx-vision", "tls": {"enabled": True, "reality": {"enabled": True, "public_key": "PUB", "short_id": "ab"}}}})
+if kind == "ok":
+    bad = [http(9, tag="没有前缀"), http(10, detour="direct"), http(11, server="127.0.0.1"), http(12, type="wireguard"), http(13, server_port="443"), http(1), http(14, tag='官方-引"号'), http(15, tls={"certificate_path": "@CERTS@/x.crt"})]
+    print(json.dumps({"entitled": True, "nodes": nodes + bad}, ensure_ascii=False))
+elif kind == "ok2":    # 与 ok 同样的节点, 只是云端换了顺序和键的顺序
+    n = [dict(sorted(x["outbound"].items(), reverse=True)) for x in reversed(nodes)]
+    print(json.dumps({"entitled": True, "nodes": [{"outbound": o} for o in n]}, ensure_ascii=False))
+elif kind == "changed":
+    print(json.dumps({"entitled": True, "nodes": nodes[:3] + [http(7)]}, ensure_ascii=False))
+elif kind == "no":
+    print(json.dumps({"entitled": False, "nodes": []}))
+elif kind == "empty":
+    print(json.dumps({"entitled": True, "nodes": []}))
+elif kind == "junk":
+    print("<html>login</html>")
+PYEOF
+for k in ok ok2 changed no empty junk; do python3 "$OFFD/mk.py" $k > "$OFFD/$k.json"; done
+
+official_ingest "$OFFD/ok.json" "$OFFD/cand.jsonl"; eq "整理云端响应: 有资格且有节点 → 退出码 0" "$?" "0"
+eq "整理云端响应: 只留 5 个合格节点 (没有保留前缀 / detour / 回环地址 / 不支持的协议 / 端口不是数字 / 重复 / 引号 / 本机证书占位符 全部丢弃)" "$(wc -l < "$OFFD/cand.jsonl" | tr -d ' ')" "5"
+t "每一行都通过 official_check_lines (role=auto, official:true, type 和 tag 在最前)" official_check_lines "$OFFD/cand.jsonl"
+eq "行按节点名排序, 每行是合法 JSON" "$(python3 -c 'import json,sys; r=[json.loads(l) for l in open(sys.argv[1], encoding="utf-8")]; t=[x["outbound"]["tag"] for x in r]; assert t==sorted(t, key=lambda s: s.encode()); assert all(list(x["outbound"])[:2]==["type","tag"] and x["role"]=="auto" and x["official"] is True for x in r); print(len(t))' "$OFFD/cand.jsonl")" "5"
+official_ingest "$OFFD/ok2.json" "$OFFD/cand2.jsonl"; t "云端换了节点顺序 / 键顺序: 整理后的文件逐字节相同 (没变化就不会重启)" cmp -s "$OFFD/cand.jsonl" "$OFFD/cand2.jsonl"
+official_ingest "$OFFD/no.json" "$OFFD/x" ; eq "云端说没有资格 (entitled:false) → 退出码 3" "$?" "3"
+official_ingest "$OFFD/empty.json" "$OFFD/x" ; eq "有资格但云端暂时没有节点 → 退出码 4 (保留现有节点)" "$?" "4"
+official_ingest "$OFFD/junk.json" "$OFFD/x" ; eq "不是 JSON → 退出码 1" "$?" "1"
+t "拒绝过的内容不会写出文件 (没有部分写入)" test ! -e "$OFFD/x"
+
+# 与用户的服务器分开存放; 配置生成时只进自动线路池
+printf '%s\n' '{"role":"pin","outbound":{"type":"socks","tag":"Pin-A","server":"203.0.113.77","server_port":1080,"version":"5"}}' '{"role":"auto","outbound":{"type":"trojan","tag":"Auto-1","server":"198.51.100.4","server_port":443,"password":"x"}}' > "$H/servers.jsonl"
+cp "$OFFD/cand.jsonl" "$H/official.jsonl"
+eq "official_emit: 每个官方节点一行 (role=auto)" "$(official_emit | cut -f1 | sort | uniq -c | tr -s ' ')" " 5 auto"
+eq "official_emit: 第三列是去掉外层的出站 JSON, 不含 official 标记" "$(official_emit | cut -f3 | python3 -c 'import sys,json; print(all("official" not in json.loads(l) and list(json.loads(l))[:2]==["type","tag"] for l in sys.stdin))')" "True"
+eq "official_list: 第 7 列 = 1, 地址和端口留空 (界面不显示官方节点的地址)" "$(official_list | awk -F'\t' '$7=="1" && $3=="" && $4=="" && $5=="auto" {n++} END{print n}')" "5"
+eq "srv_list 不含官方节点 (它们不是用户的服务器): 数量 / 首次使用判断不受影响" "$(srv_count)" "2"
+t "official_has_tag" official_has_tag "官方-图克"
+printf '%s\n' '{"role":"auto","outbound":{"type":"trojan","tag":"官方-图克","server":"203.0.113.9","server_port":443,"password":"mine"}}' >> "$H/servers.jsonl"
+eq "用户自己有同名节点时, 官方的那一行不输出 (核心配置里不能出现重复标签)" "$(official_emit | cut -f2 | grep -c '^官方-图克$')" "0"
+sed -i.bak '$d' "$H/servers.jsonl"; rm -f "$H/servers.jsonl.bak"
+t "用户导入的节点不能占用保留前缀 官方-" sh -c ". '$LIB/servers.sh'; ! srv_check_line '{\"role\":\"auto\",\"outbound\":{\"type\":\"trojan\",\"tag\":\"官方-我的\",\"server\":\"203.0.113.9\",\"server_port\":443,\"password\":\"p\"}}'"
+t "也不能占用 enana-official- 前缀 (旧的模拟器 / 文档里用过)" sh -c ". '$LIB/servers.sh'; ! srv_check_line '{\"role\":\"auto\",\"outbound\":{\"type\":\"trojan\",\"tag\":\"enana-official-x\",\"server\":\"203.0.113.9\",\"server_port\":443,\"password\":\"p\"}}'"
+t "普通节点名照常接受" sh -c ". '$LIB/servers.sh'; srv_check_line '{\"role\":\"auto\",\"outbound\":{\"type\":\"trojan\",\"tag\":\"官方版本\",\"server\":\"203.0.113.9\",\"server_port\":443,\"password\":\"p\"}}'"
+srv_secret_fields "官方-图克" >/dev/null; eq "官方节点的凭据永远不显示 (srv_secret_fields 退出码 3)" "$?" "3"
+srv_secret_fields "Auto-1" >/dev/null; eq "用户自己的节点仍可查看 (退出码 0)" "$?" "0"
+printf '%s\n' '{"role":"auto","outbound":{"type":"trojan","tag":"香港节点","server":"198.51.100.8","server_port":443,"password":"cn-pw"}}' >> "$H/servers.jsonl"
+eq "含中文名字的用户节点也能查看凭据 (srv_secret_fields 以前拿字节和已解码的字符串比较, 中文名永远对不上)" "$(srv_secret_fields 香港节点 | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["value"])')" "cn-pw"
+sed -i.bak '$d' "$H/servers.jsonl"; rm -f "$H/servers.jsonl.bak"
+
+gen_config >/dev/null 2>&1; cp "$H/config.json.new" "$OFFD/cfg1.json"
+eq "配置: 官方节点在 AUTO 池和 Global 里, 不在 PIN 里 (只进自动线路)" "$(python3 - "$OFFD/cfg1.json" <<'PYEOF'
+import json, sys
+c = json.load(open(sys.argv[1], encoding="utf-8")); o = {x["tag"]: x for x in c["outbounds"]}
+off = sorted(t for t in o if t.startswith("官方-"))
+print(len(off), all(t in o["AUTO"]["outbounds"] and t in o["Global"]["outbounds"] and t not in o["PIN"]["outbounds"] for t in off), o["PIN"]["outbounds"], "official" in json.dumps(c))
+PYEOF
+)" "5 True ['Pin-A'] False"
+gen_config >/dev/null 2>&1; t "官方节点没变化: 重新生成的配置逐字节相同" cmp -s "$OFFD/cfg1.json" "$H/config.json.new"
+python3 "$OFFD/mk.py" changed > /dev/null; official_ingest "$OFFD/changed.json" "$OFFD/cand3.jsonl"; cp "$OFFD/cand3.jsonl" "$H/official.jsonl"
+gen_config >/dev/null 2>&1; t "官方节点变了: 配置也跟着变" sh -c "! cmp -s '$OFFD/cfg1.json' '$H/config.json.new'"
+: > "$H/official.jsonl"; gen_config >/dev/null 2>&1; eq "官方节点清空后: 配置里一个官方节点都没有" "$(grep -c '官方-' "$H/config.json.new" || true)" "0"
+
+# 同步流程 (云端、授权、配置校验都用桩函数)
+auth_logged_in() { return 0; }; session_id() { printf sid; }; session_token() { printf tok; }
+session_call() { local out=$1; if [ -n "${FAKE_BODY:-}" ]; then cp "$FAKE_BODY" "$out"; else : > "$out"; fi; printf '%s' "${FAKE_CODE:-200}"; }
+apply_config() { echo x >> "$OFFD/applies"; APPLY_CHANGED=1; [ -z "${STUB_FAIL:-}" ]; }
+napply() { wc -l < "$OFFD/applies" | tr -d ' '; }
+rm -f "$H/official.jsonl" "$H/official.state"; NETWORK_MODE=system; unset OP_WHO
+FAKE_BODY=$OFFD/ok.json FAKE_CODE=200 official_sync; eq "同步: 第一次 → 写入并应用 (apply_config 调用 1 次)" "$?:$(napply):$(wc -l < "$H/official.jsonl" | tr -d ' ')" "0:1:5"
+eq "同步: 文件权限 600, 状态里 entitled=1、fails=0" "$(ls -l "$H/official.jsonl" | cut -c1-10):$(official_state_get entitled):$(official_state_get fails)" "-rw-------:1:0"
+cp "$H/official.jsonl" "$OFFD/keep.jsonl"
+FAKE_BODY=$OFFD/ok2.json FAKE_CODE=200 official_sync; eq "同步: 云端内容没变 (顺序不同) → 不重新生成配置、不重启 (apply_config 仍是 1 次), 文件逐字节不变" "$?:$(napply):$(cmp -s "$OFFD/keep.jsonl" "$H/official.jsonl" && echo same)" "0:1:same"
+FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync; eq "同步: 节点变了 → 应用 (apply_config 共 2 次)" "$?:$(napply)" "0:2"
+FAKE_BODY=$OFFD/changed.json FAKE_CODE=503 official_sync; eq "同步: 云端 503 → 失败 (退出码 1), 现有节点原样保留, 没有应用, fails=1" "$?:$(napply):$(wc -l < "$H/official.jsonl" | tr -d ' '):$(official_state_get fails)" "1:2:4:1"
+FAKE_BODY=$OFFD/junk.json FAKE_CODE=200 official_sync; eq "同步: 云端回了网页 → 当作失败, 现有节点保留, fails=2" "$?:$(wc -l < "$H/official.jsonl" | tr -d ' '):$(official_state_get fails)" "1:4:2"
+FAKE_BODY=$OFFD/empty.json FAKE_CODE=200 official_sync; eq "同步: 有资格但云端暂时没有节点 → 保留现有节点, fails 归零" "$?:$(wc -l < "$H/official.jsonl" | tr -d ' '):$(official_state_get fails)" "0:4:0"
+now_=$(now); due() { official_due && echo due || echo wait; }
+official_state_set try="$now_" fails=0; eq "到点判断: 刚同步过 → 还没到点" "$(due)" wait
+official_state_set try=$((now_ - 14500)) fails=0; eq "到点判断: 超过 4 小时 → 到点" "$(due)" due
+official_state_set try=$((now_ - 1000)) fails=1; eq "失败退避: 第 1 次失败后 15 分钟到点" "$(due)" due
+official_state_set try=$((now_ - 800)) fails=1; eq "失败退避: 15 分钟内不重试" "$(due)" wait
+official_state_set try=$((now_ - 1000)) fails=2; eq "失败退避: 第 2 次失败后要等 30 分钟" "$(due)" wait
+official_state_set try=$((now_ - 3000)) fails=8; eq "失败退避: 多次失败后最长 4 小时一次" "$(due)" wait
+official_state_set ok=$((now_ - 100000)) try="$now_" fails=1
+FAKE_CODE=503 official_sync; eq "宽限期: 离线不到 3 天 → 节点保留" "$?:$(wc -l < "$H/official.jsonl" | tr -d ' '):$(napply)" "1:4:2"
+official_state_set ok=$((now_ - 270000)) try=0
+FAKE_CODE=503 official_sync; eq "宽限期: 离线超过 3 天 → 节点移除并应用 (apply_config 共 3 次)" "$?:$(test -e "$H/official.jsonl" && echo present || echo gone):$(napply)" "1:gone:3"
+FAKE_BODY=$OFFD/ok.json FAKE_CODE=200 official_sync; FAKE_BODY=$OFFD/no.json FAKE_CODE=200 official_sync
+eq "同步: 云端明确说没有资格 (订阅到期 / 邮箱未验证) → 下一次成功同步时全部移除" "$?:$(test -e "$H/official.jsonl" && echo present || echo gone):$(official_state_get entitled)" "0:gone:0"
+n0=$(napply); FAKE_BODY=$OFFD/no.json FAKE_CODE=200 official_sync; eq "同步: 本来就没有节点时 entitled:false 不触发任何应用" "$(napply)" "$n0"
+t "移除官方节点之后不留凭据副本 (op_txn 的备份 official.jsonl.prev 也删掉)" test ! -e "$H/official.jsonl.prev"
+
+# 配置没通过校验: 回滚到原来的节点, 同一份内容一天之内不再重试
+FAKE_BODY=$OFFD/ok.json FAKE_CODE=200 official_sync; cp "$H/official.jsonl" "$OFFD/good.jsonl"; n1=$(napply)
+STUB_FAIL=1 FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync
+eq "校验失败: 退出码 1, 回滚到原来的节点 (official.jsonl 没变), 记下被拒绝的内容" "$?:$(cmp -s "$OFFD/good.jsonl" "$H/official.jsonl" && echo same):$([ -n "$(official_state_get bad)" ] && echo marked)" "1:same:marked"
+n2=$(napply); STUB_FAIL=1 FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync
+eq "校验失败: 同一份被拒绝的内容不会再次尝试 (没有额外的 apply_config)" "$(napply)" "$n2"
+official_state_set bad_at=$(( $(now) - 90000 )); FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync; eq "拒绝记录超过一天后重新尝试并成功" "$?:$(wc -l < "$H/official.jsonl" | tr -d ' '):$(official_state_get bad)" "0:4:"
+
+# Enhanced/TUN: 后台 (auto) 不弹授权, 记下 deferred; 仪表盘里 (用户在场) 才应用
+FAKE_BODY=$OFFD/ok.json FAKE_CODE=200 official_sync; n3=$(napply); cp "$H/official.jsonl" "$OFFD/tun0.jsonl"
+NETWORK_MODE=tun OP_WHO=auto FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync
+eq "TUN + 后台: 节点有变化 → 不应用、不改文件、记下 deferred=1" "$?:$(napply):$(cmp -s "$OFFD/tun0.jsonl" "$H/official.jsonl" && echo same):$(official_state_get deferred)" "0:$n3:same:1"
+NETWORK_MODE=tun OP_WHO=dashboard FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync
+eq "TUN + 仪表盘: 用户在场 → 正常应用, deferred 清零" "$?:$(napply):$(official_state_get deferred)" "0:$((n3 + 1)):0"
+NETWORK_MODE=tun OP_WHO=auto FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync; eq "TUN + 后台: 内容没变 → 什么都不做 (也不记 deferred)" "$(napply):$(official_state_get deferred)" "$((n3 + 1)):0"
+NETWORK_MODE=system; unset OP_WHO
+
+# 套餐刷新后判断是否需要同步 / 退出账号清除
+printf '%s' '{"plan":{"code":"pro"},"features":{"core":{"enabled":true,"tier":"free"},"official_proxy":{"enabled":true,"tier":"pro"}},"official":{"available":true,"nodes":33}}' > "$H/plan.json"
+eq "plan_official_on: 套餐里 official_proxy.enabled=true → 1" "$(plan_official_on)" "1"
+printf '%s' '{"plan":{"code":"free"},"features":{"official_proxy":{"enabled":false,"tier":"pro","reason":"upgrade","coming_soon":true}}}' > "$H/plan.json"
+eq "plan_official_on: 免费版 / 即将推出 → 0" "$(plan_official_on)" "0"
+rm -f "$H/plan.json"; eq "plan_official_on: 没有缓存 → 0" "$(plan_official_on)" "0"
+t "退出账号 (auth_logout_local) 会删除 official.jsonl、它的备份和 official.state: 官方节点属于账号" sh -c "grep -q '\$H/official.jsonl\" \"\$H/official.jsonl.prev\" \"\$H/official.state' '$LIB/auth.sh'"
+unset -f auth_logged_in session_id session_token session_call apply_config
+echo
 PASS=$(wc -l < "$UW/.pass" 2>/dev/null | tr -d ' '); FAIL=$(wc -l < "$UW/.fail" 2>/dev/null | tr -d ' ')
 echo "单元测试: ${PASS:-0} 通过, ${FAIL:-0} 失败"
 [ "${FAIL:-0}" = 0 ]

@@ -13,6 +13,8 @@ step 3; sleep 0.2
 step 4; sleep 0.2
 step 5; sleep 0.2
 hop=$(c hop); port=443
+# 默认端口被别的服务占用 (busy=1): 不停止 / 不替换占用它的服务, 改用一个空闲端口, 并如实报告请求的端口、实际端口和原因 (本机界面和放行指引以节点实际使用的端口为准)
+if [ "$(c busy)" = 1 ]; then kv port_requested 443; kv port_reason default_busy; port=2053; fi
 kv port "$port"; kv sni www.microsoft.com; kv public_key MOCKPUBLICKEY; kv short_id 0123456789abcdef; kv uuid 00000000-0000-4000-8000-000000000001
 [ "$f" != E_VPS_VERIFY ] || die E_VPS_VERIFY "服务启动失败" "The service failed to start"
 mock_ips | while read -r ip; do

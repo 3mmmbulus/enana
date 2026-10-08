@@ -182,6 +182,19 @@ rm -f "$HELPER"; mv "$HELPER.real" "$HELPER"
 rm -f "$SUDOERS"
 eq "sudoers 规则不在了 (用户或系统删了): 不信任 (sudo -n 要密码)" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
 
+echo "-- S6c2. 端口被重新分配: 助手里写死的还是旧端口 → 不信任 (否则会把系统代理指向旧端口、还报告成功), 下一次授权时重装"
+reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
+os_sysproxy_apply on </dev/null >/dev/null 2>&1
+OLD_PORT=$PORT
+eq "(准备) 助手装好了, 写死的端口 = 当前端口" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted):$(os_sysproxy_helper_port)" "trusted:$OLD_PORT"
+PORT=$((OLD_PORT + 11)); export FAKE_PORT=$PORT; rm -f "$FAKE_STATE/sysproxy-on"
+eq "端口变了: 版本对, 但写死的端口不一致 → 不信任" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
+os_sysproxy_apply on </dev/null >/dev/null 2>&1; rc=$?
+eq "…下一次打开系统代理: 弹一次框重装助手 (新端口写进去), 之后可信" "$rc:$SYSPROXY_METHOD:$SYSPROXY_HELPER:$(os_sysproxy_helper_ok && echo trusted || echo untrusted):$(os_sysproxy_helper_port)" "0:dialog:installed:trusted:$PORT"
+os_sysproxy_apply off </dev/null >/dev/null 2>&1
+eq "…重装之后又走助手 (不再弹框)" "$SYSPROXY_METHOD" "helper"
+PORT=$OLD_PORT; export FAKE_PORT=$OLD_PORT
+
 echo "-- S6d. 不装助手的情况: 用户名不合法 / 明确关闭 / 本来就有免密 sudo / 授权被取消"
 reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
 id() { case ${1:-} in -un) printf 'bad user;name' ;; *) command id "$@" ;; esac; }

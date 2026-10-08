@@ -738,7 +738,6 @@ sudo 没有通过: sudo 密码不对, 或这个用户没有 sudo 权限	sudo fai
 探测服务器	Probe server
 探测服务器主机指纹	Probe server host fingerprint
 整理结果	Collect results
-新增的节点从这台电脑连不上: 多半是云服务商的安全组 / 防火墙没有放行端口, 放行后再试一次	The new nodes cannot be reached from this computer: most likely the cloud provider's security group / firewall does not allow the port; open it and try again
 无法创建临时目录	Could not create a temporary directory
 更新自己的服务器的出口 IP	Update the exit IPs of your own server
 服务器地址不正确 (IP 或域名)	The server address is not valid (IP or domain)
@@ -762,7 +761,6 @@ sudo 没有通过: sudo 密码不对, 或这个用户没有 sudo 权限	sudo fai
 这台电脑上找不到 ssh 命令	The ssh command was not found on this computer
 连不上这台服务器 (地址 / 端口不对, 服务器没开机, 或防火墙挡住了 SSH 端口)	Cannot reach this server (wrong address / port, the server is off, or a firewall blocks the SSH port)
 连接服务器	Connect to the server
-部署完成了, 但从这台电脑连不上新节点: 多半是云服务商的安全组 / 防火墙没有放行端口 */tcp, 放行后点「重新验证」	Deployment finished, but the new nodes cannot be reached from this computer: most likely the cloud provider's security group / firewall does not allow port */tcp; open it and click “Verify again”
 部署脚本异常结束 (退出码 *)	The deployment script ended abnormally (exit code *)
 部署脚本没有返回可用的节点	The deployment script returned no usable nodes
 部署脚本由 enana 云端下发: 请先登录, 并等「云端内容」同步完成后再试	The deployment scripts come from the enana cloud: sign in first and wait for “cloud content” to sync, then try again
@@ -771,6 +769,25 @@ sudo 没有通过: sudo 密码不对, 或这个用户没有 sudo 权限	sudo fai
 需要 sudo 密码	The sudo password is required
 需要先确认并固定服务器的主机指纹	Confirm and pin the server's host fingerprint first
 验证连通	Verify connectivity
+找不到这次部署的记录 (可能已经放弃、已经添加, 或超过 7 天被清理了)	This deployment record was not found (it may have been discarded, already added, or cleaned up after 7 days)
+这次部署正在验证中, 请稍等	This deployment is already being verified, please wait
+待验证的部署编号无效	The pending-deployment ID is invalid
+放弃待验证的部署	Discard unverified deployment
+读取部署记录	Read the deployment record
+检查端口	Check the port
+节点已经在本机的服务器列表里了	The nodes are already in this computer's server list
+新增的节点没有通过验证 (TCP *)	The new nodes did not pass verification (TCP *)
+部署完成了, 但新节点没有通过验证 (TCP *)	Deployment finished, but the new nodes did not pass verification (TCP *)
+处理后再试一次	try again once that is fixed
+放行或修复后点「重新验证」	once it is open or fixed, click “Verify again”
+端口是通的, 但经节点访问失败, 这不是防火墙问题: 可能是服务端配置或密钥不匹配、服务器时间不准, 或这台服务器的出站网络被限制	the port is reachable, but going through the node failed, so this is not a firewall problem: the server configuration or keys may not match, the server clock may be off, or this server's outbound network may be restricted
+服务器上没有进程在监听这个端口, 服务可能没有启动成功, 请到服务器上查看服务状态	nothing on the server is listening on this port; the service may have failed to start, check its status on the server
+服务器明确拒绝了连接: 服务没有在监听这个端口, 或服务器防火墙配置成了拒绝; 这不是云服务商安全组的典型表现	the server actively refused the connection: nothing is listening on this port, or the server firewall rejects instead of dropping; this is not typical of a cloud security group
+这台电脑到服务器没有可用路由, 请检查这台电脑的网络或 VPN	this computer has no usable route to the server, check this computer's network or VPN
+服务在监听, 但服务器上启用了防火墙: 它或云服务商的安全组可能没有放行这个端口	the service is listening, but a firewall is enabled on the server: it or the cloud provider's security group may not allow this port
+服务在监听, 没有发现服务器自己的防火墙拦截, 多半是云服务商的安全组 / 网络 ACL 没有放行这个端口	the service is listening and no firewall on the server itself was found blocking it, so most likely the cloud provider's security group / network ACL does not allow this port
+没有收到服务器的回应, 无法确定原因: 可能是云服务商的安全组或服务器防火墙没有放行, 也可能是这台电脑的网络到该地址不通	no reply was received from the server, so the cause cannot be determined: the cloud provider's security group or the server firewall may not allow it, or this computer's network may not reach that address
+原因无法确定, 请检查服务器和网络	the cause cannot be determined, check the server and the network
   [1] 打开仪表盘\n	  [1] Open dashboard\n
   [2] 重启服务\n	  [2] Restart service\n
   [3] %s\n	  [3] %s\n
@@ -894,3 +911,55 @@ macOS 没有允许 enana 弹出授权窗口。请在「系统设置 → 隐私�
 完整诊断包含你访问过的域名和应用名, 只发给 enana 开发者, 云端 7 天后自动删除; 不含密码和令牌。	Full diagnostics include the domains you visited and app names, are sent only to the enana developer, and are deleted from the cloud after 7 days; no passwords or tokens.
 确认发送?	Send?
 已发送。报告编号: %s (把它告诉开发者)	Sent. Report code: %s (give it to the developer)
+打包完整诊断	Package the full diagnostics
+已发送, 报告编号 *	Sent, report ID *
+需要先登录	Sign in first
+诊断文件太大, 请在设置里缩短日志保留时长后再试	The diagnostics file is too large; shorten the log retention in Settings and try again
+今天发送的次数已经够多了, 请明天再试	Too many sends today, try again tomorrow
+发送失败 (*), 检查网络后重试	Sending failed (*), check the network and try again
+没有经过验证的兼容版本可升级, 保持 sing-box *	No verified compatible version is available to upgrade to; keeping sing-box *
+已经是兼容的最新版本 sing-box *	Already on the latest compatible version, sing-box *
+Windows 更新失败, 已保留当前版本 (详情见 api.log)	The Windows update failed; the current version was kept (see api.log for details)
+没能删除系统代理助手, 可以手动删除: sudo rm -f * *	Could not remove the system proxy helper; you can delete it manually: sudo rm -f * *
+没有登录, 或者不是 macOS	Not signed in, or not macOS
+先登录账号 (enana 里按 1 打开仪表盘)	Sign in first (press 1 in enana to open the dashboard)
+已上传诊断摘要 (enana diag-preview 可以看到传了什么)	Diagnostics summary uploaded (enana diag-preview shows what was sent)
+上传失败	Upload failed
+看操作记录里的「诊断上传」: enana logs	Check “Diagnostics upload” in the operation log: enana logs
+用法: enana diag-send [小时数]	Usage: enana diag-send [hours]
+已发送。报告编号: * (把它告诉开发者)	Sent. Report ID: * (give it to the developers)
+发送失败 (*)	Sending failed (*)
+没有登录就先登录; 太大就缩短时间范围; 看操作记录: enana logs	Sign in if you are not signed in; shorten the time range if it is too large; check the operation log: enana logs
+没能删除	Could not delete
+没有登录, 或者联系不上云端	Not signed in, or the cloud cannot be reached
+已删除云端上你的 * 份诊断	Deleted * of your diagnostics from the cloud
+enana * · * * * · bash * · 安装目录 * · 语言 *	enana * · * * * · bash * · install dir * · language *
+# --- billing bridge errors and official routes
+付款参数无效	Invalid payment details
+订单编号无效	Invalid order id
+账号服务暂时无法连接，请稍后重试	The account service is unreachable right now. Try again later
+云端登录已失效、已结束或这台电脑是离线登录，请联网并重新登录后再试	Your cloud sign-in has expired, ended, or this computer signed in offline. Go online, sign in again and retry
+enana.cc 服务器返回了错误，这次操作可能已生效也可能没有，请先刷新并查看订单和余额	The enana.cc server returned an error. The request may or may not have gone through: refresh and check your orders and balance first
+请求过于频繁，请稍后再试	Too many requests. Try again later
+官方线路同步	Official routes sync
+官方线路更新待应用	Official routes update pending
+官方线路同步没有完成, 稍后会自动重试	The official routes sync did not finish; it will retry automatically
+官方线路节点由会员权益提供，不能删除或修改角色	Official route nodes come with the membership and cannot be deleted or re-assigned
+
+# --- lib/exits.sh · Exit assignment (fixed-exit assignment, impact checks, bulk move)
+固定出口移除前改派	Reassigned items before removing a Fixed exit
+固定出口移除时没有改派	Removed a Fixed exit without reassigning its items
+恢复默认固定出口	Restored the default Fixed exit
+删除订阅时没有改派固定出口	Deleted a subscription without reassigning its Fixed exits
+移动固定出口	Move Fixed exit assignments
+新的出口不能是正要移除的这一个	The new exit can’t be the one being removed
+它自己就是默认固定出口, 请选另一个固定出口作为新的去向	It is the default Fixed exit itself — pick another Fixed exit as the destination
+剩下的固定出口不到 2 个, 不能选「在固定出口里自动选」	Fewer than 2 Fixed exits remain, so “Auto-pick among Fixed exits” isn’t available
+指定的固定出口不存在 (固定出口至少要有 2 个才能单独指定)	That Fixed exit doesn’t exist (you need at least 2 Fixed exits to assign one individually)
+有应用 / 网站 / 服务正在使用这个固定出口 (或跟随它作默认出口): 先选择让它们改走哪一个出口, 或者明确接受后果再继续	Apps, sites or services are using this Fixed exit (or follow it as the default exit): choose where they go first, or explicitly accept the consequences to continue
+有应用 / 网站 / 服务正在使用这个订阅里的固定出口 (或跟随其中的默认固定出口): 删除订阅后它们会退回默认固定出口 (没有固定出口时直连)。请明确接受后果再继续	Apps, sites or services are using Fixed exits in this subscription (or follow one of them as the default): after deleting it they fall back to the default Fixed exit — or connect directly if none is left. Explicitly accept the consequences to continue
+还没有固定出口	There’s no Fixed exit yet
+移动固定出口 完成, 配置已应用	Fixed exit assignments moved; configuration applied
+移动固定出口 完成 (配置无变化, 未重启)	Fixed exit assignments moved (configuration unchanged, no restart)
+移动固定出口 失败: 没有可应用的更改	Moving Fixed exit assignments failed: no changes to apply
+            %s⚠ 有 %s 个应用 / 网站指定的固定出口已经不存在, 暂时在用默认固定出口 (出口 IP 可能变了); 到仪表盘「服务器」页的「出口分配」处理%s\n	            %s⚠ %s apps/sites point to a Fixed exit that no longer exists and are using the default Fixed exit for now (their exit IP may have changed); fix it on the dashboard Servers page under Exit assignment%s\n

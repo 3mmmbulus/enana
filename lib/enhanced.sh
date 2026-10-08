@@ -27,22 +27,46 @@ enhanced_admin() {
 }
 # The fingerprint of everything the root core was installed from EXCEPT the app/site policy rule sets (rules/ovr-*.json): those are plain routing data
 # that enhanced_sync_ovr can push into the root snapshot without a restart (see enhanced_ovr_fingerprint). A change to anything else needs a full,
-# administrator-authorised install.
+# administrator-authorised install, so the fingerprint must only move when the root snapshot would really differ:
+#   - config.json is hashed with the clash_api "default_mode" value blanked. proxy_apply_mode rewrites that value in place on every master-switch / mode
+#     toggle, but it is only the mode the core starts in when it has no remembered one: the live mode is pushed through the API (PATCH /configs) and
+#     the core keeps it in cache.db (sing-box restores it on start), and every restart enana makes is followed by proxy_sync_mode. The one thing left
+#     is a core that restarts on its own with a stale seed, which apply_config covers (enhanced_mode_resync).
+#   - hidden files (rules/.updated is rewritten by every `enana update` even when no rule changed, .DS_Store), *.new and *.tmp (downloads and writes in
+#     progress) are bookkeeping, not rule data.
+enhanced_config_hash() { sed 's/"default_mode":"[A-Za-z]*"/"default_mode":"-"/' "$H/config.json" 2>/dev/null | shasum -a 256 | awk '{print $1}'; }
+enhanced_data_hashes() { find "$H/rules" "$H/certs" -type f ! -name 'ovr-*.json' ! -name '.*' ! -name '*.new' ! -name '*.tmp' -exec shasum -a 256 {} \; 2>/dev/null; }
 enhanced_fingerprint() {
   {
-    printf 'autostart=%s\n' "${AUTOSTART:-1}"; shasum -a 256 "$SB" "$H/config.json"
+    printf 'autostart=%s\n' "${AUTOSTART:-1}"; shasum -a 256 "$SB"; printf 'config:%s\n' "$(enhanced_config_hash)"
     # Source checkouts and the installed copy must fingerprint identically.
     local impl
     for impl in enhanced.sh enhanced-root.sh; do printf 'implementation:%s %s\n' "$impl" "$(shasum -a 256 "$LIB/$impl" | awk '{print $1}')"; done
-    find "$H/rules" "$H/certs" -type f ! -name 'ovr-*.json' -exec shasum -a 256 {} \; 2>/dev/null
+    enhanced_data_hashes
   } | LC_ALL=C sort | shasum -a 256 | awk '{print $1}'
+}
+enhanced_record_install() { # after a successful root install: remember what it was built from (see apply_config)
+  enhanced_fingerprint > "$H/.enhanced-fingerprint"; enhanced_ovr_fingerprint > "$H/.enhanced-ovr-fingerprint"
+  rm -f "$H/.enhanced-stopped"
+  if type proxy_clash_mode >/dev/null 2>&1; then proxy_clash_mode > "$H/.enhanced-mode"; fi
+}
+enhanced_mode_resync() { # the mode baked into the root snapshot is only a seed (see above): when the wanted one differs, push it to the live core and remember it once the core reports it
+  local want got; want=$(proxy_clash_mode)
+  [ "$(cat "$H/.enhanced-mode" 2>/dev/null)" != "$want" ] || return 0
+  proxy_sync_mode
+  got=$(clash GET /configs 2>/dev/null | sed -n 's/.*"mode":"\([A-Za-z]*\)".*/\1/p' | head -1)
+  [ "$(printf '%s' "$got" | tr 'A-Z' 'a-z')" != "$(printf '%s' "$want" | tr 'A-Z' 'a-z')" ] || printf '%s\n' "$want" > "$H/.enhanced-mode"
+  return 0
 }
 enhanced_ovr_fingerprint() { # the app/site policy rule sets (written by ovr_sync); empty directory => a fixed hash
   { find "$H/rules" -maxdepth 1 -type f -name 'ovr-*.json' -exec shasum -a 256 {} \; 2>/dev/null; echo ovr; } | LC_ALL=C sort | shasum -a 256 | awk '{print $1}'
 }
 
-# ---- rule-data helper: change an app/site policy in TUN mode without restarting the root core (= without an administrator prompt) ----
-TUNRULES_HELPER_VERSION=1
+# ---- root helper: change an app/site policy in TUN mode (`sync`) or bounce the root core (`restart`) without an administrator prompt ----
+# Version 2 added `restart`. A helper installed by an older enana reports version 1, so enhanced_helper_ok rejects it and the next full install (one
+# administrator authorisation, the same one that already follows any upgrade of enhanced.sh / enhanced-root.sh) replaces it. Nothing silently
+# calls a helper that lacks the action.
+TUNRULES_HELPER_VERSION=2
 enhanced_helper_path() { enhanced_paths; printf '%s/usr/local/libexec/enana/tunrules-%s' "${ENANA_ROOT_PREFIX:-}" "$TUN_UID"; }
 enhanced_helper_ok() { os_helper_trusted "$(enhanced_helper_path)" "$TUNRULES_HELPER_VERSION"; }
 enhanced_ovr_bundle() { # {"ovr-pin.json": {...}, ...} from $H/rules/ovr-*.json (the helper validates it again, strictly)
@@ -55,6 +79,21 @@ enhanced_sync_ovr() { # 0 = synced (the running root core hot-reloads the files)
   enhanced_helper_ok || return 1
   enhanced_ovr_bundle | sudo -n "$h" sync >/dev/null 2>"$H/enhanced-sync.log" || return 1
   enhanced_ovr_fingerprint > "$H/.enhanced-ovr-fingerprint"
+}
+# Restart the running root core without an administrator prompt: the root helper's `restart` action only runs `launchctl kickstart -k` on this user's
+# own TUN daemon (see lib/tunrules-helper.pl). It is the right tool when nothing about the root snapshot changed (fingerprint identical): a full install
+# would copy the very same files again and ask for a password for nothing. Returns non-zero when it cannot be used or failed; the caller then does
+# the full, authorised install. ENHANCED_FAST_WHY says why (for the operation log).
+enhanced_restart_fast() {
+  ENHANCED_FAST_WHY=''
+  enhanced_paths
+  enhanced_configured || { ENHANCED_FAST_WHY=not-tun; return 1; }
+  enhanced_loaded || { ENHANCED_FAST_WHY=not-loaded; return 1; }
+  [ "$(enhanced_fingerprint)" = "$(cat "$H/.enhanced-fingerprint" 2>/dev/null)" ] || { ENHANCED_FAST_WHY=changed; return 1; }
+  enhanced_helper_ok || { ENHANCED_FAST_WHY=no-helper; return 1; }
+  # A policy edit that is still pending must reach the root snapshot before the restart loads it.
+  if [ "$(enhanced_ovr_fingerprint)" != "$(cat "$H/.enhanced-ovr-fingerprint" 2>/dev/null)" ]; then enhanced_sync_ovr || { ENHANCED_FAST_WHY=sync-failed; return 1; }; fi
+  sudo -n "$(enhanced_helper_path)" restart >/dev/null 2>"$H/enhanced-restart.log" || { ENHANCED_FAST_WHY=rejected; return 1; }
 }
 enhanced_stage_config() {
   # Explicitly open the config: decode(<>) evaluates the diamond in list
@@ -92,7 +131,7 @@ enhanced_start() {
   # Restore selector choices through the authenticated API, never copy a live DB.
   enhanced_restore_selectors "$stage/selectors.json"
   rm -rf "$stage"
-  enhanced_fingerprint > "$H/.enhanced-fingerprint"; enhanced_ovr_fingerprint > "$H/.enhanced-ovr-fingerprint"
+  enhanced_record_install
 }
 enhanced_restore_selectors() {
   local name choice
@@ -107,8 +146,30 @@ enhanced_restore_selectors() {
       print $url,"\t",JSON::PP->new->utf8->encode({name=>$p->{$n}{now}}),"\n";
     }' "$1")
 }
-enhanced_stop() { enhanced_paths; [ -e "$TUN_PLIST" ] || return 0; enhanced_admin /bin/bash "$LIB/enhanced-root.sh" stop "$TUN_UID"; }
-enhanced_remove() { enhanced_paths; [ -e "$TUN_PLIST" ] || [ -e "$TUN_ROOT" ] || return 0; enhanced_admin /bin/bash "$LIB/enhanced-root.sh" remove "$TUN_UID"; }
+# 0 = there is nothing for `stop` to do: the root daemon is not loaded AND cannot come back on its own. `stop` (enhanced-root.sh) unloads the job and also
+# disables it, so it does not return at the next boot next to the user's own core; that state outlives the process. We know it holds when launchd lists
+# the job as disabled (no root needed to ask) or when our own earlier `stop` succeeded and nothing has loaded the job since (the marker is dropped the
+# moment a loaded daemon is seen and by every install). Unloaded but still enabled (someone booted it out by hand) is NOT idle: `stop` runs and disables it.
+enhanced_idle() {
+  enhanced_paths
+  if enhanced_loaded; then rm -f "$H/.enhanced-stopped"; return 1; fi
+  [ -f "$H/.enhanced-stopped" ] && return 0
+  launchctl print-disabled system 2>/dev/null | grep -F "\"$TUN_LABEL\"" | grep -Eq '=> (true|disabled)'
+}
+# The plist stays after a stop (only `remove` deletes it), so "plist exists" alone does not mean a daemon is running: asking for administrator rights to
+# stop an already-stopped daemon made every System Proxy start / stop prompt once the user had tried TUN.
+enhanced_stop() {
+  local rc; enhanced_paths; [ -e "$TUN_PLIST" ] || return 0
+  enhanced_idle && return 0
+  enhanced_admin /bin/bash "$LIB/enhanced-root.sh" stop "$TUN_UID"; rc=$?
+  [ "$rc" != 0 ] || : > "$H/.enhanced-stopped"
+  return "$rc"
+}
+enhanced_remove() {
+  enhanced_paths; [ -e "$TUN_PLIST" ] || [ -e "$TUN_ROOT" ] || return 0
+  enhanced_admin /bin/bash "$LIB/enhanced-root.sh" remove "$TUN_UID" || return $?
+  rm -f "$H/.enhanced-stopped"
+}
 enhanced_system_log() {
   if [ -L "$H/sing-box.log" ] && [ "$(readlink "$H/sing-box.log")" = "$TUN_ROOT/sing-box.log" ]; then
     logs_rotate; rm -f "$H/sing-box.log"; : > "$H/sing-box.log"

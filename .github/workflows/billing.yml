@@ -2,9 +2,9 @@ name: Cloud billing foundation
 on:
   push:
     branches: [main]
-    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'ui/billing.js', 'tests/billing-*', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
+    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'lib/plan.sh', 'lib/official.*', 'lib/servers.sh', 'lib/config.sh', 'tests/mock-account.py', 'ui/billing.js', 'ui/plan.js', 'tests/billing-*', 'tests/official-*', 'tests/update-official.sh', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
   pull_request:
-    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'ui/billing.js', 'tests/billing-*', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
+    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'lib/plan.sh', 'lib/official.*', 'lib/servers.sh', 'lib/config.sh', 'tests/mock-account.py', 'ui/billing.js', 'ui/plan.js', 'tests/billing-*', 'tests/official-*', 'tests/update-official.sh', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
   workflow_dispatch:
 permissions:
   contents: read
@@ -28,10 +28,15 @@ jobs:
       - name: Test real database transactions and local SMTP activation
         env:
           PB_BIN: ${{ runner.temp }}/enana-pb-test/pocketbase
-        run: node --test tests/billing-domain.test.js tests/billing-pocketbase.test.js tests/diag-pocketbase.test.js tests/email-verification-ui.test.js tests/billing-ui.test.js tests/billing-smtp-admin.test.js
+        run: node --test tests/billing-domain.test.js tests/billing-pocketbase.test.js tests/official-domain.test.js tests/official-pocketbase.test.js tests/billing-plan-ui.test.js tests/diag-pocketbase.test.js tests/email-verification-ui.test.js tests/billing-ui.test.js tests/billing-smtp-admin.test.js
       - name: Check authenticated local bridge and exact amounts
-        run: python3 tests/billing-bridge.py
+        run: |
+          python3 tests/billing-bridge.py
+          python3 tests/official-bridge.py
       - name: Check deployment syntax
         run: |
           bash -n server/deploy-billing.sh
+          bash -n server/update-official.sh
           python3 -m py_compile server/update-nginx.py
+      - name: Check the official-hooks update script (fake host, rollback paths, no secrets printed)
+        run: bash tests/update-official.sh

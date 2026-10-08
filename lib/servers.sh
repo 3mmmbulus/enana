@@ -43,14 +43,15 @@ srv_emit() { # TSV: role<TAB>tag<TAB>outbound_json (已替换 @CERTS@); 供配�
 
 srv_secret_fields() { # <tag> -> 打印 JSON 数组 [{name,value}] (只含凭据类字段); 0 = 找到  1 = 没有这个服务器  3 = 官方线路 (永远不显示)
   /usr/bin/perl -MJSON::PP -e '
-    my ($tag, $file) = @ARGV; my $j = JSON::PP->new->utf8; open my $fh, "<", $file or exit 1;
+    my ($tag, $file) = @ARGV; utf8::decode($tag); my $j = JSON::PP->new->utf8; open my $fh, "<", $file or exit 1;
     while (my $l = <$fh>) {
       my $d = eval { $j->decode($l) }; next unless ref $d eq "HASH" && ref $d->{outbound} eq "HASH"; my $o = $d->{outbound};
       next unless defined $o->{tag} && $o->{tag} eq $tag; exit 3 if $d->{official};
       my @f; for my $k (qw(username password uuid auth_str private_key pre_shared_key)) { push @f, { name => $k, value => $o->{$k} } if defined $o->{$k} && !ref $o->{$k} && length $o->{$k} }
       push @f, { name => "obfs_password", value => $o->{obfs}{password} } if ref $o->{obfs} eq "HASH" && defined $o->{obfs}{password} && length $o->{obfs}{password};
       print $j->encode(\@f); exit 0 }
-    exit 1' "$1" "$H/servers.jsonl"
+    if (open my $oh, "<", $ARGV[2]) { while (my $l = <$oh>) { my $d = eval { $j->decode($l) }; exit 3 if ref $d eq "HASH" && ref $d->{outbound} eq "HASH" && defined $d->{outbound}{tag} && $d->{outbound}{tag} eq $tag } }
+    exit 1' "$1" "$H/servers.jsonl" "$H/official.jsonl"
 }
 srv_has_tag() { srv_list | awk -F'\t' -v t="$1" '$1==t {f=1} END{exit f?0:1}'; }
 srv_count() { srv_list | wc -l | tr -d ' '; }
@@ -94,20 +95,51 @@ srv_check_line() { # 仪表盘提交的一行是否合法 (正则闸门; 真正�
   case $l in *'"detour"'*) return 1 ;; esac
   tag=$(printf '%s\n' "$l" | LC_ALL=C sed -n 's/^.*,"outbound":{"type":"[a-z0-9]*","tag":"\([^"]*\)".*/\1/p')
   case " $RESERVED_TAGS " in *" $tag "*) return 1 ;; esac
-  case $tag in svc-*|'') return 1 ;; esac
+  case $tag in svc-*|官方-*|enana-official-*|'') return 1 ;; esac        # 官方-… 是官方线路的保留前缀 (lib/official.sh): 用户导入的节点不能占用
   return 0
+}
+
+# 订阅刷新 (srv_import 的 replace) 是「就地」合并: 每个已有的 tag 留在原来那一行 (内容变了就原地覆盖), 新的 tag 追加到末尾, 订阅里已经没有的 tag 删掉。
+# 以前是「删光这个订阅的行, 再把新的追加到文件末尾」: 有两个以上订阅、或订阅后面还有手动添加的服务器时, 内容完全相同的刷新也会改变文件里的顺序; 而配置生成器按
+# 文件顺序决定默认固定出口 (PIN 列表的第一个) 和自动线路的顺序, 于是每次刷新都生成一份不同的配置, 核心白白重启 (TUN 下还要管理员授权, 长连接也被切断)。
+# 新节点文件每行是 "tag<TAB>整行 JSON" (tag 里不会有制表符, 见 srv_check_line); 数量 "added replaced removed" 写进 <数量文件>:
+#   added = 全新的 tag · replaced = 文件里已有的 tag (不论内容有没有变, 和 merge 一致; 订阅刷新时也就是「保留的节点」) · removed = 这个订阅里有、新数据里没有的 tag
+srv_merge_inplace() { # <现有文件> <新节点文件> <数量文件>  -> 合并结果写到标准输出
+  SRV_SUB="$SRV_SUB" LC_ALL=C awk -v cnt="$3" '
+    function tagof(s,   i, rest, r2, r3) {
+      i = index(s, ",\"outbound\":{\"type\":\""); if (!i) return ""
+      rest = substr(s, i + 21); r2 = substr(rest, index(rest, "\"") + 1)
+      if (substr(r2, 1, 8) != ",\"tag\":\"") return ""
+      r3 = substr(r2, 9); return substr(r3, 1, index(r3, "\"") - 1)
+    }
+    function mine(s,   p) { p = index(s, ",\"sub\":\"" want "\",\"outbound\":{"); return p > 0 && p <= 16 }
+    BEGIN { want = ENVIRON["SRV_SUB"] }
+    FILENAME == ARGV[1] {
+      p = index($0, "\t"); if (p < 2) next
+      t = substr($0, 1, p - 1)
+      if (t in nl) dup++; else ord[++nn] = t
+      nl[t] = substr($0, p + 1); next
+    }
+    {
+      t = tagof($0)
+      if (t != "" && (t in nl)) { if (!(t in placed)) { print nl[t]; placed[t] = 1 }; next }     # 同一个 tag 在文件里出现多次时只保留第一处
+      if (mine($0)) { removed++; next }
+      print
+    }
+    END {
+      for (i = 1; i <= nn; i++) { t = ord[i]; if (t in placed) rep++; else { print nl[t]; add++ } }
+      printf "%d %d %d\n", add + 0, rep + dup, removed + 0 > cnt
+    }' "$2" "$1"
 }
 
 srv_import() { # srv_import [订阅名] [merge|replace] < JSONL  -> 打印 "added replaced removed", 逐行错误写 stderr
   # 目标文件默认 $H/servers.jsonl; 设置 SRV_FILE 可对副本做「干跑」(仪表盘预览数量用)
+  # merge: 已有的 tag 被新行取代, 新行追加到末尾。replace + 订阅名: 就地合并 (见 srv_merge_inplace), 内容不变的刷新不改动文件。
   local sub=${1:-} mode=${2:-merge} line n=0 added=0 replaced=0 removed=0 tag f=${SRV_FILE:-$H/servers.jsonl}
-  local tmp="$f.new" tags="$f.tags"
+  local tmp="$f.new" tags="$f.tags" pairs="$f.pairs" counts="$f.counts" inplace=0
   : > "$tmp"; : > "$tags"
   [ -f "$f" ] && cp "$f" "$tmp"
-  if [ "$mode" = replace ] && [ -n "$sub" ]; then
-    removed=$(LC_ALL=C grep -c "^{\"role\":\"[a-z]*\",\"sub\":\"$sub\"," "$tmp" || true)
-    LC_ALL=C grep -v "^{\"role\":\"[a-z]*\",\"sub\":\"$sub\"," "$tmp" > "$tmp.2" || true; mv "$tmp.2" "$tmp"
-  fi
+  if [ "$mode" = replace ] && [ -n "$sub" ]; then inplace=1; : > "$pairs"; fi
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n+1)); [ -n "$line" ] || continue
     if ! srv_check_line "$line"; then printf '第 %s 行格式不符合要求, 已忽略\n' "$n" >&2; continue; fi
@@ -115,18 +147,50 @@ srv_import() { # srv_import [订阅名] [merge|replace] < JSONL  -> 打印 "adde
       line=$(printf '%s\n' "$line" | sed -e 's/^{"role":"\([a-z]*\)","sub":"[^"]*",/{"role":"\1",/' -e "s/^{\"role\":\"\([a-z]*\)\",\"outbound\"/{\"role\":\"\1\",\"sub\":\"$sub\",\"outbound\"/")
     fi
     tag=$(printf '%s\n' "$line" | LC_ALL=C sed -n 's/^.*,"outbound":{"type":"[a-z0-9]*","tag":"\([^"]*\)".*/\1/p')
-    if LC_ALL=C grep -qF ",\"tag\":\"$tag\"" "$tmp" 2>/dev/null; then
-      LC_ALL=C awk -v needle=",\"tag\":\"$tag\"" 'index($0, needle) == 0' "$tmp" > "$tmp.2"; mv "$tmp.2" "$tmp"; replaced=$((replaced+1))
-    else added=$((added+1)); fi
-    printf '%s\n' "$line" >> "$tmp"; printf '%s\n' "$tag" >> "$tags"
+    if [ "$inplace" = 1 ]; then
+      printf '%s\t%s\n' "$tag" "$line" >> "$pairs"
+    else
+      if LC_ALL=C grep -qF ",\"tag\":\"$tag\"" "$tmp" 2>/dev/null; then
+        LC_ALL=C awk -v needle=",\"tag\":\"$tag\"" 'index($0, needle) == 0' "$tmp" > "$tmp.2"; mv "$tmp.2" "$tmp"; replaced=$((replaced+1))
+      else added=$((added+1)); fi
+      printf '%s\n' "$line" >> "$tmp"
+    fi
+    printf '%s\n' "$tag" >> "$tags"
   done
-  mv "$tmp" "$f"; chmod 600 "$f"
+  if [ "$inplace" = 1 ]; then
+    if SRV_SUB="$sub" srv_merge_inplace "$tmp" "$pairs" "$counts" > "$tmp.2" 2>/dev/null && [ -s "$counts" ]; then
+      mv "$tmp.2" "$tmp"; read -r added replaced removed < "$counts"
+    else rm -f "$tmp" "$tmp.2" "$tags" "$pairs" "$counts"; return 1; fi
+    rm -f "$pairs" "$counts"
+  fi
+  if [ -f "$f" ] && cmp -s "$tmp" "$f"; then rm -f "$tmp"; else mv "$tmp" "$f"; fi          # 内容没变就不碰文件
+  chmod 600 "$f"
   if [ -n "${SRV_SAVE:-}" ] && [ -z "${SRV_FILE:-}" ]; then          # 导入时的「保存到云端」: 1 = 这些节点 (和订阅) 进入云端同步, 0 = 只留在本机
     [ -s "$tags" ] && sync_list_batch srv "$SRV_SAVE" "$tags"
     [ -n "$sub" ] && sync_list_set sub "$sub" "$SRV_SAVE"
   fi
   rm -f "$tags"
   printf '%s %s %s\n' "$added" "$replaced" "$removed"
+}
+
+srv_keep_roles() { # <订阅名>  标准输入 JSONL -> 标准输出: 订阅里已有的节点沿用现在的角色 (pin / off / dl …); 新节点保持输入里的角色
+  # 命令行 / 定时刷新用导入器的默认角色 (auto) 解析订阅, 不做这一步就会把用户固定的出口悄悄改回「自动」(仪表盘手动刷新是自己带上现有角色的)。
+  local map; map=$(mktemp)
+  srv_list | awk -F'\t' -v s="$1" '$6 == s && $1 != "" {print $1 "\t" $5}' > "$map"
+  LC_ALL=C awk -v map="$map" '
+    function tagof(s,   i, rest, r2, r3) {
+      i = index(s, ",\"outbound\":{\"type\":\""); if (!i) return ""
+      rest = substr(s, i + 21); r2 = substr(rest, index(rest, "\"") + 1)
+      if (substr(r2, 1, 8) != ",\"tag\":\"") return ""
+      r3 = substr(r2, 9); return substr(r3, 1, index(r3, "\"") - 1)
+    }
+    BEGIN { while ((getline l < map) > 0) { p = index(l, "\t"); if (p > 1) role[substr(l, 1, p - 1)] = substr(l, p + 1) }; close(map) }
+    {
+      t = tagof($0)
+      if (t != "" && (t in role) && substr($0, 1, 9) == "{\"role\":\"") { q = index(substr($0, 10), "\""); if (q > 1) $0 = "{\"role\":\"" role[t] substr($0, 9 + q) }
+      print
+    }'
+  rm -f "$map"
 }
 
 srv_delete() { # tag

@@ -26,3 +26,35 @@
 @media (pointer:coarse){
   .link-b{display:inline-flex;align-items:center;min-height:44px}
 }
+
+/* ===== 出口分配 (exits.js) ===== */
+.exits-def{margin:0 0 8px;font-weight:600}
+.exits-banner{margin:0 0 12px}
+.exits-list{display:grid;gap:10px}
+.exits-empty{margin:6px 0}
+.exits-note{margin:12px 0 0}
+.exg{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--surface)}
+.exg.is-def{border-color:var(--pin)}
+.exg.is-warn{border-color:var(--warn);background:var(--warn-bg)}
+.exg-h{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 12px}
+.exg-hl{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;min-width:0}
+.exg-t{overflow-wrap:anywhere}
+.exg-act{display:flex;flex-wrap:wrap;gap:6px}
+.exg-b{margin-top:8px;display:grid;gap:6px}
+.exg-k{display:grid;grid-template-columns:96px minmax(0,1fr);gap:4px 10px;align-items:start}
+.exg-kl{font-size:var(--fs-12-5);padding-top:2px}
+.exg-cs{display:flex;flex-wrap:wrap;gap:4px 6px;min-width:0}
+.exg-c{max-width:100%;overflow:hidden;text-overflow:ellipsis}
+button.exg-more{cursor:pointer;color:var(--pri);border-color:var(--pri);background:transparent}
+.exg-none{margin:0}
+.exg-dlg>*+*{margin-top:10px}
+.exg-imp{padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--surface2);display:grid;gap:6px}
+.exg-imp-t{font-weight:600;font-size:var(--fs-13)}
+.exg-rh{display:block;margin-top:2px}
+.exg-ack{margin-top:4px}
+.exg-dlg .hint .ci,.srv-orphan .ci{margin-right:6px;vertical-align:-2px;flex:none}
+.srv-follow-r{align-items:center;gap:4px 10px;margin-top:2px}
+.srv-orphan{display:flex;align-items:center;gap:6px;margin-top:8px}
+@media (max-width:759px){
+  .exg-k{grid-template-columns:minmax(0,1fr)}
+}

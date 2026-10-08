@@ -20,8 +20,11 @@ Gemini 自身日志在 12:58:45 接受浏览器回调并开始交换 authorizati
 
 System Proxy 默认不变。Enhanced/TUN 是显式选择, 包含双栈捕获、DNS hijack、进程匹配、系统路由私网排除、默认接口出口绑定。root launchdaemon 使用 root 拥有的核心/规则快照; 用户授权后安装。启动检查实际 utun 地址与 IPv4/IPv6 路由。失败在 root helper 内恢复快照, 上层事务恢复设置。切换时通过控制 API 保存并恢复 Selector 选项, 避免丢失已选 PIN 出口。应用 PIN 使用独立进程规则集, 优先于网站指定的其他 PIN 出口; 浏览器 Direct/Auto/PIN 则作为网站策略之后的兜底。
 
+固定出口分配 (`POST /api/exits/move|freeze`) 在 TUN 下同 `/api/override` 一样是后台任务: 只改 `rules/ovr-*.json` (纯路由数据), 经免密规则同步助手 (`lib/tunrules-helper.pl`) 同步到 root 快照, 核心热加载, 不重启、不要管理员密码; 助手一次最多同步 160 个规则集文件 (32 个固定出口 = 107 个), 旧助手上限 60 (16 个固定出口), 超过时退回完整安装并把助手换成新版。默认固定出口的选择存在 `$H/pin-default`, 核心 (重新) 启动后由 `proxy_sync_mode` 校正, 不改 `config.json`, 所以换默认出口不会触发 TUN 的完整重装。
+
 自动化测试不修改真实系统路由, 不触发管理员授权:
 
+- `tests/exits.sh`: 固定出口分配 (归属表 / 默认出口 / 批量移动与钉住 / 删除与改角色的保护 / 孤儿事件 / 上限 / HTTP 接口 / TUN 任务及回滚), 用假 Clash API。
 - `tests/enhanced.sh`: 默认与已有设置保留、生成配置的真实 sing-box 校验、双栈排除、共享 PIN、浏览器与网站优先级、OS socket 证据。
 - `tests/tun-service.sh`: 临时副本与假系统命令执行真实 helper 逻辑, 校验 bootstrap 失败/外部 VPN 路由冲突回滚、GUI 恢复及 symlink 拒绝。
 - `tests/ui-busy.test.js`: 实际组件回调的重复提交、忙碌状态、错误恢复、切换控件、弹窗按钮重建。
@@ -99,3 +102,26 @@ System Proxy 默认不变。Enhanced/TUN 是显式选择, 包含双栈捕获、D
 `tests/app-refresh-ui.test.js` 加载真实 core.js / data.js, 执行实际轮询与可见性事件, 验证自动扫描没有进度卡和成功通知、刷新后间隔保留、并发只有一次扫描、手动任务标题准确、失败没有假成功且可重试; 所有这些路径都不会请求 `/api/network-mode`。这不是关闭新应用发现功能, 也不修改现有接管方式和分流规则。
 
 本次前端 4 套回归通过 (应用刷新、异步控件、接管引导、SSH 向导), 正式 2.2.2 发布包安装 / 升级测试 55 通过、0 失败。102 个本机程序文件与发布包一致, 账号、服务器、设置与所有 Selector 均保留。Chrome 实际验证设置页及服务器页刷新、切出 / 切回标签页没有自动任务卡; 手动重新扫描显示「扫描已安装的应用」并正常完成。接管仍为 Enhanced/TUN 且就绪, PIN Tokyo / Global AUTO 保持。
+
+## 不必要的管理员密码框 (重启 / 自动更新订阅 / 停止)
+
+TUN 的核心是 root 守护进程: 改核心、配置、规则库 (`.srs`)、证书都要管理员授权 (`lib/enhanced.sh` 的 `enhanced_admin`)。授权只应该在 root 快照真的会不同的时候出现, 下面几种情形以前会白白弹框:
+
+| 现象 | 原因 | 现在 |
+| --- | --- | --- |
+| 「重启 enana」每次都弹 | `os_service_restart` → `enhanced_start` 一律走完整安装 | 核心 / 配置 / 规则库指纹没变、且 root 助手可信时, 用助手的 `restart` 动作 (`launchctl kickstart -k`) 重启, 不弹; 否则走原来的完整安装。操作记录里的 `重启核心方式` 写明走了哪条路: `via=helper`, 或 `via=admin why=no-helper|changed|rejected|not-loaded|sync-failed` |
+| `enana update` / 每日维护 (订阅「自动更新」) 弹 | 指纹把每次都会重写的 `rules/.updated` 算进去了; 总开关 / 模式切换会改写磁盘配置里的 `default_mode`, 也让指纹对不上 | 指纹忽略隐藏文件 / `*.new` / `*.tmp`, 并把 `default_mode` 的值抹平后再算; 真的变了的 `.srs` / 配置 / 证书仍然触发完整安装 |
+| 订阅内容没变也重启核心 | 订阅刷新「删光再追加」, 有两个以上订阅或订阅后面有手动服务器时文件顺序变了, 生成的配置 (默认固定出口、自动线路顺序) 随之不同 | 刷新是就地合并 (见 `docs/API.md` 的 `servers/import`), 内容相同的刷新不改动 `servers.jsonl`; 多个订阅一次事务、一次应用; 订阅里用户固定的角色保留 |
+| 切到系统代理模式后, 每次启动 / 停止都弹 | 停止动作只看 plist 在不在 (停止后 plist 还在), 对已经停掉的守护进程也要授权 | 守护进程没加载、且不会自己回来 (launchd 里已禁用, 或本机记下了上一次成功的停止) 时直接跳过 |
+
+**默认模式不会走错**: `default_mode` 只是核心「没有记住模式」时的起始模式。运行时的模式通过控制接口 (`PATCH /configs`) 推送, sing-box 把它存在 `cache.db` 里并在重启时恢复; enana 自己做的每一次重启 (应用配置、重启、升级核心、启动) 之后都会再 `proxy_sync_mode`。剩下的缺口是「推送时核心没在运行 + 缓存里也没有」, 所以完整安装会记下写进快照的模式 (`$H/.enhanced-mode`), 之后每次无变化的 `apply_config` 发现设置里的模式和它不一致就补同步一次, 核心确认之后才记下。
+
+**root 助手 (`/usr/local/libexec/enana/tunrules-<uid>`, 版本 2)** 现在有两个动作, 都只作用于这个用户自己的守护进程:
+
+- `sync`: 校验后写入 `rules/ovr-*.json` (应用 / 网站策略), 核心热加载。
+- `restart`: 只执行 `launchctl kickstart -k system/com.enana.proxy.tun.<uid>`。标签和 `launchctl` 路径是安装时由 root 脚本写死进助手的 (不是调用者给的), 助手不读任何参数 / 输入 / 环境变量; 有多余参数、标签不合规都会拒绝。威胁模型: 同一用户下的任何进程最多能让自己的 root 守护进程重启一次 (流量中断几秒), 得不到 root 权限, 也改不了任何文件; 助手文件归 root、别人不可写、不是符号链接、sudoers 规则经 `visudo -cf` 校验, 这些检查一条没放松。
+- 从旧版本升级后, 已安装的版本 1 助手不认识 `restart`, `enhanced_helper_ok` 判为不可用, 下一次完整安装 (升级本身会改变 `enhanced.sh` / `enhanced-root.sh` 的指纹, 反正要装一次) 用一次管理员授权换上版本 2。
+
+Windows 的 TUN 没有免密助手 (每次完整安装都是 UAC), 指纹的两个问题同样存在, 已用同一套规则修复; 策略规则集 (`ovr-*.json`) 在 Windows 上仍计入指纹。Windows 的 `stop` 本来就会跳过没有运行的任务。
+
+测试: `tests/tunrules.sh` (T3b 助手 `restart` 的接受 / 拒绝, T4b 记账内容与模式切换不重启, T5b 指纹, T6 重启走助手还是完整安装)、`tests/tun-service.sh` (安装后的助手写死标签 / launchctl 路径并真实执行)、`tests/enhanced.sh` (停止已停掉的守护进程不弹框)、`tests/units.sh` U8 (订阅就地刷新、一次应用)、`tests/sysproxy.sh` S6c2 (系统代理助手写死的端口与当前端口不一致时不信任)。

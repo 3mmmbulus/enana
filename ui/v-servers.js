@@ -1,4 +1,6 @@
-/* enana · v-servers.js — 服务器页: 当前出口 / 服务器表 / 测速全部 / 订阅列表 (含过期自动刷新)
+/* enana · v-servers.js — 服务器页: 默认固定出口 / 出口分配 (exits.js) / 服务器表 / 测速全部 / 订阅列表 (含过期自动刷新)
+ * 固定出口不是全局的一个开关: 不同的应用 / 网站 / 服务可以走不同的固定出口。这里的「默认固定出口」只是「跟随默认」的项目走的那一个 ——
+ * 换默认 / 删除固定出口 / 把它改成别的角色之前, 都会先列出谁会换出口 IP, 让用户选择去向 (exits.js 的事前检查), 不会悄悄换 IP。
  * 添加·导入服务器是弹窗 (v-import.js, TP.imp.open); 每个会改变状态的操作都先 confirmDialog; 暂时不能用的按钮显示原因而不是失灵。
  * 服务器表: 列头 (名称 / 类型 / 地址 / 角色 / 延迟) 可以点击排序 (ui.sorter, 先排序再分页); 工具栏的排序下拉保留 (没点列头时照旧, 用下拉框会取消列头排序)。 */
 (function () {
@@ -10,7 +12,7 @@
   var pendingRole = {}, pendingDel = {};                    // 操作进行中的临时显示 (避免被 10 秒轮询的旧状态闪回)
   var test = { running: false, stop: false, i: 0, n: 0, done: false };
   var ROLES = ['pin', 'auto', 'dl', 'off'], ROLE_RANK = { pin: 0, auto: 1, dl: 2, off: 3 };
-  var refreshing = {}, refreshedAt = {};
+  var refreshing = {}, refreshedAt = {}, pickTab = function () { };
   TP.subs = {};
 
   function active() { return TP.tab === 'servers'; }
@@ -25,22 +27,27 @@
     el.pinSel = h('select', { class: 'sel', 'aria-label': L('servers.pin.aria') });
     ui.selectAct(el.pinSel, function () { return (S.proxies.PIN && S.proxies.PIN.now) || ''; }, function (want) { return switchTo('PIN', want); });
     el.pinInfo = h('div', { class: 'muted sm' });
+    el.pinFollow = h('div', { class: 'muted sm srv-follow' });                       // 谁在跟随默认固定出口 (数据来自 GET /api/exits)
+    el.pinView = h('button', { class: 'link-b sm', type: 'button' }, L('servers.pin.view')); el.pinView.addEventListener('click', function () { pickTab('exits'); });
+    el.pinOrphan = h('div', { class: 'hint warn srv-orphan', hidden: true });         // 有项目指定的出口已经不是固定出口 (孤儿)
     el.autoSel = h('select', { class: 'sel', 'aria-label': L('servers.auto.aria') });
     ui.selectAct(el.autoSel, function () { return (S.proxies.Global && S.proxies.Global.now) || ''; }, function (want) { return switchTo('Global', want); });
     el.autoBack = ui.btn(L('servers.auto.back'), { sm: true, icon: 'auto' }); el.autoBack.hidden = true;
     ui.act(el.autoBack, function () { return switchTo('Global', 'AUTO'); });
     el.autoInfo = h('div', { class: 'muted sm' });
     root.appendChild(h('div', { class: 'grid cols2' },
-      h('section', { class: 'card' }, h('div', { class: 'card-h' }, ui.icon('pin', 20, 'ci'), h('h3', null, L('servers.pin.title'), ui.help('servers.pin'))), h('div', { class: 'row wrap' }, el.pinSel), el.pinInfo),
+      h('section', { class: 'card' }, h('div', { class: 'card-h' }, ui.icon('pin', 20, 'ci'), h('h3', null, L('servers.pin.title'), ui.help('servers.pin'))), h('div', { class: 'row wrap' }, el.pinSel), el.pinInfo, h('div', { class: 'row wrap srv-follow-r' }, el.pinFollow, el.pinView), el.pinOrphan),
       h('section', { class: 'card' }, h('div', { class: 'card-h' }, ui.icon('auto', 20, 'ci'), h('h3', null, L('servers.auto.title'), ui.help('servers.auto'))), h('div', { class: 'row wrap' }, el.autoSel, el.autoBack), el.autoInfo)));
 
-    var panels = {}, names = ['nodes', 'vps', 'subs', 'official'];
+    var panels = {}, names = ['nodes', 'exits', 'vps', 'subs', 'official'];
     var curTab = TP.prefs.get('servers.tab', 'nodes');
     if (names.indexOf(curTab) < 0) curTab = 'nodes';
     names.forEach(function (k) { panels[k] = h('div', { class: 'servers-pane', role: 'tabpanel', id: 'servers-panel-' + k }); panels[k].hidden = k !== curTab; });
-    var tabs = ui.tabs(L('servers.tabs.aria'), names.map(function (k) { return { id: k, label: L('servers.tab.' + k), icon: k === 'vps' ? 'server' : k === 'subs' ? 'refresh' : k === 'official' ? 'pro' : 'nav-servers' }; }), function (k) {
+    var tabs = ui.tabs(L('servers.tabs.aria'), names.map(function (k) { return { id: k, label: L('servers.tab.' + k), icon: k === 'vps' ? 'server' : k === 'subs' ? 'refresh' : k === 'official' ? 'pro' : k === 'exits' ? 'pin' : 'nav-servers' }; }), function (k) { pickTab(k); });
+    pickTab = function (k) {
       tabs.set(k); names.forEach(function (n) { panels[n].hidden = n !== k; }); TP.prefs.set('servers.tab', k);
-    });
+      if (k === 'exits') TP.exits.load();
+    };
     names.forEach(function (k) { panels[k].setAttribute('aria-labelledby', tabs.btn(k).id); tabs.btn(k).setAttribute('aria-controls', panels[k].id); });
     tabs.set(curTab); root.appendChild(tabs.el); names.forEach(function (k) { root.appendChild(panels[k]); });
     /* 工具栏 */
@@ -86,6 +93,9 @@
       el.empty.el, el.pg.el));
     syncSort();
 
+    /* 出口分配: 每个固定出口上有哪些应用 / 网站 / 服务, 跟随默认的, 指定的出口已不存在的 (exits.js) */
+    panels.exits.appendChild(TP.exits.card());
+
     /* enana 官方线路 (会员): 以后订阅用户登录后自动出现; 现在是「即将推出」占位卡片 (读 GET /api/plan 的 features.official_proxy) */
     panels.official.appendChild(officialCard());
     panels.official.appendChild(h('section', { class: 'card srv-off' }, h('div', { class: 'card-h' }, ui.icon('pro', 20, 'ci'), h('h3', null, L('billing.dedicatedTitle')), ui.badge(L('billing.none'), 'neutral')), h('p', { class: 'muted' }, L('billing.dedicatedNote'))));
@@ -99,7 +109,8 @@
     /* 我的服务器 (SSH 一键部署过的 VPS 记录, 不含任何密码 / 私钥) — 由 v-vps.js 提供, 缺失时整块省略 */
     if (TP.vps && TP.vps.listCard) { try { panels.vps.appendChild(TP.vps.listCard()); } catch (e) { console.error('[vps.listCard]', e); } }
 
-    TP.on('state', function () { if (active()) V.render(); autoCheck(); });
+    TP.on('state', function () { if (active()) { V.render(); TP.exits.load(20000); } autoCheck(); });
+    TP.on('exits', function () { if (active()) renderStrip(); });
     TP.on('proxies', function () { if (active()) V.render(); });
     TP.on('helper', function () { if (active()) V.render(); });
     TP.on('clash', function () { if (active()) V.render(); });
@@ -109,7 +120,7 @@
     setInterval(function () { if (active() && !document.hidden) paintTest(); }, 1000);
     V.render();
   };
-  V.show = function () { V.render(); TP.plan.load(false); };
+  V.show = function () { V.render(); TP.plan.load(false); TP.exits.load(); };
 
   V.render = function () {
     renderStrip(); renderTable(); renderSubs(); paintTest(); paintOfficial();
@@ -132,6 +143,11 @@
     ui.avail(el.pinSel, why || (pinAll.length < 1 ? t('servers.pin.none') : ''), pinAll.length < 1 && !why ? addFix() : null);
     var pl = TP.leaf('PIN'), d = pl ? TP.delayOf(pl) : null;
     setText(el.pinInfo, !pinAll.length ? t('servers.pin.noneHint') : t('servers.pin.hint') + (d ? ' ' + t('servers.pin.delay', { ms: fmtMs(d.ms) }) : ''));
+    var fl = pinAll.length ? TP.exits.followLine() : '';
+    setText(el.pinFollow, fl); el.pinFollow.hidden = !fl; el.pinView.hidden = !pinAll.length || !S.exits;
+    var oc = TP.exits.orphanCount();
+    el.pinOrphan.hidden = !oc;
+    if (oc) { TP.clear(el.pinOrphan); el.pinOrphan.appendChild(ui.icon('warning', 14, 'ci')); el.pinOrphan.appendChild(h('span', null, t('servers.pin.orphan', { n: oc }))); }
     var glAll = (gl && gl.all) || [];
     fillSelect(el.autoSel, glAll, function (x) { return x === 'AUTO' ? t('servers.auto.best') : x; });
     if (gl && gl.now && el.autoSel.value !== gl.now) el.autoSel.value = gl.now;
@@ -147,15 +163,22 @@
     var P = S.proxies, cur = P[group] && P[group].now, isPin = group === 'PIN';
     if (cur === tag) { ui.toast(t('servers.switch.same'), ''); return; }
     var tagLabel = tag === 'AUTO' ? t('servers.auto.best') : tag, curLabel = cur === 'AUTO' ? t('servers.auto.best') : (cur || '—');
+    if (isPin) {                                                         // 默认固定出口: 先列出谁在跟随它 (换了它们的出口 IP 会变), 让用户选择「继续走原出口」还是「跟着换」
+      var done = await TP.exits.switchDefault(curLabel, tag, function (pre) {
+        return ui.confirmDialog({ title: t('servers.switch.titlePin'), message: t('servers.switch.msgPin', { from: curLabel, to: tagLabel }), detail: t(pre.none ? 'servers.switch.detailPinNone' : 'servers.switch.detailPin'), confirmText: t('servers.switch.go'), rememberKey: 'policy' });
+      });
+      if (done) ui.toast(t('servers.switch.done', { group: t('servers.pin.title'), to: tagLabel }), 'ok');
+      return;
+    }
     var ok = await ui.confirmDialog({
-      title: t(isPin ? 'servers.switch.titlePin' : 'servers.switch.titleAuto'),
-      message: t(isPin ? 'servers.switch.msgPin' : 'servers.switch.msgAuto', { from: curLabel, to: tagLabel }),
-      detail: t(isPin ? 'servers.switch.detailPin' : (tag === 'AUTO' ? 'servers.switch.detailAuto' : 'servers.switch.detailAutoPin')),
+      title: t('servers.switch.titleAuto'),
+      message: t('servers.switch.msgAuto', { from: curLabel, to: tagLabel }),
+      detail: t(tag === 'AUTO' ? 'servers.switch.detailAuto' : 'servers.switch.detailAutoPin'),
       confirmText: t('servers.switch.go'), rememberKey: 'policy'
     });
     if (!ok) return;
     await TP.setPolicy(group, tag);
-    ui.toast(t('servers.switch.done', { group: t(isPin ? 'name.policy.PIN' : 'name.policy.Global'), to: tagLabel }), 'ok');
+    ui.toast(t('servers.switch.done', { group: t('name.policy.Global'), to: tagLabel }), 'ok');
   }
 
   /* ================= 服务器表 ================= */
@@ -250,20 +273,36 @@
     var cur = pendingRole[s.tag] || s.role;
     if (!role || role === cur) return;
     if (role === 'dl' && !canDl(s.type)) { ui.toast(t('servers.dlOnly'), 'warn'); return; }
-    var tx = TP.txt.role(s.tag, s.role, role);
-    var ok = await ui.confirmDialog({ title: t('servers.role.title'), message: tx.message, detail: tx.detail, confirmText: t('servers.role.go') });
-    if (!ok) return;
+    var q = { tag: s.tag, role: role }, pre = {};
+    if (s.role === 'pin' && role !== 'pin') {                           // 固定出口改成别的角色 = 把它从固定出口里移除: 先看谁在用它 (指定了它的 / 跟随它作默认的), 让用户选择去向
+      pre = await TP.exits.askRemove(s, role);
+      if (!pre) return;
+      Object.keys(pre).forEach(function (k) { q[k] = pre[k]; });
+    }
+    if (!Object.keys(pre).length) {                                     // 没有谁在用它: 普通确认 (已经走过事前检查对话框的不再重复确认)
+      var tx = TP.txt.role(s.tag, s.role, role);
+      var ok = await ui.confirmDialog({ title: t('servers.role.title'), message: tx.message, detail: tx.detail, confirmText: t('servers.role.go') });
+      if (!ok) return;
+    }
     pendingRole[s.tag] = role; renderTable();
     try {
-      await TP.jobs.runInDock(t('servers.role.job', { tag: s.tag }), function () { return TP.helper('POST', '/api/servers/role', { q: { tag: s.tag, role: role } }); });
+      await TP.jobs.runInDock(t('servers.role.job', { tag: s.tag }), function () { return TP.helper('POST', '/api/servers/role', { q: q }); });
     } finally { delete pendingRole[s.tag]; await TP.loadState(); renderTable(); }
   }
   async function del(s) {
-    var ok = await ui.confirmDialog({ title: t('servers.del.title'), message: t('servers.del.msg', { tag: s.tag }), detail: [s.sub ? t('servers.del.sub', { name: s.sub }) : '', t('servers.del.d1')].filter(Boolean), confirmText: t('common.delete'), danger: true });
-    if (!ok) return;
+    var q = { tag: s.tag }, pre = {};
+    if (s.role === 'pin') {                                             // 删除固定出口: 先看谁在用它 (指定了它的 / 跟随它作默认的), 让用户选择去向
+      pre = await TP.exits.askRemove(s, '');
+      if (!pre) return;
+      Object.keys(pre).forEach(function (k) { q[k] = pre[k]; });
+    }
+    if (!Object.keys(pre).length) {                                     // 走过事前检查对话框的 (已经明确选择了去向并点了「删除」) 不再重复确认
+      var ok = await ui.confirmDialog({ title: t('servers.del.title'), message: t('servers.del.msg', { tag: s.tag }), detail: [s.sub ? t('servers.del.sub', { name: s.sub }) : '', t('servers.del.d1')].filter(Boolean), confirmText: t('common.delete'), danger: true });
+      if (!ok) return;
+    }
     pendingDel[s.tag] = true; renderTable();
     try {
-      await TP.jobs.runInDock(t('servers.del.job', { tag: s.tag }), function () { return TP.helper('POST', '/api/servers/delete', { q: { tag: s.tag } }); });
+      await TP.jobs.runInDock(t('servers.del.job', { tag: s.tag }), function () { return TP.helper('POST', '/api/servers/delete', { q: q }); });
     } finally { delete pendingDel[s.tag]; await TP.loadState(); renderTable(); }
   }
 
@@ -365,10 +404,14 @@
     await TP.subs.refresh(x.name, false);
   }
   async function delSub(x) {
-    var n = x.count || 0;
-    var ok = await ui.confirmDialog({ title: t('servers.subs.delTitle'), message: t('servers.subs.delMsg', { name: x.name }), detail: t('servers.subs.delDetail', { n: n }), confirmText: t('common.delete'), danger: true });
+    var n = x.count || 0, imp = await TP.exits.subImpact(x.name), q = { name: x.name }, detail = [t('servers.subs.delDetail', { n: n })];
+    if (imp && (imp.n > 0 || !imp.known)) {                             // 订阅里有固定出口: 它们一起消失, 指定了它们的应用 / 网站 / 服务会退回默认固定出口 (没有固定出口时直连)
+      detail.push(t(imp.known ? 'servers.subs.delPins' : 'servers.subs.delPinsUnknown', { pins: imp.pins.join(', '), n: imp.n }));
+      q.accept_orphans = 1;
+    }
+    var ok = await ui.confirmDialog({ title: t('servers.subs.delTitle'), message: t('servers.subs.delMsg', { name: x.name }), detail: detail, confirmText: t('common.delete'), danger: true });
     if (!ok) return;
-    await TP.jobs.runInDock(t('servers.subs.delJob', { name: x.name }), function () { return TP.helper('POST', '/api/sub/delete', { q: { name: x.name } }); });
+    await TP.jobs.runInDock(t('servers.subs.delJob', { name: x.name }), function () { return TP.helper('POST', '/api/sub/delete', { q: q }); });
     await TP.loadState();
     V.render();
   }
@@ -531,7 +574,9 @@
     var on = !!(f.enabled && d && d.official && d.official.available);
     el.off.classList.toggle('is-soon', !on);
     TP.clear(el.offBadge);
-    el.offBadge.appendChild(on ? ui.badge(t('servers.off.on', { n: (d.official && d.official.nodes) || 0 }), 'ok', 'success') : (f.comingSoon || !d) ? ui.badge(L('plan.soon'), 'info', 'clock') : ui.badge(L(f.reason === 'expired' ? 'plan.f.expired' : 'plan.f.upgrade'), 'warn', 'lock'));
-    setText(el.offDesc, t(on ? 'servers.off.descOn' : 'servers.off.desc'));
+    var soon = f.comingSoon || !d, synced = servers().some(function (s) { return s.official; });          // synced = 本机已经取回了官方节点 (登录后几分钟内会同步)
+    el.offBadge.appendChild(on ? ui.badge(t('servers.off.on', { n: (d.official && d.official.nodes) || 0 }), 'ok', 'success') : soon ? ui.badge(L('plan.soon'), 'info', 'clock')
+      : f.reason === 'expired' ? ui.badge(L('plan.f.expired'), 'warn', 'warning') : f.reason === 'verify' ? ui.badge(L('plan.f.verify'), 'warn', 'warning') : ui.badge(L('plan.f.upgrade'), 'warn', 'lock'));
+    setText(el.offDesc, t(on ? (synced ? 'servers.off.descOn' : 'servers.off.descSync') : soon ? 'servers.off.desc' : f.reason === 'expired' ? 'servers.off.descExpired' : f.reason === 'verify' ? 'servers.off.descVerify' : 'servers.off.descUpgrade'));
   }
 })();

@@ -89,7 +89,7 @@ PY
 )
 echo 'PASS: installer preserves ports owned by the root TUN service'
 (
-  SB=${SINGBOX:-/bin/true}
+  SB=${SINGBOX:-$(type -P true)}
   cp "$W/tun.json" "$H/config.json"
   enhanced_paths() { TUN_UID=501; TUN_ROOT="$W/staged-root"; mkdir -p "$TUN_ROOT"; }
   enhanced_supported() { return 0; }
@@ -147,8 +147,8 @@ grep -q '/proxies/PIN.*Fixed Exit' "$W/switch-calls"
 echo 'PASS: switching back restores root PIN choice into System core'
 
 # A denied administrator request leaves a healthy old core alone.
-cp "${SINGBOX:-/bin/true}" "$H/sing-box"
-SB=${SINGBOX:-/bin/true}
+cp "${SINGBOX:-$(type -P true)}" "$H/sing-box"
+SB=${SINGBOX:-$(type -P true)}
 cp "$W/system.json" "$H/config.json"
 settings_set NETWORK_MODE tun
 enhanced_loaded() { return 1; }
@@ -162,7 +162,7 @@ settings_set NETWORK_MODE system
 load_settings || true
 echo 'PASS: administrator cancellation restores config without a second restart/prompt'
 # Core-affecting implementation changes change the snapshot fingerprint; policy-rule-only edits change only the rule-data fingerprint.
-SB=${SINGBOX:-/bin/true}
+SB=${SINGBOX:-$(type -P true)}
 before=$(enhanced_fingerprint)
 saved_lib=$LIB; mkdir "$W/changed-lib"
 cp "$LIB/enhanced.sh" "$LIB/enhanced-root.sh" "$W/changed-lib/"
@@ -254,3 +254,68 @@ PY
 v="space and ' quote \$(not_a_command)"; q=$(enhanced_quote "$v")
 [ "$(eval "printf '%s' $q")" = "$v" ]
 echo 'PASS: privileged argument shell quoting'
+# Stopping a daemon that is not loaded must not ask for administrator rights. `stop` never deletes the plist (only `remove` does), so after a single TUN
+# session every System Proxy start / stop used to run an admin `stop` on an already-stopped daemon. The REAL functions are re-sourced here (the
+# fixtures above replaced them with stubs); only the privileged call, launchd and the paths are fakes.
+(
+  eval "$(sed -n -e '/^enhanced_idle()/,/^}/p' -e '/^enhanced_stop()/,/^}/p' -e '/^enhanced_remove()/,/^}/p' "$LIB/enhanced.sh")"
+  H="$W/stoph"; mkdir -p "$H"
+  TUN_LABEL=com.enana.proxy.tun.501; TUN_UID=501; TUN_ROOT="$W/stop-root"; TUN_PLIST="$W/stop.plist"
+  enhanced_paths() { :; }
+  ADMIN=0; ADMIN_RC=0; ADMIN_LOG="$W/admin-calls"; : > "$ADMIN_LOG"
+  enhanced_admin() { ADMIN=$((ADMIN + 1)); printf '%s\n' "$*" >> "$ADMIN_LOG"; return "$ADMIN_RC"; }
+  LOADED=0; enhanced_loaded() { [ "$LOADED" = 1 ]; }
+  DISABLED=''                                              # launchctl print-disabled system 的输出: 空 = 查不到 / 没有这一项
+  launchctl() { [ "$1" = print-disabled ] || return 1; printf 'disabled services = {\n\t"com.apple.example" => disabled\n'; [ -z "$DISABLED" ] || printf '\t"%s" => %s\n' "$TUN_LABEL" "$DISABLED"; printf '}\n'; }
+  reset_stop() { ADMIN=0; ADMIN_RC=0; LOADED=0; DISABLED=''; rm -f "$H/.enhanced-stopped"; : > "$TUN_PLIST"; : > "$ADMIN_LOG"; }
+
+  reset_stop; rm -f "$TUN_PLIST"
+  enhanced_stop; rc=$?; [ "$rc:$ADMIN" = 0:0 ] || { echo "FAIL: no plist should be a no-op ($rc:$ADMIN)"; exit 1; }
+  reset_stop; LOADED=1
+  enhanced_stop; rc=$?; [ "$rc:$ADMIN" = 0:1 ] || { echo "FAIL: a loaded daemon must be stopped with one admin call ($rc:$ADMIN)"; exit 1; }
+  grep -q "enhanced-root.sh stop 501" "$ADMIN_LOG" || { echo 'FAIL: wrong privileged command'; cat "$ADMIN_LOG"; exit 1; }
+  # ...and from then on (the daemon is unloaded, the plist is still there) there is nothing left to stop
+  LOADED=0; enhanced_stop; enhanced_stop
+  [ "$ADMIN" = 1 ] || { echo "FAIL: stopping an already-stopped daemon asked for administrator rights again ($ADMIN calls)"; exit 1; }
+  # unloaded but nothing known about it (daemon stopped by an older enana, no marker, launchd cannot tell): one authorised stop, then never again
+  reset_stop
+  enhanced_stop; enhanced_stop; enhanced_stop
+  [ "$ADMIN" = 1 ] || { echo "FAIL: unknown stopped state should cost exactly one administrator call ($ADMIN)"; exit 1; }
+  # launchd says the job is disabled (what `stop` does): no call at all, even without a marker
+  for d in disabled true; do
+    reset_stop; DISABLED=$d
+    enhanced_stop; [ "$ADMIN" = 0 ] || { echo "FAIL: a disabled, unloaded job needs no administrator call ($d)"; exit 1; }
+  done
+  # unloaded but still ENABLED (somebody booted it out by hand): it would come back at the next boot, so `stop` must run and disable it
+  for d in enabled false; do
+    reset_stop; DISABLED=$d
+    enhanced_stop; [ "$ADMIN" = 1 ] || { echo "FAIL: an unloaded but enabled job must still be stopped (disabled) ($d)"; exit 1; }
+  done
+  # a stale marker never hides a daemon that is loaded again
+  reset_stop; : > "$H/.enhanced-stopped"; LOADED=1
+  enhanced_stop; [ "$ADMIN" = 1 ] || { echo 'FAIL: stale marker hid a loaded daemon'; exit 1; }
+  # a failed / cancelled authorisation is reported and not remembered
+  reset_stop; ADMIN_RC=1
+  if enhanced_stop; then echo 'FAIL: cancelled authorisation reported as success'; exit 1; fi
+  [ ! -e "$H/.enhanced-stopped" ] || { echo 'FAIL: marker written after a failed stop'; exit 1; }
+  ADMIN_RC=0; LOADED=0; enhanced_stop; [ "$ADMIN" = 2 ] || { echo 'FAIL: a failed stop must be retried'; exit 1; }
+  # remove clears the marker
+  : > "$H/.enhanced-stopped"; enhanced_remove; [ ! -e "$H/.enhanced-stopped" ] || { echo 'FAIL: remove left the marker'; exit 1; }
+  # end to end through the real os_service_start / os_service_stop (System Proxy start after a TUN session): no administrator call
+  reset_stop; : > "$H/.enhanced-stopped"
+  enhanced_system_log() { :; }; os_write_plists() { return 1; }; STARTS=0; os_system_service_start() { STARTS=$((STARTS + 1)); }
+  os_system_service_stop() { :; }
+  os_service_start; rc=$?
+  [ "$rc:$ADMIN:$STARTS" = 0:0:1 ] || { echo "FAIL: System Proxy start after a stopped TUN daemon: rc:admin:starts = $rc:$ADMIN:$STARTS"; exit 1; }
+  os_service_stop; [ "$ADMIN" = 0 ] || { echo 'FAIL: System Proxy stop prompted for administrator rights'; exit 1; }
+)
+echo 'PASS: enhanced_stop asks for administrator rights only when a daemon is loaded or could still come back'
+# A successful root install forgets the stop marker and records the fingerprint, the policy fingerprint and the baked-in mode.
+(
+  SB=${SINGBOX:-$(type -P true)}; cp "$W/system.json" "$H/config.json"
+  : > "$H/.enhanced-stopped"; rm -f "$H/.enhanced-fingerprint" "$H/.enhanced-ovr-fingerprint" "$H/.enhanced-mode"
+  PROXY_ENABLED=1; PROXY_MODE=global
+  enhanced_record_install
+  [ ! -e "$H/.enhanced-stopped" ] && [ "$(cat "$H/.enhanced-fingerprint")" = "$(enhanced_fingerprint)" ] && [ "$(cat "$H/.enhanced-ovr-fingerprint")" = "$(enhanced_ovr_fingerprint)" ] && [ "$(cat "$H/.enhanced-mode")" = Global ]
+)
+echo 'PASS: a root install records its fingerprints and mode and clears the stop marker'

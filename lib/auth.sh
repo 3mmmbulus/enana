@@ -228,7 +228,7 @@ auth_register() {
 # 本机退出登录 (不通知云端; 云端已经撤销了会话时用): 关闭代理 + 令牌轮换 + 清除登录状态 / 会话 / 离线缓存 / 提示
 auth_logout_local() {
   proxy_set_enabled 0
-  rm -f "$H/loggedin" "$H/auth.fail" "$H/account.conf" "$H/notice" "$H/sudo.tokens"
+  rm -f "$H/loggedin" "$H/auth.fail" "$H/account.conf" "$H/notice" "$H/sudo.tokens" "$H/official.jsonl" "$H/official.jsonl.prev" "$H/official.state"      # 官方节点属于账号: 退出就清掉 (随后的 apply_config 把它们从核心配置里去掉)
   sync_on_logout
   session_clear
   auth_secret_new

@@ -26,9 +26,16 @@ billing_body() {
   ' "$1" "$2"
 }
 
-billing_request() { # method, fixed route, optional validated JSON
+# billing_request <方法> <固定路由> [已校验的 JSON]  成功: 把白名单过滤后的响应打印到标准输出, 返回 0
+# 失败: 返回 1, 并设置 BILLING_CODE (调用方必须在当前 shell 里调用, 不能放进 $(...), 否则拿不到这个变量):
+#   E_AUTH                 云端 401 (令牌 / 会话已失效), 或本机没有云端会话 (离线登录): 需要重新登录
+#   E_ACCOUNT_UNREACHABLE  连不上云端 (网络不通 / 超时), 或收到的不是云端的 JSON (例如认证网页 / 代理的网页)
+#   E_RATE_LIMITED         云端 429 且不是我们自己的 JSON
+#   E_SERVER_ERROR         连上了, 但云端返回了 5xx / 意外的状态码, 且正文不是我们自己的 JSON (不能拿它当「连不上」)
+billing_request() {
   local out code result
-  [ -n "$(session_id)" ] && [ -n "$(session_token)" ] || { BILLING_CODE=E_ACCOUNT_UNREACHABLE; return 1; }
+  BILLING_CODE=''
+  [ -n "$(session_id)" ] && [ -n "$(session_token)" ] || { BILLING_CODE=E_AUTH; return 1; }
   out=$(mktemp)
   code=$(CLOUD_MAXTIME=12 CLOUD_CONNECT=4 session_call "$out" "$1" "/api/enana/v1/$2" "${3:-}")
   # Never relay an upstream HTML error page or an unexpected/token-bearing body.
@@ -39,7 +46,19 @@ billing_request() { # method, fixed route, optional validated JSON
     else {exit 1 if exists $d->{token} || exists $d->{provider_key} || exists $d->{scanner_secret};print encode_json($d)}
   ' "$out")
   rm -f "$out"
-  case $code in 200|400|403|404|409|429|503) ;; *) BILLING_CODE=E_ACCOUNT_UNREACHABLE; return 1 ;; esac
-  [ -n "$result" ] || { BILLING_CODE=E_ACCOUNT_UNREACHABLE; return 1; }
+  case $code in
+    401) BILLING_CODE=E_AUTH; return 1 ;;
+    200|400|403|404|409|429|500|503) ;;
+    000|''|[123]??) BILLING_CODE=E_ACCOUNT_UNREACHABLE; return 1 ;;
+    *) BILLING_CODE=E_SERVER_ERROR; return 1 ;;
+  esac
+  if [ -z "$result" ]; then
+    case $code in
+      200) BILLING_CODE=E_ACCOUNT_UNREACHABLE ;;      # 200 却不是云端的 JSON: 多半是被网络认证页 / 代理替换了
+      429) BILLING_CODE=E_RATE_LIMITED ;;
+      *)   BILLING_CODE=E_SERVER_ERROR ;;
+    esac
+    return 1
+  fi
   printf '%s' "$result"
 }
