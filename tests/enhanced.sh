@@ -49,7 +49,7 @@ for b in ['ovr-browserdirect','ovr-browserauto','ovr-browserpin','ovr-browserpin
  assert idx(lambda a:a.get('rule_set')==['ovr-pin']) < idx(lambda a:a.get('rule_set')==[b])
 assert 'Google Chrome' in open(h+'/rules/ovr-browserdirect.json').read()
 assert 'Google Chrome' not in open(h+'/rules/ovr-appdirect.json').read()
-assert 'Terminal' in open(h+'/rules/ovr-auto.json').read()
+assert 'Terminal' in open(h+'/rules/ovr-appauto.json').read()   # 应用自动单独成集 (N1)
 for app in ['Gemini','Claude','ChatGPT']:
  assert app in open(h+'/rules/ovr-pin.json').read()
 assert s['route']['rules']==[a for a in r if 'tun-in' not in a.get('inbound',[])]

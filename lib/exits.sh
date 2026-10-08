@@ -32,7 +32,7 @@ exits_stored() { # 持久化的默认固定出口 (它必须还是固定出口, 
 exits_live() { # 核心里选择器 PIN 当前选中的服务器 (核心没运行 / 选的不是固定出口: 空)
   local now
   [ -z "${ENANA_EXITS_NO_LIVE:-}" ] || return 0
-  now=$(clash GET /proxies/PIN 2>/dev/null | sed -n 's/.*"now":"\([^"]*\)".*/\1/p' | head -1)
+  now=$(clash GET /proxies/PIN 2>/dev/null | sed -n 's/.*"now": *"\([^"]*\)".*/\1/p' | head -1)
   if [ -n "$now" ] && exits_has_pin "$now"; then printf '%s' "$now"; fi
   return 0
 }
@@ -61,7 +61,7 @@ exits_sync_default() { # 核心(重新)启动后: 持久化的默认固定出口
   local want live='' i=0
   want=$(exits_stored); [ -n "$want" ] || return 0
   while [ "$i" -lt 6 ]; do
-    live=$(clash GET /proxies/PIN 2>/dev/null | sed -n 's/.*"now":"\([^"]*\)".*/\1/p' | head -1)
+    live=$(clash GET /proxies/PIN 2>/dev/null | sed -n 's/.*"now": *"\([^"]*\)".*/\1/p' | head -1)
     [ -z "$live" ] || break
     i=$((i + 1)); sleep 0.5
   done

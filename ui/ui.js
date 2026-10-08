@@ -77,8 +77,8 @@
     box.appendChild(el);
     while (box.children.length > 4) box.removeChild(box.firstChild);
     var left = ms || (kind === 'err' ? 12000 : act ? 7000 : 3800), timer = 0, startAt = 0;   // 悬停或聚焦时暂停计时, 离开后接着算
-    function arm() { startAt = Date.now(); timer = setTimeout(rm, left); }
-    function hold() { clearTimeout(timer); left = Math.max(1500, left - (Date.now() - startAt)); }
+    function arm() { if (timer) return; startAt = Date.now(); timer = setTimeout(rm, left); }   // 已在计时就不再叠加
+    function hold() { if (!timer) return; clearTimeout(timer); timer = 0; left = Math.max(1500, left - (Date.now() - startAt)); }
     el.addEventListener('mouseenter', hold); el.addEventListener('focusin', hold);
     el.addEventListener('mouseleave', arm); el.addEventListener('focusout', arm);
     arm();

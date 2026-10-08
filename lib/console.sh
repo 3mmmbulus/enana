@@ -16,8 +16,8 @@ console_gather() {
   CS_mode=''; CS_pin=''; CS_auto=''; CS_pin_ms=''; CS_auto_ms=''
   if [ "$CS_svc" = 1 ]; then
     CS_mode=$(clash GET /configs 2>/dev/null | sed -n 's/.*"mode":"\([^"]*\)".*/\1/p')
-    CS_pin=$(clash GET /proxies/PIN 2>/dev/null | sed -n 's/.*"now":"\([^"]*\)".*/\1/p')
-    CS_auto=$(clash GET /proxies/AUTO 2>/dev/null | sed -n 's/.*"now":"\([^"]*\)".*/\1/p')
+    CS_pin=$(clash GET /proxies/PIN 2>/dev/null | sed -n 's/.*"now": *"\([^"]*\)".*/\1/p')
+    CS_auto=$(clash GET /proxies/AUTO 2>/dev/null | sed -n 's/.*"now": *"\([^"]*\)".*/\1/p')
     if [ "$CS_srv" -gt 0 ]; then
       [ -n "$CS_pin" ] && [ "$CS_pin" != direct ] && _cs_delay PIN "$T/pin" &
       [ -n "$CS_auto" ] && _cs_delay AUTO "$T/auto" &

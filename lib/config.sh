@@ -77,7 +77,7 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
     printf '%s\n' '{"type":"socks","tag":"pin-none","server":"127.0.0.1","server_port":1}' >> "$T/ob"; pin_list='"pin-none"'; pin_def=pin-none
   fi
   if [ -s "$T/autos" ]; then
-    printf '{"type":"urltest","tag":"AUTO","outbounds":[%s],"url":"http://www.gstatic.com/generate_204","interval":"10m","tolerance":50,"idle_timeout":"30m"}\n' "$(json_list < "$T/autos")" >> "$T/ob"
+    printf '{"type":"urltest","tag":"AUTO","outbounds":[%s],"url":"http://www.gstatic.com/generate_204","interval":"3m","tolerance":50,"idle_timeout":"30m"}\n' "$(json_list < "$T/autos")" >> "$T/ob"
     glob_list="\"AUTO\",$(json_list < "$T/autos")"; [ -s "$T/pins" ] && glob_list="$glob_list,$pin_list"; glob_def=AUTO
   elif [ -s "$T/pins" ]; then glob_list=$pin_list; glob_def=$pin_def
   else glob_list='"direct"'; glob_def=direct; fi
@@ -117,7 +117,7 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
     printf '{"type":"urltest","tag":"PINAUTO","outbounds":[%s],"url":"http://www.gstatic.com/generate_204","interval":"10m","tolerance":50,"idle_timeout":"30m"}\n' "$(json_list < "$T/pinx")" >> "$T/ob"
     pinx_opts=",\"PINAUTO\",$(json_list < "$T/pinx")"
   fi
-  for i in direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto auto $(seqn "$npinx"); do
+  for i in direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto appauto auto $(seqn "$npinx"); do
     case $i in [0-9]*)
       rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"ovr-apppin-$i\",\"format\":\"source\",\"path\":\"$H/rules/ovr-apppin-$i.json\"}"
       rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"ovr-browserpin-$i\",\"format\":\"source\",\"path\":\"$H/rules/ovr-browserpin-$i.json\"}"
@@ -164,6 +164,7 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
     cat "$T/r1"
     cat "$T/r2"
     printf '%s\n' '{"rule_set":["ovr-appdirect"],"action":"route","outbound":"direct-app"}'          # 应用直连排在网站规则之后: 网站的固定出口 / 直连优先 (P0-1)
+    printf '%s\n' '{"rule_set":["ovr-appauto"],"action":"route","outbound":"Global"}'                 # 应用自动同样排在网站规则之后 (N1)
     # A browser is a container of websites: direct/auto are its fallback,
     # while explicit website policies still work. Native App PIN is an override.
     printf '%s\n' '{"rule_set":["ovr-browserdirect"],"action":"route","outbound":"direct-app"}'
@@ -276,7 +277,7 @@ proxy_clash_mode() { if [ "${PROXY_ENABLED:-0}" != 1 ]; then echo Direct; elif [
 proxy_apply_mode() { # 把当前设置推给运行中的核心, 并同步磁盘配置的 default_mode
   local mode; mode=$(proxy_clash_mode)
   clash PATCH /configs "{\"mode\":\"$mode\"}" >/dev/null 2>&1 || true
-  [ -f "$H/config.json" ] && sed -i '' "s/\"default_mode\":\"[A-Za-z]*\"/\"default_mode\":\"$mode\"/" "$H/config.json"
+  [ -f "$H/config.json" ] && sed_inplace "s/\"default_mode\":\"[A-Za-z]*\"/\"default_mode\":\"$mode\"/" "$H/config.json"
   return 0
 }
 # 代理总开关 / 模式要和「生成并应用配置」互斥: 否则后台任务 (比如登录后的云端内容同步) 正在用旧的设置生成配置时, 它会把磁盘配置和运行中的模式改回旧值。

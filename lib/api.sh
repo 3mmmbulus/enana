@@ -788,7 +788,7 @@ ep_rules_add() {
   okj "\"job\":\"$(job_spawn rules-add "$RULE_STEPS" "$name" "$url" "$pol")\""
 }
 valid_id() { case $1 in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac; [ "${#1}" -le 64 ]; }   # 内部编号: 只允许字母 数字 . _ -
-valid_name() { [ -n "$1" ] && [ "${#1}" -le 200 ] && case $1 in *[/\\]*|*..*|*"$(printf '\n\r')"*) false ;; *) true ;; esac; }   # 显示名称: 不允许路径分隔符、.. 和换行
+valid_name() { [ -n "$1" ] && [ "${#1}" -le 200 ] && case $1 in *[/\\]*|*..*|*$'\n'*|*$'\r'*|*'|'*) false ;; *) true ;; esac; }   # 显示名称: 不允许路径分隔符、.. 和换行
 ep_rules_delete() {
   local tag; tag=$(fp tag); valid_id "$tag" || fail "规则集编号无效" E_INVALID
   grep -q "^$tag|" "$H/custom-rulesets.tsv" 2>/dev/null || fail "找不到这个规则集" E_NOT_FOUND

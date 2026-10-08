@@ -1,5 +1,31 @@
 # Changelog / 更新日志
 
+## 2.3.13 (2026-10-09)
+
+### 中文
+- **应用「自动线路」不再压过网站规则**: 应用自动单独成规则集, 排在网站直连和目录固定出口之后 (与应用直连一致)。
+- **覆盖规则拒绝换行和竖线**: 整串检查, 不再因为按行匹配而把多行内容写进 `overrides.tsv`。
+- **文案与行为一致**: 没有固定出口时写明「暂停访问, 不会直连」 (界面、订阅删除提示、出口分配、帮助与 API 文档)。
+- **自建服务器**: 「enana 节点」状态以是否已部署为准, 不再因为服务器装了 Node.js 就显示「尚未部署」。
+- **Clash API 输出解析**: sing-box 1.14 的 `"now": "x"` (冒号后有空格) 现在能正确读取, 修复出口状态、控制台和健康记录的出口链。
+- **自动线路检测间隔** 由 10 分钟改为 3 分钟, 缩短节点失效后的中断时间 (当前节点挂掉后最长约 3 分钟切换)。
+- **测速节点**: 换行或逗号分隔都可以 (节点名含逗号时请用换行)。
+- **安装脚本**: 没有终端且没有 `--yes` 时直接失败并提示, 不再当作「已取消」正常退出。
+- **发布包**: 不再包含 macOS 扩展属性。
+- **提示条**: 悬停时计时器不会叠加。
+
+### English
+- **App "auto" no longer overrides website rules:** app auto now has its own rule set placed after website direct and catalog fixed exits, matching app direct.
+- **Override names reject newlines and `|`:** validation runs on the whole string instead of line by line, so multi-line input can no longer corrupt `overrides.tsv`.
+- **Wording matches behaviour:** with no fixed exit, the UI and API docs now say access is paused and never connects directly.
+- **Self-hosted servers:** the "enana node" state follows whether enana is deployed, not whether Node.js is installed.
+- **Clash API parsing:** `"now": "x"` (space after the colon, as printed by sing-box 1.14) is read correctly, fixing exit status, the console and health chains.
+- **Auto-line re-test interval** changed from 10 to 3 minutes, so a dead current node is replaced within about 3 minutes.
+- **Speed test nodes** may be separated by newlines or commas (use newlines when a name contains a comma).
+- **Installer:** without a terminal and without `--yes`, it fails with a message instead of reporting "Cancelled" with exit 0.
+- **Release bundle** no longer carries macOS extended attributes.
+- **Toasts:** hover/focus no longer stacks timers.
+
 ## 2.3.12 (2026-10-09)
 
 ### 中文
