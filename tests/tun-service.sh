@@ -12,6 +12,8 @@ r,w=sys.argv[1:]; s=open(r+'/lib/enhanced-root.sh').read()
 s=s.replace('root="/Library/Application Support/enana-$uid"','root="'+w+'/runtime"')
 s=s.replace('plist="/Library/LaunchDaemons/$label.plist"','plist="'+w+'/daemon.plist"')
 s=s.replace('libexec="/usr/local/libexec/enana"; sudoers_dir="/etc/sudoers.d"','libexec="'+w+'/libexec"; sudoers_dir="'+w+'/sudoers.d"')
+assert 'launchctl_bin="/bin/launchctl"' in s
+s=s.replace('launchctl_bin="/bin/launchctl"','launchctl_bin="'+w+'/bin/launchctl"')
 open(w+'/helper.sh','w').write(s)
 PY
 for c in chown sleep; do printf '#!/bin/sh\nexit 0\n' > "$W/bin/$c"; done
@@ -71,17 +73,33 @@ cp "${args[0]}" "${args[1]}" && { [ -z "$mode" ] || chmod "$mode" "${args[1]}"; 
 MOCK
 chmod +x "$W/bin/install"
 mkdir -p "$W/stage/rules"; printf '{"snapshot":"third"}\n' > "$W/stage/config.json"
-sed 's|@VERSION@|1|g' "$R/lib/tunrules-helper.pl" > "$W/stage/tunrules-helper"
+HV=$(sed -n 's/^TUNRULES_HELPER_VERSION=\([0-9][0-9]*\).*/\1/p' "$R/lib/enhanced.sh")       # enhanced_start 把这个版本号写进暂存的助手
+sed "s|@VERSION@|$HV|g" "$R/lib/tunrules-helper.pl" > "$W/stage/tunrules-helper"
 bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1 tester
 [ -x "$W/libexec/tunrules-501" ]
 grep -qx "tester ALL=(root) NOPASSWD: $W/libexec/tunrules-501" "$W/sudoers.d/enana-tunrules-501"
 [ "$(wc -l < "$W/sudoers.d/enana-tunrules-501" | tr -d ' ')" = 1 ]
 [ "$(stat -f %Lp "$W/libexec/tunrules-501")" = 755 ] && [ "$(stat -f %Lp "$W/sudoers.d/enana-tunrules-501")" = 440 ]
-! grep -q '@ROOT@\|@ROOTUID@\|@VERSION@' "$W/libexec/tunrules-501"
+! grep -q '@ROOT@\|@ROOTUID@\|@VERSION@\|@LABEL@\|@LAUNCHCTL@' "$W/libexec/tunrules-501"
 grep -q "my \$ROOT = '$W/runtime'" "$W/libexec/tunrules-501"
 grep -q 'my \$ROOT_UID = 0;' "$W/libexec/tunrules-501"
+# `restart` 动作: 标签和 launchctl 路径是 root 脚本按自己的固定值写死进去的 (不来自调用者); 助手本身没有任何别的 launchctl 调用
+grep -q "my \$LABEL = 'com.enana.proxy.tun.501';" "$W/libexec/tunrules-501"
+grep -q "my \$LAUNCHCTL = '$W/bin/launchctl';" "$W/libexec/tunrules-501"
 /usr/bin/perl -c "$W/libexec/tunrules-501" >/dev/null 2>&1
 /usr/sbin/visudo -cf "$W/sudoers.d/enana-tunrules-501" >/dev/null
+# 真实运行已安装的那份助手 (只把「必须是 root」的 uid 换成当前用户: 生产里是 0, 测试不是 root)
+sed "s/^my \$ROOT_UID = 0;/my \$ROOT_UID = $(/usr/bin/id -u);/" "$W/libexec/tunrules-501" > "$W/installed-copy.pl"
+[ "$(/usr/bin/perl "$W/installed-copy.pl" version)" = "$HV" ]
+before=$(wc -l < "$W/calls" | tr -d ' ')
+/usr/bin/perl "$W/installed-copy.pl" restart >/dev/null
+[ "$(wc -l < "$W/calls" | tr -d ' ')" = $((before + 1)) ]
+[ "$(tail -1 "$W/calls")" = 'kickstart -k system/com.enana.proxy.tun.501' ]
+for bad in 'restart system/com.apple.mDNSResponder' 'restart -k' 'bootout' 'kickstart'; do
+  # shellcheck disable=SC2086
+  if /usr/bin/perl "$W/installed-copy.pl" $bad >/dev/null 2>&1; then echo "FAIL: helper accepted: $bad"; exit 1; fi
+done
+[ "$(wc -l < "$W/calls" | tr -d ' ')" = $((before + 1)) ]          # 被拒绝的调用没有碰 launchctl
 [ ! -e "$W/stage/../runtime/.helper."* ] 2>/dev/null
 # A bad user name, a non-perl helper or a helper that does not compile never blocks or breaks the TUN install, and leaves no rule behind.
 rm -rf "$W/libexec" "$W/sudoers.d"
@@ -97,7 +115,7 @@ rm -f "$W/stage/tunrules-helper"
 bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1 tester
 [ ! -e "$W/libexec/tunrules-501" ]
 # Installing a good helper again and then removing the service removes the helper and its sudoers rule.
-sed 's|@VERSION@|1|g' "$R/lib/tunrules-helper.pl" > "$W/stage/tunrules-helper"
+sed "s|@VERSION@|$HV|g" "$R/lib/tunrules-helper.pl" > "$W/stage/tunrules-helper"
 bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1 tester
 [ -x "$W/libexec/tunrules-501" ] && [ -f "$W/sudoers.d/enana-tunrules-501" ]
 bash "$W/helper.sh" remove 501

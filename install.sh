@@ -370,7 +370,9 @@ cmd_diag() { # 诊断导出 (和仪表盘「日志 → 导出」同一份文件,
 cmd_update() {
   info "更新规则集…"; rules_update || warn "规则集下载失败, 保留旧版本"
   info "刷新订阅…"; op_subs_refresh "${QUIET:+1}"
-  op_apply >/dev/null 2>&1 && ok "已更新" || warn "应用配置失败: enana doctor"
+  # 订阅刷新成功应用过配置 (带上了刚下载的规则集) 就不用再应用一遍
+  if [ "${SUBS_APPLIED:-0}" = 1 ]; then ok "已更新"
+  else op_apply >/dev/null 2>&1 && ok "已更新" || warn "应用配置失败: enana doctor"; fi
 }
 cmd_maintain() { op_maintain; }
 cmd_content() { # 拉取并应用云端内容 (登录后下发的服务目录 / 规则库 / 应用推荐), 然后显示状态

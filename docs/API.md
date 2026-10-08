@@ -157,6 +157,8 @@
 `POST /api/servers/import?sub=&mode=merge|replace&save=0|1` (正文=JSONL; **save★**: 1 = 「保存到云端」, 这些节点 (和订阅) 进入云端同步清单, 第一次用时自动打开云端同步; 0 = 只留在本机; 不带 = 不改动, 例如订阅自动刷新) · `POST /api/servers/delete?tag=` · `POST /api/servers/role?tag=&role=pin|auto|off|dl` ·
 `POST /api/cert?name=` · `POST /api/sub/fetch` · `POST /api/sub/save?name=&save=0|1` · `POST /api/sub/delete?name=` · `POST /api/restart` — 形状不变。
 
+`servers/import` 的 `mode=replace` + `sub` (订阅刷新) 是**就地**合并: 订阅里已有的 tag 留在 `servers.jsonl` 里原来的那一行 (内容变了就原地覆盖), 新的 tag 追加到末尾, 订阅里已经没有的 tag 删掉; 其它来源的行 (手动添加的服务器、别的订阅) 原样不动。内容完全相同的刷新不改动文件, 所以生成的配置不变、核心不重启 (TUN 下也不用管理员授权)。返回的 `added` = 全新的 tag · `replaced` = 文件里已有的 tag (不论内容有没有变; 和 `merge` 一致) · `removed` = 这个订阅里有、新数据里没有的 tag (以前是「先删光再追加」, 订阅整个刷新一次就是 `removed` = 旧节点数、`added` = 新节点数)。`mode=merge` 不变: 已有的 tag 被新行取代并移到末尾。命令行 / 定时刷新 (`enana update`、每日维护) 会把订阅里已有节点的角色 (pin / off / dl) 带回来, 不会被导入器的默认 `auto` 覆盖; 同一批要刷新的多个订阅在一个事务里导入、只应用一次 (合并的事务没通过时退回逐个订阅各一个事务)。
+
 ### `GET /api/job?id=`
 `{"ok":true,"id","name","state":"running|done|error","pct":0-100,"msg":"…","steps":[{"label":"…","state":"todo|run|done|error"}],"result":{}}`; `msg`/`label` 按 `X-Enana-Lang` 翻译。
 

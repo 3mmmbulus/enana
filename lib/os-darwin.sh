@@ -120,7 +120,17 @@ os_service_start() {
 }
 os_service_restart() {
   type core_restart_note >/dev/null 2>&1 && core_restart_note
-  if enhanced_configured || enhanced_loaded; then os_service_start; else os_system_service_restart; fi
+  if enhanced_configured || enhanced_loaded; then
+    # TUN: when the root snapshot is exactly what is installed (fingerprint unchanged) and the root helper is trusted, bounce the daemon through the
+    # helper's `restart` action: no administrator prompt. Anything else (changed config / binary / rules, no or older helper, helper refused, daemon
+    # not loaded) goes through the full install, which asks for administrator authorisation as before.
+    if enhanced_restart_fast; then
+      type oplog >/dev/null 2>&1 && oplog "${OP_WHO:-auto}" "重启核心方式" "$(kv mode tun via helper)" ok
+      return 0
+    fi
+    if enhanced_configured && type oplog >/dev/null 2>&1; then oplog "${OP_WHO:-auto}" "重启核心方式" "$(kv mode tun via admin why "${ENHANCED_FAST_WHY:-}")" ok; fi
+    os_service_start
+  else os_system_service_restart; fi
 }
 os_service_stop() { enhanced_stop || return 1; os_system_service_stop; }
 
@@ -208,7 +218,9 @@ os_helper_trusted() { # <路径> <版本>  已安装、归 root (测试里归当
   v=$(sudo -n "$h" version 2>/dev/null) || return 1
   [ "$v" = "$want" ]
 }
-os_sysproxy_helper_ok() { os_helper_trusted "$(os_sysproxy_helper_path)" "$SYSPROXY_HELPER_VERSION"; }
+os_sysproxy_helper_port() { sed -n 's/^NS=.*; PORT=\([0-9][0-9]*\); VERSION=.*/\1/p' "$(os_sysproxy_helper_path)" 2>/dev/null | head -1; }      # 助手里写死的端口 (文件归 root、别人改不了, 见 os_helper_trusted)
+# 版本对还不够: 端口是装助手时写死的, 如果后来端口被重新分配了, 旧助手会把系统代理指向旧端口、还报告成功 —— 所以写死的端口也要和现在的一致, 不一致就当作没装好 (重新授权并重装)。
+os_sysproxy_helper_ok() { os_helper_trusted "$(os_sysproxy_helper_path)" "$SYSPROXY_HELPER_VERSION" && [ "$(os_sysproxy_helper_port)" = "$PORT" ]; }
 os_sysproxy_helper_install_cmds() { # 以 root 身份执行的命令串 (末尾带分号): 安装助手 + 免密规则; 任何一步失败都不影响后面的系统代理设置, 也不会留下半成品规则
   local h s u d sd text b64
   [ -z "${ENANA_NO_SYSPROXY_HELPER:-}" ] || return 1
