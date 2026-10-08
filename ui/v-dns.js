@@ -611,7 +611,7 @@
         if (o.onInput) o.onInput({ domain: f.d.value, ip: f.i.value });
       });
       inp.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') { e.preventDefault(); f.ok.click(); }
+        if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); f.ok.click(); }
         else if (e.key === 'Escape' && o.onCancel) { e.preventDefault(); e.stopPropagation(); o.onCancel(); }
       });
     });
@@ -984,7 +984,7 @@
       if (sb && !saving) ui.avail(sb, changes().n ? '' : t('dns.noChanges'));
     }
     [f.cn.url, f.global.url].forEach(function (inp) {
-      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); var b = api && api.getBtn('save'); if (b) b.click(); } });
+      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); var b = api && api.getBtn('save'); if (b) b.click(); } });
     });
 
     /* ---- 保存: 校验 -> 确认 (旧 → 新) -> 提交 -> 在弹窗里跟踪任务 ---- */

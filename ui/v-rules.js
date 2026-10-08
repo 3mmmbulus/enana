@@ -340,7 +340,7 @@
     });
     function go(ev) { ev.preventDefault(); var b = api.getBtn('go'); if (b) b.click(); }
     form.addEventListener('submit', go);
-    [name, url].forEach(function (inp) { inp.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') go(ev); }); });     // 两个文本框且没有提交按钮: 浏览器不会自动提交
+    [name, url].forEach(function (inp) { inp.addEventListener('keydown', function (ev) { if (ev.key === 'Enter' && !ev.isComposing && ev.keyCode !== 229) go(ev); }); });     // 两个文本框且没有提交按钮: 浏览器不会自动提交
     return api.closed;
   }
 

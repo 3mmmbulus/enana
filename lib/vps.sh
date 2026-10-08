@@ -183,8 +183,8 @@ vps_classify_ssh() {
     *'incorrect passphrase'*|*'invalid format'*|*'error in libcrypto'*|*'Load key'*|*'bad passphrase'*) VPS_CODE=E_SSH_KEY; VPS_ERR="私钥格式不对, 或私钥口令不对" ;;
     *'Permission denied'*|*'Too many authentication failures'*|*'No more authentication methods'*) VPS_CODE=E_SSH_AUTH; VPS_ERR="用户名、密码或私钥不对 (连得上服务器, 但登录被拒绝)" ;;
     *'sudo: '*|*'Sorry, try again'*|*'incorrect password'*|*'is not in the sudoers'*) VPS_CODE=E_VPS_PRIVILEGE; VPS_ERR="sudo 没有通过: sudo 密码不对, 或这个用户没有 sudo 权限" ;;
-    *'Connection refused'*|*'timed out'*|*'No route to host'*|*'Network is unreachable'*|*'Could not resolve hostname'*|*'Connection reset'*|*'Connection closed'*|*'kex_exchange_identification'*|*'Operation timed out'*)
-      VPS_CODE=E_SSH_UNREACHABLE; VPS_ERR="连不上这台服务器 (地址 / 端口不对, 服务器没开机, 或防火墙挡住了 SSH 端口)" ;;
+    *'Connection refused'*|*'timed out'*|*'No route to host'*|*'Network is unreachable'*|*'Could not resolve hostname'*|*'Connection reset'*|*'Connection closed'*|*'kex_exchange_identification'*)
+      VPS_CODE=E_SSH_UNREACHABLE; VPS_ERR="连不上 $V_HOST:$V_PORT (SSH): 地址或端口不对, 服务器没开机, 或防火墙挡住了 SSH 端口" ;;
     *) VPS_CODE=E_SSH_UNREACHABLE; VPS_ERR="SSH 连接失败 (退出码 $1)" ;;
   esac
 }
@@ -310,7 +310,7 @@ vps_connect() { # <凭据文件>
   vps_hostkey_setup; case $? in
     0) ;;
     2) VPS_CODE=E_SSH_HOSTKEY; VPS_ERR="服务器的主机指纹与之前固定的不一致 (可能被中间人攻击, 或服务器重装过系统)"; vps_job_error; return 1 ;;
-    *) VPS_CODE=E_SSH_UNREACHABLE; VPS_ERR="连不上这台服务器 (地址 / 端口不对, 服务器没开机, 或防火墙挡住了 SSH 端口)"; vps_job_error; return 1 ;;
+    *) VPS_CODE=E_SSH_UNREACHABLE; VPS_ERR="连不上 $V_HOST:$V_PORT (SSH): 地址或端口不对, 服务器没开机, 或防火墙挡住了 SSH 端口"; vps_job_error; return 1 ;;
   esac
   return 0
 }
@@ -338,11 +338,11 @@ vps_probe_job() { # <凭据文件>
         if vps_run probe user; then break; fi ;;
       2) VPS_CODE=E_SSH_HOSTKEY; VPS_ERR="服务器的主机指纹与之前固定的不一致 (可能被中间人攻击, 或服务器重装过系统)" ;;
       3) VPS_CODE=E_CANCELLED; VPS_ERR="已取消服务器检测" ;;
-      *) VPS_CODE=E_SSH_UNREACHABLE; VPS_ERR="连不上这台服务器 (地址 / 端口不对, 服务器没开机, 或防火墙挡住了 SSH 端口)" ;;
+      *) VPS_CODE=E_SSH_UNREACHABLE; VPS_ERR="连不上 $V_HOST:$V_PORT (SSH): 地址或端口不对, 服务器没开机, 或防火墙挡住了 SSH 端口" ;;
     esac
     # Retry only transient connection failures, never rejected credentials or keys.
     if [ "$VPS_CODE" != E_SSH_UNREACHABLE ] || [ "$attempt" = 3 ]; then vps_job_error 1; return 1; fi
-    oplog "${OP_WHO:-dashboard}" "服务器检测重试" "$(kv attempt "$attempt" max 3 code "$VPS_CODE")" error
+    oplog "${OP_WHO:-dashboard}" "服务器检测重试" "$(kv host "$V_HOST:$V_PORT" attempt "$attempt" max 3 code "$VPS_CODE")" error
     retry_start=$(now)
     while [ $(( $(now) - retry_start )) -lt 2 ]; do
       vps_check_cancel || { vps_job_error; return 1; }
@@ -751,7 +751,7 @@ vps_redetect_job() { # <凭据文件>
   if ! vps_cred_check "$V_HOST" "$V_PORT" "$V_USER" "$V_MODE" "$V_PASSWORD" "$V_KEY" "$V_PASSPHRASE" "$V_SUDOPW" "$V_HOSTKEY"; then VPS_CODE=E_INVALID; vps_job_error; return 1; fi
   vps_prepare || { VPS_CODE=E_INVALID; VPS_ERR="无法创建临时目录"; vps_job_error; return 1; }
   job_step 0 5 "连接服务器"
-  vps_hostkey_setup; case $? in 0) ;; 2) VPS_CODE=E_SSH_HOSTKEY; VPS_ERR="服务器的主机指纹与之前固定的不一致 (可能被中间人攻击, 或服务器重装过系统)"; vps_job_error; return 1 ;; *) VPS_CODE=E_SSH_UNREACHABLE; VPS_ERR="连不上这台服务器 (地址 / 端口不对, 服务器没开机, 或防火墙挡住了 SSH 端口)"; vps_job_error; return 1 ;; esac
+  vps_hostkey_setup; case $? in 0) ;; 2) VPS_CODE=E_SSH_HOSTKEY; VPS_ERR="服务器的主机指纹与之前固定的不一致 (可能被中间人攻击, 或服务器重装过系统)"; vps_job_error; return 1 ;; *) VPS_CODE=E_SSH_UNREACHABLE; VPS_ERR="连不上 $V_HOST:$V_PORT (SSH): 地址或端口不对, 服务器没开机, 或防火墙挡住了 SSH 端口"; vps_job_error; return 1 ;; esac
   vps_playbook_ok || { VPS_CODE=E_VPS_NO_PLAYBOOK; VPS_ERR="部署脚本由 enana 云端下发: 请先登录, 并等「云端内容」同步完成后再试"; vps_job_error; return 1; }
   vps_progress() { vps_redetect_progress "$1"; }
   if ! vps_run probe user; then vps_job_error 1; return 1; fi

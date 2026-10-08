@@ -320,8 +320,8 @@ speed_start() {
   speed_running >/dev/null && return 2
   if [ "$mode" != direct ]; then
     # 节点: 必须是现有的 pin/auto 服务器 (白名单), 最多 12 个; 缺省取计划里的默认选择
-    if [ -z "$nodes" ]; then nodes=$(speed_plan_json | sed 's/.*"defaults":{[^}]*"nodes":\[\([^]]*\)\].*/\1/' | tr -d '"'); fi
-    local IFS=','; for n in $nodes; do
+    if [ -z "$nodes" ]; then nodes=$(speed_plan_json | sed 's/.*"defaults":{[^}]*"nodes":\[\([^]]*\)\].*/\1/' | tr -d '"' | tr ',' '\n'); fi
+    local IFS=$'\n'; for n in $nodes; do
       [ -n "$n" ] || continue
       speed_nodes | awk -F'\t' -v t="$n" '$1==t{f=1} END{exit f?0:1}' || { bad=1; continue; }
       list="$list${list:+$'\n'}$n"
@@ -428,7 +428,7 @@ speed_run() {
   speed_route_select direct 2>/dev/null || true
   speed_ip_refine "$id"
   if [ -f "$d/$id.stop" ]; then speed_finish "$id" stopped "已停止"; else speed_finish "$id" done "测速完成"; fi
-  oplog terminal "测速" "$mode · $nodes_n 个节点" ok 2>/dev/null || true
+  oplog "${OP_WHO:-terminal}" "测速" "$mode · $nodes_n 个节点" ok 2>/dev/null || true
 }
 
 # 用探测结果修正 IP 状态: 每条线路只看「与它相关」的目标 (直连看国内/运营商, 节点看海外), 失败/受限占比高 -> limited/blocked
@@ -513,7 +513,7 @@ speed_render() {
         if (best == "" || okc[r] > okc[best] || (okc[r] == okc[best] && okc[r] > 0 && sum[r] / okc[r] < sum[best] / okc[best])) best = r }
       if (best == "") for (i = 1; i <= nr; i++) if (n[rid[i]] > 0) { best = rid[i]; break }
       printf "\"best\":\"%s\",\"avg_ms\":{", esc(best)
-      for (i = 1; i <= nr; i++) { r = rid[i]; printf "%s\"%s\":%d", (i > 1 ? "," : ""), esc(r), (okc[r] > 0 ? sum[r] / okc[r] : 0) }
+      for (i = 1; i <= nr; i++) { r = rid[i]; printf "%s\"%s\":%s", (i > 1 ? "," : ""), esc(r), (okc[r] > 0 ? sprintf("%d", sum[r] / okc[r]) : "null") }
       printf "},\"ok\":{"; for (i = 1; i <= nr; i++) printf "%s\"%s\":%d", (i > 1 ? "," : ""), esc(rid[i]), okc[rid[i]]
       printf "},\"total\":{"; for (i = 1; i <= nr; i++) printf "%s\"%s\":%d", (i > 1 ? "," : ""), esc(rid[i]), n[rid[i]]
       printf "},\"limited\":{"; for (i = 1; i <= nr; i++) printf "%s\"%s\":%d", (i > 1 ? "," : ""), esc(rid[i]), lim[rid[i]]

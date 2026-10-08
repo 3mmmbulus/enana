@@ -1,5 +1,34 @@
 # Changelog / 更新日志
 
+## 2.3.12 (2026-10-09)
+
+### 中文
+- **路由优先级: 应用「直连」排在网站规则之后**。新应用默认直连不再盖过网站的固定出口, AI 等站点不会因此走真实 IP。
+- **固定出口为空时 fail-closed**: 没有可用的固定出口时, 相关站点不再静默直连, 而是连接失败 (本地不可达的 `pin-none` 出站)。
+- **诊断摘要上传默认关闭** (新安装)。已有的设置保持不变。
+- **测速**: 从面板触发的测速日志显示「控制台」; 节点名可以包含逗号; 失败节点的平均延迟返回 `null`, 而不是 `0`。
+- **输入校验**: 规则集编号、应用名做白名单 / 长度 / 路径字符检查, 错误返回 `E_INVALID`。
+- **系统代理授权**: 修正「不是管理员」的错误分类顺序。
+- **自建服务器**: 检测重试日志带 `host:port`; 连接失败提示写明地址和端口; 去掉重复的错误分支。
+- **跨平台脚本**: `sed -i` 和 `stat` 改为 BSD / GNU 通用写法 (`sed_inplace`、`file_size`、`file_mtime`、`file_inode`)。
+- **界面**:
+  - 拼音输入法选字时按回车不再提交 (日志搜索、DNS 弹窗、规则库添加)。
+  - 提示条可以关闭; 悬停或聚焦时暂停计时; 错误提示保留 12 秒并以 alert 播报。
+  - 没有新应用时隐藏两个相同的「没有新应用」按钮。
+  - 支持浏览器前进 / 后退; 页面标题随页面变化。
+  - 小按钮的点击区不小于 30px。
+
+### English
+- **Routing precedence: app-level "direct" now comes after site rules.** A newly seen app that defaults to direct no longer overrides a website's fixed exit, so AI sites no longer leak the real IP that way.
+- **Fail-closed when no fixed exit exists:** sites bound to a fixed exit fail to connect instead of silently going direct (a local unreachable `pin-none` outbound).
+- **Diagnostics upload is off by default** for new installs; existing settings are unchanged.
+- **Speed test:** panel-triggered runs are logged as "console"; node names may contain commas; failed nodes report `null` average latency instead of `0`.
+- **Input validation** for rule-set ids and app names (allow-list, length, no path separators or newlines); errors return `E_INVALID`.
+- **System proxy authorization:** "not admin" errors are classified before the generic "not allowed" match.
+- **Self-hosted servers:** retry logs include `host:port`; unreachable errors name the address and port; a redundant error branch was removed.
+- **Portability:** `sed -i` and `stat` calls go through BSD/GNU-neutral helpers.
+- **UI:** IME composition no longer submits on Enter (log search, DNS dialog, rule-library add); toasts can be dismissed, pause on hover/focus, and errors stay 12 s with `role=alert`; the duplicate "no new apps" buttons are hidden; browser back/forward works; page titles follow the route; small buttons have a 30 px hit area.
+
 ## 2.3.11 (2026-10-08)
 
 ### 中文

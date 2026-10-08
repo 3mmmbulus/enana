@@ -273,9 +273,9 @@ os_sysproxy_apply() { # on|off [force]  -> 0 = 已是想要的状态 · 1 = 没�
   msg=$(head -c 300 "$errf" 2>/dev/null | tr '\n\t' '  '); rm -f "$errf"
   case $msg in
     *"-128"*|*"User canceled"*|*"user canceled"*) SYSPROXY_ERR=user-canceled ;;
+    *"not in the sudoers"*|*"not allowed to"*) SYSPROXY_ERR=not-admin ;;
     *"-1743"*|*"not allowed"*|*"Not authorized"*|*"not authorized"*) SYSPROXY_ERR=not-authorized ;;
     *"incorrect password"*|*"Sorry, try again"*) SYSPROXY_ERR=wrong-password ;;
-    *"not in the sudoers"*|*"not allowed to"*) SYSPROXY_ERR=not-admin ;;
     *"window server"*|*"WindowServer"*|*"-1708"*) SYSPROXY_ERR=no-gui-session ;;
     '') SYSPROXY_ERR=not-applied ;;
     *) SYSPROXY_ERR=failed ;;

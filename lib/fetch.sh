@@ -321,7 +321,7 @@ custom_rs_refresh_all() {
 
 rules_json() { # GET /api/rules 的 sets 数组
   local st="$H/.rules.stat"
-  { stat -f '%N|%z|%m' "$H"/rules/*.srs 2>/dev/null || true; } > "$st"
+  for f in "$H"/rules/*.srs; do [ -e "$f" ] && printf '%s|%s|%s\n' "$f" "$(file_size "$f")" "$(file_mtime "$f")"; done > "$st" 2>/dev/null || true
   awk -F'|' -v st="$st" -v state="$H/rules.state" -v cust="$H/custom-rulesets.tsv" -v rd="$H/rules/" '
     function esc(x) { gsub(/["\\]/, "", x); return x }
     BEGIN {

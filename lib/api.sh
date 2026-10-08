@@ -694,7 +694,7 @@ ep_settings_set() {
   fi
   [ -n "$lang" ] && { settings_set LANG_UI "$lang"; LANG_UI=$lang; changed=1; }
   if [ -n "$hours" ]; then
-    oldh=$(logs_hours); settings_set LOG_HOURS "$hours"; sed -i '' '/^LOG_DAYS=/d' "$H/settings.env" 2>/dev/null || true; LOG_HOURS=$hours; ( logs_purge >/dev/null 2>&1 & ); changed=1
+    oldh=$(logs_hours); settings_set LOG_HOURS "$hours"; sed_inplace '/^LOG_DAYS=/d' "$H/settings.env" 2>/dev/null || true; LOG_HOURS=$hours; ( logs_purge >/dev/null 2>&1 & ); changed=1
     oplog dashboard "修改设置" "$(kv setting log_hours from "$oldh" to "$hours")" ok
   fi
   if [ -n "$lops" ] && [ "$lops" != "${LOG_OPS:-1}" ]; then                          # 关闭操作记录: 先写下「关闭」这一条, 再停; 开启: 先开再写
@@ -702,8 +702,8 @@ ep_settings_set() {
     settings_set LOG_OPS "$lops"; LOG_OPS=$lops; changed=1
     [ "$lops" = 1 ] && oplog_force dashboard "修改设置" "$(kv setting log_ops from 0 to 1)" ok
   fi
-  if [ -n "$dup" ] && [ "$dup" != "${DIAG_UPLOAD:-1}" ]; then                      # 诊断摘要上传: 开关本身的变化一定记下来 (隐私相关)
-    oplog_force dashboard "修改设置" "$(kv setting diag_upload from "${DIAG_UPLOAD:-1}" to "$dup")" ok
+  if [ -n "$dup" ] && [ "$dup" != "${DIAG_UPLOAD:-0}" ]; then                      # 诊断摘要上传: 开关本身的变化一定记下来 (隐私相关)
+    oplog_force dashboard "修改设置" "$(kv setting diag_upload from "${DIAG_UPLOAD:-0}" to "$dup")" ok
     settings_set DIAG_UPLOAD "$dup"; DIAG_UPLOAD=$dup; changed=1
   fi
   if [ -n "$asites" ] && [ "$asites" != "${AUTO_SITES:-0}" ]; then
@@ -787,8 +787,10 @@ ep_rules_add() {
   case $pol in pin|auto|direct) ;; *) fail "策略无效" ;; esac
   okj "\"job\":\"$(job_spawn rules-add "$RULE_STEPS" "$name" "$url" "$pol")\""
 }
+valid_id() { case $1 in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac; [ "${#1}" -le 64 ]; }   # 内部编号: 只允许字母 数字 . _ -
+valid_name() { [ -n "$1" ] && [ "${#1}" -le 200 ] && case $1 in *[/\\]*|*..*|*"$(printf '\n\r')"*) false ;; *) true ;; esac; }   # 显示名称: 不允许路径分隔符、.. 和换行
 ep_rules_delete() {
-  local tag; tag=$(fp tag)
+  local tag; tag=$(fp tag); valid_id "$tag" || fail "规则集编号无效" E_INVALID
   grep -q "^$tag|" "$H/custom-rulesets.tsv" 2>/dev/null || fail "找不到这个规则集" E_NOT_FOUND
   okj "\"job\":\"$(job_spawn rules-delete "$APPLY_STEPS" "$tag")\""
 }
@@ -941,7 +943,7 @@ case "$method $path" in
   "POST /api/apps/custom")     ep_apps_custom ;;
   "POST /api/apps/custom/delete") ep_apps_custom_delete ;;
   "POST /api/apps/adopt")      ep_apps_adopt ;;
-  "POST /api/apps/ack")        n=$(qp name); [ "$(qp all)" = 1 ] && n=all; [ -n "$n" ] || fail "缺少应用名"; lock_take && { apps_ack "$n"; lock_drop; }; okj ;;
+  "POST /api/apps/ack")        n=$(qp name); [ "$(qp all)" = 1 ] && n=all; [ -n "$n" ] || fail "缺少应用名"; [ "$n" = all ] || valid_name "$n" || fail "应用名无效" E_INVALID; lock_take && { apps_ack "$n"; lock_drop; }; okj ;;
   "POST /api/override")        ep_override ;;
   "POST /api/policy")          ep_policy ;;
   "GET /api/exits")            ep_exits ;;

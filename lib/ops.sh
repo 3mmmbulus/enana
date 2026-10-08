@@ -193,7 +193,7 @@ txn_settings() { # KEY=VALUE… (LOG_HOURS ACCESS_LOG AUTO_SITES LANG_UI AUTO_UP
         case $v in system|tun) ;; *) TXN_ERR="流量接管模式无效"; return 1 ;; esac
         if [ "$v" = tun ] && ! enhanced_supported; then TXN_ERR="Enhanced/TUN 需要 sing-box 1.12 或更新版本"; return 1; fi
         settings_set NETWORK_MODE "$v" ;;
-      LOG_HOURS)   settings_set LOG_HOURS "$(logs_hours_clamp "$v")"; sed -i '' '/^LOG_DAYS=/d' "$H/settings.env" 2>/dev/null || true ;;
+      LOG_HOURS)   settings_set LOG_HOURS "$(logs_hours_clamp "$v")"; sed_inplace '/^LOG_DAYS=/d' "$H/settings.env" 2>/dev/null || true ;;
       AUTO_SITES)  case $v in 0|1) settings_set AUTO_SITES "$v" ;; *) TXN_ERR="参数无效"; return 1 ;; esac ;;
       ACCESS_LOG)  case $v in 0|1) settings_set ACCESS_LOG "$v" ;; *) TXN_ERR="参数无效"; return 1 ;; esac ;;
       LOG_CORE)    case $v in 0|1) settings_set LOG_CORE "$v" ;; *) TXN_ERR="参数无效"; return 1 ;; esac ;;

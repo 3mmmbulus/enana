@@ -686,7 +686,7 @@
     el.q = h('input', { class: 'inp', type: 'search', autocomplete: 'off', spellcheck: 'false', on: {
       input: function () { clearTimeout(qTimer); qTimer = setTimeout(applySearch, 300); },
       search: applySearch,
-      keydown: function (e) { if (e.key === 'Enter') applySearch(); }
+      keydown: function (e) { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) applySearch(); }
     } });
     el.refresh = ui.ibtn('refresh', L('common.refresh')); ui.act(el.refresh, function () { return load(cur); });
     el.liveSw = h('input', { type: 'checkbox', role: 'switch', 'aria-label': L('logs.live.aria') });

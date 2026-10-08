@@ -102,10 +102,10 @@ logs_purge() {
     [ -f "$f" ] || continue
     d=$(printf '%s' "$f" | sed -nE 's/.*-([0-9]{4}-[0-9]{2}-[0-9]{2})\.log(\.gz)?$/\1/p')
     if [ -z "$d" ]; then   # proxy-unknown.log: 没有日期可比, 按修改时间
-      case $f in */proxy-unknown.log*) if [ -n "$(find "$f" -maxdepth 0 -mmin +$((hours * 60)) 2>/dev/null)" ]; then sz=$(stat -f %z "$f" 2>/dev/null || echo 0); freed=$((freed + sz)); rm -f "$f"; fi ;; esac
+      case $f in */proxy-unknown.log*) if [ -n "$(find "$f" -maxdepth 0 -mmin +$((hours * 60)) 2>/dev/null)" ]; then sz=$(file_size "$f" 2>/dev/null || echo 0); freed=$((freed + sz)); rm -f "$f"; fi ;; esac
       continue
     fi
-    sz=$(stat -f %z "$f" 2>/dev/null || echo 0)
+    sz=$(file_size "$f" 2>/dev/null || echo 0)
     if [ "$d" \< "$cday" ]; then freed=$((freed + sz)); rm -f "$f"
     elif [ "$d" = "$cday" ]; then
       case $f in */ops-*|*/health-*) kind=ops ;; *) kind=proxy ;; esac      # 健康记录和操作记录一样每行以时间戳开头
@@ -113,7 +113,7 @@ logs_purge() {
       case $f in *.gz) gzip -dc "$f" 2>/dev/null ;; *) cat "$f" ;; esac | _logs_trim "$kind" "$cutoff" > "$tmp"
       if [ -s "$tmp" ]; then
         case $f in *.gz) gzip -9 -c "$tmp" > "$f.new" ;; *) cp "$tmp" "$f.new" ;; esac
-        mv "$f.new" "$f"; sz2=$(stat -f %z "$f" 2>/dev/null || echo 0); freed=$((freed + sz - sz2))
+        mv "$f.new" "$f"; sz2=$(file_size "$f" 2>/dev/null || echo 0); freed=$((freed + sz - sz2))
       else freed=$((freed + sz)); rm -f "$f"; fi
       rm -f "$tmp"
     fi
@@ -225,8 +225,8 @@ logs_export() { # <类型> <日期>  -> 纯文本 (旧接口; 仪表盘现在用
 
 logs_usage_json() { # 各类日志占用的字节数
   local o=0 a=0 p=0 f sz
-  for f in "$LOGS"/ops-* "$LOGS"/health-*; do [ -f "$f" ] && { sz=$(stat -f %z "$f" 2>/dev/null || echo 0); o=$((o+sz)); }; done      # 健康记录算在「操作记录」里
-  for f in "$LOGS"/proxy-* "$H/sing-box.log"; do [ -f "$f" ] && { sz=$(stat -f %z "$f" 2>/dev/null || echo 0); p=$((p+sz)); }; done
+  for f in "$LOGS"/ops-* "$LOGS"/health-*; do [ -f "$f" ] && { sz=$(file_size "$f" 2>/dev/null || echo 0); o=$((o+sz)); }; done      # 健康记录算在「操作记录」里
+  for f in "$LOGS"/proxy-* "$H/sing-box.log"; do [ -f "$f" ] && { sz=$(file_size "$f" 2>/dev/null || echo 0); p=$((p+sz)); }; done
   a=$p   # 网站访问从代理日志里归并出来, 占用即代理日志的占用
   printf '{"ops":%s,"access":%s,"proxy":%s,"total":%s}' "$o" "$a" "$p" "$((o + p))"
 }
@@ -239,15 +239,15 @@ logs_clear() { # <类型 ops|access|proxy|all> [before=YYYY-MM-DD] -> 打印释�
     case $type in ops) case $f in */ops-*|*/health-*) ;; *) continue ;; esac ;; access|proxy) case $f in */proxy-*) ;; *) continue ;; esac ;; esac
     d=$(printf '%s' "$f" | sed -nE 's/.*-([0-9]{4}-[0-9]{2}-[0-9]{2})\.log(\.gz)?$/\1/p')
     if [ -n "$before" ] && [ -n "$d" ] && ! [ "$d" \< "$before" ]; then continue; fi
-    sz=$(stat -f %z "$f" 2>/dev/null || echo 0); freed=$((freed + sz)); rm -f "$f"
+    sz=$(file_size "$f" 2>/dev/null || echo 0); freed=$((freed + sz)); rm -f "$f"
   done
-  if [ "$type" != ops ] && [ -z "$before" ] && [ -s "$H/sing-box.log" ]; then sz=$(stat -f %z "$H/sing-box.log" 2>/dev/null || echo 0); freed=$((freed + sz)); : > "$H/sing-box.log"; fi
+  if [ "$type" != ops ] && [ -z "$before" ] && [ -s "$H/sing-box.log" ]; then sz=$(file_size "$H/sing-box.log" 2>/dev/null || echo 0); freed=$((freed + sz)); : > "$H/sing-box.log"; fi
   echo "$freed"
 }
 
 settings_json() { # GET /api/settings 的 settings 与 usage
   printf '"settings":{"log_hours":%s,"log_hours_min":%s,"log_hours_max":%s,"log_ops":%s,"access_log":%s,"log_core":%s,"auto_sites":%s,"diag_upload":%s},"usage":%s' \
-    "$(logs_hours)" "$LOG_HOURS_MIN" "$LOG_HOURS_MAX" "$([ "${LOG_OPS:-1}" = 1 ] && echo true || echo false)" "$([ "${ACCESS_LOG:-1}" = 1 ] && echo true || echo false)" "$([ "${LOG_CORE:-1}" = 1 ] && echo true || echo false)" "$([ "${AUTO_SITES:-0}" = 1 ] && echo true || echo false)" "$([ "${DIAG_UPLOAD:-1}" = 1 ] && echo true || echo false)" "$(logs_usage_json)"
+    "$(logs_hours)" "$LOG_HOURS_MIN" "$LOG_HOURS_MAX" "$([ "${LOG_OPS:-1}" = 1 ] && echo true || echo false)" "$([ "${ACCESS_LOG:-1}" = 1 ] && echo true || echo false)" "$([ "${LOG_CORE:-1}" = 1 ] && echo true || echo false)" "$([ "${AUTO_SITES:-0}" = 1 ] && echo true || echo false)" "$([ "${DIAG_UPLOAD:-0}" = 1 ] && echo true || echo false)" "$(logs_usage_json)"
 }
 
 # ======================================================================================================================
@@ -283,7 +283,7 @@ _b_meta() {
   printf 'service.loaded=%s\nservice.running=%s\nservice.pid=%s\n' "${SVC_LOADED:-0}" "${SVC_RUNNING:-0}" "${SVC_PID:-}"
   printf 'capture.mode=%s\n' "${NETWORK_MODE:-system}"
   printf 'proxy.enabled=%s\nproxy.mode=%s\nclash.mode=%s\n' "${PROXY_ENABLED:-0}" "${PROXY_MODE:-auto}" "${clash_mode:-unknown}"
-  printf 'settings.log_ops=%s\nsettings.access_log=%s\nsettings.log_core=%s\nsettings.log_hours=%s\nsettings.auto_sites=%s\nsettings.auto_update=%s\nsettings.diag_upload=%s\n' "${LOG_OPS:-1}" "${ACCESS_LOG:-1}" "${LOG_CORE:-1}" "$(logs_hours)" "${AUTO_SITES:-0}" "${AUTO_UPDATE:-1}" "${DIAG_UPLOAD:-1}"
+  printf 'settings.log_ops=%s\nsettings.access_log=%s\nsettings.log_core=%s\nsettings.log_hours=%s\nsettings.auto_sites=%s\nsettings.auto_update=%s\nsettings.diag_upload=%s\n' "${LOG_OPS:-1}" "${ACCESS_LOG:-1}" "${LOG_CORE:-1}" "$(logs_hours)" "${AUTO_SITES:-0}" "${AUTO_UPDATE:-1}" "${DIAG_UPLOAD:-0}"
   printf 'ports.proxy=%s\nports.clash=%s\nports.api=%s\nports.speed=%s\n' "$PORT" "$UI_PORT" "$API_PORT" "$SPEED_PORT"
   printf 'servers.total=%s\nservers.pin=%s\nservers.auto=%s\nservers.other=%s\n' "$(srv_count)" "$role_pin" "$role_auto" "$role_other"
   printf 'account.logged_in=%s\ncontent.seq=%s\ncontent.version=%s\nrules.updated=%s\n' "$(auth_logged_in && echo yes || echo no)" "$(cloud_seq)" "$(cloud_version)" "$(rules_updated_at)"
@@ -343,7 +343,7 @@ _b_sessionfacts() { # 登录会话 + 心跳的现状: 最近一次心跳是什�
   printf 'session.state=logged-in\nsession.id_tail=%s\nsession.device_tail=%s\n' "${sid: -4}" "$(device_uid | cut -c1-8)"
   [ -z "$last" ] || printf 'session.last_heartbeat_age_s=%s\nsession.last_heartbeat_code=%s\n' "$((now_ - last))" "${code:-}"
   [ -z "$okts" ] || printf 'session.last_heartbeat_ok_age_s=%s\n' "$((now_ - okts))"
-  [ ! -s "$H/cloud.token" ] || printf 'session.token_age_s=%s\n' "$(( now_ - $(stat -f %m "$H/cloud.token" 2>/dev/null || echo "$now_") ))"
+  [ ! -s "$H/cloud.token" ] || printf 'session.token_age_s=%s\n' "$(( now_ - $(file_mtime "$H/cloud.token" 2>/dev/null || echo "$now_") ))"
   return 0
 }
 

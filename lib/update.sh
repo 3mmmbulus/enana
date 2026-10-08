@@ -67,7 +67,7 @@ update_check() {
   if [ -n "$latest" ] && version_gt "$latest" "$VERSION" && _update_get CHANGELOG.md valid_text_file "$tmp"; then update_notes "$latest" "$tmp"; fi
   rm -f "$tmp"
   if [ -z "$latest" ] && [ -z "$core_latest" ]; then   # 完全查不到: 保留旧结果, 只记录失败
-    [ -f "$f" ] && sed -i '' 's/"error":[a-z]*/"error":true/' "$f" 2>/dev/null; return 1
+    [ -f "$f" ] && sed_inplace 's/"error":[a-z]*/"error":true/' "$f" 2>/dev/null; return 1
   fi
   printf '{"checked":%s,"latest":"%s","core_latest":"%s","notes_zh":"%s","notes_en":"%s","error":false}\n' "$now_" "$latest" "$core_latest" \
     "$(printf '%s' "$NOTES_ZH" | awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/[\001-\037]/, " "); printf "%s%s", (NR > 1 ? "\\n" : ""), $0 }')" \
