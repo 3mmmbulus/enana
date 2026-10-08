@@ -601,6 +601,7 @@
         f = null;
         if (my !== st.run) return;
         st.err = explain(e, 'provision'); setPhase('provErr');    // 凭据仍在内存里, 「重试」不用重新输入
+        if (st.err.pending) reloadCards();                        // 服务器上已经部署好、验证没通过: 「我的服务器」里立刻出现这条待验证的部署
       }
     }
 
@@ -623,6 +624,7 @@
       } catch (e) {
         if (my !== st.run) return;
         st.err = explain(e, 'verify'); setPhase('provErr');         // 记录还在: 可以再验证; 原因更新为这一次的结果
+        reloadCards();
       }
     }
 
@@ -902,12 +904,13 @@
       var why = TP.why.helper(), rows = loaded && data.length > 0;
       renderPending();
       C._seen = C._seen || card.isConnected;
-      addBtn.hidden = !rows; ui.avail(addBtn, why);
+      addBtn.hidden = !(rows || (loaded && pending.length)); ui.avail(addBtn, why);
       table.hidden = !rows; note.hidden = !(rows && err);
       if (!note.hidden) setText(note, t('vps.list.stale'));
       var pr = pg.update(rows ? data.length : 0);
       if (rows) { ui.syncList(list, so.apply(data).slice(pr.start, pr.end), function (x) { return x.id; }, makeRow, updateRow); empty.hide(); return; }
       ui.syncList(list, [], function (x) { return x.id; }, makeRow, updateRow);
+      if (loaded && pending.length) { empty.hide(); return; }                  // 只有待验证的部署: 上面的提示已经说明了情况, 不再说「你还没有部署自己的服务器」
       if (!loaded && !err) empty.show({ icon: 'refresh', text: S.locked ? t('why.locked') : t('common.loading') });
       else if (!loaded) empty.show({ icon: why ? 'wifi-off' : 'warning', text: why || t('vps.list.loadFail'), hint: why ? '' : TP.errMsg(err), action: { label: t('common.retry'), icon: 'refresh', fn: load } });
       else empty.show({ icon: 'server', text: t('vps.list.empty'), hint: t('vps.list.emptyHint'), action: { label: t('vps.list.add'), icon: 'plus', fn: openWizard } });
