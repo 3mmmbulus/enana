@@ -7,6 +7,7 @@
   POST /api/enana/v1/session/logout        GET /api/enana/v1/devices      POST /api/enana/v1/devices/kick {device_uid}
   POST /api/enana/v1/account/password      {old_password,new_password} -> 200 {token,session} / 400 bad_credentials|weak_password (其它会话全部撤销: password_changed)
   GET  /api/enana/v1/plan                  套餐与权益 (默认 free; POST /_test/plan?code=pro 切换)
+  GET  /api/enana/v1/nodes                 官方线路节点 (会员): {entitled, nodes:[{outbound}]}; POST /_test/nodes?mode=none|ok|ok2|changed|empty|junk|500 切换 (全部是占位数据: *.example.invalid)
   GET|PUT|DELETE /api/enana/v1/sync/snapshot   端到端加密的快照 (只存密文; PUT 带 base_version 做乐观锁, 不对返回 409 conflict)
   GET  /api/health
   测试控制:  POST /_test/mode?m=ok|down|ratelimit|badjson    POST /_test/passwd?email=..&pw=..    GET /_test/hits
@@ -23,7 +24,7 @@ USERS = {  # email -> [id, password]
 }
 DEVICES = {}   # user_id -> {uid: {...}}
 SESSIONS = {}  # session_id -> {...}
-STATE = {'mode': 'ok', 'hits': 0, 'limit': 2, 'plan': 'free'}
+STATE = {'mode': 'ok', 'hits': 0, 'limit': 2, 'plan': 'free', 'nodes': 'none'}
 SNAPS = {}     # user_id -> {version, payload, size, updated, device}
 V1_DIR = sys.argv[2] if len(sys.argv) > 2 else ''
 LOCK = threading.Lock()
@@ -42,7 +43,29 @@ def plan_obj():
     return {'plan': {'code': STATE['plan'], 'title': 'Pro' if pro else 'Free', 'max_devices_per_platform': STATE['limit']}, 'expires_at': 1790000000 if pro else None,
             'limits': {'devices_per_platform': STATE['limit']},
             'features': {'core': {'enabled': True, 'tier': 'free'}, 'sync': {'enabled': True, 'tier': 'free'}, 'vps_deploy': {'enabled': True, 'tier': 'free'}, 'official_proxy': off},
-            'official': {'available': pro, 'nodes': 0}}
+            'official': {'available': pro, 'nodes': len(NODES) if pro else 0}}
+
+
+def _node(i, **kw):
+    o = {'type': 'http', 'tag': '官方-区域%d' % i, 'server': 'n%d.example.invalid' % i, 'server_port': 443, 'username': 'u%d' % i, 'password': 'pw%d' % i, 'tls': {'enabled': True, 'server_name': 'n%d.example.invalid' % i}}
+    o.update(kw)
+    return {'outbound': o}
+
+
+NODES = [_node(1), _node(2), {'outbound': {'type': 'hysteria2', 'tag': '官方-海星', 'server': 'y.example.invalid', 'server_port': 8443, 'password': 'pw', 'tls': {'enabled': True}}}]
+
+
+def nodes_body():
+    m = STATE['nodes']
+    if m == 'ok':
+        return {'entitled': True, 'nodes': NODES}
+    if m == 'ok2':      # same nodes, other order / key order
+        return {'entitled': True, 'nodes': [{'outbound': dict(reversed(list(n['outbound'].items())))} for n in reversed(NODES)]}
+    if m == 'changed':
+        return {'entitled': True, 'nodes': NODES + [_node(7)]}
+    if m == 'empty':
+        return {'entitled': True, 'nodes': []}
+    return {'entitled': False, 'nodes': []}
 
 
 class H(BaseHTTPRequestHandler):
@@ -98,7 +121,7 @@ class H(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header('Content-Type', 'application/octet-stream'); self.send_header('Content-Length', str(len(b))); self.end_headers(); self.wfile.write(b)
             return
         if u.path == '/_test/hits':
-            return self._send(200, {'hits': STATE['hits']})
+            return self._send(200, {'hits': STATE['hits'], 'node_hits': STATE.get('node_hits', 0)})
         if u.path == '/_test/sessions':
             return self._send(200, {'sessions': [{'id': k, 'user': v['user'], 'uid': v['uid'], 'platform': v['platform'], 'revoked': v['revoked'], 'active': active(v)} for k, v in SESSIONS.items()]})
         if u.path == '/api/enana/v1/devices':
@@ -117,6 +140,21 @@ class H(BaseHTTPRequestHandler):
                 if s is None or why:
                     return self._send(401, {'code': 'session_revoked', 'reason': why or 'invalid'})
             return self._send(200, plan_obj())
+        if u.path == '/api/enana/v1/nodes':
+            if STATE['mode'] == 'down':
+                return self._send(502, {'message': 'bad gateway'})
+            with LOCK:
+                s, why = self._session()
+                if s is None or why:
+                    return self._send(401, {'code': 'session_revoked', 'reason': why or 'invalid'})
+                STATE['node_hits'] = STATE.get('node_hits', 0) + 1
+            if STATE['nodes'] == '500':
+                return self._send(500, {'message': 'boom'})
+            if STATE['nodes'] == 'junk':
+                b = b'<html>login</html>'
+                self.send_response(200); self.send_header('Content-Type', 'text/html'); self.send_header('Content-Length', str(len(b))); self.end_headers(); self.wfile.write(b)
+                return
+            return self._send(200, nodes_body())
         if u.path == '/api/enana/v1/sync/snapshot':
             if STATE['mode'] == 'down':
                 return self._send(502, {'message': 'bad gateway'})
@@ -188,6 +226,9 @@ class H(BaseHTTPRequestHandler):
             with LOCK:
                 USERS[q['email'][0]][1] = q['pw'][0]
             return self._send(200, {'ok': True})
+        if u.path == '/_test/nodes':
+            STATE['nodes'] = q.get('mode', ['none'])[0]
+            return self._send(200, {'nodes': STATE['nodes']})
         if u.path == '/_test/plan':
             STATE['plan'] = q.get('code', ['free'])[0]
             return self._send(200, {'plan': STATE['plan']})

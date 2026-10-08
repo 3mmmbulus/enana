@@ -57,6 +57,12 @@ names and floating-point amounts cannot confirm payment. A healthy scanner
 heartbeat within 180 seconds is required for new invoices; existing balances
 remain accessible during provider outages.
 
+Official route nodes are delivered by `GET nodes` (see CLOUD_API.md) only to an active Pro
+plan with a verified email; nothing in the billing flow can unlock them early. When a
+payment, wallet purchase or renewal changes the plan, the dashboard asks the local helper
+for `GET /api/plan?refresh=1` (a synchronous cloud refresh) and the helper then syncs the
+official nodes in the background.
+
 Email activation uses PocketBase's native POST
 `/api/collections/users/confirm-verification`. Mail links carry the token in a
 fragment on `https://enana.cc/verify`, which removes it from browser history and

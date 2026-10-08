@@ -41,7 +41,8 @@
  *   sync=reset                    云端同步恢复初始状态: 未开启, 云端有数据 (版本 7), 本机版本 6 且有未上传的改动 (--first-run 时本机版本 0)
  *   syncremote=none|exists|newer  云端没有数据 / 有且不比本机新 / 比本机新 (推送会冲突)     synckey=ok|bad   密钥场景: bad = 拉取时 E_SYNC_KEY, 要带 old_password=oldpass1234
  *   syncoffline=0|1               同步时 enana.cc 不可达 (GET /api/sync 的 online=false; 推送 / 拉取 / 清除 -> E_ACCOUNT_UNREACHABLE)
- *   plan=soon|free|pro|expired    套餐 (GET /api/plan): soon (默认) = 免费版, 官方线路「即将推出」; free = 免费版, Pro 功能已上线但需要升级; pro = 专业版 (30 天后到期, 设备上限 5, 服务器列表多出 2 个 official:true 的官方节点); expired = 订阅已过期 (reason "expired", 官方节点消失)
+ *   billing=closed|open|unverified|nomail|pending|auth|server   会员付款页 (GET /api/billing 等): closed (默认, 和线上一致: 服务器关闭收款) / open / unverified (邮箱未验证) / nomail (未验证且服务器发不出验证邮件) / pending (有未完成的订单) / auth (云端会话失效 E_AUTH) / server (云端 5xx E_SERVER_ERROR)
+ *   plan=soon|free|pro|expired|verify 套餐 (GET /api/plan; verify = Pro 但邮箱未验证, 官方线路 reason "verify"): soon (默认) = 免费版, 官方线路「即将推出」; free = 免费版, Pro 功能已上线但需要升级; pro = 专业版 (30 天后到期, 设备上限 5, 服务器列表多出 2 个 official:true 的官方节点); expired = 订阅已过期 (reason "expired", 官方节点消失)
  *   prefs=reset|bump              偏好设置 (GET / POST /api/prefs): reset = 清空 (version 0); bump = 模拟「另一台设备同步来了改动」: version +1, 并写入 "ui.fromOtherDevice": true (state.prefs_version 随之变化)
  *   sudottl=N                     步骤验证令牌 (X-Enana-Sudo) 的有效期, 真实秒数 (默认 300; 设成 1-2 来测「过期后重新弹出密码框」)       sudo=clear   让所有步骤验证令牌立刻失效
  *   icons=progressive|all|none    应用图标: progressive (默认) = 启动 / 重置时的应用 0-6 秒内陆续出现, 新扫描到的应用 2-6 秒后出现 (按 --fast 缩短); all = 立刻都有; none = 都没有 (图片也 404)
@@ -117,7 +118,7 @@ const HELP = [
   '  &lock=reset&locksec=N&expire=1&update=on|off|fail&failnext=/api/x&speedlast=seed&env=bad&tick=N&newapp=Name&reset=1',
   '  &vps=reset&sync=reset&syncremote=none|exists|newer&synckey=ok|bad&syncoffline=0|1&devices=free|full|reset&kickme=1&notice=text',
   '  &stats=normal|short|empty (traffic statistics history: 41 days / 2 days / none)&statsfail=1 (next /api/stats fails once)',
-  '  &plan=soon|free|pro|expired&prefs=reset|bump&sudottl=N (seconds)&sudo=clear&icons=progressive|all|none&vpsport=open|closed&kickme=1|password',
+  '  &plan=soon|free|pro|expired|verify&billing=closed|open|unverified|nomail|pending|auth|server&prefs=reset|bump&sudottl=N (seconds)&sudo=clear&icons=progressive|all|none&vpsport=open|closed&kickme=1|password',
   'Sudo (step-up password): POST /api/auth/verify -> X-Enana-Sudo for servers/delete, sub/delete, servers/secret, sub/url, logs/clear, devices/kick, sync/clear, export (403 E_SUDO_REQUIRED without it)',
   'Magic VPS hosts (probe/provision): 203.0.113.10 20 30 31 40 50 51 60-65 70 (70 fails with E_VPS_VERIFY until vpsport=open; see the file header)',
   'Magic app inspect inputs: /Applications/Cursor.app /Applications/Slack.app (exists) /usr/local/bin/mytool (unsigned bin) /opt/homebrew/bin/node /etc/hosts /private/var/root/secret.app; names: cursor (1 hit) code (5) zzz (none)',
@@ -237,6 +238,10 @@ const S = {
   'e.pwOffline': ['连不上 enana.cc, 修改密码必须在线 (离线登录时不能修改)。请检查网络后重试', 'Cannot reach enana.cc; changing the password requires being online (not possible after an offline sign-in). Check your network and retry'],
   'e.prefsJson': ['偏好设置必须是一个 JSON 对象', 'The preferences must be a JSON object'], 'e.prefsSize': ['偏好设置太大 (最多 32 KB)', 'The preferences are too large (32 KB at most)'],
   'e.officialSecret': ['官方线路的凭据不能查看', 'Credentials of the official route cannot be viewed'], 'e.officialDel': ['官方线路节点由会员权益提供, 不能删除', 'Official route nodes come with the membership and cannot be deleted.'],
+  'e.billAuth': ['登录已失效或云端会话已结束，请重新登录后再试', 'Your sign-in has expired or the cloud session has ended. Sign in again and retry'],
+  'e.billServer': ['enana.cc 服务器返回了错误，这次操作可能已生效也可能没有，请先刷新并查看订单和余额', 'The enana.cc server returned an error. The request may or may not have gone through: refresh and check your orders and balance first'],
+  'e.billUnverified': ['请先验证账号邮箱', 'Verify your account email first'], 'e.billClosed': ['收款暂未开放', 'Receiving payments is not open yet'], 'e.billPending': ['已有待付款订单', 'You already have a pending invoice'],
+  'e.billNotFound': ['找不到这笔订单', 'Invoice not found'], 'e.billBalance': ['余额不足', 'Insufficient funds'], 'e.billNoMail': ['验证邮件暂时无法发送', 'Verification mail could not be sent'],
   'plan.free': ['免费版', 'Free'], 'plan.pro': ['专业版', 'Pro'],
   'notice.pwChanged': ['你的登录密码已在另一台设备上修改, 请用新密码重新登录, 代理已关闭', 'Your password was changed on another device. Sign in again with the new password; the proxy was turned off.'],
   /* 新增: 网站域名 (也用于 DNS 自定义解析) */
@@ -559,7 +564,7 @@ function reset(mode) {
   Object.assign(M, { secret, firstRun: first, os: 'darwin', helperDown: false, helperWin: null, clashDown: false, clashWins: [], central: 'up', failNext: [], failJob: false, jobs: {}, jobSeq: 0,
     mode: 'Rule', connTarget: 45, conns: [], delayHist: {}, fails: [], regs: [], lockUntil: 0, locksec: 300, langSet: null, logHours: 72, logOps: true, accessLog: true, logCore: true, autoSites: false, autoSimAt: 0, autoSimIdx: 0, dismissed: [], net: 'normal', netChecked: t - 60, stats: 'normal',
     upd: { cur: BASE_APP, coreCur: BASE_CORE, on: true, fail: false, checked: t - 2 * 3600 }, speed: { running: null, last: null, seq: 0, byId: {} }, custom: [], pendingNames: {}, pendingApps: [], apps: [], appsScanned: 0,
-    prefs: { obj: {}, version: 0, updated: 0 }, sudo: Object.create(null), sudoTtl: 300, plan: 'soon', siteMods: {}, tgt: { custom: [], over: {}, hidden: {} }, hosts: [], subUrls: Object.create(null), inspected: Object.create(null), icons: 'progressive', vpsOpen: false });
+    prefs: { obj: {}, version: 0, updated: 0 }, sudo: Object.create(null), sudoTtl: 300, plan: 'soon', billing: 'closed', siteMods: {}, tgt: { custom: [], over: {}, hidden: {} }, hosts: [], subUrls: Object.create(null), inspected: Object.create(null), icons: 'progressive', vpsOpen: false });
   M.dir = clone(ACCOUNTS);                                                // 模拟的 enana.cc 账号库 (注册会往里加); 重置会让种子账号的密码回到 demo1234 / other1234
   if (keepAcc) M.dir[account] = keepAcc;                                  // 但不会让已登录的 (注册来的) 账号消失
   M.lastAcct = flag('unbound') ? null : cacheRec('demo@example.com', ACCOUNTS['demo@example.com'].pw); M.account = account; M.proxyOn = false; M.proxyMode = 'auto';   // 令牌与「当前账号」不随重置变化
@@ -1074,18 +1079,47 @@ route('POST', '/api/prefs', (c) => {
 });
 
 /* ---- 会员 / 套餐 (GET /api/plan; ctl plan=soon (默认) | free | pro | expired) ---- */
-const OFFICIAL_NODES = [{ tag: 'enana-official-tokyo', type: 'vless', server: 'official-jp.example.net', port: 443, role: 'auto', sub: '', official: true }, { tag: 'enana-official-singapore', type: 'vless', server: 'official-sg.example.net', port: 443, role: 'auto', sub: '', official: true }];
+const OFFICIAL_NODES = [{ tag: '官方-东京', type: 'vless', server: '', port: 0, role: 'auto', sub: '', official: true }, { tag: '官方-新加坡', type: 'vless', server: '', port: 0, role: 'auto', sub: '', official: true }];     // 官方节点的地址 / 端口不返回给界面 (lib/api.sh 的 servers_json); 保留前缀 官方-
 function applyPlan() {                                                     // 套餐 -> 官方线路: pro 时服务器列表多出 2 个 official:true 的节点 (进核心配置), 其它套餐 (含过期) 没有
   M.servers = M.servers.filter((s) => !s.official); M.applied = M.applied.filter((s) => !s.official);
   if (M.plan === 'pro') OFFICIAL_NODES.forEach((n) => { M.servers.push(Object.assign({}, n)); M.applied.push(Object.assign({}, n)); });
 }
-const devLimit = () => (M.plan === 'pro' ? 5 : DEVICE_LIMIT);
+const devLimit = () => (M.plan === 'pro' || M.plan === 'verify' ? 5 : DEVICE_LIMIT);
 route('GET', '/api/plan', (c) => {
-  const p = M.plan, pro = p === 'pro', exp = p === 'expired', t = sec(), free = { enabled: true, tier: 'free' };
+  const p = M.plan, pro = p === 'pro' || p === 'verify', exp = p === 'expired', t = sec(), free = { enabled: true, tier: 'free' };
   const gated = () => (pro ? { enabled: true, tier: 'pro' } : { enabled: false, tier: 'pro', reason: exp ? 'expired' : 'upgrade', coming_soon: p === 'soon' });
+  const official = p === 'verify' ? { enabled: false, tier: 'pro', reason: 'verify' } : gated();               // verify: Pro, official routes are live, but the account email is not verified yet
   return { ok: true, plan: { code: pro ? 'pro' : 'free', title: tr(c.lang, pro ? 'plan.pro' : 'plan.free') }, expires_at: pro ? t + 30 * 86400 : exp ? t - 2 * 86400 : null, checked: t - 120, limits: { devices_per_platform: devLimit() },
-    features: { core: free, sync: free, vps_deploy: free, custom_dns: free, official_proxy: gated(), unlimited_devices: gated(), priority_support: gated() }, official: { available: pro, nodes: pro ? OFFICIAL_NODES.length : 0 } };
+    features: { core: free, sync: free, vps_deploy: free, custom_dns: free, official_proxy: official, unlimited_devices: gated(), priority_support: gated() }, official: { available: p === 'pro', nodes: p === 'pro' ? OFFICIAL_NODES.length : 0 } };
 });
+
+/* ---- 会员付款页 (GET /api/billing 等; ctl billing=closed (默认) | open | unverified | nomail | pending | auth | server) ----
+ * 对照 lib/billing.sh + lib/api.sh 的 ep_billing: 云端自己的错误码 (E_PAYMENTS_UNAVAILABLE ...) 原样透传; 本机辅助服务自己的 E_AUTH (云端会话失效) / E_SERVER_ERROR (云端 5xx) 带翻译后的 error。
+ * closed = 服务器关闭收款 (payments_available:false, 付款按钮置灰并有常驻说明); unverified = 邮箱未验证且能发邮件; nomail = 邮箱未验证且服务器发不出验证邮件;
+ * pending = 有一笔未完成的订单; auth = 云端会话已失效 (所有请求 E_AUTH); server = 云端返回 5xx (所有请求 E_SERVER_ERROR)。 */
+const BILL_SKUS = [['m1', 1, 4], ['m3', 3, 10], ['m6', 6, 19], ['y1', 12, 35], ['y2', 24, 56], ['y3', 36, 72], ['y5', 60, 100]];
+const billOrder = (status) => ({ id: 'abcdefghijklmno', kind: 'plan', sku: 'm1', price: '4.000000', amount: '4.000037', network: 'TRC20', currency: 'USDT', address: 'TMiyPt3gfLQNJRPqUzGke9EJWhhyoHR8RU', status: status || 'pending', created_at: sec() - 60, expires_at: sec() + 1740, paid_at: null, event_key: null });
+const billGate = (fn) => (c) => {
+  if (M.billing === 'auth') throw E('E_AUTH', 'e.billAuth');
+  if (M.billing === 'server') throw E('E_SERVER_ERROR', 'e.billServer');
+  return fn(c);
+};
+const billVerified = () => M.billing !== 'unverified' && M.billing !== 'nomail';
+route('GET', '/api/billing', billGate(() => ({ ok: true, payments_available: M.billing !== 'closed', email: { address: M.account || 'demo@example.com', verified: billVerified(), mail_available: M.billing !== 'nomail' },
+  wallet: { balance: '0.000000', auto_renew: false, monthly_price: '4.000000' }, catalog: BILL_SKUS.map((k) => ({ id: k[0], months: k[1], price: k[2] + '.000000' })), plan: { code: M.plan === 'pro' ? 'pro' : 'free', expires_at: null },
+  orders: M.billing === 'pending' ? [billOrder()] : [], ledger: [], order_ttl: 1800 })));
+route('POST', '/api/billing/checkout', billGate(() => {
+  if (!billVerified()) throw E('E_EMAIL_UNVERIFIED', 'e.billUnverified');
+  if (M.billing === 'closed') throw E('E_PAYMENTS_UNAVAILABLE', 'e.billClosed');
+  if (M.billing === 'pending') throw E('E_ORDER_PENDING', 'e.billPending');
+  M.billing = 'pending'; return { ok: true, order: billOrder() };
+}));
+route('GET', '/api/billing/order', billGate((c) => { if (c.p('id') !== 'abcdefghijklmno') throw E('E_NOT_FOUND', 'e.billNotFound'); return { ok: true, order: billOrder(M.billing === 'pending' ? 'pending' : 'cancelled') }; }));
+route('POST', '/api/billing/cancel', billGate(() => { M.billing = 'open'; return { ok: true, order: billOrder('cancelled') }; }));
+route('POST', '/api/billing/purchase', billGate(() => { if (!billVerified()) throw E('E_EMAIL_UNVERIFIED', 'e.billUnverified'); throw E('E_BALANCE', 'e.billBalance'); }));
+route('POST', '/api/billing/auto-renew', billGate(() => { if (!billVerified()) throw E('E_EMAIL_UNVERIFIED', 'e.billUnverified'); return { ok: true, auto_renew: true }; }));
+route('GET', '/api/email/status', billGate(() => ({ ok: true, email: M.account || 'demo@example.com', verified: billVerified(), mail_available: M.billing !== 'nomail' })));
+route('POST', '/api/email/send', billGate(() => { if (billVerified()) return { ok: true, verified: true }; if (M.billing === 'nomail') throw E('E_MAIL_UNAVAILABLE', 'e.billNoMail'); return { ok: true, sent: true, retry_after: 60 }; }));
 
 /* ---- 状态 / 设置 ---- */
 const ovOut = () => M.overrides.map((o) => Object.assign({ target: '', src: 'user', at: 0, why: '', fails: 0, app: '' }, o, { target_ok: targetOk(o.target || '') }));
@@ -1378,7 +1412,7 @@ function importJsonl(lang, sub, mode, body) {
     let j; try { j = JSON.parse(line); } catch (e) { return bad(); }
     const ob = j && typeof j === 'object' ? j.outbound : null;
     if (!ob || typeof ob !== 'object' || ['pin', 'auto', 'dl', 'off'].indexOf(j.role) < 0 || (j.sub && !subNameOk(String(j.sub))) || SRV_TYPES.indexOf(ob.type) < 0 || typeof ob.tag !== 'string' || !/^[^"\\\x00-\x1f]{1,64}$/.test(ob.tag)
-      || !ob.server || !ob.server_port || RESERVED.indexOf(ob.tag) >= 0 || /^svc-/.test(ob.tag) || /^enana-official-/.test(ob.tag) || 'detour' in ob) return bad();
+      || !ob.server || !ob.server_port || RESERVED.indexOf(ob.tag) >= 0 || /^svc-/.test(ob.tag) || /^(官方-|enana-official-)/.test(ob.tag) || 'detour' in ob) return bad();
     const rec = { tag: ob.tag, type: ob.type, server: String(ob.server), port: +ob.server_port, role: j.role, sub: sub || j.sub || '' }, k = work.findIndex((s) => s.tag === ob.tag);
     if (k >= 0) { work[k] = rec; out.replaced++; } else { work.push(rec); out.added++; }
   });
@@ -2429,7 +2463,8 @@ async function mockCtl(req, res, u) {
   if (q.has('notice')) M.notice = g('notice') ? { text: g('notice').slice(0, 300) } : null;
   sw('vps', ['reset'], () => { M.vps = []; });
   sw('vpsport', ['open', 'closed'], (v) => { M.vpsOpen = v === 'open'; });                     // 203.0.113.70 部署: closed (默认) = 验证连通失败 E_VPS_VERIFY, open = 成功
-  sw('plan', ['soon', 'free', 'pro', 'expired'], (v) => { M.plan = v; applyPlan(); });          // 套餐: soon (默认, 官方线路即将推出) / free / pro (多出 2 个官方节点) / expired
+  sw('plan', ['soon', 'free', 'pro', 'expired', 'verify'], (v) => { M.plan = v; applyPlan(); });          // 套餐: soon (默认, 官方线路即将推出) / free / pro (多出 2 个官方节点) / expired / verify (Pro, 但邮箱未验证)
+  sw('billing', ['closed', 'open', 'unverified', 'nomail', 'pending', 'auth', 'server'], (v) => { M.billing = v; });       // 会员付款页: closed (默认, 和线上一致: 服务器关闭收款) / open / unverified / nomail / pending / auth / server
   if (q.has('prefs')) {                                                    // prefs=reset: 清空 (version 0); prefs=bump: 模拟另一台设备同步来的改动 (version + 1, 并写入 "ui.fromOtherDevice": true)
     const v = g('prefs');
     if (v === 'reset') M.prefs = { obj: {}, version: 0, updated: 0 };
@@ -3120,12 +3155,24 @@ async function selftest() {
     await ctl('plan=pro'); const pf2 = jx(await api('GET', '/api/plan')), pf2en = jx(await api('GET', '/api/plan', { lang: 'en' })), sv2 = jx(await api('GET', '/api/state')).servers, px2 = jx(await clashR('GET', '/proxies')).proxies;
     ck('plan=pro: 专业版 / Pro, expires in 30 days, Pro features enabled, official {available:true, nodes:2}, device limit 5', pf2.plan.code === 'pro' && pf2.plan.title === '专业版' && pf2en.plan.title === 'Pro' && Math.abs(pf2.expires_at - (sec() + 30 * 86400)) <= 5 && JSON.stringify(pf2.features.official_proxy) === '{"enabled":true,"tier":"pro"}'
       && pf2.features.unlimited_devices.enabled === true && pf2.official.available === true && pf2.official.nodes === 2 && pf2.limits.devices_per_platform === 5 && jx(await api('GET', '/api/devices')).limit === 5, pf2);
-    ck('plan=pro: state.servers gains 2 servers flagged official:true (the others carry no such flag) and they are live in the core (AUTO pool)', sv2.length === n0 + 2 && sv2.filter((x) => x.official === true).length === 2 && sv2.filter((x) => !('official' in x)).length === n0 && px2.AUTO.all.indexOf('enana-official-tokyo') >= 0 && jx(await api('GET', '/api/state')).first_run === false);
-    r = await api('GET', '/api/servers/secret', { q: { tag: 'enana-official-tokyo' } }); r2 = await api('POST', '/api/servers/delete', { q: { tag: 'enana-official-tokyo' } }); const ex0 = await api('GET', '/api/export');
-    ck('official nodes: secret -> E_INVALID (translated), delete -> E_INVALID, and they are excluded from the export', jx(r).code === 'E_INVALID' && !!jx(r).error && jx(r2).code === 'E_INVALID' && !!jx(r2).error && ex0.status === 200 && ex0.text.indexOf('official') < 0 && JSON.parse(ex0.text).servers.length === n0);
+    ck('plan=pro: state.servers gains 2 servers flagged official:true (the others carry no such flag) and they are live in the core (AUTO pool)', sv2.length === n0 + 2 && sv2.filter((x) => x.official === true).length === 2 && sv2.filter((x) => !('official' in x)).length === n0 && px2.AUTO.all.indexOf('官方-东京') >= 0 && sv2.filter((x) => x.official).every((x) => x.server === '' && x.port === 0) && jx(await api('GET', '/api/state')).first_run === false);
+    r = await api('GET', '/api/servers/secret', { q: { tag: '官方-东京' } }); r2 = await api('POST', '/api/servers/delete', { q: { tag: '官方-东京' } }); const ex0 = await api('GET', '/api/export');
+    ck('official nodes: secret -> E_INVALID (translated), delete -> E_INVALID, and they are excluded from the export', jx(r).code === 'E_INVALID' && !!jx(r).error && jx(r2).code === 'E_INVALID' && !!jx(r2).error && ex0.status === 200 && ex0.text.indexOf('官方-') < 0 && ex0.text.indexOf('official') < 0 && JSON.parse(ex0.text).servers.length === n0);
     await ctl('plan=expired'); const pf3 = jx(await api('GET', '/api/plan')), sv3 = jx(await api('GET', '/api/state')).servers;
     ck('plan=expired: free again, official_proxy {enabled:false, reason:expired, coming_soon:false}, expires_at in the past, the official nodes are gone', pf3.plan.code === 'free' && JSON.stringify(pf3.features.official_proxy) === '{"enabled":false,"tier":"pro","reason":"expired","coming_soon":false}' && pf3.expires_at < sec() && pf3.official.nodes === 0 && sv3.length === n0 && pf3.limits.devices_per_platform === 2);
     await ctl('plan=soon'); ck('plan=soon restores the default', jx(await api('GET', '/api/plan')).features.official_proxy.coming_soon === true);
+    await ctl('plan=verify'); const pf4 = jx(await api('GET', '/api/plan')), sv4 = jx(await api('GET', '/api/state')).servers;
+    ck('plan=verify: Pro, official_proxy {enabled:false, reason:verify} (no coming_soon), official {available:false, nodes:0}, no official nodes', pf4.plan.code === 'pro' && JSON.stringify(pf4.features.official_proxy) === '{"enabled":false,"tier":"pro","reason":"verify"}' && pf4.official.available === false && pf4.official.nodes === 0 && sv4.every((x) => !x.official));
+    await ctl('plan=soon');
+    /* 会员付款页: 默认和线上一致 (关闭收款), 其余每个状态各有自己的返回 */
+    const bl = async (v) => { await ctl('billing=' + v); return jx(await api('GET', '/api/billing')); };
+    const b0 = await bl('closed'), b0c = jx(await api('POST', '/api/billing/checkout', { body: JSON.stringify({ kind: 'plan', sku: 'm1', request_key: 'k'.repeat(16) }) }));
+    ck('billing=closed (default): payments_available:false, email verified, catalog of 7 terms, checkout -> E_PAYMENTS_UNAVAILABLE', b0.ok === true && b0.payments_available === false && b0.email.verified === true && b0.catalog.length === 7 && b0.orders.length === 0 && b0c.code === 'E_PAYMENTS_UNAVAILABLE');
+    const b1 = await bl('unverified'), b2 = await bl('nomail'), b2s = jx(await api('POST', '/api/email/send', { body: '{}' })), b3 = await bl('pending'), b3c = jx(await api('POST', '/api/billing/checkout', { body: JSON.stringify({ kind: 'plan', sku: 'm1', request_key: 'k'.repeat(16) }) }));
+    ck('billing=unverified / nomail / pending: unverified email (mail_available true / false, send -> E_MAIL_UNAVAILABLE), one unfinished invoice (checkout -> E_ORDER_PENDING)', b1.email.verified === false && b1.email.mail_available === true && b2.email.verified === false && b2.email.mail_available === false && b2s.code === 'E_MAIL_UNAVAILABLE' && b3.orders.length === 1 && b3.orders[0].status === 'pending' && b3c.code === 'E_ORDER_PENDING');
+    const b4 = jx(await (async () => { await ctl('billing=auth'); return api('GET', '/api/billing'); })()), b5 = jx(await (async () => { await ctl('billing=server'); return api('GET', '/api/billing'); })());
+    ck('billing=auth / server: the helper answers E_AUTH (cloud session ended) / E_SERVER_ERROR (cloud 5xx) with a translated error, HTTP 200 so the local dashboard stays unlocked', b4.ok === false && b4.code === 'E_AUTH' && !!b4.error && b5.ok === false && b5.code === 'E_SERVER_ERROR' && !!b5.error);
+    await ctl('billing=closed');
 
     /* 步骤验证 (sudo) */
     const WL = [['POST', '/api/servers/delete', { form: { tag: 'no-such' } }], ['POST', '/api/sub/delete', { form: { name: 'no-such' } }], ['GET', '/api/servers/secret', {}], ['GET', '/api/sub/url', {}], ['POST', '/api/logs/clear', { form: { type: 'bogus' } }],

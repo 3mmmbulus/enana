@@ -4,7 +4,7 @@
 # 因此连续快速的操作不会互相覆盖备份, 坏配置绝不会留在磁盘上。每次操作都会写一条「操作记录」(不含任何密码/令牌)。
 
 APPLY_STEPS='生成配置|校验配置|应用并重启|等待就绪'
-TXN_FILES="servers.jsonl subs.tsv dns.conf rules.state custom-rulesets.tsv settings.env overrides.tsv autosites.tsv autosites.dismissed custom-apps.tsv site-domains.tsv hosts.tsv speedtest-custom.tsv prefs.json vps.jsonl apps.seen"
+TXN_FILES="servers.jsonl subs.tsv dns.conf rules.state custom-rulesets.tsv settings.env overrides.tsv autosites.tsv autosites.dismissed custom-apps.tsv site-domains.tsv hosts.tsv speedtest-custom.tsv prefs.json vps.jsonl apps.seen official.jsonl"
 TXN_ERR=''; TXN_RESULT=''
 
 op_wait_turn() { # 轮到我了吗? 等所有「更早创建且还在运行」的排队任务结束 (任务进程已死/卡住超过 5 分钟的忽略)
@@ -79,6 +79,7 @@ _txn_detail() { # <变更函数> <参数…>
     txn_reset_official) reset_counts ;;
     txn_reset_undo)    kv backup "$(basename "$(reset_latest_backup)" 2>/dev/null)" ;;
     txn_sync_apply)    kv mode "$1" ;;
+    txn_official_apply) kv nodes "${OFFICIAL_N:-0}" ;;
     txn_vps_save)      kv host "$1" ;;
     txn_none)          printf '' ;;
     *)                 printf '%s' "$*" ;;
@@ -510,6 +511,7 @@ job_dispatch() {
     vps-redetect)   vps_redetect_job "$@" ;;
     sync-push)      sync_push_job "$@" ;;
     sync-login)     sync_login_auto ;;
+    official-sync)  official_job ;;
     sync-pull)      sync_pull_job "$@" ;;
     network-mode) op_txn "切换流量接管模式" txn_settings "NETWORK_MODE=$1" ;;
     settings-apply) APPLY_BASE=2; op_txn "修改设置" txn_settings "$@" ;;

@@ -42,7 +42,7 @@ srv_emit() { # TSV: role<TAB>tag<TAB>outbound_json (已替换 @CERTS@); 供配�
 }
 
 srv_secret_fields() { # <tag> -> 打印 JSON 数组 [{name,value}] (只含凭据类字段); 0 = 找到  1 = 没有这个服务器  3 = 官方线路 (永远不显示)
-  /usr/bin/perl -MJSON::PP -e '
+  /usr/bin/perl -CA -MJSON::PP -e '
     my ($tag, $file) = @ARGV; my $j = JSON::PP->new->utf8; open my $fh, "<", $file or exit 1;
     while (my $l = <$fh>) {
       my $d = eval { $j->decode($l) }; next unless ref $d eq "HASH" && ref $d->{outbound} eq "HASH"; my $o = $d->{outbound};
@@ -50,7 +50,8 @@ srv_secret_fields() { # <tag> -> 打印 JSON 数组 [{name,value}] (只含凭据
       my @f; for my $k (qw(username password uuid auth_str private_key pre_shared_key)) { push @f, { name => $k, value => $o->{$k} } if defined $o->{$k} && !ref $o->{$k} && length $o->{$k} }
       push @f, { name => "obfs_password", value => $o->{obfs}{password} } if ref $o->{obfs} eq "HASH" && defined $o->{obfs}{password} && length $o->{obfs}{password};
       print $j->encode(\@f); exit 0 }
-    exit 1' "$1" "$H/servers.jsonl"
+    if (open my $oh, "<", $ARGV[2]) { while (my $l = <$oh>) { my $d = eval { $j->decode($l) }; exit 3 if ref $d eq "HASH" && ref $d->{outbound} eq "HASH" && defined $d->{outbound}{tag} && $d->{outbound}{tag} eq $tag } }
+    exit 1' "$1" "$H/servers.jsonl" "$H/official.jsonl"
 }
 srv_has_tag() { srv_list | awk -F'\t' -v t="$1" '$1==t {f=1} END{exit f?0:1}'; }
 srv_count() { srv_list | wc -l | tr -d ' '; }
@@ -94,7 +95,7 @@ srv_check_line() { # 仪表盘提交的一行是否合法 (正则闸门; 真正�
   case $l in *'"detour"'*) return 1 ;; esac
   tag=$(printf '%s\n' "$l" | LC_ALL=C sed -n 's/^.*,"outbound":{"type":"[a-z0-9]*","tag":"\([^"]*\)".*/\1/p')
   case " $RESERVED_TAGS " in *" $tag "*) return 1 ;; esac
-  case $tag in svc-*|'') return 1 ;; esac
+  case $tag in svc-*|官方-*|enana-official-*|'') return 1 ;; esac        # 官方-… 是官方线路的保留前缀 (lib/official.sh): 用户导入的节点不能占用
   return 0
 }
 

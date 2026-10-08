@@ -15,6 +15,7 @@
 | `devices` | 登录过的设备: `user` · `device_uid`(客户端生成的随机 UUID) · `name` · `platform` · `os_version` · `arch` · `app_version` · `last_seen_at` · `last_ip_masked` |
 | `device_sessions` | 登录会话: `user` · `device` · `last_heartbeat_at` · `expires_at` · `revoked_at` · `revoked_reason`(logout/kicked/limit/expired/admin) · `revoked_by_device` |
 | `sync_snapshots` | 端到端加密的配置快照: `user` · `version` · `payload`(密文, 云端看不到明文) · `size` · `source_device` |
+| `official_nodes` | 官方线路节点 (会员): `node_key`(来源编号 + 节点名哈希) · `label`(节点名) · `outbound`(json, 含凭据) · `origin`(official/shared) · `approved` · `enabled` · `fresh_until` · `capability`。没有任何 API 规则 = 只有超级用户和服务端代码能读; 由定时任务从私有配置的订阅源写入 (见 `server/README.md`) |
 | `audit_events` | 安全审计: `user` · `device` · `type`(register/login/login_failed/logout/kick/limit_blocked/sync_push/sync_pull …) · `detail` · `ip_masked` |
 所有集合只允许通过上面的接口访问 (规则: 只能访问自己的记录), 管理员通过 SSH 隧道进入后台。
 
@@ -42,6 +43,17 @@ Pro 订单、余额、到账记录与验证接口见 [BILLING_API.md](BILLING_AP
 ### `POST /api/enana/v1/account/password` `{"old_password":"…","new_password":"…"}`
 → 200 `{"ok":true,"token":"<新 jwt>","session":{"id":"…","expires_at":…}}` (当前设备保持登录, 旧令牌立即作废; 账号下**其它所有会话**被撤销, `reason=password_changed`) · 400 `bad_credentials` (旧密码不对) / `weak_password` (新密码不是 8–71 个字符 / 超过 72 字节 / 与旧密码相同) · 429 (与登录共用失败计数)。密码只在请求体里 (经 TLS), 本机从不落盘。
 ### `GET /api/enana/v1/plan` → `{"plan":{"code":"free","title":"…","max_devices_per_platform":2,"features":[]},"expires_at":null}`
+### `GET /api/enana/v1/nodes` 官方线路节点 (会员)
+需要令牌 + 会话。**只发给套餐有效 (Pro) 且邮箱已验证的账号**, 其它账号永远得到空列表:
+```json
+{"entitled":true,"nodes":[{"outbound":{"type":"http","tag":"官方-美国西雅图","password":"…","server":"…","server_port":443,"tls":{"enabled":true,"server_name":"…"},"username":"…"}}]}
+```
+- `entitled:false, nodes:[]`: 没有资格 (免费 / 订阅已过期 / 邮箱未验证)。客户端收到后在**下一次成功同步时**移除本机全部官方节点。
+- `entitled:true, nodes:[]`: 有资格, 但云端现在没有新鲜节点 (订阅源暂时不可用)。客户端保留已有节点, 离线 / 无更新最长再保留 3 天宽限。
+- 每个 `outbound` 是 sing-box 出站, **`type` 第一个键、`tag` 第二个键** (安装端的 awk 依赖), 其余键按字母序; 同样的数据永远得到相同的字节, 客户端据此判断「没有变化」就不重新生成配置 / 不重启核心。`tag` 一律以保留前缀 `官方-` 开头且互不相同; 只含这些协议: `trojan http socks tuic hysteria2 vless vmess shadowsocks anytls`; 不含 `detour`、本机文件路径、绑定网卡等字段。
+- 响应带 `Cache-Control: no-store`。**不包含**订阅源的编号 / 地址 / 令牌、`fresh_until`、`node_key` 等任何服务器内部信息。官方节点的凭据必须交给本地核心才能使用, 所以电脑的主人能读到它们; 客户端不显示、不导出、不同步它们, 但这**不是**防拷贝措施。
+- 客户端: 登录后 / 套餐刷新后 / `enana tick` (每 4 小时, 失败按 15 分钟 → 4 小时退避) 调用; 保存到 `~/.enana/official.jsonl`, 只进自动线路池 (见 `API.md` 的 `servers[]`)。
+- `GET /api/enana/v1/plan` 的 `features.official_proxy` / `official` 由同一张表计算: 有新鲜节点时 `coming_soon` 自动消失, `official.available` / `official.nodes` 只对有资格的账号非零; 邮箱未验证的 Pro 账号得到 `reason:"verify"`。
 ### 同步 (端到端加密; 云端只存密文)
 - `GET /api/enana/v1/sync/snapshot[?payload=1]` → `{"exists":true,"version":7,"updated":1760000000,"size":2048,"device":"MacBook","payload":"<base64, 仅 payload=1>"}`
 - `PUT /api/enana/v1/sync/snapshot` `{"base_version":6,"payload":"<base64>","size":2048}` → `{"version":7}` 或 409 `{"code":"conflict","version":8}`

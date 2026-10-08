@@ -39,3 +39,10 @@ test('forced reload asks the helper for a synchronous cloud refresh; a normal re
  const f=fixture(free);await f.P.load(false);assert.equal(f.calls[0][2].q,undefined);
  await f.P.load(true);assert.equal(JSON.stringify(f.calls[1][2].q),'{"refresh":"1"}');assert.ok(f.calls[1][2].timeout>=12000);
 });
+test('Pro with an unverified email is told to verify (reason "verify"), and the button leads to the account tab',async()=>{
+ const f=fixture({...free,plan:{code:'pro',title:'Pro'},features:{core:{enabled:true,tier:'free'},official_proxy:{enabled:false,tier:'pro',reason:'verify'}}});await f.P.load(true);
+ assert.equal(f.P.feature('official_proxy').reason,'verify');
+ const dlg=f.P.explain('official_proxy'),b=flatten(dlg.body).find(n=>n.tag==='button');assert.equal(b.label,'plan.verifyGo');
+ assert.ok(flatten(dlg.body).some(n=>(n.children||[]).includes('plan.why.verify')));
+ await b.click();assert.deepEqual(f.log.filter(x=>x[0]==='tab').map(x=>x[1]),['account']);
+});

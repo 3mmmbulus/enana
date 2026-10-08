@@ -901,3 +901,7 @@ macOS 没有允许 enana 弹出授权窗口。请在「系统设置 → 隐私�
 登录已失效或云端会话已结束，请重新登录后再试	Your sign-in has expired or the cloud session has ended. Sign in again and retry
 enana.cc 服务器返回了错误，这次操作可能已生效也可能没有，请先刷新并查看订单和余额	The enana.cc server returned an error. The request may or may not have gone through: refresh and check your orders and balance first
 请求过于频繁，请稍后再试	Too many requests. Try again later
+官方线路同步	Official routes sync
+官方线路更新待应用	Official routes update pending
+官方线路同步没有完成, 稍后会自动重试	The official routes sync did not finish; it will retry automatically
+官方线路节点由会员权益提供，不能删除或修改角色	Official route nodes come with the membership and cannot be deleted or re-assigned

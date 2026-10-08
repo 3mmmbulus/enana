@@ -23,7 +23,8 @@ SKIP_EXACT = {
     '{"ok":false,"error":"日志类型无效"}',      # logs.sh: unreachable (api.sh validates the type first)
     '*: 系统代理已*',                         # os-darwin.sh: $v is 开启/关闭 (bare words); the two real sentences are in en.tsv
     '* (保留 * 里的数据)', '*, 并删除 * (含你的服务器 / 订阅配置)',   # install.sh uninstall: pieces of one confirm message
-    '其他', '备用线路 %s|%s://%s:%s|%s%s%s',     # awk-internal: apps group id (UI maps it) / dl-route label (see patterns)
+    '其他', '备用线路 %s|%s://%s:%s|%s%s%s',
+    '官方-',                                      # lib/official.sh: the reserved tag prefix of official nodes (data, never shown through _t)     # awk-internal: apps group id (UI maps it) / dl-route label (see patterns)
 }
 SKIP_SUB = ['BEGIN {', 'function esc(', 'function str(', '($0 ~ /中文/)', '(tproxy|ereldaili|tokyo-proxy) 快捷命令',
             'if (core != 1', '--- file ', '#about=', '#privacy=', '#route-reasons=']        # logs.sh: awk 脚本 / 诊断导出文件里的说明行 (文件内容, 不是界面提示, 只用中文)

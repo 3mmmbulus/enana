@@ -95,7 +95,7 @@ case $path in /favicon.ico) path="$ADMIN_PATH/favicon.png" ;; esac      # 浏览
 case $path in /|"$ADMIN_PATH"|"$ADMIN_PATH"/*) serve_static ;; esac
 
 # ---------- 以下是 JSON 接口: 到这里才加载其余模块 ----------
-for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan billing sync vps diag; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan billing official sync vps diag; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 i18n_init
 OP_WHO=dashboard; export OP_WHO
@@ -133,9 +133,9 @@ bool() { [ "$1" = 1 ] && printf true || printf false; }
 valid_day() { case $1 in '') return 0 ;; [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) return 0 ;; *) return 1 ;; esac; }
 
 # ---------- JSON 片段 ----------
-servers_json() {
-  srv_list | awk -F'\t' 'BEGIN{printf "["} { gsub(/["\\]/, "", $1); gsub(/["\\]/, "", $3);
-    printf "%s{\"tag\":\"%s\",\"type\":\"%s\",\"server\":\"%s\",\"port\":%s,\"role\":\"%s\",\"sub\":\"%s\"}", (NR>1?",":""), $1, $2, $3, ($4==""?0:$4), $5, $6 } END{printf "]"}'
+servers_json() { # 用户自己的服务器, 后面接官方线路 (第 7 列 = 1: 带 "official":true, 地址 / 端口为空, 界面据此不允许编辑 / 删除 / 查看凭据)
+  { srv_list; official_list; } | awk -F'\t' 'BEGIN{printf "["} { gsub(/["\\]/, "", $1); gsub(/["\\]/, "", $3);
+    printf "%s{\"tag\":\"%s\",\"type\":\"%s\",\"server\":\"%s\",\"port\":%s,\"role\":\"%s\",\"sub\":\"%s\"%s}", (NR>1?",":""), $1, $2, $3, ($4==""?0:$4), $5, $6, ($7=="1"?",\"official\":true":"") } END{printf "]"}'
 }
 
 # ---------- 账号 / 代理总开关 ----------
@@ -249,6 +249,7 @@ ep_auth_verify() { # 敏感操作前再次输入密码 -> 5 分钟有效的 sudo
 }
 ep_servers_secret() { # 查看某个节点的密码 / UUID / 密钥 (需 sudo)
   local tag fields rc; tag=$(qp tag)
+  [ -n "$tag" ] && ! srv_has_tag "$tag" && official_has_tag "$tag" && fail "官方线路的凭据不能查看" E_FORBIDDEN
   [ -n "$tag" ] && srv_has_tag "$tag" || fail "找不到这个服务器" E_NOT_FOUND
   fields=$(srv_secret_fields "$tag"); rc=$?
   case $rc in 0) ;; 3) fail "官方线路的凭据不能查看" E_FORBIDDEN ;; *) fail "找不到这个服务器" E_NOT_FOUND ;; esac
@@ -567,6 +568,7 @@ ep_servers_import() { # 先对副本「干跑」, 立即返回数量与逐行错
 
 ep_servers_change() { # delete | role  (校验后交给后台任务)
   local tag role; tag=$(qp tag); role=$(qp role)
+  [ -n "$tag" ] && ! srv_has_tag "$tag" && official_has_tag "$tag" && fail "官方线路节点由会员权益提供，不能删除或修改角色" E_FORBIDDEN
   [ -n "$tag" ] && srv_has_tag "$tag" || fail "找不到这台服务器" E_NOT_FOUND
   if [ "$1" = delete ]; then okj "\"job\":\"$(job_spawn servers-delete "$APPLY_STEPS" "$tag")\""
   else case $role in pin|auto|off|dl) okj "\"job\":\"$(job_spawn servers-role "$APPLY_STEPS" "$tag" "$role")\"" ;; *) fail "角色无效" ;; esac; fi

@@ -531,7 +531,9 @@
     var on = !!(f.enabled && d && d.official && d.official.available);
     el.off.classList.toggle('is-soon', !on);
     TP.clear(el.offBadge);
-    el.offBadge.appendChild(on ? ui.badge(t('servers.off.on', { n: (d.official && d.official.nodes) || 0 }), 'ok', 'success') : (f.comingSoon || !d) ? ui.badge(L('plan.soon'), 'info', 'clock') : ui.badge(L(f.reason === 'expired' ? 'plan.f.expired' : 'plan.f.upgrade'), 'warn', 'lock'));
-    setText(el.offDesc, t(on ? 'servers.off.descOn' : 'servers.off.desc'));
+    var soon = f.comingSoon || !d, synced = servers().some(function (s) { return s.official; });          // synced = 本机已经取回了官方节点 (登录后几分钟内会同步)
+    el.offBadge.appendChild(on ? ui.badge(t('servers.off.on', { n: (d.official && d.official.nodes) || 0 }), 'ok', 'success') : soon ? ui.badge(L('plan.soon'), 'info', 'clock')
+      : f.reason === 'expired' ? ui.badge(L('plan.f.expired'), 'warn', 'warning') : f.reason === 'verify' ? ui.badge(L('plan.f.verify'), 'warn', 'warning') : ui.badge(L('plan.f.upgrade'), 'warn', 'lock'));
+    setText(el.offDesc, t(on ? (synced ? 'servers.off.descOn' : 'servers.off.descSync') : soon ? 'servers.off.desc' : f.reason === 'expired' ? 'servers.off.descExpired' : f.reason === 'verify' ? 'servers.off.descVerify' : 'servers.off.descUpgrade'));
   }
 })();

@@ -9,9 +9,13 @@ settlement, opt-in renewal, SMTP verification and a confirmation page. It has
 real PocketBase integration tests. Deployment deliberately leaves receiving
 disabled. The shared Mac/Windows dashboard now includes catalog checkout,
 exact-amount invoices, wallet purchase, renewal consent and verification mail.
-Official-node lease delivery and server-sharing controls remain separate work;
-this is not a complete Pro launch. Official lines still show coming soon, with
-an explicitly empty dedicated Claude pool.
+Official lines are fed by privately configured third-party subscription sources
+(see "Official route nodes" below) and switch on by themselves once at least one
+fresh approved node exists; until then they keep showing "coming soon". Server
+sharing controls remain separate work, with an explicitly empty dedicated Claude
+pool; this is not a complete Pro launch. The dashboard states every reason a
+purchase is unavailable (receiving not open, email unverified, unfinished
+invoice, expired sign-in) next to the buttons instead of only dimming them.
 
 The ordinary account service sources are now tracked here for reproducible
 testing. User databases, SMTP passwords, provider keys, and upstream subscription
@@ -113,9 +117,15 @@ pass.
 ```sh
 PB_BIN=/absolute/path/to/pocketbase node --test \
   tests/billing-domain.test.js tests/billing-pocketbase.test.js \
+  tests/official-domain.test.js tests/official-pocketbase.test.js \
   tests/email-verification-ui.test.js tests/billing-ui.test.js \
-  tests/billing-smtp-admin.test.js
+  tests/billing-plan-ui.test.js tests/billing-smtp-admin.test.js
+python3 tests/billing-bridge.py && python3 tests/official-bridge.py
 ```
+
+`tests/official-pocketbase.test.js` starts a local HTTPS server that plays the third-party
+subscription (synthetic `*.example.invalid` nodes, a made-up token, a throw-away certificate
+trusted only by the PocketBase child through `SSL_CERT_FILE`; it needs `openssl` and Linux).
 
 Run `python3 tests/billing-bridge.py` for the actual local CGI, authentication,
 request normalization, upstream failure handling and credential redaction.
@@ -167,6 +177,78 @@ Do not use this initial deployment script to overwrite a running paid service.
 Gmail SMTP must be configured and real receipt acceptance validated before a
 complete Pro release can enable receiving. Never enable payments as a substitute
 for shipping the billing UI and official-node entitlement enforcement.
+
+## Official route nodes (third-party subscription)
+
+The nodes Pro members receive ("官方线路") come from third-party subscription URLs. A subscription
+URL carries a token, so it is a secret: it lives only in a private root-only file on the server and
+is never committed, logged, stored in the database, returned by any route, or placed in a client
+package. The design takes a **list** of sources so more can be added later.
+
+**1. Create `/etc/enana/official.json`** (owner `root:enana`, mode 640, in the 750 `/etc/enana`
+directory; `deploy-billing.sh` validates it structurally without printing it and fixes the mode):
+
+```json
+{
+  "sources": [
+    { "id": "main", "url": "https://example.invalid/subs/TOKEN", "ua": "sing-box/1.12.0", "prefix": "官方-", "enabled": true }
+  ],
+  "ttl_hours": 24
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | `[a-z0-9-]`, 1-16 characters, unique. Internal only; never sent to clients. |
+| `url` | `https://` only (no user:password@). Redirects are followed by PocketBase's HTTP client, so use a provider you trust. |
+| `ua` | User-Agent. A `sing-box/<version>` agent makes the provider return one complete sing-box JSON, which is the only format parsed (Clash YAML and share-link fallbacks are intentionally not implemented). Default `sing-box/1.12.0`. |
+| `prefix` | Tag prefix; always forced to start with the reserved `官方-` so a user import can never collide with an official tag. |
+| `enabled` | `false` retires the source's nodes at the next run. |
+| `ttl_hours` | How long a fetched node stays servable without a new successful fetch (default 24, clamped 2-168). |
+
+Up to 8 sources are read. A malformed entry is ignored (and its nodes retired); an unreadable or
+missing file never retires anything. `ENANA_OFFICIAL_CONFIG` overrides the path, like billing's
+`ENANA_BILLING_CONFIG`.
+
+**2. Deploy.** `deploy-billing.sh` installs `enana_official.pb.js`, `enana_official.js` and
+`enana_official_domain.js` next to the billing hooks (no schema change: the existing empty
+`official_nodes` collection is used, with `node_key = <source id>~<hash of tag>`). nginx already
+allow-lists `nodes`; the operator routes below are not in the public allow-list and require a
+superuser, who is restricted to loopback.
+
+**3. Check it** (superuser token through the loopback/SSH tunnel; read the password without echoing it):
+
+```sh
+read -rsp 'superuser password: ' PW; echo
+SUPER=$(curl -s -X POST http://127.0.0.1:8090/api/collections/_superusers/auth-with-password \
+  -H 'Content-Type: application/json' -d "{\"identity\":\"ADMIN_EMAIL\",\"password\":\"$PW\"}" | node -pe 'JSON.parse(require("fs").readFileSync(0)).token')
+curl -s -X POST http://127.0.0.1:8090/api/enana/admin/official/sync   -H "Authorization: $SUPER"   # fetch now
+curl -s          http://127.0.0.1:8090/api/enana/admin/official/status -H "Authorization: $SUPER"   # counts, last success
+```
+
+Both answers contain only source ids, node counts, skipped counts and short error codes
+(`network`, `http_<status>`, `empty`, `too_large`, `bad_format`, `no_nodes`, `store`).
+
+**What happens.** An hourly cron (`enana_official_sync`, 23 minutes past) fetches each enabled source
+that has not succeeded in the last ~3 hours (a failing source is retried hourly), parses the sing-box
+JSON, keeps only real proxy outbounds (`trojan http socks tuic hysteria2 vless vmess shadowsocks
+anytls`), drops selectors / urltest / direct / block / dns and the "traffic left / expires"
+pseudo-nodes, rebuilds every outbound from a per-protocol allow-list (no `detour`, bind interfaces,
+DNS settings or local file paths), writes `type` then `tag` first and sorts the other keys so equal data
+gives equal bytes, prefixes and de-duplicates tags, and upserts the rows in one transaction
+(vanished nodes are deleted). Any failure (network, non-200, oversized body, not JSON, zero usable
+nodes) leaves the existing rows untouched; they simply stop being served when `fresh_until` passes.
+PocketBase's `$http.send` has no size limit option: the 4 MiB cap rejects an oversized body after it
+was read. Logs record only source id, counts and error codes.
+
+`GET /api/enana/v1/nodes` serves the rows only to an active Pro plan with a verified email (see
+`docs/CLOUD_API.md`); the plan's `official_proxy` feature stops saying "coming soon" as soon as one
+fresh approved node exists, and `official.available/nodes` come from the same table. Rotating a
+token is an edit of the file, then the next hourly run (or the `sync` call above).
+
+Official node credentials are not viewable or exportable in the clients, and they disappear when the
+membership ends (clients keep them for up to 3 days offline). The local proxy core necessarily
+receives usable credentials, so this is access control, not DRM.
 
 ## Diagnostics upload (2.3.9)
 
