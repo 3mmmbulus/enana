@@ -89,6 +89,8 @@ ts<TAB>who<TAB>action<TAB>detail<TAB>result      ← tsv 的第一行是列名, 
 | `开启代理` / `关闭代理` (来源 `terminal`) | `enabled=1 via=console` | 终端 / 控制台里改总开关 (以前不留记录) |
 | `导出诊断日志` / `清除日志` | `hours=24 sections=ops,access,proxy,snapshot bytes=…` / `type=all before=… freed=…` | 日志本身的操作也会留痕 |
 | `服务器检测重试` / `取消服务器检测` | `attempt=1 max=3 code=E_SSH_UNREACHABLE` / `id=vps-probe-…` | 只读检测的重试与取消; 实时阶段和耗时见任务接口 `result.connection`, 不包含 SSH 凭据 |
+| `添加自己的服务器` (失败, `result=error`) | `host=1.2.3.4 code=E_VPS_VERIFY reason=blocked_cloud tcp=timeout` | 部署 / 重新验证失败: `reason` 是本机判断的原因 (`handshake` `not_listening` `refused` `unreachable` `blocked_server` `blocked_cloud` `blocked_unknown` `unknown`, 含义见 API.md「待验证的部署」), `tcp` 是本机到节点端口的 TCP 预检结果; 不含端口以外的服务器信息和任何凭据 |
+| `放弃待验证的部署` | `id=p-0a1b2c` | 用户放弃了「部署完成但验证没通过」的记录 (只删本机保存的待验证节点) |
 
 - 排查「为什么昨晚突然不走代理了」: 先看 `ops` 里的时间线 (**谁、什么时候、把什么从什么改成了什么**), 再对照 `access` 里同一时间之后的 `route` / `reason`。
 - `result=error` 的操作, `detail` 里会带原因。

@@ -35,5 +35,11 @@ jobs:
         run: bash tests/tun-service.sh
       - name: TUN policy changes without a restart (rule-data helper validation, apply decision)
         run: bash tests/tunrules.sh
+      - name: Server deployment that finished but failed verification (actual port, reasons, verify-only retry)
+        run: |
+          bash tests/vps-pending.sh
+          bash tests/vps-probe.sh
+          node tests/vps-ui.test.js
+          node tests/vps-verify-ui.test.js
       - name: Stop owned detached jobs while preserving unrelated processes
         run: python3 tests/stop-jobs.py

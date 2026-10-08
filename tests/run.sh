@@ -365,6 +365,7 @@ api "$A/api/apps" | chk "采纳推荐: 已知→推荐值, 未知保持关" 'n={
 api -X POST "$A/api/apps/ack?all=1" >/dev/null
 api "$A/api/apps" | chk "全部确认后不再提示新应用" 'assert d["new_count"]==0'
 api -X POST "$A/api/apps/scan" | chk "再次扫描不会重复标记" 'assert d["new_count"]==0'
+api "$A/api/apps" | chk "应用页的「识别时间」: 每个应用都有 seen > 0 (以前 apps.times 总是被写成空文件, 界面全是空白); installed 是秒级时间戳 (拿不到时 0)" 'assert d["apps"] and all(a["seen"]>0 for a in d["apps"]) and all(a["installed"]>=0 for a in d["apps"]), d["apps"][:2]'
 
 echo "   (应用图标 / 自定义软件: 校验 + 两步添加)"
 for i in $(seq 1 30); do sleep 0.5; [ "$(api "$A/api/apps" | jp 'print(sum(1 for a in d["apps"] if a["icon"]))' 2>/dev/null)" -ge 1 ] 2>/dev/null && break; done
@@ -1409,10 +1410,12 @@ echo "== 19. Enhanced/TUN isolated regressions"
 if SINGBOX="$SB" bash "$HERE/enhanced.sh" > "$W/enhanced.out" 2>&1; then tpass "System/TUN schema, exclusions, PIN priority and socket evidence"; else tfail "Enhanced config regression"; cat "$W/enhanced.out"; fi
 if bash "$HERE/tun-service.sh" > "$W/tun-service.out" 2>&1; then tpass "Root snapshot rollback and route ownership"; else tfail "TUN service regression"; cat "$W/tun-service.out"; fi
 if bash "$HERE/vps-probe.sh" > "$W/vps-probe.out" 2>&1; then tpass "Read-only SSH retries, cancellation and launch failure"; else tfail "SSH detection lifecycle regression"; cat "$W/vps-probe.out"; fi
+if bash "$HERE/vps-pending.sh" > "$W/vps-pending.out" 2>&1; then tpass "Deployed-but-unverified recovery: actual port, failure reasons, verify-only retry without redeploying"; else tfail "Deployed-but-unverified recovery regression"; cat "$W/vps-pending.out"; fi
 if command -v node >/dev/null; then
   if node "$HERE/ui-busy.test.js" > "$W/ui-busy.out" 2>&1; then tpass "Async UI buttons and modal duplicate submissions"; else tfail "UI busy regression"; cat "$W/ui-busy.out"; fi
   if node "$HERE/network-mode-ui.test.js" > "$W/network-mode-ui.out" 2>&1; then tpass "App capture onboarding, cancellation and readiness"; else tfail "Capture onboarding regression"; cat "$W/network-mode-ui.out"; fi
   if node "$HERE/vps-ui.test.js" > "$W/vps-ui.out" 2>&1; then tpass "SSH wizard cancellation and failed-cancel races"; else tfail "SSH wizard lifecycle regression"; cat "$W/vps-ui.out"; fi
+  if node "$HERE/vps-verify-ui.test.js" > "$W/vps-verify-ui.out" 2>&1; then tpass "Wizard: deployed-but-unverified state, actual-port guidance, verify-only retry"; else tfail "Wizard verification-state regression"; cat "$W/vps-verify-ui.out"; fi
   if node "$HERE/app-refresh-ui.test.js" > "$W/app-refresh-ui.out" 2>&1; then tpass "Quiet app discovery and visibility/reload cadence"; else tfail "App refresh lifecycle regression"; cat "$W/app-refresh-ui.out"; fi
 fi
 

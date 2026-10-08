@@ -160,6 +160,11 @@ ChatGPT|pin|AI' > "$UW/apps.conf"
 content_file() { case $1 in apps.conf) echo "$UW/apps.conf" ;; *) echo "$DATA/$1" ;; esac; }
 n=$(apps_scan)
 eq "首次扫描: 识别到 4 个 (Utilities 子目录里的 Terminal 也在; 太深的和应用内部的辅助程序不算)" "$n:$(apps_installed | cut -f1 | paste -sd, -)" "4:ChatGPT,Odd Browser,Plain App,Terminal"
+eq "首次扫描: 每个应用都有「识别时间」(apps.times 不是空的; 以前 NR==FNR 写法在旧文件为空时把整个文件清空, 应用页的安装 / 识别时间全是空白)" "$(awk -F'\t' '$2 + 0 > 0 {n++} END {print n + 0}' "$H/apps.times"):$(wc -l < "$H/apps.times" | tr -d ' ')" "4:4"
+t_seen=$(awk -F'\t' '$1 == "Plain App" {print $2}' "$H/apps.times"); apps_scan >/dev/null
+eq "再扫描: 已有应用的识别时间不变 (只记第一次看到的时间)" "$(awk -F'\t' '$1 == "Plain App" {print $2}' "$H/apps.times")" "$t_seen"
+: > "$H/apps.times"; apps_scan >/dev/null
+eq "apps.times 被清空 (旧版本留下的) 后, 下一次扫描自动补回" "$(awk -F'\t' '$2 + 0 > 0 {n++} END {print n + 0}' "$H/apps.times")" "4"
 eq "首次扫描: 标记全是 def (不弹「新应用」), 新应用数 0" "$(awk -F'|' '$1=="app" {print $4}' "$H/overrides.tsv" | sort -u | paste -sd, -):$(apps_new_count)" "def:0"
 eq "首次扫描: 已知应用按推荐 (ChatGPT=pin, Terminal=follow); 浏览器 (声明能打开 http/https) = follow; 其它 = direct" "$(awk -F'|' '$1=="app" {print $2 "=" $3}' "$H/overrides.tsv" | sort | paste -sd, -)" "ChatGPT=pin,Odd Browser=follow,Plain App=direct,Terminal=follow"
 # ---- 之后新装的应用: 浏览器跟随 / 其它直连, 标记 new, 弹提示

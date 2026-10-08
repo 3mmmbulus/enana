@@ -2,6 +2,7 @@
  * 对外: TP.vps = { pane(mode, host), listCard(), openRedetect(record) }   (没有 TP.V 视图; 面板由 v-import.js 的弹窗承载)
  *
  * 向导: 表单 -> 探测 (只读) -> 结果 (系统 / 依赖 / 出口 IP / 主机指纹, 勾选确认指纹) -> 确认 1 (缺失依赖) -> 确认 2 (将执行的全部操作) -> 部署 -> 完成
+ *       部署完成但本机验证没通过 (端口没放行等) = 「待验证的部署」: 原因和端口来自任务结果 (节点实际使用的端口, 界面不假设任何固定端口), 修好后「重新验证」只在本机验证, 不重新部署
  * 安全: SSH 密码 / 私钥 / 口令 / sudo 密码只放在闭包变量和输入框里 (autocomplete 关闭, 不用 <form>), 只通过 POST 表单体交给本机辅助服务;
  *       不进 URL / 存储 / 控制台 / 提示 / 错误文字。探测提交后立即清空输入框; 部署成功或退出失败页时清掉闭包里的凭据; 关闭弹窗 (wipe) 时全部清除。
  * 文案全部来自词典 (vps.*)。来自服务器的字符串 (系统名 / 说明 / 节点名 / IP) 一律用 textContent 渲染。 */
@@ -10,7 +11,6 @@
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, setText = TP.setText, fmt = TP.fmt, I = window.I18N, t = I.t, L = I.L;
   var vps = TP.vps = {};
   var uid = 0, panes = [], cards = [], reOpen = null, shared = typeof WeakMap === 'function' ? new WeakMap() : null;
-  var NODE_PORT = 443;                          // 节点端口 (API.md: 默认 443)
   var MAX_KEY = 64 * 1024;                      // 私钥文件 / 文本上限
   var VERIFY_STEP = 6, STEP_COUNT = 9;          // 部署任务共 9 步, 第 7 步 (下标 6) 是「验证连通」
   var LIST_MAX = 8;                             // 列表里最多显示的芯片数
@@ -121,11 +121,12 @@
   /* -> {code, msg, hint, detail, steps, verify} (msg / hint 已是当前语言) */
   function explain(e, where) {
     var code = codeOf(e), d = (e && e.data) || {}, steps = Array.isArray(d.steps) ? d.steps : [], bad = -1, i, raw = e && e.message ? String(e.message) : '';
-    var known = own(ERR, code), verify = code === 'E_VPS_VERIFY', out = { code: code, steps: steps, msg: '', hint: '', detail: '', verify: false };
+    var known = own(ERR, code), verify = code === 'E_VPS_VERIFY', res = d.result || {}, out = { code: code, steps: steps, msg: '', hint: '', detail: '', verify: false, pending: '', info: null };
     for (i = 0; i < steps.length; i++) if (steps[i] && steps[i].state === 'error') { bad = i; break; }
     if (where === 'provision' && !known && !verify && bad >= 0) verify = steps.length === STEP_COUNT ? bad === VERIFY_STEP : VERIFY_RE.test(String(steps[bad].label || ''));
     if (known) { out.msg = t(known[0]); out.hint = t(known[1]); }
-    else if (verify) { out.msg = t('vps.err.verify'); out.hint = t('vps.hint.verify', { port: NODE_PORT }); }
+    else if (verify && res.pending) { out.pending = String(res.pending); out.info = res; out.msg = t('vps.err.pendLead'); }          // 部署完成, 本机验证没通过: 原因 / 端口都用任务结果里的, 不假设固定端口
+    else if (verify) { out.msg = raw || t('vps.err.verify'); out.hint = t('vps.hint.verifyRemote'); }                          // 服务器上的部署脚本自己报告的失败 (例如服务没有启动成功): 说明在任务消息里
     else {
       out.msg = code === 'E_INVALID' && raw ? raw : TP.errMsg(e);          // 参数校验失败: 后端的具体说明 (哪个字段不对) 比通用文字有用
       out.hint = e && e.kind === 'unreachable' ? t('why.helper') : t('vps.hint.generic');
@@ -134,6 +135,52 @@
     if (where === 'probe' && d.result && d.result.attempt) out.hint += ' ' + t('vps.err.attempts', { n: d.result.attempt, max: d.result.max_attempts });
     out.verify = verify;
     return out;
+  }
+
+  /* ================= 部署完成但验证没通过: 原因与处理办法 =================
+   * 全部来自任务结果里的结构化字段 (reason / port(s) / tcp / remote / nodes), 没有任何写死的端口; 证据不足时说「无法确定」, 不断言是防火墙。 */
+  var VF_REASON = { blocked_cloud: 1, blocked_server: 1, blocked_unknown: 1, not_listening: 1, refused: 1, unreachable: 1, handshake: 1, unknown: 1 };
+  var VF_TCP = { ok: 1, timeout: 1, refused: 1, unreachable: 1, mixed: 1, none: 1 };
+  var VF_FW = { ufw_active: 'vps.vf.fw.ufwOn', ufw_inactive: 'vps.vf.fw.ufwOff', none: 'vps.vf.fw.none', firewalld_active: 'vps.vf.fw.fwdOn' };
+  function vfReason(info) { var r = String((info && info.reason) || ''); return own(VF_REASON, r) ? r : 'unknown'; }
+  function vfPorts(info) {
+    var ps = (Array.isArray(info && info.ports) ? info.ports : []).map(Number).filter(function (n) { return n > 0 && n < 65536; });
+    if (!ps.length && info && +info.port > 0 && +info.port < 65536) ps = [+info.port];
+    return ps;
+  }
+  function vfPortText(info) { return vfPorts(info).join(', ') || '?'; }
+  function codeNode(text) { return h('code', null, String(text)); }
+  function vfSteps(info) {
+    var p1 = vfPorts(info)[0] || 0;
+    return I.rich('vps.vf.r.' + vfReason(info) + '.steps', { port: vfPortText(info), ufw: codeNode('ufw allow ' + p1 + '/tcp'),
+      fwd: codeNode('firewall-cmd --permanent --add-port=' + p1 + '/tcp && firewall-cmd --reload'), status: codeNode('systemctl status enana-singbox'), ss: codeNode('ss -ltn | grep :' + p1) });
+  }
+  function vfStatus(info) {
+    var ul = h('ul', { class: 'vps-vf-list' }), port = vfPortText(info), rm = (info && info.remote) || {}, tcp = own(VF_TCP, String(info.tcp || '')) ? String(info.tcp) : 'none', fw = own(VF_FW, String(rm.firewall || ''));
+    function li(kind, text) { ul.appendChild(h('li', { class: 'is-' + kind }, ui.icon(kind === 'ok' ? 'check' : kind === 'bad' ? 'x' : 'info', 14, 'ci'), h('span', null, text))); }
+    li('ok', t('vps.vf.s1', { port: port }));
+    li('bad', t('vps.vf.s2', { n: +info.nodes || 0 }));
+    li(tcp === 'ok' ? 'ok' : tcp === 'none' ? 'info' : 'bad', t('vps.vf.tcp.' + tcp, { port: port }));
+    if (rm.checked) li(rm.listening ? 'ok' : 'bad', t(rm.listening ? 'vps.vf.listen' : 'vps.vf.nolisten', { port: port }));
+    else li('info', t('vps.vf.listenUnknown'));
+    if (fw) li('info', t(fw));
+    li('info', t('vps.vf.cloud'));
+    return ul;
+  }
+  function vfPanel(info) {
+    var box = h('div', { class: 'vps-vf' });
+    box.appendChild(h('p', { class: 'vps-err-m' }, t('vps.vf.r.' + vfReason(info) + '.msg', { port: vfPortText(info) })));
+    box.appendChild(h('div', { class: 'vps-vf-st' }, h('h4', { class: 'vps-h4' }, t('vps.vf.status')), vfStatus(info)));
+    box.appendChild(h('p', { class: 'hint warn vps-vf-steps' }, ui.icon('info', 15, 'ci'), h('span', null, vfSteps(info))));
+    return box;
+  }
+  /* 放弃一条待验证的部署记录 (只删本机保存的待验证节点, 不改动服务器); 返回 true = 已删除 */
+  async function discardPending(pd) {
+    var ok = await ui.confirmDialog({ title: t('vps.vf.discardTitle'), message: t('vps.vf.discardMsg', { name: pd.name || pd.host }), detail: [t('vps.vf.discardD1'), t('vps.vf.discardD2')], confirmText: t('vps.vf.discardGo'), danger: true });
+    if (!ok) return false;
+    await TP.helper('POST', '/api/vps/pending/discard', { form: { id: String(pd.id) } });
+    ui.toast(t('vps.vf.discarded'), 'ok', 2400);
+    return true;
   }
 
   /* 提交一个远程任务并跟随进度 (凭据只在 form 里, 即请求体); card = ui.taskCard; quiet = 只读任务 (探测): 不让顶栏变成「正在应用配置…」 */
@@ -359,7 +406,7 @@
     function sh() { return sharedOf((el.closest && el.closest('dialog')) || host); }
     function visible() { return el.isConnected && el.getClientRects().length > 0; }
     function say(text) { live.textContent = ''; setTimeout(function () { live.textContent = text; }, 60); }
-    function isBusy() { return st.phase === 'probing' || st.phase === 'provisioning'; }
+    function isBusy() { return st.phase === 'probing' || st.phase === 'provisioning' || st.phase === 'verifying'; }
     function needSudoInline() { return !!st.probe && st.probe.privilege === 'sudo_password' && !(st.creds && st.creds.sudo); }
     function sudoValue() { return st.sudoIn || (st.creds && st.creds.sudo) || ''; }
     function focusFp() { if (cbFp) { cbFp.scrollIntoView({ block: 'center' }); cbFp.focus(); } }
@@ -387,8 +434,10 @@
           { label: t('vps.detect'), kind: 'primary', icon: 'search', id: 'go', keep: true, unavail: why ? { reason: why } : null, onClick: async function () { await detect(); return false; } }];
       }
       if (ph === 'probeErr' || ph === 'provErr') {
-        return [{ label: t('vps.backEdit'), icon: 'chevron-left', id: 'back', keep: true, onClick: function () { backToForm(); return false; } },
-          { label: t('common.retry'), kind: 'primary', icon: 'refresh', id: 'retry', keep: true, onClick: async function () { await retry(); return false; } }];
+        var pend = ph === 'provErr' && st.err && st.err.pending, acts = [{ label: t('vps.backEdit'), icon: 'chevron-left', id: 'back', keep: true, onClick: function () { backToForm(); return false; } }];
+        if (pend && st.creds && st.probe) acts.push({ label: t('vps.vf.redeploy'), icon: 'rocket', id: 'redeploy', keep: true, onClick: async function () { await onContinue(true); return false; } });      // 明确的「重新部署」: 默认的主操作是不重新部署的「重新验证」
+        acts.push({ label: t(pend ? 'vps.vf.go' : 'common.retry'), kind: 'primary', icon: 'refresh', id: 'retry', keep: true, onClick: async function () { await retry(); return false; } });
+        return acts;
       }
       if (ph === 'result') {
         return [{ label: t('common.back'), icon: 'chevron-left', id: 'back', keep: true, onClick: function () { backToForm(); return false; } },
@@ -417,6 +466,7 @@
       toTop(el); focusSoon(p === 'form' ? cf.firstInput() : view.querySelector('.vps-h'));
       if (p === 'probing') say(t('vps.say.probing'));
       else if (p === 'provisioning') say(t('vps.say.provisioning'));
+      else if (p === 'verifying') say(t('vps.say.verifying'));
       else if (p === 'result') say(t('vps.say.result', { os: osName(st.probe) }));
       else if (p === 'done') say(t('vps.say.done'));
       else if (st.err) say(st.err.msg);
@@ -427,7 +477,7 @@
       cbFp = null; sudoInp = null;
       if (p === 'form') return;
       TP.clear(view);
-      if (p === 'probing' || p === 'provisioning') view.appendChild(stageView());
+      if (p === 'probing' || p === 'provisioning' || p === 'verifying') view.appendChild(stageView());
       else if (p === 'result') view.appendChild(resultView());
       else if (p === 'probeErr' || p === 'provErr') view.appendChild(errView());
       else if (p === 'done') view.appendChild(doneView());
@@ -438,7 +488,11 @@
     function wipeAll() { forgetSecrets(); st.probe = null; st.fpOk = false; st.err = null; st.card = null; st.res = null; }
     function backToForm() { st.run++; wipeAll(); setPhase('form'); }
     function again() { st.run++; wipeAll(); st.meta = null; cf.reset(); sh().snap = cf.snapshot(); setPhase('form'); }
-    function retry() { return st.phase === 'probeErr' ? runProbe() : onContinue(true); }
+    function retry() {
+      if (st.phase === 'probeErr') return runProbe();
+      if (st.err && st.err.pending) return runVerify(st.err.pending);          // 服务器上已经部署好了: 重试 = 只在本机重新验证, 不再部署
+      return onContinue(true);
+    }
 
     /* ---------- 1. 表单 -> 探测 ---------- */
     function detect() {
@@ -507,19 +561,22 @@
       if (!ok) return;
       await runProvision();
     }
+    function planPort(p) { var n = p && p.plan && +p.plan.port; return n > 0 && n < 65536 ? n : 0; }
     /* 确认 2: 逐条列出将在服务器和本机上做的事 */
     function planOf(p) {
       var ips = ipsOf(p).map(function (x) { return String(x.public); }), miss = missingOf(p), d = [];
       d.push(miss.length ? t('vps.cf2.pkgs', { list: miss.join(', ') }) : t('vps.cf2.noPkgs'));
       if (!(p.singbox && p.singbox.installed)) d.push(t('vps.cf2.install'));
-      d.push(t('vps.cf2.config', { n: ips.length, ips: ips.join(', '), port: NODE_PORT }));
+      var pp = planPort(p);          // 云端的探测脚本告诉了「将要用哪个端口」就写出来, 没有就不假设 —— 部署完成后以节点实际使用的端口为准
+      d.push(pp ? t('vps.cf2.config', { n: ips.length, ips: ips.join(', '), port: pp }) : t('vps.cf2.configAuto', { n: ips.length, ips: ips.join(', ') }));
       d.push(t('vps.cf2.start'));
-      if (p.firewall === 'ufw_active') d.push(t('vps.cf2.ufw', { port: NODE_PORT }));
+      if (p.firewall === 'ufw_active') d.push(pp ? t('vps.cf2.ufw', { port: pp }) : t('vps.cf2.ufwAuto'));
+      if ((p.singbox && p.singbox.installed) || (Array.isArray(p.listening) && p.listening.length > 1)) d.push(t('vps.cf2.keep'));
       d.push(t('vps.cf2.verify'));
       d.push(t('vps.cf2.save', { n: ips.length, name: st.meta.name, role: TP.name.role(st.meta.role) }));
       d.push(t(st.meta.save ? 'imp.cf.saveYes' : 'imp.cf.saveNo'));
       if (p.node && p.node.installed) d.push(t('vps.cf2.node'));
-      d.push(t('vps.cf2.cloud', { port: NODE_PORT }));
+      d.push(pp ? t('vps.cf2.cloud', { port: pp }) : t('vps.cf2.cloudAuto'));
       return d;
     }
     async function runProvision() {
@@ -547,15 +604,37 @@
       }
     }
 
+    /* ---------- 3. 部署已完成、验证没通过: 只在本机重新验证 (没有 SSH, 不重新部署, 不需要凭据) ---------- */
+    async function runVerify(pid) {
+      var my = ++st.run;
+      st.card = ui.taskCard(t('vps.card.progress'), { horizontal: false });
+      setPhase('verifying');
+      try {
+        var j = await remote('/api/vps/verify', { id: String(pid) }, st.card, t('vps.vf.running'));
+        if (my !== st.run) return;
+        st.res = j.result && typeof j.result === 'object' ? j.result : {};
+        forgetSecrets(); st.probe = null; st.fpOk = false;
+        st.card.done(t('vps.vf.done'));
+        TP.afterApply();
+        await TP.loadState();
+        reloadCards();
+        if (my !== st.run) return;
+        setPhase('done');
+      } catch (e) {
+        if (my !== st.run) return;
+        st.err = explain(e, 'verify'); setPhase('provErr');         // 记录还在: 可以再验证; 原因更新为这一次的结果
+      }
+    }
+
     /* ---------- 视图 ---------- */
     function sec(titleKey, body, cls) { return h('section', { class: 'vps-sec' + (cls ? ' ' + cls : '') }, h('h4', { class: 'vps-h4' }, t(titleKey), ui.help(titleKey === 'vps.sec.packages' ? 'vps.deps' : titleKey === 'vps.sec.system' ? 'vps.os' : titleKey === 'vps.sec.network' ? 'vps.network' : 'vps.software')), body); } // i18n-ignore: help topic ids
     function stageView() {
-      var prov = st.phase === 'provisioning', c = st.creds || {};
+      var prov = st.phase === 'provisioning', ver = st.phase === 'verifying', c = st.creds || {};
       return h('div', { class: 'vps-stage' },
-        h('h3', { class: 'vps-h', tabindex: '-1' }, ui.icon(prov ? 'rocket' : 'search', 20, 'ci'), t(prov ? 'vps.prov.head' : 'vps.probe.head')),
-        h('p', { class: 'muted sm vps-target' }, t('vps.target', { target: String(c.user) + '@' + addrOf(c.host, c.port) })),
+        h('h3', { class: 'vps-h', tabindex: '-1' }, ui.icon(prov ? 'rocket' : ver ? 'refresh' : 'search', 20, 'ci'), t(prov ? 'vps.prov.head' : ver ? 'vps.vf.head' : 'vps.probe.head')),
+        !ver && c.host ? h('p', { class: 'muted sm vps-target' }, t('vps.target', { target: String(c.user) + '@' + addrOf(c.host, c.port) })) : null,
         st.card ? st.card.el : null,
-        h('p', { class: 'muted sm' }, t(prov ? 'vps.prov.note' : 'vps.probe.note')));
+        h('p', { class: 'muted sm' }, t(prov ? 'vps.prov.note' : ver ? 'vps.vf.note' : 'vps.probe.note')));
     }
 
     function resultView() {
@@ -564,6 +643,7 @@
       root.appendChild(h('p', { class: 'muted sm vps-ro' }, t('vps.res.readonly')));
       root.appendChild(supportBlock(p));
       root.appendChild(hostkeyBlock(p));
+      if (p.pending) root.appendChild(pendingBlock(p.pending));
       if (needSudoInline()) root.appendChild(sudoBlock());
       root.appendChild(h('div', { class: 'vps-cols' }, sec('vps.sec.system', systemBlock(p, c)), sec('vps.sec.network', networkBlock(p)), sec('vps.sec.software', softwareBlock(p))));
       root.appendChild(sec('vps.sec.packages', packagesBlock(p), 'vps-wide'));
@@ -589,6 +669,16 @@
         h('p', { class: 'muted sm vps-fp-help' }, I.rich('vps.fp.help', { cmd: h('code', null, 'ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub') })),
         h('label', { class: 'chk-inline vps-confirm' + (changed ? ' is-strong' : '') }, cb, h('span', null, t(changed ? 'vps.fp.confirmNew' : 'vps.fp.confirm'))));
     }
+    /* 这台服务器上有一次「部署完成但验证没通过」的记录: 服务器上其实已经有节点了, 不需要重新部署, 直接重新验证 */
+    function pendingBlock(pd) {
+      var verify = ui.btn(t('vps.pend.verify'), { icon: 'refresh', kind: 'primary', sm: true }), drop = ui.btn(t('vps.pend.discard'), { icon: 'trash', sm: true });
+      ui.act(verify, async function () { await runVerify(pd.id); });
+      ui.act(drop, async function () { if (await discardPending(pd)) { if (st.probe) st.probe.pending = null; render(); setFoot(true); } });
+      return h('section', { class: 'vps-sec vps-pend', role: 'group' }, h('h4', { class: 'vps-h4' }, ui.icon('warning', 16, 'ci'), t('vps.pend.title')),
+        h('p', { class: 'sm' }, t('vps.pend.msg', { ports: (Array.isArray(pd.ports) ? pd.ports : []).join(', ') || '?', n: +pd.nodes || 0 })),
+        pd.reason && pd.reason !== 'pending' ? h('p', { class: 'muted sm' }, t('vps.pl.reason.' + (own(VF_REASON, String(pd.reason)) ? pd.reason : 'unknown'))) : null,
+        h('div', { class: 'vps-pend-acts' }, verify, drop));
+    }
     function sudoBlock() {
       var s = secretInput('vps.eye.sudo'), key = st.creds && st.creds.mode === 'key';
       sudoInp = s.inp; s.inp.value = st.sudoIn;
@@ -605,16 +695,18 @@
     function networkBlock(p) {
       var ports = (Array.isArray(p.listening) ? p.listening : []).map(Number).filter(Boolean), box = h('div', { class: 'vps-net' });
       box.appendChild(kv([[t('vps.k.firewall'), own(FW, p.firewall) ? t(FW[p.firewall]) : t('common.unknown')], [t('vps.k.listening'), ports.length ? chips(ports) : t('common.none')]]));
-      if (ports.indexOf(NODE_PORT) >= 0) box.appendChild(h('p', { class: 'hint warn' }, ui.icon('warning', 15, 'ci'), h('span', null, t('vps.port.busy', { port: NODE_PORT }))));
-      box.appendChild(h('p', { class: 'hint vps-cloud' }, ui.icon('info', 15, 'ci'), h('span', null, t('vps.cloud.note', { port: NODE_PORT }))));
+      var pp = planPort(p);
+      if (pp) box.appendChild(h('p', { class: 'hint ok' }, ui.icon('info', 15, 'ci'), h('span', null, t(p.plan.reason === 'default_busy' ? 'vps.net.planBusy' : 'vps.net.plan', { port: pp }))));
+      if (ports.length > 1 || (p.singbox && p.singbox.installed)) box.appendChild(h('p', { class: 'hint' }, ui.icon('info', 15, 'ci'), h('span', null, t('vps.net.keep'))));      // 已有的服务 / 端口: 不会被动
+      box.appendChild(h('p', { class: 'hint vps-cloud' }, ui.icon('info', 15, 'ci'), h('span', null, pp ? t('vps.cloud.note', { port: pp }) : t('vps.cloud.noteAuto'))));
       return box;
     }
     function softwareBlock(p) {
       var sb = p.singbox || {}, node = p.node || {}, box = h('div', null);
       box.appendChild(kv([
         [t('vps.k.singbox'), sb.installed ? ui.chip(sb.version ? t('vps.sb.installedV', { v: sb.version }) : t('vps.sb.installed'), 'ok', 'check') : ui.chip(t('vps.sb.none'), '', 'minus')],
-        [t('vps.k.node'), node.installed ? ui.chip(t('vps.node.exists'), 'warn', 'warning') : ui.chip(t('vps.node.none'), '', 'minus')]]));
-      if (node.installed) box.appendChild(h('p', { class: 'hint warn' }, ui.icon('warning', 15, 'ci'), h('span', null, t('vps.node.hint'))));
+        [t('vps.k.node'), node.installed ? ui.chip(t(p.pending ? 'vps.node.pending' : 'vps.node.exists'), 'warn', 'warning') : ui.chip(t('vps.node.none'), '', 'minus')]]));
+      if (node.installed) box.appendChild(h('p', { class: 'hint warn' }, ui.icon('warning', 15, 'ci'), h('span', null, t(p.pending ? 'vps.node.pendHint' : 'vps.node.hint'))));
       return box;
     }
     function packagesBlock(p) {
@@ -652,12 +744,13 @@
 
     function errView() {
       var e = st.err || { msg: '', hint: '', detail: '', steps: [] }, prov = st.phase === 'provErr', root = h('div', { class: 'vps-err' });
-      root.appendChild(h('h3', { class: 'vps-h bad-t', tabindex: '-1' }, ui.icon('error', 20, 'ci'), t(prov ? 'vps.err.provTitle' : 'vps.err.probeTitle')));
-      root.appendChild(h('p', { class: 'vps-err-m' }, e.msg));
+      root.appendChild(h('h3', { class: 'vps-h bad-t', tabindex: '-1' }, ui.icon('error', 20, 'ci'), t(e.pending ? 'vps.err.pendTitle' : prov ? 'vps.err.provTitle' : 'vps.err.probeTitle')));
+      root.appendChild(h('p', { class: e.pending ? 'vps-err-lead' : 'vps-err-m' }, e.msg));
+      if (e.pending && e.info) root.appendChild(vfPanel(e.info));          // 部署已完成、验证没通过: 当前状态 + 原因 + 处理办法
       if (e.hint) root.appendChild(h('p', { class: 'hint warn' }, ui.icon('info', 15, 'ci'), h('span', null, e.hint)));
       if (prov) {
         if (e.steps && e.steps.length) { var ol = h('ol', { class: 'steps vps-steps' }); ui.renderSteps(ol, e.steps.map(function (s) { return { label: String(s.label || ''), state: s.state }; })); root.appendChild(ol); }
-        root.appendChild(h('p', { class: 'muted sm' }, t('vps.err.partial')));
+        if (!e.pending) root.appendChild(h('p', { class: 'muted sm' }, t('vps.err.partial')));
       }
       if (e.detail) root.appendChild(h('div', { class: 'skipped' }, ui.detailsBtn(t('common.details'), t('common.details'), function () { return h('p', { class: 'mono sm vps-raw' }, e.detail); })));
       return root;
@@ -674,7 +767,7 @@
           ul.appendChild(h('li', { class: 'vps-node' }, h('b', { class: 'vps-node-t' }, String(n.tag)),
             h('span', { class: 'vps-node-m' },
               h('span', { class: 'mono sm' }, addrOf(n.server, n.port)),
-              n.egress ? h('span', { class: 'chip mono' }, ui.icon('globe', 13, 'ci'), String(n.egress)) : null,
+              n.egress ? h('span', { class: 'chip mono' }, ui.icon('globe', 13, 'ci'), String(n.egress)) : (n.verified === false ? ui.chip(t('vps.done.unverified'), 'warn', 'warning') : null),
               r ? h('span', { class: 'badge ' + (r === 'pin' ? 'pin' : 'auto') }, ui.icon(r === 'pin' ? 'pin' : 'auto', 12, 'ci'), TP.name.role(r)) : null)));
         });
         root.appendChild(h('div', null, h('h4', { class: 'vps-h4' }, t('vps.done.nodes')), ul));
@@ -720,10 +813,10 @@
   function pruneList(list) { var i; for (i = list.length - 1; i >= 0; i--) if (list[i]._seen && !list[i].el.isConnected) list.splice(i, 1); }
 
   vps.listCard = function () {
-    var C = { _seen: false }, data = [], loaded = false, loading = false, err = null, at = 0, busy = {};
+    var C = { _seen: false }, data = [], pending = [], loaded = false, loading = false, err = null, at = 0, busy = {};
     var card = h('section', { class: 'card vps-card' }), empty = ui.emptyBox();
     var addBtn = ui.btn(L('vps.list.add'), { icon: 'plus', kind: 'primary', sm: true });
-    var note = h('p', { class: 'hint warn', hidden: true }), list = h('tbody');
+    var note = h('p', { class: 'hint warn', hidden: true }), list = h('tbody'), pendBox = h('section', { class: 'vps-pl', hidden: true });
     /* 列头可点击排序 (ui.sorter 'vps-list'; 先排序再分页, 没排序时保持服务器给的顺序); 「操作」列不排序 */
     var so = ui.sorter('vps-list', {
       name: { get: function (r) { return r.name || r.id; } },
@@ -744,7 +837,7 @@
     card.setAttribute('aria-labelledby', titleId);
     card.appendChild(h('div', { class: 'card-h' }, ui.icon('server', 20, 'ci'), h('h3', { id: titleId }, L('vps.list.title'), ui.help('vps.list')), h('span', { class: 'muted sm' }, L('vps.list.sub')), addBtn));
     var pg = ui.pager('vps.list', { def: 10 }); pg.onChange(function () { render(); });
-    card.appendChild(note); card.appendChild(table); card.appendChild(empty.el); card.appendChild(pg.el);
+    card.appendChild(note); card.appendChild(pendBox); card.appendChild(table); card.appendChild(empty.el); card.appendChild(pg.el);
     C.el = card;
 
     function tip(b, text) { b._tip = text; b.setAttribute('aria-label', text); if (!b._un) b.title = text; }
@@ -785,8 +878,29 @@
       tip(r.re, t('vps.row.redetect', { name: nm })); tip(r.fg, t('vps.row.forget', { name: nm }));
       ui.avail(r.re, why || (busy[rec.id] ? t('vps.row.busy') : '')); ui.avail(r.fg, why || (busy[rec.id] ? t('vps.row.busy') : ''));
     }
+    /* 待验证的部署: 服务器上已经部署好, 但本机验证没通过 (节点还没有添加); 这里可以重新验证 (不重新部署) 或放弃 */
+    function renderPending() {
+      var why = TP.why.helper();
+      pendBox.hidden = !pending.length;
+      TP.clear(pendBox);
+      if (!pending.length) return;
+      pendBox.appendChild(h('div', { class: 'vps-pl-h' }, ui.icon('warning', 16, 'ci'), h('b', null, t('vps.pl.title')), h('span', { class: 'muted sm' }, t('vps.pl.sub'))));
+      pending.forEach(function (pd) {
+        var ports = (Array.isArray(pd.ports) ? pd.ports : []).map(String), reason = own(VF_REASON, String(pd.reason || '')) ? String(pd.reason) : (pd.reason === 'pending' ? 'pending' : 'unknown');
+        var vb = ui.btn(t('vps.pl.verify'), { icon: 'refresh', kind: 'primary', sm: true }), db = ui.btn(t('vps.pl.discard'), { icon: 'trash', sm: true });
+        ui.act(vb, function () { return vps.openVerify(pd); });
+        ui.act(db, async function () { if (await discardPending(pd)) load(); });
+        ui.avail(vb, why); ui.avail(db, why);
+        pendBox.appendChild(h('div', { class: 'vps-pl-row' },
+          h('div', { class: 'vps-pl-main' }, h('b', { class: 'vps-name' }, String(pd.name || pd.host)), h('span', { class: 'mono sm' }, addrOf(pd.host, pd.ssh_port || 22)),
+            ports.length ? h('span', { class: 'vps-chips' }, ports.map(function (x) { return h('span', { class: 'chip mono' }, 'TCP ' + x); })) : null),
+          h('div', { class: 'muted sm' }, t('vps.pl.reason.' + reason), ' · ', t('vps.pl.nodes', { n: +pd.nodes || 0 }), pd.updated ? ' · ' + t('vps.row.updated', { when: fmt.rel(pd.updated) }) : ''),
+          h('div', { class: 'vps-pl-acts' }, vb, db)));
+      });
+    }
     function render() {
       var why = TP.why.helper(), rows = loaded && data.length > 0;
+      renderPending();
       C._seen = C._seen || card.isConnected;
       addBtn.hidden = !rows; ui.avail(addBtn, why);
       table.hidden = !rows; note.hidden = !(rows && err);
@@ -804,6 +918,7 @@
       try {
         var r = await TP.helper('GET', '/api/vps');
         data = Array.isArray(r && r.vps) ? r.vps : []; loaded = true; err = null;
+        try { var pr = await TP.helper('GET', '/api/vps/pending'); pending = Array.isArray(pr && pr.pending) ? pr.pending : []; } catch (e2) { /* 待验证列表读不到不影响主列表 */ }
       } catch (e) { if (e && e.kind === 'auth') { loading = false; return; } err = e; }
       loading = false; at = Date.now(); render();
     }
@@ -937,8 +1052,69 @@
     return api;
   };
 
+  /* ================================================================================
+   * 重新验证待验证的部署: TP.vps.openVerify(pending) — 只在本机验证 (没有 SSH, 不重新部署, 不需要任何凭据); 通过后节点才加到本机
+   * ================================================================================ */
+  var vOpen = null;
+  vps.openVerify = function (pd) {
+    var why = TP.why.helper();
+    if (why) { ui.toast(why, 'warn', 5200); return null; }
+    if (vOpen) return vOpen.api;
+    var phase = 'run', run = 0, card = null, errInfo = null, out = null, api = null, target = addrOf(pd.host, pd.ssh_port || 22);
+    var view = h('div', { class: 'vps-view' }), live = h('div', { class: 'sr', role: 'status', 'aria-live': 'polite' }), body = h('div', { class: 'vps vps-re' }, view, live);
+    function footer() {
+      if (phase === 'error') return [{ label: t('vps.vf.discard'), icon: 'trash', id: 'discard', keep: true, onClick: async function () { if (await discardPending(pd)) { reloadCards(); api.close(true); } return false; } },
+        { label: t('common.close'), id: 'close', cancel: true }, { label: t('vps.vf.go'), kind: 'primary', icon: 'refresh', id: 'retry', keep: true, onClick: async function () { await runIt(); return false; } }];
+      if (phase === 'result') return [{ label: t('common.close'), kind: 'primary', id: 'close', cancel: true }];
+      return [];
+    }
+    function paint() {
+      TP.clear(view);
+      if (phase === 'run') view.appendChild(h('div', { class: 'vps-stage' }, h('h3', { class: 'vps-h', tabindex: '-1' }, ui.icon('refresh', 20, 'ci'), t('vps.vf.head')), h('p', { class: 'muted sm vps-target' }, t('vps.target', { target: target })), card.el, h('p', { class: 'muted sm' }, t('vps.vf.note'))));
+      else if (phase === 'error') {
+        view.appendChild(h('div', { class: 'vps-err' }, h('h3', { class: 'vps-h bad-t', tabindex: '-1' }, ui.icon('error', 20, 'ci'), t(errInfo.pending ? 'vps.err.pendTitle' : 'vps.vf.failTitle')),
+          h('p', { class: errInfo.pending ? 'vps-err-lead' : 'vps-err-m' }, errInfo.msg), errInfo.pending && errInfo.info ? vfPanel(errInfo.info) : null,
+          errInfo.hint ? h('p', { class: 'hint warn' }, ui.icon('info', 15, 'ci'), h('span', null, errInfo.hint)) : null,
+          errInfo.detail ? h('div', { class: 'skipped' }, ui.detailsBtn(t('common.details'), t('common.details'), function () { return h('p', { class: 'mono sm vps-raw' }, errInfo.detail); })) : null));
+      } else if (phase === 'result') {
+        var nodes = Array.isArray(out.nodes) ? out.nodes : [], ul = h('ul', { class: 'vps-nodes' });
+        nodes.forEach(function (n) { ul.appendChild(h('li', { class: 'vps-node' }, h('b', { class: 'vps-node-t' }, String(n.tag)), h('span', { class: 'vps-node-m' }, h('span', { class: 'mono sm' }, addrOf(n.server, n.port)), n.egress ? h('span', { class: 'chip mono' }, ui.icon('globe', 13, 'ci'), String(n.egress)) : null))); });
+        view.appendChild(h('div', { class: 'vps-done' }, h('div', { class: 'done-box' }, h('div', { class: 'done-t' }, h('span', { class: 'ck ok' }, ui.icon('check', 13)), h('h3', { class: 'vps-h vps-plain', tabindex: '-1' }, t('vps.vf.doneTitle'))),
+          h('p', { class: 'vps-done-m' }, t('vps.vf.doneMsg', { n: nodes.length }))), nodes.length ? ul : null));
+      }
+      api.setBusy(phase === 'run'); api.setActions(footer());
+      focusSoon(view.querySelector('.vps-h'));
+    }
+    async function runIt() {
+      var my = ++run;
+      card = ui.taskCard(t('vps.card.progress'), { horizontal: false });
+      phase = 'run'; paint(); live.textContent = t('vps.say.verifying');
+      try {
+        var j = await remote('/api/vps/verify', { id: String(pd.id) }, card, t('vps.vf.running'));
+        if (my !== run) return;
+        out = j.result && typeof j.result === 'object' ? j.result : {};
+        TP.afterApply(); TP.loadState(); reloadCards();
+        phase = 'result'; paint();
+        ui.toast(t('vps.vf.done'), 'ok');
+      } catch (e) {
+        if (my !== run) return;
+        errInfo = explain(e, 'verify'); phase = 'error'; paint();
+        reloadCards();
+      }
+    }
+    api = ui.modal({
+      title: t('vps.vf.title'), icon: 'refresh', iconKind: 'pri', size: 'md', cls: 'vps-dlg', body: body,
+      lock: function () { return phase === 'run'; },
+      onClose: function () { run++; card = null; vOpen = null; },
+      actions: []
+    });
+    vOpen = { api: api, relang: function () { api.setTitle(t('vps.vf.title')); if (card) card.setTitle(t('vps.card.progress')); } };
+    runIt();
+    return api;
+  };
+
   /* ================= 模块级事件: 切换语言 / 辅助服务状态变化 / 登录 ================= */
-  TP.on('lang', function () { pruneList(panes); panes.forEach(function (p) { p.relang(); }); cards.forEach(function (c) { c.relang(); }); if (reOpen) reOpen.relang(); });
+  TP.on('lang', function () { pruneList(panes); panes.forEach(function (p) { p.relang(); }); cards.forEach(function (c) { c.relang(); }); if (reOpen) reOpen.relang(); if (vOpen) vOpen.relang(); });
   TP.on('helper', function () { pruneList(panes); panes.forEach(function (p) { p.refreshFoot(); }); cards.forEach(function (c) { c.refresh(); }); if (reOpen) reOpen.refresh(); });
   TP.on('auth', function (ok) { if (ok) cards.forEach(function (c) { c.reload(); }); });
   TP.on('state', function () { cards.forEach(function (c) { if (c.el.isConnected && c.el.getClientRects().length) c.refresh(); }); });     // 「更新于 N 分钟前」随状态轮询刷新

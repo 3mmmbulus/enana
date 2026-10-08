@@ -9,3 +9,5 @@ node_modules/
 /server/secrets/
 /server/pb_data/
 /server/payments/state/
+__pycache__/
+*.pyc

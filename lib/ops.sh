@@ -508,6 +508,7 @@ job_dispatch() {
     vps-probe)      vps_probe_job "$@" ;;
     vps-provision)  vps_provision_job "$@" ;;
     vps-redetect)   vps_redetect_job "$@" ;;
+    vps-verify)     vps_verify_job "$@" ;;
     sync-push)      sync_push_job "$@" ;;
     sync-login)     sync_login_auto ;;
     sync-pull)      sync_pull_job "$@" ;;

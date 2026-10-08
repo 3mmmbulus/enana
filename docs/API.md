@@ -306,8 +306,10 @@
  "singbox":{"installed":false,"version":""},"node":{"installed":false},"deployed":false,
  "firewall":"ufw_active|ufw_inactive|firewalld_active|none","listening":[22,80],
  "ips":[{"local":"10.0.0.5","public":"1.2.3.4","v":4,"dev":"eth0"}],"ipv6":["2001:db8::5"],
- "actions":[{"id":"deps","text":"安装依赖 (apt-get): ca-certificates"},{"id":"core","text":"下载并安装服务端 sing-box 1.14.2 (SHA-256 校验) …"},{"id":"config","text":"…"},{"id":"service","text":"…"},{"id":"firewall","text":"…"}]}
+ "actions":[{"id":"deps","text":"安装依赖 (apt-get): ca-certificates"},{"id":"core","text":"下载并安装服务端 sing-box 1.14.2 (SHA-256 校验) …"},{"id":"config","text":"…"},{"id":"service","text":"…"},{"id":"firewall","text":"…"}],
+ "pending":null,"plan":null}
 ```
+`pending` = 本机保存着这台服务器 (同 host:ssh 端口) 上一次「部署完成但验证没通过」的记录时的摘要 (见下面的 `/api/vps/pending`, 不含节点凭据), 这时 `node.installed` 也是 `true` —— 服务器上其实已经有节点了, 界面不能再说「尚未部署」; `plan` = 云端探测脚本 (可选字段 `plan_port` / `plan_reason`) 告诉的「按现在的占用情况将要使用的节点端口」`{"port":2053,"reason":"default_busy"}`, 没有就是 `null` —— **界面和放行指引不假设任何固定端口**, 只用 `plan.port` (部署前) 和部署结果里节点实际使用的端口 (部署后)。
 `deps` 固定检查 `curl ca-certificates tar iproute2 gzip`; `deployed:true` = 这台服务器上已经有 enana 的部署 (可以重新识别出口 IP); `ips` = 服务器上所有可用的公网 IPv4 出口 (云厂商的内网 IP + 一对一 NAT 的会绑定源地址问外部服务得到各自的公网 IP; 同一公网 IP 只算一次, 最多 16 个; `ipv6` 只列出, 不建节点); **`actions` = 将要执行的操作清单** (按服务器当前状态生成: 已经具备的不列), 前端的「确认安装」弹窗逐条列出让用户确认。不支持的系统探测照样成功, 但 `supported:false`、`actions:[]`。
 失败 (`job.state=error`, 接口里的 `code` 在 `job.result.code`, `job.msg` 是已翻译的原因): `E_SSH_NO_CLIENT` (本机没有 ssh) · `E_SSH_UNREACHABLE` (连不上 / 超时 / 被拒 / 服务器没拿到主机密钥) · `E_SSH_AUTH` (用户名 / 密码 / 私钥不对) · `E_SSH_KEY` (私钥格式不对 / 口令不对) · `E_SSH_HOSTKEY` (指纹与固定的不一致) · `E_VPS_NO_PLAYBOOK` (云端还没有下发部署脚本; 这个错误在接口里就直接返回, 不进任务)。
 前端流程: (确认指纹) → 探测成功 → 弹窗展示「系统 / 依赖 / 出口 IP / 指纹」; `missing` 非空 → 问用户是否安装依赖; 要安装依赖或服务端时 → **二次弹窗** 逐条列出 `actions` 再让用户确认 → 调 provision。
@@ -318,11 +320,38 @@
 ### `POST /api/vps/provision` (通用凭据 + `hostkey` 必填 + `name` + `role=pin|auto` (默认 pin) + `install_deps=0|1` + `save=0|1`★ (同 `servers/import`)) → `{"ok":true,"job":"…"}`
 任务步骤 (9 步): `连接服务器` → `检测系统与环境` → `安装依赖` (apt-get: curl, ca-certificates, tar, iproute2, gzip; 只在 `install_deps=1` 时, 否则缺依赖 → `E_VPS_DEPS`) → `安装服务端` (sing-box, 固定版本 + SHA-256 校验, 装到 `/usr/local/bin/enana-sing-box`, 不覆盖用户已有的 sing-box) → `生成配置与密钥` (VLESS + Reality, 无需域名; 每个公网出口 IP 一个入站, 出口 IP = 入站 IP; 密钥 / 端口 / 伪装域名保存在服务器 `/etc/enana/state.json`, **重复部署沿用它们, 已有节点不会失效**) → `开放端口并启动` (专用系统用户 + systemd 服务 `enana-singbox`, 开机自启; ufw 活跃时放行端口; 云厂商安全组需用户自己放行) → `验证连通` (本机起一个**临时核心**, 逐个节点真实访问一次, 对比出口 IP; 全部不通 → `E_VPS_VERIFY` + 提示放行 `端口/tcp`) → `识别出口 IP` → `保存到本机` (走和导入服务器一样的事务: 校验 → 应用 → 失败自动回滚)。
 权限: root 直接执行; 非 root 用 `sudo -n` (免密) 或 `sudo -S` (密码经标准输入传递, 不进命令行), 没有 sudo → `E_VPS_PRIVILEGE` (sudo 密码不对也是)。系统 / 架构不支持 → `E_VPS_UNSUPPORTED` (不改动服务器); 没有 systemd / apt-get 同理。服务端启动失败 → `E_VPS_VERIFY` (带最近的日志片段)。
-完成时 `job.result` (节点 tag 规则: `<name>-<出口公网 IP>`, `name` 默认 `my-vps-<host>`; 同一台服务器的多个出口 IP 各一个节点): `{"nodes":[{"tag":"My-VPS-1.2.3.4","server":"1.2.3.4","port":443,"type":"vless","egress":"1.2.3.4"}],"ips":["1.2.3.4"],"vps":"v-1a2b3c"}`; `egress` 是验证时从这个节点出去实际看到的 IP。节点已写入本机服务器列表并生效。同一 host:port 再部署 = 更新同一条记录 (`vps` 编号不变)。
+**部署完成但验证没通过** (远端已经部署好, 本机经新节点真实访问失败): 这不是「部署失败」。任务以 `E_VPS_VERIFY` 结束, 但失败结果带结构化字段, 并且**服务器上的部署结果被保存为「待验证的部署」** (见下), 本机的服务器列表不添加任何节点:
+`{"code":"E_VPS_VERIFY","pending":"p-0a1b2c","reason":"blocked_cloud","port":2053,"ports":[2053],"host":"1.2.3.4","tcp":"timeout","remote":{"checked":true,"listening":true,"firewall":"ufw_inactive"},"nodes":2,"failed":2}`。`port(s)` 取自**节点实际使用的端口** (节点的 `server_port`), 不是任何默认值; `tcp` = 本机到节点端口的 TCP 预检 (`ok|timeout|refused|unreachable|mixed|none`; TUN 模式下探测绑定物理网卡, 否则 TUN 会在本机应答握手, 任何端口都显示通); `remote` = 登录凭据还在时重新跑一遍云端的只读 `probe.sh` 得到的服务器端证据 (服务有没有在监听、服务器上有没有启用 ufw / firewalld; 取不到时 `checked:false`, `listening:null`)。`reason` 只断言证据支持的结论:
+| `reason` | 依据 | 含义 / 处理 |
+|---|---|---|
+| `handshake` | 至少有一个节点端口 TCP 能连上 | **不是防火墙问题**: 服务端配置 / 密钥、服务器时间 (Reality 对时间敏感)、服务器出站被限制; 先「重新验证」, 不行再「重新部署」(沿用原来的密钥) |
+| `not_listening` | 服务器端证据: 节点端口没有进程在监听 | 服务没有启动成功, 与防火墙无关 |
+| `refused` | 本机收到连接被拒 (RST) | 没有监听, 或服务器防火墙设成了拒绝; 云安全组通常是静默丢弃, 不是典型表现 |
+| `unreachable` | 本机没有可用路由 | 本机网络 / VPN |
+| `blocked_server` | 超时 + 服务在监听 + 服务器上启用了 ufw / firewalld | 服务器防火墙或云安全组都可能, 两处都要检查 |
+| `blocked_cloud` | 超时 + 服务在监听 + 没发现服务器自己的防火墙 | 多半是云服务商的安全组 / 网络 ACL |
+| `blocked_unknown` | 超时, 但没有服务器端证据 | **无法确定** (可能是安全组 / 防火墙, 也可能是本机网络), 明确说不确定, 不断言 |
+| `unknown` | 其它 (例如只有 UDP 协议的节点, 不做 TCP 预检) | 原因无法确定 |
+没有任何节点能连上时不再等「真实访问」(每个节点最长 36 秒), TCP 预检不通的节点直接记为失败, 一个都不通就不启动本机的临时核心。部分节点通过验证时保存全部节点, 没通过的在结果里 `verified:false` (界面标出来)。
+完成时 `job.result` (节点 tag 规则: `<name>-<出口公网 IP>`, `name` 默认 `my-vps-<host>`; 同一台服务器的多个出口 IP 各一个节点): `{"nodes":[{"tag":"My-VPS-1.2.3.4","server":"1.2.3.4","port":443,"type":"vless","egress":"1.2.3.4"}],"ips":["1.2.3.4"],"vps":"v-1a2b3c"}`; `egress` 是验证时从这个节点出去实际看到的 IP; `verified` = 这个节点是否通过了验证 (部分通过时没通过的是 `false`, `egress` 为空)。节点已写入本机服务器列表并生效。同一 host:port 再部署 = 更新同一条记录 (`vps` 编号不变)。
 ### `GET /api/vps` → `{"ok":true,"vps":[{"id":"v-1a2b3c","name":"My-VPS","host":"1.2.3.4","ssh_port":22,"user":"root","os":"Debian GNU/Linux 12 (bookworm)","hostkey":"SHA256:…","ips":["1.2.3.4"],"nodes":["My-VPS-1.2.3.4"],"updated":1760000000}]}` (本机保存的服务器记录, **不含任何密码 / 私钥**)
 ### `POST /api/vps/forget` 表单 `id` → `{ok}` (只删除这条记录, 不删节点; 编号无效 → 被拒, 找不到 → `E_NOT_FOUND`)
 ### `POST /api/vps/redetect` (通用凭据 + `id`) → `{ok,job}`
 重新识别服务器的出口 IP (比如云厂商给机器加了一个 IP): **主机 / 指纹以本机保存的记录为准** (固定校验, 指纹变了 → `E_SSH_HOSTKEY`), 前端只需要重新带上凭据。服务器上更新配置并重启服务 (IP 没变就不重启), 本机只补充「还没有的」节点 (沿用已有节点的角色), 验证通过后保存。`job.result` = `{"nodes":[…新增的],"ips":[…全部],"vps":"<id>","added":1}`; 没有新增时 `added:0` 且不改动核心配置。服务器上还没有部署 → `E_VPS_NOT_DEPLOYED`; 记录不存在 → `E_NOT_FOUND`。
+
+### 待验证的部署 (部署完成但验证没通过) ★ (v2.3.11)
+远端已经部署好、本机还没验证通过的节点, 保存在本机 `$H/vps-pending/<编号>` (目录 700 / 文件 600; 内含节点凭据, 和 `servers.jsonl` 同样敏感; **不进配置快照、导出和云端同步**; 同一个 host:ssh 端口只留最新一条; 7 天后自动清理; 验证并保存成功 / 放弃时删除)。用户放行端口 (或修好别的问题) 后只需「重新验证」: **不再 SSH、不再部署、不需要重新输入任何凭据**。
+- `GET /api/vps/pending` → `{"ok":true,"pending":[{"id":"p-0a1b2c","name":"My-VPS","host":"1.2.3.4","ssh_port":22,"user":"root","os":"…","ports":[2053],"ips":["1.2.3.4"],"nodes":1,"created":1760000000,"updated":1760000300,"tries":1,"reason":"blocked_cloud"}]}` (不含节点凭据)。
+- `POST /api/vps/verify` 表单 `id=p-xxxxxx` → `{"ok":true,"job":"…"}`; 任务步骤 `读取部署记录` → `检查端口` → `验证连通` → `识别出口 IP` → `保存到本机`。通过 → 保存 (走和部署成功后相同的事务), 结果 `{"nodes":[…],"ips":[…],"vps":"v-…","added":1,"unchanged":0,"updated":0}`。**和本机已有的节点逐个比较**: 完全一样的原样保留 (不重复添加), 同名但内容不同的 (服务器重新部署换了密钥) 才更新并**保留你给它设的角色**, 本机都已经有了就只补上服务器记录、不动核心配置。再次失败 → 记录保留 (`tries+1`), 结果和部署时同一种结构 (`reason` / `port(s)` / `tcp`; 这个任务没有 SSH, 所以 `remote.checked:false`, 只给本机能确认的原因)。编号格式不对 → `E_INVALID`; 记录不存在 → `E_NOT_FOUND`; 同一条记录正在验证 → `E_BUSY`。
+- `POST /api/vps/pending/discard` 表单 `id` → `{ok}`: 只删本机保存的待验证节点, 不改动服务器 (节点服务仍在服务器上运行)。
+
+### 云端部署脚本约定 (给云端内容的维护者; 公开仓库里的 `tests/fixtures/content/vps/` 是遵守这份约定的模拟脚本)
+本机只做 SSH 编排和校验, 下面这些由云端 `vps/*.sh` 保证; 本机不依赖固定端口, 以脚本报告的节点 (`##node` 的 `server_port`) 为准:
+1. **保护已有服务**: 不停止 / 不替换 / 不改写服务器上已有的网站、代理和其他业务及其配置; 已有的 sing-box 保持原样 (本服务端装在独立的路径和 systemd 服务里)。
+2. **端口选择**: 默认端口 (443) 被占用时不去抢, 选一个空闲端口 (已有服务占着的端口一律不碰), 并如实报告: `##kv port <实际端口>`, 以及 (可选) `##kv port_requested <请求的端口>` `##kv port_reason default_busy`; 重复部署沿用已选的端口。
+3. **部署前告知端口** (可选): `probe.sh` 输出 `##kv plan_port <将要用的端口>` 和 `##kv plan_reason default|default_busy`, 本机在「确认安装」之前就能列出具体端口、让用户提前放行云安全组; 没有这两个字段, 界面只说「部署完成后会告诉你具体端口」。
+4. **服务器自己的防火墙**: ufw / firewalld 启用时只放行节点实际使用的端口 (授权范围 = 用户在「确认安装」里看到并确认的操作); 云服务商的安全组脚本改不了, 由用户操作, 本机给出带实际端口的指引。
+5. `probe.sh` 的 `listening` / `firewall` 字段要准确 (本机在验证失败后用它判断「服务有没有在监听」「服务器上有没有防火墙」)。
 
 ## 云端同步 (端到端加密) ★ (v2.1 新增)
 

@@ -248,8 +248,11 @@ apps_times_update() {
   [ -s "$H/.apps.now" ] || return 0
   touch "$f"; b=$(mktemp)
   while IFS=$'\t' read -r name path; do [ -n "$name" ] && printf '%s\t%s\n' "$name" "$(os_birth_time "$path")"; done < "$H/.apps.now" > "$b"
-  LC_ALL=C awk -F'\t' -v now="$(now)" 'NR == FNR { s[$1] = $2; next } { i = $2; if (i !~ /^[0-9]+$/) i = 0; printf "%s\t%s\t%s\n", $1, ($1 in s ? s[$1] : now), i }' "$f" "$b" > "$f.new" && mv "$f.new" "$f"
-  rm -f "$b"
+  # 旧文件在 BEGIN 里读: 不能用 `NR == FNR` 两个文件的写法 —— 旧文件是空的 (第一次扫描 / 以前被这个写法清空过) 时 FNR 永远追上 NR, 新数据整个被当成「旧文件」吞掉, 文件永远是空的
+  LC_ALL=C awk -F'\t' -v now="$(now)" -v old="$f" '
+    BEGIN { while ((getline line < old) > 0) { split(line, a, "\t"); if (a[1] != "" && a[2] ~ /^[0-9]+$/ && a[2] + 0 > 0) s[a[1]] = a[2] } close(old) }
+    { i = $2; if (i !~ /^[0-9]+$/) i = 0; printf "%s\t%s\t%s\n", $1, ($1 in s ? s[$1] : now), i }' "$b" > "$f.new" && mv "$f.new" "$f"
+  rm -f "$b" "$f.new"
 }
 
 apps_json() { # 已安装应用 + 当前状态 + 推荐 (JSON 数组)

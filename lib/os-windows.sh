@@ -71,7 +71,10 @@ os_sysproxy_apply() { # on|off [force]
   return 1
 }
 os_sysproxy_uninstall() { win_bridge sysproxy-off; }
-os_birth_time() { stat -c %W "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+os_birth_time() { # GNU stat 不知道创建时间时 %W 输出 0 而且退出码也是 0: 当成「不知道」, 退回修改时间
+  local t; t=$(stat -c %W "$1" 2>/dev/null); case $t in ''|0|*[!0-9]*) t=$(stat -c %Y "$1" 2>/dev/null) ;; esac
+  case $t in ''|*[!0-9]*) t=0 ;; esac; printf '%s\n' "$t"
+}
 os_date_at() { date -d "@$1" "+%F %T"; }
 os_stop_owned_jobs() { :; } # Native CLI releases this installation's runtime after Bash exits.
 os_open() { win_bridge open "$1"; }

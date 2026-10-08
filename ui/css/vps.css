@@ -150,3 +150,25 @@ dialog.dlg:has(.vps){align-items:stretch}
 }
 
 .vps-table .tbl{min-width:850px}.vps-table td{vertical-align:top}.vps-table .vps-chips{display:flex;flex-wrap:wrap;gap:4px;max-width:240px}.vps-table .c-act{white-space:nowrap}
+
+/* ===== 部署完成但验证没通过: 当前状态 / 原因 / 处理办法; 待验证的部署 ===== */
+.vps-err-lead{margin:0;overflow-wrap:anywhere}
+.vps-vf>*+*{margin-top:10px}
+.vps-vf-st{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--surface2)}
+.vps-vf-list{list-style:none;margin:0;padding:0;display:grid;gap:5px}
+.vps-vf-list li{display:flex;align-items:flex-start;gap:8px;font-size:13.5px;line-height:1.45;overflow-wrap:anywhere}
+.vps-vf-list li .ci{flex:none;margin-top:2px;color:var(--muted)}
+.vps-vf-list li.is-ok .ci{color:var(--ok)}
+.vps-vf-list li.is-bad .ci{color:var(--err)}
+.vps-vf-steps code,.vps-vf-st code{padding:1px 5px;border-radius:5px;background:var(--surface);border:1px solid var(--line);font-size:12.5px;word-break:break-all}
+.vps-pend{border-color:var(--warn);background:var(--warn-bg)}
+.vps-pend-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.vps-pl{margin:0 0 12px;padding:10px 12px;border:1px solid var(--warn);border-radius:10px;background:var(--warn-bg)}
+.vps-pl-h{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin-bottom:6px}
+.vps-pl-h .ci{flex:none;color:var(--warn)}
+.vps-pl-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 12px;padding:8px 0;border-top:1px solid var(--line)}
+.vps-pl-row:first-of-type{border-top:0}
+.vps-pl-main{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;min-width:0}
+.vps-pl-main .vps-chips{display:flex;flex-wrap:wrap;gap:4px}
+.vps-pl-acts{display:flex;gap:8px;flex:none}
+@media (max-width:700px){.vps-pl-acts{width:100%}}

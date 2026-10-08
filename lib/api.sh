@@ -383,6 +383,21 @@ ep_vps_redetect() {
   [ -n "$F_HOSTKEY" ] || F_HOSTKEY=$(vps_rec_field "$id" hostkey)
   vps_launch vps-redetect '连接服务器|检测系统与环境|生成配置与密钥|开放端口并启动|验证连通|保存到本机' '' pin 0 "$id" 0
 }
+ep_vps_verify() { # 部署完成但验证没通过的节点: 只在本机重新验证 (不 SSH、不部署、不需要任何凭据)
+  local pid id; pid=$(fp id)
+  vps_pending_id_ok "$pid" || fail "待验证的部署编号无效" E_INVALID
+  [ -f "$(vps_pending_file "$pid")" ] || fail "找不到这次部署的记录 (可能已经放弃、已经添加, 或超过 7 天被清理了)" E_NOT_FOUND
+  id=$(job_new vps-verify '读取部署记录|检查端口|验证连通|识别出口 IP|保存到本机')
+  job_launch vps-verify "$id" "$pid"
+  okj "\"job\":\"$id\""
+}
+ep_vps_pending_discard() {
+  local pid; pid=$(fp id)
+  vps_pending_id_ok "$pid" || fail "待验证的部署编号无效" E_INVALID
+  [ -f "$(vps_pending_file "$pid")" ] || fail "找不到这次部署的记录 (可能已经放弃、已经添加, 或超过 7 天被清理了)" E_NOT_FOUND
+  vps_pending_delete "$pid"
+  oplog dashboard "放弃待验证的部署" "$(kv id "$pid")" ok; okj
+}
 ep_vps_forget() {
   local id; id=$(fp id); case $id in v-[0-9a-f]*) ;; *) fail "服务器编号无效" ;; esac
   vps_forget "$id" || fail "找不到这台服务器的记录" E_NOT_FOUND
@@ -832,6 +847,9 @@ case "$method $path" in
   "POST /api/vps/cancel")      ep_vps_cancel ;;
   "POST /api/vps/provision")   ep_vps_provision ;;
   "POST /api/vps/redetect")    ep_vps_redetect ;;
+  "POST /api/vps/verify")      ep_vps_verify ;;
+  "GET /api/vps/pending")      json "{\"ok\":true,\"pending\":[$(vps_pending_json)]}" ;;
+  "POST /api/vps/pending/discard") ep_vps_pending_discard ;;
   "POST /api/vps/forget")      ep_vps_forget ;;
   "GET /api/vps")              json "{\"ok\":true,\"vps\":[$(vps_json)]}" ;;
   "GET /api/sync")             json "{\"ok\":true,$(sync_state_json)}" ;;

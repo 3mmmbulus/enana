@@ -222,6 +222,7 @@ const S = {
   'e.vpsUser': ['用户名不正确', 'The user name is not valid.'], 'e.vpsMode': ['登录方式只能是 password 或 key', 'The login mode must be password or key.'], 'e.vpsPassword': ['请填写 SSH 密码', 'Enter the SSH password.'],
   'e.vpsKey': ['请粘贴私钥全文 (以 -----BEGIN 开头)', 'Paste the full private key (starting with -----BEGIN).'], 'e.vpsHostkey': ['缺少主机指纹: 请先探测并确认指纹', 'The host key fingerprint is missing: probe the server and confirm it first.'],
   'e.vpsName': ['节点名称只能包含字母、数字、. _ - (最多 40 个字符)', 'The name may only contain letters, digits, . _ - (up to 40 characters).'], 'e.vpsRole': ['角色只能是 pin 或 auto', 'The role must be pin or auto.'],
+  'e.vpsPendId': ['待验证的部署编号无效', 'The pending-deployment ID is invalid.'], 'e.noVpsPend': ['找不到这次部署的记录 (可能已经放弃、已经添加, 或超过 7 天被清理了)', 'This deployment record was not found (it may have been discarded, already added, or cleaned up after 7 days).'],
   'e.noVps': ['找不到这条服务器记录', 'Server record not found.'], 'e.vpsId': ['缺少服务器记录的 id', 'The server record id is missing.'],
   'vps.noteFull': ['{os} 受支持', '{os} is supported'], 'vps.noteBest': ['{os} 已停止维护, 软件源可能失效, 将尽力安装; 失败时请先升级系统。', '{os} is end-of-life and its package sources may be broken. Installation is best-effort; upgrade the system first if it fails.'],
   'vps.noteNo': ['不支持的系统: {os}。目前支持 Debian 11 / 12 / 13 与 Ubuntu 20.04 / 22.04 / 24.04。', 'Unsupported system: {os}. Debian 11 / 12 / 13 and Ubuntu 20.04 / 22.04 / 24.04 are supported.'],
@@ -231,7 +232,7 @@ const S = {
   'e.netBusy': ['测速任务正在使用线路, 请稍后重试', 'A speed test is using the routes. Please try again shortly.'], 'e.badNet': ['未知的 IP 检测场景', 'Unknown IP check scenario.'],
   /* 新增: 步骤验证 (sudo) / 密码修改 / 偏好 / 凭据显示 / 套餐 (文案与 lib/*.sh + data/i18n/en.tsv 里真实辅助服务的保持一致) */
   'err.E_SUDO_REQUIRED': ['此操作需要再次输入登录密码', 'This action needs your sign-in password again'],
-  'err.E_VPS_VERIFY': ['部署完成了, 但从这台电脑连不上新节点: 多半是云服务商的安全组 / 防火墙没有放行端口 {port}/tcp, 放行后点「重新验证」', 'The deployment finished, but this computer cannot reach the new node: most likely the cloud provider\'s security group / firewall does not allow port {port}/tcp. Open it, then click "Verify again".'],
+  'err.E_VPS_VERIFY': ['部署完成了, 但新节点没有通过验证 (TCP {port}): 服务在监听, 没有发现服务器自己的防火墙拦截, 多半是云服务商的安全组 / 网络 ACL 没有放行这个端口; 放行或修复后点「重新验证」', 'Deployment finished, but the new nodes did not pass verification (TCP {port}): the service is listening and no firewall on the server itself was found blocking it, so most likely the cloud provider\'s security group / network ACL does not allow this port; once it is open or fixed, click "Verify again".'],
   'e.pwEmpty': ['请输入登录密码', 'Enter your sign-in password'], 'e.pwWrong': ['密码不正确', 'Incorrect password'], 'e.pwWrongCur': ['当前密码不正确', 'The current password is incorrect'],
   'e.pwWeakNew': ['新密码至少 8 位, 并且不能和旧密码相同', 'The new password must be at least 8 characters and different from the old one'],
   'e.pwOffline': ['连不上 enana.cc, 修改密码必须在线 (离线登录时不能修改)。请检查网络后重试', 'Cannot reach enana.cc; changing the password requires being online (not possible after an offline sign-in). Check your network and retry'],
@@ -292,11 +293,11 @@ const S = {
   'jd.toggle': ['规则集设置已应用', 'Rule set setting applied'], 'jd.customAdd': ['自定义规则集已添加', 'Custom rule set added'], 'jd.customDel': ['自定义规则集已删除', 'Custom rule set removed'],
   'js.sshConnect': ['连接服务器', 'Connect to the server'], 'js.sshDetect': ['检测系统与环境', 'Detect the system and environment'], 'js.sshEnv': ['检测依赖与防火墙', 'Check dependencies and firewall'],
   'js.sshDeps': ['安装依赖', 'Install dependencies'], 'js.sshServer': ['安装服务端', 'Install the server software'], 'js.sshConfig': ['生成配置与密钥', 'Generate the config and keys'],
-  'js.sshStart': ['开放端口并启动', 'Open the port and start'], 'js.sshVerify': ['验证连通', 'Verify the connection'], 'js.sshIps': ['识别出口 IP', 'Detect the exit IPs'], 'js.sshSave': ['保存到本机', 'Save to this computer'],
+  'js.sshStart': ['开放端口并启动', 'Open the port and start'], 'js.sshVerify': ['验证连通', 'Verify the connection'], 'js.vpsRead': ['读取部署记录', 'Read the deployment record'], 'js.vpsPort': ['检查端口', 'Check the port'], 'js.sshIps': ['识别出口 IP', 'Detect the exit IPs'], 'js.sshSave': ['保存到本机', 'Save to this computer'],
   'js.syncCollect': ['收集本机配置', 'Collect the local settings'], 'js.syncEncrypt': ['加密', 'Encrypt'], 'js.syncUpload': ['上传到 enana.cc', 'Upload to enana.cc'],
   'js.syncDownload': ['下载云端数据', 'Download the cloud data'], 'js.syncDecrypt': ['解密', 'Decrypt'], 'js.syncValidate': ['校验', 'Validate'], 'js.syncApply': ['应用到本机', 'Apply to this computer'],
   'jd.vpsProbe': ['检测完成', 'Detection finished'], 'jd.vpsProvision': ['服务器已部署, 已添加 {n} 个节点', 'The server is deployed and {n} node(s) were added'],
-  'jd.vpsRedetect': ['已重新识别出口 IP (新增 {n} 个节点)', 'Exit IPs re-detected ({n} new node(s))'], 'jd.syncPush': ['已上传到云端 (版本 {v})', 'Uploaded to the cloud (version {v})'],
+  'jd.vpsVerify': ['验证通过, 已添加 {n} 个节点', 'Verified, {n} node(s) were added'], 'jd.vpsRedetect': ['已重新识别出口 IP (新增 {n} 个节点)', 'Exit IPs re-detected ({n} new node(s))'], 'jd.syncPush': ['已上传到云端 (版本 {v})', 'Uploaded to the cloud (version {v})'],
   'jd.syncPull': ['已从云端同步 (版本 {v})', 'Synced from the cloud (version {v})'],
   'jd.restart': ['服务已重启', 'Service restarted'], 'jd.sysproxy': ['系统代理已指向 enana', 'The system proxy now points to enana'], 'jd.sysproxyCancel': ['已取消授权, 系统代理没有改动。需要时再点一次「开启系统代理」。', 'Authorization cancelled; the system proxy was not changed. Try again whenever you like.'], 'jd.rules': ['规则集已更新 ({n} 个有变化, 0 个失败)', 'Rule sets updated ({n} changed, 0 failed)'], 'jd.net': ['已更新', 'Updated'],
   'jd.updApp': ['已更新到 {v}, 辅助服务已重启', 'Updated to {v}; the helper service was restarted.'], 'jd.updCore': ['核心已更新到 {v}', 'Core updated to {v}.'],
@@ -577,7 +578,7 @@ function reset(mode) {
   M.rulesUpdated = first ? 0 : t - 2 * 86400;
   M.rs = RULESETS.map((r) => { const present = (r.essential || r.def) && !(first && (r.tag === 'geosite-cn' || r.tag === 'geosite-ai')); return { tag: r.tag, enabled: r.essential || r.def, present, bytes: present ? ruleSize(r.tag) : 0, updated: present ? (M.rulesUpdated || t - 3 * 86400) - hash(r.tag) % 3600 : 0 }; });
   M.dns = { cn: 'alidns', cn_custom: '', global: 'cloudflare', global_custom: '', via: 'Global', strategy: 'prefer_ipv4', leak_guard: true, ads_block: false };
-  M.vps = []; M.sync = syncInit(first); M.autoUpdate = true;
+  M.vps = []; M.vpsPending = []; M.sync = syncInit(first); M.autoUpdate = true;
   M.devices = seedDevices(); M.notice = null; if (account) setThisOnline(account, true);                // 重置不会把已登录的浏览器踢下线
   M.L = genLogs();
 }
@@ -758,7 +759,7 @@ function genLogs() {
 }
 /* 会改动「同步内容」的操作码: 记录后本机的 sync.local.dirty = true */
 const DIRTY = { 'servers.import': 1, 'servers.delete': 1, 'servers.role': 1, 'sub.save': 1, 'sub.delete': 1, 'sub.refresh': 1, 'override.set': 1, 'override.delete': 1, 'apps.adopt': 1, 'apps.ack': 1, 'dns.set': 1, 'rules.toggle': 1,
-  'rules.custom.add': 1, 'rules.custom.delete': 1, 'settings.set': 1, 'vps.provision': 1, 'vps.forget': 1, 'vps.redetect': 1, 'sites.domain': 1, 'sites.reset': 1, 'apps.custom.add': 1, 'apps.custom.delete': 1, 'dns.hosts': 1, 'dns.hosts.reset': 1 };
+  'rules.custom.add': 1, 'rules.custom.delete': 1, 'settings.set': 1, 'vps.provision': 1, 'vps.forget': 1, 'vps.redetect': 1, 'vps.verify': 1, 'vps.discard': 1, 'sites.domain': 1, 'sites.reset': 1, 'apps.custom.add': 1, 'apps.custom.delete': 1, 'dns.hosts': 1, 'dns.hosts.reset': 1 };
 function oplog(who, action, detail, result) {
   if (!M.logOps) return;
   oplogForce(who, action, detail, result);
@@ -2024,6 +2025,11 @@ function vpsCreds(c, needHostkey) {
   if (needHostkey && !hostkey) throw E('E_INVALID', 'e.vpsHostkey');
   return { host, port, user, mode, hostkey, wrongPass: mode === 'password' && pw === 'wrong-pass', hasSudo: String(c.form.sudo_password || '').length > 0, last: m ? +m[1] : -1 };
 }
+const VPS_ALT_PORT = 2053;                                                                       // .70: 默认端口被占用时云端脚本选的端口 (界面不应该假设 443)
+const vpsPendId = (host, port) => 'p-' + crypto.createHash('sha1').update(host + ':' + port).digest('hex').slice(0, 6);
+const vpsPendView = (x) => ({ id: x.id, name: x.name, host: x.host, ssh_port: x.ssh_port, user: x.user, os: x.os, ports: [x.port], ips: x.ips.slice(), nodes: x.ips.length, created: x.created, updated: x.updated, tries: x.tries, reason: x.reason });
+/* 验证没通过的结构化结果 (和 lib/vps.sh 的 vps_verify_extra 一致): 原因 / 实际端口 / 本机 TCP 结果 / 服务器端证据 */
+const vpsVerifyFailResult = (x) => ({ code: 'E_VPS_VERIFY', pending: x.id, reason: 'blocked_cloud', port: x.port, ports: [x.port], host: x.host, tcp: 'timeout', remote: { checked: true, listening: true, firewall: 'ufw_inactive' }, nodes: x.ips.length, failed: x.ips.length });
 /* 探测的结果 (语言无关的部分); support_note 在每次查询任务时按 X-Enana-Lang 翻译 */
 function vpsData(cr) {
   const host = cr.host, last = cr.last, pub = pubIp(host);
@@ -2033,14 +2039,18 @@ function vpsData(cr) {
   else if (last === 50) { os = { id: 'centos', version: '7', codename: '', pretty: 'CentOS Linux 7 (Core)' }; support = 'no'; have = [true, true, true]; fw = 'none'; }
   else if (last === 51) { os = { id: 'debian', version: '10', codename: 'buster', pretty: 'Debian GNU/Linux 10 (buster)' }; support = 'best_effort'; have = [true, true, false]; fw = 'ufw_inactive'; }
   const deps = VPS_DEPS.map((d, i) => (have[i] ? { name: d[0], installed: true, version: d[1] } : { name: d[0], installed: false })), missing = deps.filter((d) => !d.installed).map((d) => d.name);
+  let plan = null;
+  if (last === 70) { listening = [22, 80, 443, 2019]; sb = { installed: true, version: BASE_CORE }; plan = { port: VPS_ALT_PORT, reason: 'default_busy' }; }          // 443 已被占用: 云端脚本改用另一个端口 (不碰占用它的服务)
+  const pend = (M.vpsPending || []).filter((x) => x.host === host && x.ssh_port === cr.port)[0];
+  if (pend) node = { installed: true };
   let ips = [{ local: localIp(pub), public: pub, v: 4 }], ipv6 = [];
   if (last === 31) { ips = [{ local: '10.0.0.31', public: '198.51.100.31', v: 4 }, { local: '10.0.0.32', public: '198.51.100.32', v: 4 }]; ipv6 = ['2001:db8::31']; }     // 两个公网 IPv4 (NAT 式内网地址) + 一个 IPv6
   return { host, port: cr.port, user: cr.user, hostkey: fingerprint(host), hostkey_changed: last === 40, os, arch, supported: support !== 'no', support, privilege: last === 65 ? 'sudo_password' : (cr.user === 'root' ? 'root' : 'sudo_nopass'),
-    init: 'systemd', deps, missing, all_missing: missing.length === deps.length, singbox: sb, node, firewall: fw, listening, ips, ipv6 };
+    init: 'systemd', deps, missing, all_missing: missing.length === deps.length, singbox: sb, node, firewall: fw, listening, ips, ipv6, plan, pending: pend ? vpsPendView(pend) : null };
 }
 const probeResult = (r, lang) => ({ host: r.host, port: r.port, user: r.user, hostkey: r.hostkey, hostkey_changed: r.hostkey_changed, os: r.os, arch: r.arch, supported: r.supported, support: r.support,
   support_note: tr(lang, r.support === 'full' ? 'vps.noteFull' : r.support === 'best_effort' ? 'vps.noteBest' : 'vps.noteNo', { os: r.os.pretty }), privilege: r.privilege, init: r.init, deps: r.deps, missing: r.missing,
-  all_missing: r.all_missing, singbox: r.singbox, node: r.node, firewall: r.firewall, listening: r.listening, ips: r.ips, ipv6: r.ipv6 });
+  all_missing: r.all_missing, singbox: r.singbox, node: r.node, firewall: r.firewall, listening: r.listening, ips: r.ips, ipv6: r.ipv6, pending: r.pending || null, plan: r.plan || null });
 /* 先判「连不上 / 认证 / 指纹 / 权限」这些会让任务失败的场景: {err:{code, ms (多久后失败), step (失败在第几步)}}, 否则 {res: 探测结果} */
 function vpsPlan(cr) {
   const last = cr.last, err = (code, ms, step) => ({ err: { code, ms, step } });
@@ -2057,7 +2067,7 @@ const PROV_STEPS = ['js.sshConnect', 'js.sshDetect', 'js.sshDeps', 'js.sshServer
 /* 失败的任务: state=error, msg 已翻译, 失败的那一步标 error, result:{code} 且顶层也带 code */
 function vpsErrJob(name, steps, e, action, detail) {
   const at = (e.step + 0.5) / steps.length;
-  return newJob(name, steps, e.ms / at, { outage: false, fail: true, failAt: at, code: e.code, failMsg: e.msg || ('err.' + e.code), failVars: e.vars, failResult: e.result, rollback: () => oplog('dashboard', action, kv(Object.assign({}, detail, { code: e.code })), 'error') });
+  return newJob(name, steps, e.ms / at, { outage: false, fail: true, failAt: at, code: e.code, failMsg: e.msg || ('err.' + e.code), failVars: e.vars, failResult: e.result, rollback: () => { if (e.onFail) e.onFail(); oplog('dashboard', action, kv(Object.assign({}, detail, { code: e.code })), 'error'); } });
 }
 function vpsProbeJob(plan, detail) {
   if (plan.err) return { ok: true, job: vpsErrJob('vps-probe', PROBE_STEPS, plan.err, 'vps.probe', detail) };
@@ -2070,14 +2080,18 @@ function vpsProvisionJob(plan, o) {
   if (!e) {
     if (!plan.res.supported) e = { code: 'E_VPS_UNSUPPORTED', ms: 3500, step: 1 };
     else if (!o.installDeps && plan.res.missing.length) e = { code: 'E_VPS_DEPS', ms: 4500, step: 2 };
-    else if (o.last === 70 && !M.vpsOpen) e = { code: 'E_VPS_VERIFY', ms: 9000, step: 6, vars: { port: 443 }, result: { port: 443 } };       // 云厂商安全组没放行 443: 失败在「验证连通」; ctl vpsport=open 之后同一台就能成功 (测「放行端口后重新验证」)
+    else if (o.last === 70 && !M.vpsOpen) {                                       // 云厂商安全组没放行节点端口 (2053): 失败在「验证连通」, 但服务器上已经部署好 → 留下「待验证的部署」; ctl vpsport=open 之后「重新验证」或再部署都能成功
+      const ips = plan.res.ips.map((x) => x.public), pend = { id: vpsPendId(o.host, o.port), name: o.name, host: o.host, ssh_port: o.port, user: o.user, os: plan.res.os.pretty, port: VPS_ALT_PORT, ips, role: o.role, created: sec(), updated: sec(), tries: 1, reason: 'blocked_cloud' };
+      e = { code: 'E_VPS_VERIFY', ms: 9000, step: 6, vars: { port: VPS_ALT_PORT }, result: vpsVerifyFailResult(pend), onFail: () => { M.vpsPending = (M.vpsPending || []).filter((x) => x.id !== pend.id); M.vpsPending.push(pend); } };
+    }
   }
   if (e) return { ok: true, job: vpsErrJob('vps-provision', PROV_STEPS, e, 'vps.provision', detail) };
   const res = plan.res, ips = res.ips.map((x) => x.public), id = vpsId(o.host, o.port);       // 每个公网 IPv4 出口一个节点 (VLESS + Reality)
   return { ok: true, job: newJob('vps-provision', PROV_STEPS, rnd(10000, 14000), { outFrac: 0.88, msg: 'jd.vpsProvision', rollback: () => oplog('dashboard', 'vps.provision', kv(detail), 'error'),
     done: () => {
-      const nodes = ips.map((ip) => ({ tag: o.name + '-' + ip, server: ip, port: 443, type: 'vless', egress: ip }));
-      nodes.forEach((n) => { M.servers = M.servers.filter((x) => x.tag !== n.tag); M.servers.push({ tag: n.tag, type: 'vless', server: n.server, port: 443, role: o.role, sub: '' }); });
+      const port = o.last === 70 ? VPS_ALT_PORT : 443, nodes = ips.map((ip) => ({ tag: o.name + '-' + ip, server: ip, port, type: 'vless', egress: ip, verified: true }));
+      M.vpsPending = (M.vpsPending || []).filter((x) => !(x.host === o.host && x.ssh_port === o.port));
+      nodes.forEach((n) => { M.servers = M.servers.filter((x) => x.tag !== n.tag); M.servers.push({ tag: n.tag, type: 'vless', server: n.server, port, role: o.role, sub: '' }); });
       applyNow();
       const row = { id, name: o.name, host: o.host, ssh_port: o.port, user: o.user, os: res.os.pretty, hostkey: fingerprint(o.host), ips: ips.slice(), nodes: nodes.map((n) => n.tag), updated: sec() }, old = M.vps.filter((v) => v.id === id)[0];
       if (old) Object.assign(old, row); else M.vps.push(Object.assign(row, { extra: false }));
@@ -2109,6 +2123,28 @@ route('POST', '/api/vps/provision', (c) => {
   return vpsProvisionJob(vpsPlan(cr), { host: cr.host, port: cr.port, user: cr.user, name, role, installDeps: deps === '1', last: cr.last });
 });
 route('GET', '/api/vps', () => ({ ok: true, vps: M.vps.map((v) => ({ id: v.id, name: v.name, host: v.host, ssh_port: v.ssh_port, user: v.user, os: v.os, hostkey: v.hostkey, ips: v.ips, nodes: v.nodes, updated: v.updated })) }));
+route('GET', '/api/vps/pending', () => ({ ok: true, pending: (M.vpsPending || []).map(vpsPendView) }));
+route('POST', '/api/vps/pending/discard', (c) => {
+  const id = c.p('id'); if (!/^p-[0-9a-f]{6}$/.test(id)) throw E('E_INVALID', 'e.vpsPendId');
+  const x = (M.vpsPending || []).filter((y) => y.id === id)[0]; if (!x) throw E('E_NOT_FOUND', 'e.noVpsPend');
+  M.vpsPending = M.vpsPending.filter((y) => y !== x); oplog('dashboard', 'vps.discard', kv({ id })); return { ok: true };
+});
+route('POST', '/api/vps/verify', (c) => {                                                       // 只在本机重新验证: 没有凭据、不 SSH、不重新部署
+  const id = c.p('id'); if (!/^p-[0-9a-f]{6}$/.test(id)) throw E('E_INVALID', 'e.vpsPendId');
+  const x = (M.vpsPending || []).filter((y) => y.id === id)[0]; if (!x) throw E('E_NOT_FOUND', 'e.noVpsPend');
+  const steps = ['js.vpsRead', 'js.vpsPort', 'js.sshVerify', 'js.sshIps', 'js.sshSave'], detail = { id, host: x.host };
+  if (!M.vpsOpen) { x.tries++; x.updated = sec(); return { ok: true, job: vpsErrJob('vps-verify', steps, { code: 'E_VPS_VERIFY', ms: 4000, step: 2, vars: { port: x.port }, result: vpsVerifyFailResult(x) }, 'vps.verify', detail) }; }
+  return { ok: true, job: newJob('vps-verify', steps, rnd(3000, 4500), { outage: false, msg: 'jd.vpsVerify', rollback: () => oplog('dashboard', 'vps.verify', kv(detail), 'error'),
+    done: () => {
+      const nodes = x.ips.map((ip) => ({ tag: x.name + '-' + ip, server: ip, port: x.port, type: 'vless', egress: ip, verified: true }));
+      nodes.forEach((n) => { M.servers = M.servers.filter((y) => y.tag !== n.tag); M.servers.push({ tag: n.tag, type: 'vless', server: n.server, port: n.port, role: x.role || 'pin', sub: '' }); });
+      applyNow();
+      const row = { id: vpsId(x.host, x.ssh_port), name: x.name, host: x.host, ssh_port: x.ssh_port, user: x.user, os: x.os, hostkey: fingerprint(x.host), ips: x.ips.slice(), nodes: nodes.map((n) => n.tag), updated: sec() }, old = M.vps.filter((v) => v.id === row.id)[0];
+      if (old) Object.assign(old, row); else M.vps.push(Object.assign(row, { extra: false }));
+      M.vpsPending = M.vpsPending.filter((y) => y !== x); oplog('dashboard', 'vps.verify', kv(detail));
+      return { vars: { n: nodes.length }, result: { nodes, ips: x.ips.slice(), vps: row.id, added: nodes.length, unchanged: 0, updated: 0 } };
+    } }) };
+});
 route('POST', '/api/vps/forget', (c) => {
   const id = c.p('id'); if (!id) throw E('E_INVALID', 'e.vpsId');
   const v = M.vps.filter((x) => x.id === id)[0]; if (!v) throw E('E_NOT_FOUND', 'e.noVps');
@@ -2427,7 +2463,7 @@ async function mockCtl(req, res, u) {
     const t = now(); M.clashWins.push([t + D(150), t + D(150 + 2500)]);
   }
   if (q.has('notice')) M.notice = g('notice') ? { text: g('notice').slice(0, 300) } : null;
-  sw('vps', ['reset'], () => { M.vps = []; });
+  sw('vps', ['reset'], () => { M.vps = []; M.vpsPending = []; });
   sw('vpsport', ['open', 'closed'], (v) => { M.vpsOpen = v === 'open'; });                     // 203.0.113.70 部署: closed (默认) = 验证连通失败 E_VPS_VERIFY, open = 成功
   sw('plan', ['soon', 'free', 'pro', 'expired'], (v) => { M.plan = v; applyPlan(); });          // 套餐: soon (默认, 官方线路即将推出) / free / pro (多出 2 个官方节点) / expired
   if (q.has('prefs')) {                                                    // prefs=reset: 清空 (version 0); prefs=bump: 模拟另一台设备同步来的改动 (version + 1, 并写入 "ui.fromOtherDevice": true)
@@ -2533,7 +2569,7 @@ const listenOn = (srv, port) => new Promise((ok, bad) => { const onErr = (e) => 
 /* ===================== 11. 自测: node tools/mock-server.js --selftest (在 18090-18099 里找空闲端口, 时间加速, 失败则退出码非 0) ===================== */
 const OPS_CODES = ['rules.reset', 'rules.reset.undo', 'policy.switch', 'conns.kill', 'logs.bundle', 'autosite.add', 'autosite.clear', 'apps.found', 'login', 'login.fail', 'logout', 'proxy.on', 'proxy.off', 'proxy.mode', 'override.set', 'override.delete', 'apps.scan', 'apps.adopt', 'apps.ack', 'servers.import', 'servers.delete', 'servers.role', 'sub.save', 'sub.delete',
   'sub.refresh', 'rules.update', 'rules.toggle', 'rules.custom.add', 'rules.custom.delete', 'dns.set', 'dns.test', 'settings.set', 'logs.clear', 'update.apply', 'restart', 'install', 'upgrade', 'uninstall', 'start', 'stop',
-  'net.refresh', 'speedtest.start', 'speedtest.stop', 'vps.probe', 'vps.provision', 'vps.forget', 'vps.redetect', 'sync.settings', 'sync.push', 'sync.pull', 'sync.clear', 'devices.kick',
+  'net.refresh', 'speedtest.start', 'speedtest.stop', 'vps.probe', 'vps.provision', 'vps.forget', 'vps.redetect', 'vps.verify', 'vps.discard', 'sync.settings', 'sync.push', 'sync.pull', 'sync.clear', 'devices.kick',
   'auth.verify', 'secret.view', 'backup.export', 'password.change', 'sites.domain', 'sites.reset', 'apps.custom.add', 'apps.custom.delete', 'speed.target', 'speed.targets.reset', 'dns.hosts', 'dns.hosts.reset', 'dns.bench'];
 async function selftest() {
   let srv = null, helperSrv = null;
@@ -3000,7 +3036,7 @@ async function selftest() {
   ck('vps/probe: invalid host / port / user / mode / missing password / key without -----BEGIN -> synchronous E_INVALID', r.every((x) => jx(x).code === 'E_INVALID' && !jx(x).job));
   let pr = await probe('203.0.113.10', {}, 'en'), res = pr.job.result;
   ck('vps/probe default host: job done with EXACTLY the documented result keys (Debian 12 amd64, root, ca-certificates + iproute2 missing, ufw_active, one public IP = the host)', pr.job.state === 'done' && pr.job.steps.length >= 3 && pr.job.steps[0].label === 'Connect to the server'
-    && Object.keys(res).sort().join() === ['all_missing', 'arch', 'deps', 'firewall', 'host', 'hostkey', 'hostkey_changed', 'init', 'ips', 'ipv6', 'listening', 'missing', 'node', 'os', 'port', 'privilege', 'singbox', 'support', 'support_note', 'supported', 'user'].join()
+    && Object.keys(res).sort().join() === ['all_missing', 'arch', 'deps', 'firewall', 'host', 'hostkey', 'hostkey_changed', 'init', 'ips', 'ipv6', 'listening', 'missing', 'node', 'os', 'pending', 'plan', 'port', 'privilege', 'singbox', 'support', 'support_note', 'supported', 'user'].join()
     && res.os.id === 'debian' && res.os.version === '12' && res.os.codename === 'bookworm' && res.arch === 'amd64' && res.supported === true && res.support === 'full' && res.privilege === 'root' && res.init === 'systemd' && res.deps[0].installed === true && !!res.deps[0].version
     && res.missing.join() === 'ca-certificates,iproute2' && res.all_missing === false && res.singbox.installed === false && res.node.installed === false && res.firewall === 'ufw_active' && res.ips.length === 1 && res.ips[0].public === '203.0.113.10' && res.ips[0].v === 4 && res.ipv6.length === 0
     && /^SHA256:[A-Za-z0-9+\/]{43}$/.test(res.hostkey) && res.hostkey_changed === false, pr.job);
@@ -3024,12 +3060,12 @@ async function selftest() {
   r = await api('POST', '/api/vps/provision', { form: vcred('203.0.113.10', { hostkey: fp10, role: 'boss' }) }); ck('vps/provision: role must be pin|auto -> E_INVALID', jx(r).code === 'E_INVALID');
   const e1 = (await prov('203.0.113.10', { install_deps: '0' })).job, e2 = (await prov('203.0.113.50', {})).job, e3 = (await prov('203.0.113.70', {}, 'en')).job, e4 = (await prov('203.0.113.10', { hostkey: 'SHA256:other' })).job;
   ck('vps/provision failures: install_deps=0 with missing deps -> E_VPS_DEPS; unsupported OS -> E_VPS_UNSUPPORTED; .70 fails at 验证连通 (E_VPS_VERIFY, security-group hint, 9 steps, step 7 error); wrong hostkey -> E_SSH_HOSTKEY', e1.state === 'error' && e1.code === 'E_VPS_DEPS'
-    && e2.state === 'error' && e2.code === 'E_VPS_UNSUPPORTED' && e3.state === 'error' && e3.code === 'E_VPS_VERIFY' && e3.result.code === 'E_VPS_VERIFY' && e3.result.port === 443 && /does not allow port 443\/tcp/.test(e3.msg) && e3.steps.length === 9 && e3.steps[6].state === 'error' && e3.steps.slice(0, 6).every((x) => x.state === 'done') && e3.steps.slice(7).every((x) => x.state === 'todo')
+    && e2.state === 'error' && e2.code === 'E_VPS_UNSUPPORTED' && e3.state === 'error' && e3.code === 'E_VPS_VERIFY' && e3.result.code === 'E_VPS_VERIFY' && e3.result.port === 2053 && e3.result.pending && /^p-[0-9a-f]{6}$/.test(e3.result.pending) && e3.result.reason === 'blocked_cloud' && e3.result.ports[0] === 2053 && /\(TCP 2053\)/.test(e3.msg) && !/443/.test(e3.msg) && e3.steps.length === 9 && e3.steps[6].state === 'error' && e3.steps.slice(0, 6).every((x) => x.state === 'done') && e3.steps.slice(7).every((x) => x.state === 'todo')
     && e3.steps[6].label === 'Verify the connection' && e4.code === 'E_SSH_HOSTKEY', [e1.code, e2.code, e3.code, e4.code]);
   r = await api('GET', '/api/vps'); ck('vps: nothing is recorded by probes or failed provisioning', jx(r).ok === true && jx(r).vps.length === 0);
   const nBefore = jx(await api('GET', '/api/state')).servers.length; let pv = await prov('203.0.113.10', {}, 'en'); const pj = pv.job, st1 = jx(await api('GET', '/api/state')), vl = jx(await api('GET', '/api/vps')).vps;
-  ck('vps/provision happy path: 9 translated steps, result {nodes[{tag,server,port:443,type:vless,egress}], ips, vps}, VLESS node added with the chosen role', pj.state === 'done' && pj.steps.length === 9 && pj.steps.every((x) => x.state === 'done') && pj.result.nodes.length === 1
-    && JSON.stringify(pj.result.nodes[0]) === JSON.stringify({ tag: 'my-vps-203.0.113.10', server: '203.0.113.10', port: 443, type: 'vless', egress: '203.0.113.10' }) && pj.result.ips.join() === '203.0.113.10' && /^vps_[0-9a-f]{8}$/.test(pj.result.vps)
+  ck('vps/provision happy path: 9 translated steps, result {nodes[{tag,server,port:443,type:vless,egress,verified}], ips, vps}, VLESS node added with the chosen role', pj.state === 'done' && pj.steps.length === 9 && pj.steps.every((x) => x.state === 'done') && pj.result.nodes.length === 1
+    && JSON.stringify(pj.result.nodes[0]) === JSON.stringify({ tag: 'my-vps-203.0.113.10', server: '203.0.113.10', port: 443, type: 'vless', egress: '203.0.113.10', verified: true }) && pj.result.ips.join() === '203.0.113.10' && /^vps_[0-9a-f]{8}$/.test(pj.result.vps)
     && st1.servers.length === nBefore + 1 && st1.servers.filter((x) => x.tag === 'my-vps-203.0.113.10')[0].type === 'vless' && st1.servers.filter((x) => x.tag === 'my-vps-203.0.113.10')[0].role === 'pin', pj);
   ck('vps: GET /api/vps lists the record (id, name, host, ssh_port, user, os, hostkey, ips, nodes, updated) and nothing secret', vl.length === 1 && Object.keys(vl[0]).sort().join() === ['host', 'hostkey', 'id', 'ips', 'name', 'nodes', 'os', 'ssh_port', 'updated', 'user'].join() && vl[0].hostkey === fingerprint('203.0.113.10') && vl[0].id === pj.result.vps && vl[0].ssh_port === 22 && vl[0].user === 'root'
     && /Debian/.test(vl[0].os) && vl[0].nodes.join() === 'my-vps-203.0.113.10' && vl[0].ips.join() === '203.0.113.10' && vl[0].updated > 0);
@@ -3400,7 +3436,20 @@ async function selftest() {
     FAST = 80; const vc = (host, extra) => Object.assign({ host, port: '22', user: 'root', mode: 'password', password: 'S3cretPw-xyz', hostkey: fingerprint(host) }, extra);
     const vprov = async (form, lang) => { const x = await api('POST', '/api/vps/provision', { form, lang }); return jx(x).job ? waitJob(jx(x).job, lang) : { state: 'nojob', start: jx(x) }; };
     let v1 = await vprov(vc('203.0.113.70'), 'en');
-    ck('vps: the magic host .70 fails at the verify step with E_VPS_VERIFY (job code + result.code + result.port, translated hint to allow the port, step 7 marked)', v1.state === 'error' && v1.code === 'E_VPS_VERIFY' && v1.result.code === 'E_VPS_VERIFY' && v1.result.port === 443 && /does not allow port 443\/tcp/.test(v1.msg) && v1.steps[6].state === 'error' && v1.steps.length === 9, v1);
+    ck('vps: the magic host .70 fails at the verify step with E_VPS_VERIFY (job code + result.code + result.port, translated hint to allow the port, step 7 marked)', v1.state === 'error' && v1.code === 'E_VPS_VERIFY' && v1.result.code === 'E_VPS_VERIFY' && v1.result.port === 2053 && v1.result.reason === 'blocked_cloud' && /\(TCP 2053\)/.test(v1.msg) && !/443/.test(v1.msg) && v1.steps[6].state === 'error' && v1.steps.length === 9, v1);
+    // 部署完成但验证没通过: 留下「待验证的部署」; 端口还没放行时再验证仍失败 (同一个原因, 不重新部署); 放弃 / 放行后验证通过都会清掉它
+    const pend1 = jx(await api('GET', '/api/vps/pending')).pending;
+    ck('vps: the failed verification leaves a pending deployment (real port, node count, no credentials) and nothing is saved locally', pend1.length === 1 && pend1[0].id === v1.result.pending && pend1[0].ports[0] === 2053 && pend1[0].nodes === 1 && !JSON.stringify(pend1).match(/password|S3cretPw|uuid/i) && jx(await api('GET', '/api/vps')).vps.length === 0, pend1);
+    const pr70 = jx(await api('POST', '/api/vps/probe', { form: vc('203.0.113.70') })), pj70 = await waitJob(pr70.job, 'en');
+    ck('vps/probe on a host with a pending deployment: node.installed + pending, and the planned port (443 busy) is reported', pj70.state === 'done' && pj70.result.node.installed === true && pj70.result.pending && pj70.result.pending.id === v1.result.pending && pj70.result.plan.port === 2053 && pj70.result.plan.reason === 'default_busy', pj70.result);
+    const vf1 = await waitJob(jx(await api('POST', '/api/vps/verify', { form: { id: v1.result.pending } })).job, 'en');
+    ck('vps/verify while the port is still closed: fails again with the same structured reason and the pending record stays (no redeploy)', vf1.state === 'error' && vf1.result.code === 'E_VPS_VERIFY' && vf1.result.pending === v1.result.pending && vf1.result.port === 2053 && jx(await api('GET', '/api/vps/pending')).pending.length === 1, vf1);
+    r = await api('POST', '/api/vps/verify', { form: { id: 'p-nothere' } }); ck('vps/verify: invalid id -> E_INVALID; unknown id -> E_NOT_FOUND', jx(r).code === 'E_INVALID' && jx(await api('POST', '/api/vps/verify', { form: { id: 'p-ffffff' } })).code === 'E_NOT_FOUND');
+    await ctl('vpsport=open');
+    const vf2 = await waitJob(jx(await api('POST', '/api/vps/verify', { form: { id: v1.result.pending } })).job, 'en');
+    ck('vps/verify after the port is opened: done, the nodes are added, the pending record is gone and the server record exists', vf2.state === 'done' && vf2.result.added === 1 && vf2.result.nodes[0].port === 2053 && vf2.result.nodes[0].verified === true && jx(await api('GET', '/api/vps/pending')).pending.length === 0 && jx(await api('GET', '/api/vps')).vps.filter((x) => x.host === '203.0.113.70').length === 1, vf2);
+    await ctl('vps=reset'); await ctl('vpsport=closed'); v1 = await vprov(vc('203.0.113.70'), 'en');
+    r = await api('POST', '/api/vps/pending/discard', { form: { id: v1.result.pending } }); ck('vps/pending/discard removes only the pending record', jx(r).ok === true && jx(await api('GET', '/api/vps/pending')).pending.length === 0 && jx(await api('POST', '/api/vps/pending/discard', { form: { id: v1.result.pending } })).code === 'E_NOT_FOUND');
     await ctl('vpsport=open'); v1 = await vprov(vc('203.0.113.70')); const vl = jx(await api('GET', '/api/vps')).vps.filter((x) => x.host === '203.0.113.70')[0];
     ck('ctl vpsport=open: provisioning .70 again succeeds; without a name the server name is my-vps-<host> and the node tag <name>-<egress ip>; the record has name + hostkey', v1.state === 'done' && v1.result.nodes[0].tag === 'my-vps-203.0.113.70-203.0.113.70' && v1.result.nodes[0].egress === '203.0.113.70' && !!vl && vl.name === 'my-vps-203.0.113.70' && vl.hostkey === fingerprint('203.0.113.70') && Object.keys(v1.result).sort().join() === 'ips,nodes,vps', v1.result);
     const rdx = await api('POST', '/api/vps/redetect', { form: vc('203.0.113.70', { id: vl.id }) }), rdj = await waitJob(jx(rdx).job);
