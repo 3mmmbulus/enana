@@ -139,7 +139,7 @@
   /* ================= 构建 ================= */
   V.init = function (root) {
     readPrefs();
-    /* 新应用提示条 (一直显示: 没有新应用时按钮是「没有新应用」状态) */
+    /* 新应用提示条 (一直显示; 没有新应用时两个按钮隐藏) */
     el.barT = h('b'); el.barD = h('div', { class: 'sm' });
     el.adopt = ui.btn(L('apps.adopt'), { kind: 'primary', icon: 'check' }); ui.act(el.adopt, adopt);
     el.keep = ui.btn(L('apps.keepOff'), { icon: 'ban' }); ui.act(el.keep, keepAll);
@@ -257,7 +257,8 @@
     var news = list().filter(isNew), n = news.length, recN = news.filter(function (a) { return a.rec; }).length, why = TP.why.helper();
     setText(el.barT, t(n ? 'apps.new.title' : 'apps.new.none', { n: n })); setText(el.barD, t(n ? 'apps.new.text' : 'apps.new.noneSub'));
     el.bar.classList.toggle('has-new', n > 0);
-    if (!n) { ui.setBtn(el.adopt, t('apps.noNew')); ui.avail(el.adopt, t('apps.noNewReason')); ui.setBtn(el.keep, t('apps.noNew')); ui.avail(el.keep, t('apps.noNewReason')); return; }
+    el.adopt.hidden = el.keep.hidden = !n;   // 没有新应用: 两个按钮都隐藏 (以前是两个一样的「没有新应用」)
+    if (!n) return;
     if (!recN) { ui.setBtn(el.adopt, t('apps.noRec')); ui.avail(el.adopt, t('apps.noRecReason')); } else { ui.setBtn(el.adopt, t('apps.adopt')); ui.avail(el.adopt, why); }
     ui.setBtn(el.keep, t('apps.keepOff')); ui.avail(el.keep, why);
   }

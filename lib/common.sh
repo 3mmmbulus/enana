@@ -26,6 +26,10 @@ content_file() { # <文件名> -> 路径: 登录后云端下发的最新已验�
   if [ -s "$f" ]; then printf '%s' "$f"; else printf '%s/%s' "$DATA" "$1"; fi
 }
 
+sed_inplace() { if sed --version >/dev/null 2>&1; then sed -i "$@"; else sed -i '' "$@"; fi; }   # sed -i 的 BSD / GNU 写法
+file_size() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null; }      # GNU 的 -c 在 BSD 上会失败, 所以先试 GNU
+file_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
+file_inode() { stat -c %i "$1" 2>/dev/null || stat -f %i "$1" 2>/dev/null; }
 resolve_path() { # 解析符号链接 (macOS 12.3 以前没有 readlink -f)
   local p=$1 l
   while [ -L "$p" ]; do
@@ -60,7 +64,7 @@ settings_set() { # settings_set KEY VALUE   (调用方负责校验值; 写入 $H
 
 load_settings() { # 可调项: 环境变量 > $H/settings.env > 默认值
   local p=${PORT:-} u=${UI_PORT:-} a=${API_PORT:-} s=${SPEED_PORT:-}
-  PORT=7890; UI_PORT=9090; API_PORT=9091; SPEED_PORT=''; LOG_HOURS=''; LOG_DAYS=''; LOG_OPS=1; ACCESS_LOG=1; LOG_CORE=1; DIAG_UPLOAD=1; AUTO_SITES=0; AUTO_UPDATE=1; AUTOSTART=1; PROXY_ENABLED=0; PROXY_MODE=auto; NETWORK_MODE=system; LANG_UI=''
+  PORT=7890; UI_PORT=9090; API_PORT=9091; SPEED_PORT=''; LOG_HOURS=''; LOG_DAYS=''; LOG_OPS=1; ACCESS_LOG=1; LOG_CORE=1; DIAG_UPLOAD=0; AUTO_SITES=0; AUTO_UPDATE=1; AUTOSTART=1; PROXY_ENABLED=0; PROXY_MODE=auto; NETWORK_MODE=system; LANG_UI=''
   ACCOUNT_URL=https://api.enana.cc; ACCOUNT_SITE=https://enana.cc     # 云端接口 / 官网 (官网只有一个首页: 账号的注册、登录、改密码都在仪表盘里)
   [ -f "$H/settings.env" ] && . "$H/settings.env"
   case $NETWORK_MODE in system|tun) ;; *) NETWORK_MODE=system ;; esac

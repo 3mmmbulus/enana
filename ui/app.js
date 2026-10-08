@@ -47,6 +47,7 @@
   TP.setCrumb = function (fn) { crumbFn = fn; paintTitle(); };
 
   /* ================= 页面切换 ================= */
+  var navSettled = false, popping = false;   // 用户点击的导航新增历史记录; 前进/后退 (popstate) 和启动时不新增
   TP.go = function (id) {
     if (!panels[id]) id = 'overview';
     var changed = TP.tab !== id;
@@ -57,8 +58,9 @@
       if (on) navEls[n[0]].setAttribute('aria-current', 'page'); else navEls[n[0]].removeAttribute('aria-current');
     });
     TP.prefs.set('ui.tab', id);
-    try { if (location.pathname !== ROUTE_BASE + id || location.hash) history.replaceState(null, '', ROUTE_BASE + id + location.search); } catch (e) { /* 忽略 */ }
+    try { if (location.pathname !== ROUTE_BASE + id || location.hash) (navSettled && !popping ? history.pushState : history.replaceState).call(history, null, '', ROUTE_BASE + id + location.search); } catch (e) { /* 忽略 */ }
     crumbFn = null; paintTitle();
+    try { document.title = t('nav.' + id) + ' · enana'; } catch (e) { /* 忽略 */ }
     var V = TP.V[id];
     if (V && V.show) { try { V.show(); } catch (e) { console.error('[' + id + '.show]', e); } }
     if (changed && hd.scroll) hd.scroll.scrollTop = 0;
@@ -344,7 +346,7 @@
 
     var start = routeId();
     if (!panels[start]) start = TP.prefs.get('ui.tab', TP.ls.get('tab', 'overview'));
-    TP.go(start);
+    TP.go(start); navSettled = true;
     TP.auth.start();
   }
 
@@ -354,5 +356,6 @@
     ui.toast(t('app.unhandled', { reason: TP.errMsg(e.reason) }), 'err'); e.preventDefault();
   });
   window.addEventListener('hashchange', function () { var id = (location.hash || '').replace(/^#/, ''); if (panels[id] && id !== TP.tab) TP.go(id); });
+  window.addEventListener('popstate', function () { popping = true; try { TP.go(routeId()); } finally { popping = false; } });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();

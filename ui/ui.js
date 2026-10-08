@@ -70,12 +70,18 @@
     toastSeen[key] = now;
     var act = opt && opt.action, el;
     function rm() { if (el.parentNode) el.parentNode.removeChild(el); }
-    el = h('div', { class: 'toast ' + (kind || 'info') }, ui.icon(TOAST_ICON[kind] || 'info', 18, 'ti'), h('span', { class: 'toast-m' }, msg),
-      act ? h('button', { class: 'toast-a', type: 'button', on: { click: function () { rm(); try { act.fn(); } catch (e) { console.error(e); } } } }, act.label || t('common.fix')) : null);
+    var closeB = h('button', { class: 'toast-x', type: 'button', 'aria-label': t('common.close'), on: { click: rm } }, ui.icon('x', 14, 'ti'));
+    el = h('div', { class: 'toast ' + (kind || 'info'), role: kind === 'err' ? 'alert' : 'status' }, ui.icon(TOAST_ICON[kind] || 'info', 18, 'ti'), h('span', { class: 'toast-m' }, msg),
+      act ? h('button', { class: 'toast-a', type: 'button', on: { click: function () { rm(); try { act.fn(); } catch (e) { console.error(e); } } } }, act.label || t('common.fix')) : null, closeB);
     ui.hostFloaters();
     box.appendChild(el);
     while (box.children.length > 4) box.removeChild(box.firstChild);
-    setTimeout(rm, ms || (kind === 'err' ? 7000 : act ? 7000 : 3800));
+    var left = ms || (kind === 'err' ? 12000 : act ? 7000 : 3800), timer = 0, startAt = 0;   // 悬停或聚焦时暂停计时, 离开后接着算
+    function arm() { startAt = Date.now(); timer = setTimeout(rm, left); }
+    function hold() { clearTimeout(timer); left = Math.max(1500, left - (Date.now() - startAt)); }
+    el.addEventListener('mouseenter', hold); el.addEventListener('focusin', hold);
+    el.addEventListener('mouseleave', arm); el.addEventListener('focusout', arm);
+    arm();
   };
 
   /* ================= 「暂不可用」: aria-disabled + title, 点击说明原因 ================= */

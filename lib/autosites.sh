@@ -125,7 +125,7 @@ autosite_tick() { # 由 enana tick 每分钟调用一次 (必须排在 logs_tick
   local log="$H/sing-box.log" ino sz off=0 oino='' T now n added=0 hour_cnt cool
   autosite_ready || { rm -f "$H/.autosite.off" "$H/.autosite.ev"; return 0; }
   [ -s "$log" ] || return 0
-  ino=$(stat -f %i "$log"); sz=$(stat -f %z "$log"); now=$(now)
+  ino=$(file_inode "$log"); sz=$(file_size "$log"); now=$(now)
   if [ -f "$H/.autosite.off" ]; then read -r oino off < "$H/.autosite.off" || true; fi
   case ${off:-} in ''|*[!0-9]*) off=0 ;; esac
   [ "$oino" = "$ino" ] && [ "$off" -le "$sz" ] || off=0

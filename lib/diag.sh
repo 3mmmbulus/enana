@@ -10,7 +10,7 @@ DIAG_GAP=600          # 本机限频 (秒): 两次自动摘要之间至少隔多
 DIAG_FULL_MAX=7900000 # 完整诊断压缩后最多多少字节 (云端上限 8 MiB); 超过就缩短时间范围
 
 diag_enabled() { # 自动摘要: macOS 上 (Windows 的健康判定还没做, 之后跟进) · 设置里开着 · 已登录并且有云端会话
-  [ -z "${ENANA_NO_DIAG:-}" ] && [ "${ENANA_PLATFORM:-darwin}" = darwin ] && [ "${DIAG_UPLOAD:-1}" = 1 ] && auth_logged_in && [ -n "$(session_id)" ]
+  [ -z "${ENANA_NO_DIAG:-}" ] && [ "${ENANA_PLATFORM:-darwin}" = darwin ] && [ "${DIAG_UPLOAD:-0}" = 1 ] && auth_logged_in && [ -n "$(session_id)" ]
 }
 diag_summary_json() { # 标准输出: 下一份摘要 (只用本机数据, 不联网)
   logs_bundle 24 snapshot,ops 2>/dev/null | perl "$LIB/diag.pl" summary

@@ -737,7 +737,7 @@
   /* ---------- 开始 / 停止 / 跟踪 ---------- */
   async function startTest() {
     var form = { mode: sel.mode, speed: sel.speed ? '1' : '0', targets: selectedTargets().map(function (x) { return x.id; }).join(',') }, r;
-    if (sel.mode !== 'direct') form.nodes = sel.nodes.join(',');
+    if (sel.mode !== 'direct') form.nodes = sel.nodes.join('\n');
     try { r = await TP.helper('POST', '/api/speedtest/start', { form: form }); }
     catch (e) {
       if (e && e.code === 'E_RUNNING') { await attachRunning(e); return; }

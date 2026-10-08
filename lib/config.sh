@@ -72,7 +72,10 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
   done < <(srv_emit; type official_emit >/dev/null 2>&1 && official_emit)       # 用户的服务器 + 官方线路 (后者一律是 auto, 见 lib/official.sh)
 
   local pin_list pin_def glob_list glob_def
-  if [ -s "$T/pins" ]; then pin_list=$(json_list < "$T/pins"); pin_def=$(head -1 "$T/pins"); else pin_list='"direct"'; pin_def=direct; fi
+  if [ -s "$T/pins" ]; then pin_list=$(json_list < "$T/pins"); pin_def=$(head -1 "$T/pins")
+  else  # 没有任何固定出口: PIN 指向必定连不上的本地端口 (fail-closed), 绝不回落到直连 (会暴露真实 IP)
+    printf '%s\n' '{"type":"socks","tag":"pin-none","server":"127.0.0.1","server_port":1}' >> "$T/ob"; pin_list='"pin-none"'; pin_def=pin-none
+  fi
   if [ -s "$T/autos" ]; then
     printf '{"type":"urltest","tag":"AUTO","outbounds":[%s],"url":"http://www.gstatic.com/generate_204","interval":"10m","tolerance":50,"idle_timeout":"30m"}\n' "$(json_list < "$T/autos")" >> "$T/ob"
     glob_list="\"AUTO\",$(json_list < "$T/autos")"; [ -s "$T/pins" ] && glob_list="$glob_list,$pin_list"; glob_def=AUTO
@@ -149,7 +152,6 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
     printf '%s\n' '{"clash_mode":"Rule","domain":["rule.mode.enana.invalid"],"action":"route","outbound":"direct-mode"}'   # 永远不会命中; 只为让核心的模式列表里有 Rule (否则无法从 Direct 切回 Rule)
     printf '%s\n' '{"ip_is_private":true,"action":"route","outbound":"direct-lan"}'
     printf '%s\n' '{"domain_suffix":["local","lan","localhost","home.arpa"],"action":"route","outbound":"direct-lan"}'
-    printf '%s\n' '{"rule_set":["ovr-appdirect"],"action":"route","outbound":"direct-app"}'          # 你的覆盖: 应用设为直连 (关)
     for i in $(seqn "$npinx"); do printf '{"rule_set":["ovr-apppin-%s"],"action":"route","outbound":"%s"}\n' "$i" "$(sed -n "${i}p" "$T/pinx" | sed 's/["\\]//g')"; done
     [ "$npinx" -ge 2 ] && printf '%s\n' '{"rule_set":["ovr-apppinauto"],"action":"route","outbound":"PINAUTO"}'
     printf '%s\n' '{"rule_set":["ovr-apppin"],"action":"route","outbound":"PIN"}'
@@ -161,6 +163,7 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
     [ "$ads" = 1 ] && printf '%s\n' '{"rule_set":["geosite-ads"],"action":"reject"}'
     cat "$T/r1"
     cat "$T/r2"
+    printf '%s\n' '{"rule_set":["ovr-appdirect"],"action":"route","outbound":"direct-app"}'          # 应用直连排在网站规则之后: 网站的固定出口 / 直连优先 (P0-1)
     # A browser is a container of websites: direct/auto are its fallback,
     # while explicit website policies still work. Native App PIN is an override.
     printf '%s\n' '{"rule_set":["ovr-browserdirect"],"action":"route","outbound":"direct-app"}'
