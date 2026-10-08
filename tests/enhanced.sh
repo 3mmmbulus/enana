@@ -89,7 +89,7 @@ PY
 )
 echo 'PASS: installer preserves ports owned by the root TUN service'
 (
-  SB=${SINGBOX:-/bin/true}
+  SB=${SINGBOX:-$(type -P true)}
   cp "$W/tun.json" "$H/config.json"
   enhanced_paths() { TUN_UID=501; TUN_ROOT="$W/staged-root"; mkdir -p "$TUN_ROOT"; }
   enhanced_supported() { return 0; }
@@ -147,8 +147,8 @@ grep -q '/proxies/PIN.*Fixed Exit' "$W/switch-calls"
 echo 'PASS: switching back restores root PIN choice into System core'
 
 # A denied administrator request leaves a healthy old core alone.
-cp "${SINGBOX:-/bin/true}" "$H/sing-box"
-SB=${SINGBOX:-/bin/true}
+cp "${SINGBOX:-$(type -P true)}" "$H/sing-box"
+SB=${SINGBOX:-$(type -P true)}
 cp "$W/system.json" "$H/config.json"
 settings_set NETWORK_MODE tun
 enhanced_loaded() { return 1; }
@@ -162,7 +162,7 @@ settings_set NETWORK_MODE system
 load_settings || true
 echo 'PASS: administrator cancellation restores config without a second restart/prompt'
 # Core-affecting implementation changes change the snapshot fingerprint; policy-rule-only edits change only the rule-data fingerprint.
-SB=${SINGBOX:-/bin/true}
+SB=${SINGBOX:-$(type -P true)}
 before=$(enhanced_fingerprint)
 saved_lib=$LIB; mkdir "$W/changed-lib"
 cp "$LIB/enhanced.sh" "$LIB/enhanced-root.sh" "$W/changed-lib/"
@@ -312,7 +312,7 @@ echo 'PASS: privileged argument shell quoting'
 echo 'PASS: enhanced_stop asks for administrator rights only when a daemon is loaded or could still come back'
 # A successful root install forgets the stop marker and records the fingerprint, the policy fingerprint and the baked-in mode.
 (
-  SB=${SINGBOX:-/bin/true}; cp "$W/system.json" "$H/config.json"
+  SB=${SINGBOX:-$(type -P true)}; cp "$W/system.json" "$H/config.json"
   : > "$H/.enhanced-stopped"; rm -f "$H/.enhanced-fingerprint" "$H/.enhanced-ovr-fingerprint" "$H/.enhanced-mode"
   PROXY_ENABLED=1; PROXY_MODE=global
   enhanced_record_install
