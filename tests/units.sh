@@ -355,6 +355,9 @@ t "也不能占用 enana-official- 前缀 (旧的模拟器 / 文档里用过)" s
 t "普通节点名照常接受" sh -c ". '$LIB/servers.sh'; srv_check_line '{\"role\":\"auto\",\"outbound\":{\"type\":\"trojan\",\"tag\":\"官方版本\",\"server\":\"203.0.113.9\",\"server_port\":443,\"password\":\"p\"}}'"
 srv_secret_fields "官方-图克" >/dev/null; eq "官方节点的凭据永远不显示 (srv_secret_fields 退出码 3)" "$?" "3"
 srv_secret_fields "Auto-1" >/dev/null; eq "用户自己的节点仍可查看 (退出码 0)" "$?" "0"
+printf '%s\n' '{"role":"auto","outbound":{"type":"trojan","tag":"香港节点","server":"198.51.100.8","server_port":443,"password":"cn-pw"}}' >> "$H/servers.jsonl"
+eq "含中文名字的用户节点也能查看凭据 (srv_secret_fields 以前拿字节和已解码的字符串比较, 中文名永远对不上)" "$(srv_secret_fields 香港节点 | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["value"])')" "cn-pw"
+sed -i.bak '$d' "$H/servers.jsonl"; rm -f "$H/servers.jsonl.bak"
 
 gen_config >/dev/null 2>&1; cp "$H/config.json.new" "$OFFD/cfg1.json"
 eq "配置: 官方节点在 AUTO 池和 Global 里, 不在 PIN 里 (只进自动线路)" "$(python3 - "$OFFD/cfg1.json" <<'PYEOF'

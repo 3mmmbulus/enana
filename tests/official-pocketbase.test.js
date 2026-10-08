@@ -161,7 +161,17 @@ test('official nodes: scheduled import, entitlement gate, failure handling and s
    writeCfg([source,{...source,id:'second',prefix:'官方-乙-',url:`https://localhost:${sport}/subs/${TOKEN}-2`}]);
    const r=await sync();assert.equal(r.body.sources.length,2);const tags=(await nodes(pro)).body.nodes.map(x=>x.outbound.tag);
    assert.equal(tags.length,14);assert.equal(tags.filter(x=>x.startsWith('官方-乙-')).length,7);assert.ok(up.paths.some(p=>p.endsWith('-2')));
+   writeCfg([source,{...source,id:'third',url:`https://localhost:${sport}/subs/${TOKEN}-3`}]);await sync();                  // same prefix and same upstream tags
+   assert.equal((await nodes(pro)).body.nodes.length,7,'identical tags from two sources are served once');
    writeCfg([source]);await sync();assert.equal((await nodes(pro)).body.nodes.length,7);
+  });
+
+  await t.test('an operator can hide one node by disabling its row, and a later sync does not bring it back',async()=>{
+   const rows=(await req('/api/collections/official_nodes/records?perPage=50&sort=label',null,null,admin)).body.items;assert.equal(rows.length,7);
+   await patch('/api/collections/official_nodes/records/'+rows[0].id,{enabled:false},admin);
+   assert.equal((await nodes(pro)).body.nodes.length,6);assert.equal((await plan(pro)).official.nodes,6);
+   assert.equal((await sync()).body.sources[0].ok,true);assert.equal((await nodes(pro)).body.nodes.length,6,'the manual decision survives the next sync');
+   await patch('/api/collections/official_nodes/records/'+rows[0].id,{enabled:true},admin);assert.equal((await nodes(pro)).body.nodes.length,7);
   });
 
   await t.test('the URL and node credentials appear nowhere an operator or log reader could see them',async()=>{

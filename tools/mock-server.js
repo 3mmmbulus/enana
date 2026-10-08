@@ -238,7 +238,7 @@ const S = {
   'e.pwOffline': ['连不上 enana.cc, 修改密码必须在线 (离线登录时不能修改)。请检查网络后重试', 'Cannot reach enana.cc; changing the password requires being online (not possible after an offline sign-in). Check your network and retry'],
   'e.prefsJson': ['偏好设置必须是一个 JSON 对象', 'The preferences must be a JSON object'], 'e.prefsSize': ['偏好设置太大 (最多 32 KB)', 'The preferences are too large (32 KB at most)'],
   'e.officialSecret': ['官方线路的凭据不能查看', 'Credentials of the official route cannot be viewed'], 'e.officialDel': ['官方线路节点由会员权益提供, 不能删除', 'Official route nodes come with the membership and cannot be deleted.'],
-  'e.billAuth': ['登录已失效或云端会话已结束，请重新登录后再试', 'Your sign-in has expired or the cloud session has ended. Sign in again and retry'],
+  'e.billAuth': ['云端登录已失效、已结束或这台电脑是离线登录，请联网并重新登录后再试', 'Your cloud sign-in has expired, ended, or this computer signed in offline. Go online, sign in again and retry'],
   'e.billServer': ['enana.cc 服务器返回了错误，这次操作可能已生效也可能没有，请先刷新并查看订单和余额', 'The enana.cc server returned an error. The request may or may not have gone through: refresh and check your orders and balance first'],
   'e.billUnverified': ['请先验证账号邮箱', 'Verify your account email first'], 'e.billClosed': ['收款暂未开放', 'Receiving payments is not open yet'], 'e.billPending': ['已有待付款订单', 'You already have a pending invoice'],
   'e.billNotFound': ['找不到这笔订单', 'Invoice not found'], 'e.billBalance': ['余额不足', 'Insufficient funds'], 'e.billNoMail': ['验证邮件暂时无法发送', 'Verification mail could not be sent'],

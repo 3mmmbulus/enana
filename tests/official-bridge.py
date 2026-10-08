@@ -167,6 +167,25 @@ official_sync; echo "rc=$?"''' % extra
         rc, _ = self.sync('none'); self.assertEqual(rc, 'rc=0'); self.assertIsNone(self.lines(), 'entitled:false removes every official node'); self.assertEqual(self.applies(), 3)
         self.assertIn('entitled=0', (self.home / 'official.state').read_text())
 
+    def cgi_json(self, path):
+        (self.home / 'secret').write_text('local-test-token\n')
+        req = ('GET %s HTTP/1.1\r\nHost: 127.0.0.1:39802\r\nX-Enana: 1\r\nX-Enana-Token: local-test-token\r\nContent-Length: 0\r\n\r\n' % path).encode()
+        env = {**self.env, 'ENANA_API_PIPE': '1'}
+        r = subprocess.run(['/bin/bash', str(repo / 'lib/api.sh')], env=env, input=req, capture_output=True, timeout=60)
+        return json.loads(r.stdout.split(b'\r\n\r\n', 1)[1])
+
+    def test_forced_plan_refresh_sees_a_purchase_immediately(self):
+        # without ?refresh=1 the helper answers from its local cache (up to an hour old): a paying user would still see Free
+        self.post('/_test/plan?code=free')
+        self.assertEqual(self.cgi_json('/api/plan')['plan']['code'], 'free')
+        self.post('/_test/plan?code=pro')
+        self.assertEqual(self.cgi_json('/api/plan')['plan']['code'], 'free', 'cached')
+        (self.home / 'plan.checked').write_text('%d\n' % (int(time.time()) - 10))          # older than the 3-second guard, far younger than the 1-hour TTL
+        d = self.cgi_json('/api/plan?refresh=1')
+        self.assertEqual((d['plan']['code'], d['features']['official_proxy']['enabled']), ('pro', True))
+        again = self.cgi_json('/api/plan?refresh=1')                                         # a second forced call within 3 seconds reuses the fresh copy
+        self.assertEqual(again['plan']['code'], 'pro')
+
     def test_session_loss_is_a_failure_not_a_removal(self):
         self.sync('ok')
         (self.home / 'cloud.token').write_text('tok-wrong\n')                    # the cloud answers 401: the heartbeat deals with it, nodes stay

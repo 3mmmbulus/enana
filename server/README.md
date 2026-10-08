@@ -239,7 +239,8 @@ gives equal bytes, prefixes and de-duplicates tags, and upserts the rows in one 
 (vanished nodes are deleted). Any failure (network, non-200, oversized body, not JSON, zero usable
 nodes) leaves the existing rows untouched; they simply stop being served when `fresh_until` passes.
 PocketBase's `$http.send` has no size limit option: the 4 MiB cap rejects an oversized body after it
-was read. Logs record only source id, counts and error codes.
+was read. Logs record only source id, counts and error codes. To hide one node, set `enabled` to false
+on its `official_nodes` row in the admin UI; later syncs refresh the node but do not re-enable it.
 
 `GET /api/enana/v1/nodes` serves the rows only to an active Pro plan with a verified email (see
 `docs/CLOUD_API.md`); the plan's `official_proxy` feature stops saying "coming soon" as soon as one

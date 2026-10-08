@@ -419,7 +419,7 @@ ep_billing() {
   if billing_request "$verb" "$route" "$body" > "$tmp"; then result=$(cat "$tmp"); rm -f "$tmp"; json "$result"; return 0; fi
   rm -f "$tmp"
   case ${BILLING_CODE:-} in
-    E_AUTH)          fail "登录已失效或云端会话已结束，请重新登录后再试" E_AUTH ;;                       # 不用 deny 401: 那会让本机仪表盘也锁住; 这里只是云端会话的问题
+    E_AUTH)          fail "云端登录已失效、已结束或这台电脑是离线登录，请联网并重新登录后再试" E_AUTH ;;                       # 不用 deny 401: 那会让本机仪表盘也锁住; 这里只是云端会话的问题
     E_SERVER_ERROR)  fail "enana.cc 服务器返回了错误，这次操作可能已生效也可能没有，请先刷新并查看订单和余额" E_SERVER_ERROR ;;
     E_RATE_LIMITED)  fail "请求过于频繁，请稍后再试" E_RATE_LIMITED ;;
     *)               fail "账号服务暂时无法连接，请稍后重试" E_ACCOUNT_UNREACHABLE ;;

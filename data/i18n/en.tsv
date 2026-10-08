@@ -898,7 +898,7 @@ macOS 没有允许 enana 弹出授权窗口。请在「系统设置 → 隐私�
 付款参数无效	Invalid payment details
 订单编号无效	Invalid order id
 账号服务暂时无法连接，请稍后重试	The account service is unreachable right now. Try again later
-登录已失效或云端会话已结束，请重新登录后再试	Your sign-in has expired or the cloud session has ended. Sign in again and retry
+云端登录已失效、已结束或这台电脑是离线登录，请联网并重新登录后再试	Your cloud sign-in has expired, ended, or this computer signed in offline. Go online, sign in again and retry
 enana.cc 服务器返回了错误，这次操作可能已生效也可能没有，请先刷新并查看订单和余额	The enana.cc server returned an error. The request may or may not have gone through: refresh and check your orders and balance first
 请求过于频繁，请稍后再试	Too many requests. Try again later
 官方线路同步	Official routes sync

@@ -42,8 +42,8 @@ srv_emit() { # TSV: role<TAB>tag<TAB>outbound_json (已替换 @CERTS@); 供配�
 }
 
 srv_secret_fields() { # <tag> -> 打印 JSON 数组 [{name,value}] (只含凭据类字段); 0 = 找到  1 = 没有这个服务器  3 = 官方线路 (永远不显示)
-  /usr/bin/perl -CA -MJSON::PP -e '
-    my ($tag, $file) = @ARGV; my $j = JSON::PP->new->utf8; open my $fh, "<", $file or exit 1;
+  /usr/bin/perl -MJSON::PP -e '
+    my ($tag, $file) = @ARGV; utf8::decode($tag); my $j = JSON::PP->new->utf8; open my $fh, "<", $file or exit 1;
     while (my $l = <$fh>) {
       my $d = eval { $j->decode($l) }; next unless ref $d eq "HASH" && ref $d->{outbound} eq "HASH"; my $o = $d->{outbound};
       next unless defined $o->{tag} && $o->{tag} eq $tag; exit 3 if $d->{official};

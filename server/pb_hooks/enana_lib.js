@@ -171,16 +171,19 @@ function officialCount(app, t) {
 function officialRows(app, t) {
   let rows = []
   try { rows = app.findAllRecords('official_nodes', $dbx.exp(OFFICIAL_FRESH, { t: iso(t) })) } catch (_) { return [] }
-  const out = []
+  const all = []
   for (const r of rows) {
     let o = null
     try { o = JSON.parse(toString(r.get('outbound'))) } catch (_) { o = null }
     if (!o || typeof o !== 'object' || typeof o.type !== 'string' || typeof o.tag !== 'string') continue
     const ordered = { type: o.type, tag: o.tag }
     Object.keys(o).filter((k) => k !== 'type' && k !== 'tag').sort().forEach((k) => { ordered[k] = o[k] })
-    out.push({ outbound: ordered })
+    all.push({ key: r.getString('node_key'), outbound: ordered })
   }
-  out.sort((a, b) => (a.outbound.tag < b.outbound.tag ? -1 : a.outbound.tag > b.outbound.tag ? 1 : 0))
+  // by tag, then by database key, so two sources that happen to produce the same tag always resolve the same way; the first one wins
+  all.sort((a, b) => (a.outbound.tag < b.outbound.tag ? -1 : a.outbound.tag > b.outbound.tag ? 1 : a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+  const out = [], seen = {}
+  for (const x of all) { if (seen[x.outbound.tag]) continue; seen[x.outbound.tag] = true; out.push({ outbound: x.outbound }) }
   return out
 }
 // 谁有资格拿节点: 当前生效的套餐包含 official_proxy (订阅有效且套餐启用) 并且邮箱已验证。与「现在有没有节点」无关 (没有节点时返回空列表)。

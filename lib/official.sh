@@ -157,7 +157,8 @@ official_due() { # 到点了吗: 正常 4 小时一次; 失败后退避 15 分�
   [ $(( $(now) - last )) -ge "$step" ]
 }
 official_tick() { # 由 enana tick 每分钟调用: 几乎总是瞬间返回, 只有到点了才联网
-  auth_logged_in && [ -n "$(session_id)" ] || return 0
+  auth_logged_in || return 0
+  if [ -z "$(session_id)" ]; then official_expire_check; return 0; fi        # 离线登录没有云端会话: 不联网, 但宽限期照样计算
   if official_due; then OP_WHO=auto official_sync || true; else official_expire_check; fi
   return 0
 }

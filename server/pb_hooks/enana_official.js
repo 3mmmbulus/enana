@@ -57,10 +57,12 @@ function store(src, nodes, ttl, t) {
       const key = D.nodeKey(src.id, n.tag, $security.sha256)
       keep[key] = true
       let r = old[key]
-      if (!r) { r = new Record(col); r.set('node_key', key); r.set('origin', 'official') }
+      if (!r) {
+        r = new Record(col); r.set('node_key', key); r.set('origin', 'official')
+        r.set('approved', true); r.set('enabled', true); r.set('consent', false); r.set('capability', 'general')     // only on creation: an operator who disables a row in the admin UI keeps it hidden
+      }
       r.set('label', n.tag)
       r.set('outbound', JSON.stringify(n.outbound))             // a string, so the key order (type, tag first) is kept as written
-      r.set('approved', true); r.set('enabled', true); r.set('consent', false); r.set('capability', 'general')
       r.set('fresh_until', until)
       tx.save(r)
     })
