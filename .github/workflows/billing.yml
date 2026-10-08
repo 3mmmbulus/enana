@@ -2,9 +2,9 @@ name: Cloud billing foundation
 on:
   push:
     branches: [main]
-    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'lib/plan.sh', 'lib/official.*', 'lib/servers.sh', 'lib/config.sh', 'tests/mock-account.py', 'ui/billing.js', 'ui/plan.js', 'tests/billing-*', 'tests/official-*', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
+    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'lib/plan.sh', 'lib/official.*', 'lib/servers.sh', 'lib/config.sh', 'tests/mock-account.py', 'ui/billing.js', 'ui/plan.js', 'tests/billing-*', 'tests/official-*', 'tests/update-official.sh', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
   pull_request:
-    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'lib/plan.sh', 'lib/official.*', 'lib/servers.sh', 'lib/config.sh', 'tests/mock-account.py', 'ui/billing.js', 'ui/plan.js', 'tests/billing-*', 'tests/official-*', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
+    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'lib/plan.sh', 'lib/official.*', 'lib/servers.sh', 'lib/config.sh', 'tests/mock-account.py', 'ui/billing.js', 'ui/plan.js', 'tests/billing-*', 'tests/official-*', 'tests/update-official.sh', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
   workflow_dispatch:
 permissions:
   contents: read
@@ -36,4 +36,7 @@ jobs:
       - name: Check deployment syntax
         run: |
           bash -n server/deploy-billing.sh
+          bash -n server/update-official.sh
           python3 -m py_compile server/update-nginx.py
+      - name: Check the official-hooks update script (fake host, rollback paths, no secrets printed)
+        run: bash tests/update-official.sh

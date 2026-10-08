@@ -185,7 +185,7 @@ URL carries a token, so it is a secret: it lives only in a private root-only fil
 is never committed, logged, stored in the database, returned by any route, or placed in a client
 package. The design takes a **list** of sources so more can be added later.
 
-**1. Create `/etc/enana/official.json`** (owner `root:enana`, mode 640, in the 750 `/etc/enana`
+**1. Create `/etc/enana/official.json`** (`update-official.sh --set-source` below writes it for you; owner `root:enana`, mode 640, in the 750 `/etc/enana`
 directory; `deploy-billing.sh` validates it structurally without printing it and fixes the mode):
 
 ```json
@@ -217,8 +217,31 @@ allow-lists `nodes`; the operator routes below are not in the public allow-list 
 superuser, who is restricted to loopback.
 
 On a host where `deploy-billing.sh` already ran, do **not** run it again (its nginx step refuses an
-already-updated configuration and rolls back). Take the same backup it would, then copy only the
-changed hooks and restart the unit:
+already-updated configuration and rolls back). Use `update-official.sh` instead. Put the checked-out
+repository on the server (git clone or rsync; below it is `/root/enana-stage`) and, as root:
+
+```sh
+S=/root/enana-stage
+bash $S/server/update-official.sh --set-source $S   # type the source URL at the hidden prompt (id "main"; --id NAME adds another)
+bash $S/server/update-official.sh --check $S        # validate and list what would change; changes nothing
+bash $S/server/update-official.sh $S                # install + restart + verify; rolls back by itself on any failure
+bash $S/server/update-official.sh --sync            # sign in as the PocketBase superuser, fetch now, show counts
+```
+
+`--set-source` reads the URL without echo, validates it with the same rules the server applies (https only, no
+`user:password@`, no spaces), merges it into `/etc/enana/official.json` (root:enana, 640; a 700 backup of the
+previous file is kept under `/var/backups/enana/releases/`) and never prints it. The install refuses unless
+billing is deployed, PocketBase is healthy, the staged hooks parse and an existing `official.json` is valid;
+it takes `deploy-billing.sh`'s lock, backs up the four files it replaces
+(`/var/backups/enana/releases/official-<UTC time>-<pid>`, mode 700), restarts only `enana-pocketbase.service`,
+waits for `/api/health`, checks that the operator routes answer 401/403 (404 means the hooks did not load),
+and that every other running service, the nginx/systemd files and `enana-payments.service` are unchanged. If
+any step after the first change fails it restores the old files, restarts PocketBase again and exits
+non-zero. Running it again when nothing changed restarts nothing. It never reads or writes
+`/etc/enana/billing.json`, so it cannot switch payment receiving on or off. `--sync` exits 3 when a source
+failed to fetch (error codes as below). `tests/update-official.sh` exercises all of this against a fake host.
+
+The manual equivalent (no backup, no rollback) is:
 
 ```sh
 for f in enana_lib.js enana_official.pb.js enana_official.js enana_official_domain.js; do
