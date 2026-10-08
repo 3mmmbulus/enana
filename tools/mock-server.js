@@ -47,6 +47,8 @@
  *   sudottl=N                     步骤验证令牌 (X-Enana-Sudo) 的有效期, 真实秒数 (默认 300; 设成 1-2 来测「过期后重新弹出密码框」)       sudo=clear   让所有步骤验证令牌立刻失效
  *   icons=progressive|all|none    应用图标: progressive (默认) = 启动 / 重置时的应用 0-6 秒内陆续出现, 新扫描到的应用 2-6 秒后出现 (按 --fast 缩短); all = 立刻都有; none = 都没有 (图片也 404)
  *   vpsport=open|closed           203.0.113.70 的部署: closed (默认) = 「验证连通」失败 E_VPS_VERIFY, open = 成功 (测「放行端口后重新验证」)
+ * 出口分配 (docs/API.md「出口分配」): GET /api/exits (每个固定出口上的应用 / 网站 / 服务 · 跟随默认 · 自动选 · 孤儿 · 默认出口) · GET /api/exits/impact?op=remove|default&tag= · POST /api/exits/move?from=&to=[&kind=] · POST /api/exits/freeze;
+ *   POST /api/servers/delete | role (新角色不是 pin) 和 POST /api/sub/delete 在有应用 / 网站 / 服务用着固定出口时返回 E_EXIT_IN_USE + impact, 除非带 reassign= (改派; freeze=1) / accept_orphans=1; 固定出口上限 32 (和 lib/apps.sh 的 OVR_PIN_MAX 一致)。
  * 步骤验证 (sudo): 8 个敏感接口 (POST /api/servers/delete | sub/delete | logs/clear | devices/kick | sync/clear, GET /api/servers/secret | sub/url | export) 没带有效的 X-Enana-Sudo 头 -> HTTP 403
  *   {ok:false, code:"E_SUDO_REQUIRED", error} (检查顺序: 401 令牌 -> 403 sudo -> 接口自己的校验; 白名单是 SUDO_ROUTES 这张表)。POST /api/auth/verify (表单 password = 当前账号的密码, 和登录 / 注册共用失败计数) -> {sudo, ttl:300};
  *   退出 / 登录 / 注册 / 改密码 / expire=1 / kickme / sudo=clear 都会让所有 sudo 令牌失效。GET /api/servers/secret?tag= 返回按节点类型生成的确定性占位凭据 (官方节点 -> E_INVALID); GET /api/sub/url?name= 返回保存订阅时的链接;
@@ -191,6 +193,8 @@ const S = {
   'e.loginFormat': ['邮箱或密码格式不正确', 'The email or password format is not valid.'],
   'e.noJob': ['找不到该任务', 'Task not found.'], 'e.badJobId': ['任务编号无效', 'Invalid task id.'],
   'e.noServer': ['找不到这台服务器', 'Server not found.'], 'e.badRole': ['角色无效', 'Invalid role.'],
+  'e.exitInUse': ['有应用 / 网站 / 服务正在使用这个固定出口 (或跟随它作默认出口): 先选择让它们改走哪一个出口, 或者明确接受后果再继续', 'Apps, sites or services are using this Fixed exit (or follow it as the default exit): choose where they go first, or explicitly accept the consequences to continue'],
+  'e.badMove': ['参数无效', 'Invalid parameter.'], 'e.noPin': ['还没有固定出口', 'There is no Fixed exit yet.'],
   'e.dlOnly': ['下载专用只能用于 HTTP / SOCKS5 服务器', 'Download-only can only be used with HTTP / SOCKS5 servers.'],
   'e.noSub': ['找不到这个订阅', 'Subscription not found.'],
   'e.badSubName': ['订阅名称只能包含字母、数字、. _ - 和空格 (最多 40 个字符)', 'A subscription name may only contain letters, digits, . _ - and spaces (up to 40 characters).'],
@@ -1158,7 +1162,8 @@ route('POST', '/api/apps/ack', (c) => {
   M.apps.forEach((a) => { if (all || a.name === name) a.flag = 'ack'; });
   oplog('dashboard', 'apps.ack', all ? kv({ all: 1 }) : kv({ name })); return { ok: true };
 });
-const pinTags = () => M.applied.filter((x) => x.role === 'pin').map((x) => x.tag).slice(0, 16);
+const PIN_MAX = 32;                                                        // = lib/apps.sh 的 OVR_PIN_MAX
+const pinTags = () => M.applied.filter((x) => x.role === 'pin').map((x) => x.tag).slice(0, PIN_MAX);
 const targetOk = (tg) => !tg || (pinTags().length >= 2 && (tg === 'PINAUTO' || pinTags().indexOf(tg) >= 0));
 route('POST', '/api/override', (c) => {
   const kind = c.p('kind'), value = c.p('value'), state = c.p('state'); let target = c.p('target');
@@ -1192,6 +1197,73 @@ route('POST', '/api/policy', (c) => {
   oplog('dashboard', 'policy.switch', kv({ kind: 'selector', tag, site: e ? (e.name || '') : '', from, to: name }));
   return { ok: true, from, to: name };
 });
+/* ---- 出口分配 (docs/API.md 的 /api/exits*, 对照 lib/exits.sh): 每个固定出口上有哪些应用 / 网站 / 服务 · 跟随默认的 · 孤儿 (指定的出口已不是固定出口); 批量移动 / 钉住; 删除 / 改角色 / 删订阅之前的保护 ---- */
+const exitPinsAll = () => M.servers.filter((s) => s.role === 'pin').map((s) => s.tag);
+const exitDefault = () => { const P = buildProxies(); return P.PIN ? P.PIN.now : ''; };
+function exitItems() {                                                     // 每项: {kind: app|site|svc, name, cls: follow|auto|bound|orphan, target, why}
+  const all = exitPinsAll(), cap = all.slice(0, PIN_MAX), out = [];
+  const cl = (kind, name, t) => (!t ? { kind, name, cls: 'follow', target: '' } : t === 'PINAUTO' ? { kind, name, cls: 'auto', target: t } : cap.indexOf(t) >= 0 ? { kind, name, cls: 'bound', target: t }
+    : { kind, name, cls: 'orphan', target: t, why: all.indexOf(t) >= 0 ? 'cap' : (M.servers.some((s) => s.tag === t) ? 'role' : 'deleted') });
+  M.apps.forEach((a) => { if (a.state === 'pin') out.push(cl('app', a.name, a.target || '')); });
+  M.overrides.forEach((o) => { if (o.kind === 'site' && o.state === 'pin') out.push(cl('site', o.value, o.target || '')); });
+  svcList().forEach((e) => { const v = M.svc[e.id]; if (v === 'PIN') out.push({ kind: 'svc', name: e.tag, cls: 'follow', target: '' }); else if (v === 'PINAUTO') out.push({ kind: 'svc', name: e.tag, cls: 'auto', target: v }); else if (cap.indexOf(v) >= 0) out.push({ kind: 'svc', name: e.tag, cls: 'bound', target: v }); });
+  return out;
+}
+const exitLists = (items, pred) => ({ apps: items.filter((x) => x.kind === 'app' && pred(x)).map((x) => x.name), sites: items.filter((x) => x.kind === 'site' && pred(x)).map((x) => x.name), services: items.filter((x) => x.kind === 'svc' && pred(x)).map((x) => x.name) });
+const exitDns = () => !!(M.dns && M.dns.via === 'PIN' && M.dns.leak_guard);
+function exitsPayload() {
+  const all = exitPinsAll(), cap = all.slice(0, PIN_MAX), def = exitDefault(), items = exitItems(), orphans = items.filter((x) => x.cls === 'orphan');
+  return { ok: true, default: { tag: def, source: 'live', live: def, stored: def }, max: PIN_MAX, count: all.length,
+    pins: all.map((t) => Object.assign({ tag: t, targetable: cap.indexOf(t) >= 0, default: t === def }, exitLists(items, (x) => x.cls === 'bound' && x.target === t))),
+    follow: Object.assign(exitLists(items, (x) => x.cls === 'follow'), { dns: exitDns() }), auto: exitLists(items, (x) => x.cls === 'auto'),
+    orphans: orphans.map((x) => ({ kind: x.kind, name: x.name, target: x.target, reason: x.why })), orphan_count: orphans.length, services_known: !M.clashDown };
+}
+function exitImpact(op, x) {
+  const all = exitPinsAll(), cap = all.slice(0, PIN_MAX), def = exitDefault(), items = exitItems(), ispin = all.indexOf(x) >= 0, change = op === 'remove' ? (ispin && x === def) : (!!x && x !== def);
+  const bound = op === 'remove' && ispin ? exitLists(items, (i) => i.cls === 'bound' && i.target === x) : { apps: [], sites: [], services: [] }, follow = change ? exitLists(items, (i) => i.cls === 'follow') : { apps: [], sites: [], services: [] };
+  const dns = change && exitDns(), n = (l) => l.apps.length + l.sites.length + l.services.length, rest = all.filter((t) => t !== x);
+  return { op, tag: x, is_pin: ispin, default: def, default_changes: change, bound, follow: Object.assign(follow, { dns }), affected: n(bound) + n(follow) + (dns ? 1 : 0), remaining: rest.length, candidates: rest.map((t) => ({ tag: t, targetable: cap.indexOf(t) >= 0 })), services_known: !M.clashDown };
+}
+function exitMove(from, to, kind) {                                       // 一次改写应用 / 网站 / 服务的出口 (和 lib/exits.sh 的 exits_move_rows + exits_services_move 一样)
+  const cap = exitPinsAll().slice(0, PIN_MAX);
+  if (['', 'app', 'site', 'service'].indexOf(kind) < 0 || !from || /[|"\\]/.test(from) || from.length > 80) throw E('E_INVALID', 'e.badMove');
+  if (to !== 'DEFAULT' && !(cap.length >= 2 && (to === 'PINAUTO' || cap.indexOf(to) >= 0))) throw E('E_INVALID', 'e.badTarget');
+  const tgt = to === 'DEFAULT' ? '' : to, hit = (t) => (from === 'DEFAULT' ? t === '' : from === 'PINAUTO' ? t === 'PINAUTO' : from === 'ORPHAN' ? (t !== '' && t !== 'PINAUTO' && cap.indexOf(t) < 0) : t === from);
+  let apps = 0, sites = 0, services = 0;
+  if (kind !== 'service') {
+    M.apps.forEach((a) => { if (a.state === 'pin' && (!kind || kind === 'app') && hit(a.target || '') && (a.target || '') !== tgt) { a.target = tgt; a.flag = 'ack'; apps++; } });
+    M.overrides.forEach((o) => { if (o.kind === 'site' && o.state === 'pin' && (!kind || kind === 'site') && hit(o.target || '') && (o.target || '') !== tgt) { o.target = tgt; sites++; } });
+  }
+  if (kind === '' || kind === 'service') svcList().forEach((e) => { const v = M.svc[e.id], want = from === 'DEFAULT' ? 'PIN' : from, nv = tgt === '' ? 'PIN' : tgt; if (v === want && v !== nv) { M.svc[e.id] = nv; services++; } });
+  return { apps, sites, services };
+}
+route('GET', '/api/exits', () => exitsPayload());
+route('GET', '/api/exits/impact', (c) => { const op = c.p('op'), tag = c.p('tag'); if (['remove', 'default'].indexOf(op) < 0 || !tag || tag.length > 80) throw E('E_INVALID', 'e.badMove'); return Object.assign({ ok: true }, exitImpact(op, tag)); });
+route('POST', '/api/exits/move', (c) => { const r = exitMove(c.p('from'), c.p('to'), c.p('kind')); oplog('dashboard', 'override.set', kv({ kind: 'exits', from: c.p('from'), to: c.p('to'), apps: r.apps, sites: r.sites, services: r.services })); return { ok: true, moved: r, services_known: !M.clashDown, services_failed: 0 }; });
+route('POST', '/api/exits/freeze', (c) => {
+  const all = exitPinsAll(); if (!all.length) throw E('E_INVALID', 'e.noPin');
+  if (all.length < 2) return { ok: true, moved: { apps: 0, sites: 0, services: 0 }, skipped: 'single' };
+  const r = exitMove('DEFAULT', exitDefault(), c.p('kind')); oplog('dashboard', 'override.set', kv({ kind: 'exits', from: 'DEFAULT', to: exitDefault(), apps: r.apps, sites: r.sites, services: r.services }));
+  return { ok: true, moved: r, services_known: !M.clashDown, services_failed: 0 };
+});
+/* 删除 / 改角色之前 (lib/exits.sh 的 exits_guard_check + exits_runtime_reassign): 有人在用 → 必须带 reassign (改派; freeze=1 再把跟随默认的钉在去向上) 或 accept_orphans=1, 否则 E_EXIT_IN_USE + impact */
+function exitGuard(tag, reassign, freeze, accept) {
+  const im = exitImpact('remove', tag); if (!im.is_pin) return;
+  if (reassign) {
+    const cand = im.candidates.filter((x) => x.targetable).map((x) => x.tag);
+    const bad = reassign === tag || (reassign === 'DEFAULT' && im.default_changes) || (reassign === 'PINAUTO' && (im.default_changes || im.remaining < 2)) || (reassign !== 'DEFAULT' && reassign !== 'PINAUTO' && cand.indexOf(reassign) < 0);
+    if (bad) throw E('E_INVALID', 'e.badMove');
+    exitMove(tag, reassign, '');
+    if (im.default_changes) { M.pin = reassign; if (freeze) exitMove('DEFAULT', reassign, ''); }
+    return;
+  }
+  if (im.affected > 0 && !accept) throw E('E_EXIT_IN_USE', 'e.exitInUse', null, { impact: im });
+}
+function exitSubGuard(name, accept) {
+  const pins = M.servers.filter((s) => s.sub === name && s.role === 'pin').map((s) => s.tag); if (!pins.length) return;
+  const items = exitItems(), def = exitDefault(), n = items.filter((x) => (x.cls === 'bound' && pins.indexOf(x.target) >= 0) || (x.cls === 'follow' && pins.indexOf(def) >= 0)).length;
+  if (n > 0 && !accept) throw E('E_EXIT_IN_USE', 'e.exitInUse', null, { impact: { servers: pins, affected: n } });
+}
 route('POST', '/api/audit', (c) => {
   const ev = c.p('ev'); if (ev !== 'kill') throw E('E_INVALID', 'e.badKind');
   const scope = ['all', 'one', 'host'].indexOf(c.p('scope')) >= 0 ? c.p('scope') : 'all', host = /^[A-Za-z0-9._:-]{0,120}$/.test(c.p('host')) ? c.p('host') : '';
@@ -1437,6 +1509,7 @@ route('POST', '/api/servers/import', (c) => {
 route('POST', '/api/servers/delete', (c) => {
   const tag = c.p('tag'), cur = M.servers.filter((s) => s.tag === tag)[0]; if (!cur) throw E('E_NOT_FOUND', 'e.noServer');
   if (cur.official) throw E('E_INVALID', 'e.officialDel');
+  exitGuard(tag, c.p('reassign'), c.p('freeze') === '1', c.p('accept_orphans') === '1');
   const undo = snapshot(); M.servers = M.servers.filter((s) => s.tag !== tag); oplog('dashboard', 'servers.delete', kv({ tag }));
   return { ok: true, job: newJob('servers-delete', APPLY, 3600, { done: applyNow, rollback: undo, msg: 'jd.delete' }) };
 });
@@ -1445,6 +1518,7 @@ route('POST', '/api/servers/role', (c) => {
   if (!s) throw E('E_NOT_FOUND', 'e.noServer');
   if (['pin', 'auto', 'off', 'dl'].indexOf(role) < 0) throw E('E_INVALID', 'e.badRole');
   if (role === 'dl' && s.type !== 'http' && s.type !== 'socks') throw E('E_INVALID', 'e.dlOnly');
+  if (role !== 'pin') exitGuard(tag, c.p('reassign'), c.p('freeze') === '1', c.p('accept_orphans') === '1');
   const undo = snapshot(); s.role = role; oplog('dashboard', 'servers.role', kv({ tag, role }));
   return { ok: true, job: newJob('servers-role', APPLY, 3600, { done: applyNow, rollback: undo, msg: 'jd.role' }) };
 });
@@ -1481,6 +1555,7 @@ route('POST', '/api/sub/save', (c) => {
 route('POST', '/api/sub/delete', (c) => {
   const name = c.p('name'); if (!subNameOk(name)) throw E('E_INVALID', 'e.badSubName');
   if (!M.subs.some((x) => x.name === name)) throw E('E_NOT_FOUND', 'e.noSub');
+  exitSubGuard(name, c.p('accept_orphans') === '1');
   const undo = snapshot(); M.subs = M.subs.filter((x) => x.name !== name); M.servers = M.servers.filter((s) => s.sub !== name); delete M.subUrls[name]; oplog('dashboard', 'sub.delete', kv({ name }));
   return { ok: true, job: newJob('sub-delete', APPLY, 3600, { done: applyNow, rollback: undo, msg: 'jd.subdel' }) };
 });
@@ -2272,8 +2347,8 @@ function buildProxies() {
   }
   const pol = ['PIN', 'Global', 'direct'].filter((t) => P[t]);
   P.Final = { name: 'Final', type: 'Selector', now: pol.indexOf(M.final) >= 0 ? M.final : 'direct', all: ['Global', 'PIN', 'direct'].filter((t) => P[t]), history: [] };
-  const pinx = pins.length >= 2 ? ['PINAUTO'].concat(pins.slice(0, 16).map((x) => x.tag)) : [];
-  if (pinx.length) P.PINAUTO = { name: 'PINAUTO', type: 'URLTest', now: pins[0].tag, all: pins.slice(0, 16).map((x) => x.tag), history: [] };
+  const pinx = pins.length >= 2 ? ['PINAUTO'].concat(pins.slice(0, PIN_MAX).map((x) => x.tag)) : [];
+  if (pinx.length) P.PINAUTO = { name: 'PINAUTO', type: 'URLTest', now: pins[0].tag, all: pins.slice(0, PIN_MAX).map((x) => x.tag), history: [] };
   svcList().forEach((e) => { const opts = pol.concat(pinx); P[e.tag] = { name: e.tag, type: 'Selector', now: opts.indexOf(M.svc[e.id]) >= 0 ? M.svc[e.id] : 'direct', all: opts, history: [] }; });
   return P;
 }
@@ -2858,6 +2933,24 @@ async function selftest() {
     const appN = jx(await api('GET', '/api/apps')).apps.filter((a) => !a.custom)[0].name;
     r = await api('POST', '/api/override', { q: { kind: 'app', value: appN, state: 'pin', target: pinTags[1] } }); const aT = jx(await api('GET', '/api/apps')).apps.filter((a) => a.name === appN)[0];
     ck('override: an app on "pin" can be pinned to one fixed exit (target) — apps carry target + target_ok; the record has from/to/target_to', jx(r).ok === true && aT.state === 'pin' && aT.target === pinTags[1] && aT.target_ok === true && jx(await logs({ type: 'ops', day: dayOf(now()), limit: '3' })).rows.some((x) => x.action === 'override.set' && x.detail.indexOf('to=pin') >= 0 && x.detail.indexOf('target_to=') >= 0));
+    // 出口分配: GET /api/exits · impact · 批量移动 · 删除前的保护 (reassign / accept_orphans)
+    await api('POST', '/api/override', { q: { kind: 'site', value: 'exit-test.example.com', state: 'pin', target: pinTags[1] } });
+    const ex = jx(await api('GET', '/api/exits')), ex1 = ex.pins.filter((x) => x.tag === pinTags[1])[0];
+    ck('exits: GET /api/exits groups apps / sites / services by fixed exit (+ follow / auto / orphans), with the default exit and the cap', ex.ok === true && ex.max === 32 && ex.count === pinTags.length && ex.default.tag === px.PIN.now && ex1.apps.indexOf(appN) >= 0 && ex1.sites.indexOf('exit-test.example.com') >= 0 && Array.isArray(ex.follow.services) && Array.isArray(ex.orphans) && ex.orphan_count === 0);
+    const im = jx(await api('GET', '/api/exits/impact', { q: { op: 'remove', tag: pinTags[1] } }));
+    ck('exits: impact(remove) lists what is assigned to that exit, and the candidates it could be moved to', im.ok === true && im.is_pin === true && im.bound.apps.indexOf(appN) >= 0 && im.affected >= 2 && im.candidates.length === pinTags.length - 1 && im.candidates.every((x) => x.tag !== pinTags[1]));
+    r = await api('POST', '/api/servers/delete', { q: { tag: pinTags[1] } });
+    ck('exits: deleting an exit that apps / sites use, without reassign or accept_orphans -> E_EXIT_IN_USE + impact, nothing changes', jx(r).ok === false && jx(r).code === 'E_EXIT_IN_USE' && jx(r).impact.affected >= 2 && jx(await api('GET', '/api/state')).servers.some((x) => x.tag === pinTags[1]));
+    r = await api('POST', '/api/servers/role', { q: { tag: pinTags[1], role: 'auto' } }); ck('exits: the same guard protects changing the role away from "pin"', jx(r).code === 'E_EXIT_IN_USE');
+    r = await api('POST', '/api/exits/move', { q: { from: pinTags[1], to: pinTags[0] } }); const mv = jx(r);
+    ck('exits: POST /api/exits/move re-assigns everything on one exit (apps + sites + services) in one go and says how many', mv.ok === true && mv.moved.apps >= 1 && mv.moved.sites >= 1 && jx(await api('GET', '/api/exits')).pins.filter((x) => x.tag === pinTags[0])[0].sites.indexOf('exit-test.example.com') >= 0);
+    r = await api('POST', '/api/exits/move', { q: { from: pinTags[0], to: 'Nope' } }); ck('exits: moving to an exit that does not exist -> E_INVALID', jx(r).ok === false && jx(r).code === 'E_INVALID');
+    r = await api('POST', '/api/exits/move', { q: { from: pinTags[0], to: pinTags[1], kind: 'bogus' } }); ck('exits: kind must be app | site | service', jx(r).code === 'E_INVALID');
+    await api('POST', '/api/exits/move', { q: { from: pinTags[0], to: pinTags[1], kind: 'site' } });
+    const ex3 = jx(await api('GET', '/api/exits'));
+    ck('exits: kind=site moves only the sites (the app stays where it was)', ex3.pins.filter((x) => x.tag === pinTags[1])[0].sites.indexOf('exit-test.example.com') >= 0 && ex3.pins.filter((x) => x.tag === pinTags[0])[0].apps.indexOf(appN) >= 0);
+    await api('POST', '/api/exits/move', { q: { from: pinTags[0], to: pinTags[1], kind: 'app' } });
+    await api('POST', '/api/override', { q: { kind: 'site', value: 'exit-test.example.com', state: 'follow' } });
     r = await api('POST', '/api/override', { q: { kind: 'app', value: appN, state: 'pin', target: 'PINAUTO' } }); r2 = await api('POST', '/api/override', { q: { kind: 'app', value: appN, state: 'pin', target: 'No Such Server' } });
     ck('override: target PINAUTO is accepted; an unknown fixed exit -> E_INVALID', jx(r).ok === true && jx(r2).code === 'E_INVALID');
     r = await api('POST', '/api/override', { q: { kind: 'app', value: appN, state: 'direct', target: pinTags[1] } }); ck('override: the target is dropped when the state is not "pin"', jx(r).ok === true && jx(await api('GET', '/api/apps')).apps.filter((a) => a.name === appN)[0].target === '');

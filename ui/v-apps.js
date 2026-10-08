@@ -3,7 +3,8 @@
  * · 真实应用图标: GET /api/apps 的 icon (相对路径 "appicons/X.png" 或 ""); 没有图标 / 加载失败时用字母头像; 后台提取图标期间轮询新图标
  * · 添加自定义软件: 两步弹窗 (输入路径或名称 -> POST /api/apps/inspect -> 确认结果并选路由方式 -> 最后确认 -> POST /api/apps/custom -> 任务); 自定义软件可删除
  * · 新应用: 打开「应用」页就算已知晓 —— 导航上的数字立刻消失 (后端的新标记同时确认掉), 但这一次访问里这些应用仍然高亮, 方便处理; 下次进来就不再是新的了
- * · 固定出口有 2 个以上时, 状态是「固定出口」的应用可以再选: 默认固定出口 / 在固定出口里自动选 / 指定某一个固定出口 (POST /api/override 的 target)
+ * · 状态是「固定出口」的应用显示它实际走哪一个出口: 「默认 (当前是哪一个)」/ 在固定出口里自动选 / 指定的某一个 (POST /api/override 的 target; 有 2 个以上固定出口才能改, 只有 1 个时只读);
+ *   指定的出口已经不是固定出口 = 孤儿, 在这一行醒目标出 (规则集里暂时退回默认), 总览和批量改派在服务器页「出口分配」(exits.js)
  * · 列表分页 (ui.pager) + 分组标题; 分类筛选 / 搜索记在 TP.prefs (apps.group / apps.q)
  * · 2.3.8: 每个应用显示「安装 / 识别时间」(GET /api/apps 的 installed / seen) 和「今日流量」(GET /api/stats/apps?range=today, 页面开着时每 30 秒刷新);
  *   「操作」列每行都有按钮 (详情 + 保持关闭 / 删除); 所有列头可点击排序 (ui.sorter, 记在 prefs sort.apps; 排序时不分组), 工具栏也有排序下拉 (窄屏没有列头时用);
@@ -362,8 +363,8 @@
     r.sw = h('input', { type: 'checkbox', role: 'switch' });
     r.stT = h('span', { class: 'apps-stt' });                              // 「状态」列的文字 (已开启 / 已关闭); 窄屏的堆叠样式里不显示
     r.sel = h('select', { class: 'sel sm apps-sel' }, TP.opt('follow', t('name.app.follow')), TP.opt('pin', t('apps.opt.pin')), TP.opt('auto', t('apps.opt.auto')), TP.opt('direct', t('apps.opt.direct')));
-    r.tg = h('select', { class: 'sel sm apps-tg', hidden: true });                       // 固定出口有 2 个以上、状态是「固定出口」时: 指定走哪一个
-    r.tgGone = h('span', { class: 'chip warn', hidden: true }, L('apps.tg.gone'));
+    r.tg = h('select', { class: 'sel sm apps-tg', hidden: true });                       // 状态是「固定出口」时: 显示走哪一个 (有 2 个以上固定出口时可以指定; 只有 1 个时只读)
+    r.tgGone = h('span', { class: 'chip warn apps-tg-gone', hidden: true });              // 指定的出口已经不是固定出口 / 根本没有固定出口: 醒目地说明现在实际走哪里
     r.tHelp = hl('apps.terminal'); r.tHelp.hidden = true;
     r.tm = h('div', { class: 'apps-tm' }); r.tmD = h('span', { class: 'apps-tm-d' }); r.tmK = h('span', { class: 'apps-tm-k muted' }); r.tm.appendChild(r.tmD); r.tm.appendChild(r.tmK);
     r.tr = h('div', { class: 'apps-tr' }); r.trK = h('span', { class: 'apps-tr-k muted' }, L('apps.tr.today')); r.trV = h('b', { class: 'apps-tr-v' }); r.tr.appendChild(r.trK); r.tr.appendChild(r.trV);
@@ -421,26 +422,23 @@
   /* ---------- 固定出口: 默认 / 在固定出口里自动选 / 指定某一个 ---------- */
   var TERM_RE = /^(terminal|iterm2?|warp|ghostty|kitty|alacritty|wezterm|hyper|tabby|termius)$/i;
   function isTerm(a) { return a.group === t('apps.groupTermRaw') || TERM_RE.test(a.name || ''); }       // 后端给的分组原名是中文
-  function tgOf(a) { return a.target_ok === false || !a.target ? 'PIN' : a.target; }                     // select 的值: PIN = 默认固定出口
-  function tgSig(a) { return TP.pinServers().join('|') + '#' + I.lang; }
+  var X = TP.exits;                                                                                        // 出口选择器的公共部分在 exits.js (显示「默认 (当前是哪一个)」)
+  function tgOf(a) { return !TP.canPickPin() || a.target_ok === false || !a.target ? 'PIN' : a.target; }   // select 的值: PIN = 跟随默认固定出口
   function paintTarget(r, a, st, why) {
-    var show = st === 'pin' && TP.canPickPin();
-    r.tg.hidden = !show; r.tgGone.hidden = !(show && a.target && a.target_ok === false);
+    var noPin = st === 'pin' && !TP.hasPin(), show = st === 'pin' && !noPin, gone = show && !!a.target && a.target_ok === false;
+    r.tg.hidden = !show; r.tgGone.hidden = !(gone || noPin);
+    if (noPin) setText(r.tgGone, t('apps.tg.none')); else if (gone) setText(r.tgGone, X.orphanText(a.target));
     if (!show) return;
-    if (r.tg._sig !== tgSig(a)) {
-      r.tg._sig = tgSig(a); TP.clear(r.tg);
-      r.tg.appendChild(TP.opt('PIN', t('apps.tg.default'))); r.tg.appendChild(TP.opt('PINAUTO', t('apps.tg.auto')));
-      TP.pinServers().forEach(function (tag) { r.tg.appendChild(TP.opt(tag, tag)); });
-    }
+    X.fillTargets(r.tg);
     if (r.tg.value !== tgOf(a)) r.tg.value = tgOf(a);
-    ui.avail(r.tg, why);
+    X.targetAvail(r.tg, why);
     setAttr(r.tg, 'aria-label', t('apps.tg.aria', { name: a.name }));
   }
-  function tgName(v) { return v === 'PIN' || !v ? t('apps.tg.default') : v === 'PINAUTO' ? t('apps.tg.auto') : v; }
+  function tgName(v) { return X.targetName(v); }
   async function askTarget(row, to) {
     var a = row._a, prev = tgOf(a);
     if (!to || to === prev) return;
-    var ok = await ui.confirmDialog({ title: t('apps.tg.title'), message: t('apps.tg.msg', { name: a.name, from: tgName(prev), to: tgName(to) }), detail: [t(to === 'PIN' ? 'apps.tg.dDefault' : to === 'PINAUTO' ? 'apps.tg.dAuto' : 'apps.tg.dOne', { tag: to })], confirmText: t('apps.tg.go'), rememberKey: 'appstate' });
+    var ok = await ui.confirmDialog({ title: t('apps.tg.title'), message: t('apps.tg.msg', { name: a.name, from: tgName(prev), to: tgName(to) }), detail: [X.targetDetail(to)], confirmText: t('apps.tg.go'), rememberKey: 'appstate' });
     if (!ok) return;
     var old = { t: a.target, ok: a.target_ok };
     a.target = to === 'PIN' ? '' : to; a.target_ok = true; V.render();

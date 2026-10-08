@@ -141,9 +141,11 @@
     if (r.job) await TP.jobs.runInDock(window.I18N.t('job.override'), function () { return Promise.resolve(r); });
     return r;
   };
-  /* 可以单独指定的固定出口: 配置里前 16 个 role=pin 的服务器 (和 lib/config.sh 的规则集序号一致); 不到 2 个就没有「指定」这回事 */
-  TP.pinServers = function () { return TP.servers().filter(function (s) { return s.role === 'pin'; }).slice(0, 16).map(function (s) { return s.tag; }); };
+  /* 可以单独指定的固定出口: 配置里前 TP.PIN_MAX 个 role=pin 的服务器 (和 lib/apps.sh 的 OVR_PIN_MAX、lib/config.sh 的规则集序号一致); 不到 2 个就没有「指定」这回事 (只有一个时也能看到走的是它, 见 exits.js) */
+  TP.PIN_MAX = 32;
+  TP.pinServers = function () { return TP.servers().filter(function (s) { return s.role === 'pin'; }).slice(0, TP.PIN_MAX).map(function (s) { return s.tag; }); };
   TP.canPickPin = function () { return TP.pinServers().length >= 2; };
+  TP.hasPin = function () { return TP.pinServers().length >= 1; };
   /* 一个出口选择 (selector 当前选中的名字 / 覆盖的 target) 是不是「某个具体的固定出口」: 返回 'PINAUTO' | 服务器名 | '' */
   TP.pinTargetOf = function (v) { return v === 'PINAUTO' || TP.pinServers().indexOf(v) >= 0 ? v : ''; };
 

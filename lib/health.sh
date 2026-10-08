@@ -49,7 +49,10 @@ health_state_vector() { # -> core=1 pid=… api=1 proxy=1 mode=auto capture=syst
   fi
   [ "${NETWORK_MODE:-system}" != tun ] || { enhanced_ready >/dev/null 2>&1 && tun=1 || tun=0; }
   ifc=$(route -n get default 2>/dev/null | awk '/interface:/ {print $2; exit}'); gw=$(route -n get default 2>/dev/null | awk '/gateway:/ {print $2; exit}')
-  printf 'core=%s pid=%s api=%s proxy=%s mode=%s capture=%s sysproxy=%s login=%s tun=%s if=%s gw=%s pin=%s' "$run" "${pid:--}" "$api" "${PROXY_ENABLED:-0}" "${PROXY_MODE:-auto}" "${NETWORK_MODE:-system}" "$(health_sysproxy_eff)" "$(auth_logged_in && echo 1 || echo 0)" "$tun" "${ifc:--}" "${gw:--}" "$(health_pin_state)"
+  printf 'core=%s pid=%s api=%s proxy=%s mode=%s capture=%s sysproxy=%s login=%s tun=%s if=%s gw=%s pin=%s orphans=%s' "$run" "${pid:--}" "$api" "${PROXY_ENABLED:-0}" "${PROXY_MODE:-auto}" "${NETWORK_MODE:-system}" "$(health_sysproxy_eff)" "$(auth_logged_in && echo 1 || echo 0)" "$tun" "${ifc:--}" "${gw:--}" "$(health_pin_state)" "$(health_orphans)"
+}
+health_orphans() { # 指定了「已经不是固定出口的服务器」的应用 / 网站个数 (它们暂时退回默认固定出口, 出口 IP / 国家可能和你以为的不一样); 见 lib/exits.sh
+  if type exits_orphan_count >/dev/null 2>&1; then exits_orphan_count; else printf 0; fi
 }
 _health_event() { # <项目> <旧值> <新值> [额外 键 值…]  -> 操作记录 (来源 auto)
   local item=$1 from=$2 to=$3; shift 3
@@ -61,8 +64,9 @@ health_state_tick() { # 标准输出: 需要写进健康记录的 state 行 (变
   [ -f "$f" ] && IFS= read -r prev < "$f"
   [ -f "$w" ] && IFS= read -r lastw < "$w"
   if [ -n "$prev" ]; then
-    for k in core api proxy sysproxy login tun capture if gw pin; do
+    for k in core api proxy sysproxy login tun capture if gw pin orphans; do
       pv=$(_hv "$k" "$prev"); cv=$(_hv "$k" "$cur"); [ "$pv" != "$cv" ] || continue
+      [ "$k" != orphans ] || [ -n "$pv" ] || [ "$cv" != 0 ] || continue        # 升级后第一次: 旧的状态行里还没有这一项, 0 不算变化
       write=1
       case $k in
         core) _health_event core_running "$pv" "$cv" pid "$(_hv pid "$cur")" ;;
@@ -74,6 +78,7 @@ health_state_tick() { # 标准输出: 需要写进健康记录的 state 行 (变
         capture) _health_event capture_mode "$pv" "$cv" ;;
         if|gw) _health_event "net_$k" "$pv" "$cv" ;;
         pin) _health_event pin "$pv" "$cv" pin_servers 0 dependents "$(pin_dependents)" ;;     # ok → empty: 固定出口没了 (删了服务器 / 重装后没重设), 选了它的应用 / 服务开始直连
+        orphans) _health_event exit_orphans "${pv:--}" "$cv" names "$(exits_orphan_names 2>/dev/null)" ;;     # 指定的固定出口没了 / 不再是固定出口 (订阅刷新删掉了节点、角色被改): 这些应用 / 网站现在走默认固定出口, 出口 IP 可能变了
       esac
     done
     pv=$(_hv pid "$prev"); cv=$(_hv pid "$cur")
@@ -83,6 +88,7 @@ health_state_tick() { # 标准输出: 需要写进健康记录的 state 行 (变
   else
     write=1
     [ "$(_hv pin "$cur")" != empty ] || _health_event pin - empty pin_servers 0 dependents "$(pin_dependents)"      # 第一次观察就已经是空的 (例如重装后): 也记一笔
+    [ "$(_hv orphans "$cur")" = 0 ] || _health_event exit_orphans - "$(_hv orphans "$cur")" names "$(exits_orphan_names 2>/dev/null)"
   fi
   [ "$(( $(now) - ${lastw:-0} ))" -lt "$HEALTH_STATE_EVERY" ] || write=1
   printf '%s\n' "$cur" > "$f"

@@ -25,10 +25,11 @@ jobs:
         run: bash tests/core.sh
       - name: Diagnostics summary (allow-list privacy) and upload flow
         run: bash tests/diag.sh
-      - name: Dashboard system-proxy flow and sortable table headers
+      - name: Dashboard system-proxy flow, sortable table headers and exit-assignment dialogs
         run: |
           node tests/sysproxy-ui.test.js
           node tests/sorter.test.js
+          node tests/exits-ui.test.js
       - name: Verify terminal waits for Enter and renders one action per line
         run: python3 tests/console-pty.py
       - name: Check protected TUN cleanup and rollback
@@ -45,5 +46,7 @@ jobs:
         run: bash tests/units.sh
       - name: Enhanced/TUN isolated regressions (fingerprint, stop/restart decisions)
         run: bash tests/enhanced.sh
+      - name: Exit assignment (which apps/sites/services use which fixed exit; default exit; move/freeze; delete/role guards)
+        run: bash tests/exits.sh
       - name: Stop owned detached jobs while preserving unrelated processes
         run: python3 tests/stop-jobs.py

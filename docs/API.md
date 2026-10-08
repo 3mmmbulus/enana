@@ -144,8 +144,8 @@
 `GET /enana/admin/…` (无需 `X-Enana` 头; 只读, 白名单扩展名, 只给 GET / HEAD): 仪表盘静态文件由辅助服务直接提供 (`/enana/admin/` = index.html, `/enana/admin/<页面>` 也给 index.html, 页面名 = overview apps sites rules dns servers conns traffic speed logs settings login register; 不带斜杠的 `/enana/admin` 与 `/` 跳转到 `/enana/admin/`)。核心控制接口 (Clash API) 在 `ports.ui` 上, 只允许这个来源跨域访问, 地址写在 `env.json` 的 `clashBase`, 接口同源 (`apiBase` 为空)。
 
 **应用 / 覆盖的新字段 ★ 2.1.1**:
-- `apps[]` 每项多了 `target` (状态是 pin 时: 空 = 默认固定出口, `PINAUTO` = 在固定出口里自动选, 其它 = 指定走这一个固定出口) 和 `target_ok` (指定的固定出口还在吗); `flag` 多了一种值 `def` (首次扫描按推荐给的默认值: 云端推荐更新后会自动刷新, 不算「新应用」)。
-- `POST /api/override` 的 `target` 只对 `state=pin` 有意义 (其它状态忽略); 固定出口不到 2 个时只能留空; 取值必须是空 / `PINAUTO` / 现有的某个固定出口, 否则 `E_INVALID`。固定出口最多 16 个可以单独指定 (按配置里的顺序)。
+- `apps[]` 每项多了 `target` (状态是 pin 时: 空 = **跟随默认固定出口**, 默认出口换了它也跟着换; `PINAUTO` = 在固定出口里自动选, 其它 = 指定走这一个固定出口) 和 `target_ok` (指定的固定出口还在吗); `flag` 多了一种值 `def` (首次扫描按推荐给的默认值: 云端推荐更新后会自动刷新, 不算「新应用」)。
+- `POST /api/override` 的 `target` 只对 `state=pin` 有意义 (其它状态忽略); 固定出口不到 2 个时只能留空; 取值必须是空 / `PINAUTO` / 现有的某个固定出口, 否则 `E_INVALID`。固定出口最多 32 个可以单独指定 (按配置里的顺序; 常量 `OVR_PIN_MAX`, 2.3.10 及更早是 16 个; 超出的仍是固定出口, 但不能指定, 指定了的项目是「孤儿」, 见「出口分配」)。
 - `state.overrides[]` (网站覆盖) 每项: `{kind:"site",value,state,target,target_ok,src:"user|auto",at,why,fails,app}` —— `src=auto` 是「自动识别」添加的 (`at` 添加时间 unix 秒, `why` 失败类型 timeout|reset|refused|eof, `fails` 失败次数, `app` 触发的应用)。
 - `POST /api/override` 把自动识别添加的网站设成「跟随规则」= 删除它, 并且以后不再自动添加这个网站。
 - 新应用 (`flag=new`): 浏览器 (声明能打开 http / https 链接的应用) 默认「跟随规则」, 其它新应用默认「关」(直连); 仪表盘打开「应用」页就算已知晓, 会 `POST /api/apps/ack?all=1` 把新标记确认掉, 导航上的数字随之消失。
@@ -157,13 +157,59 @@
 `servers[]` 的每一项是 `{tag,type,server,port,role,sub}`。**官方线路 (会员) 的节点**排在用户自己的服务器后面, 多一个 `"official":true`: `server` 为 `""`、`port` 为 `0` (界面不显示官方节点的地址), `role` 永远是 `auto` (只进「自动线路」池, 不能当固定出口)。它们保存在 `~/.enana/official.jsonl` (权限 600), **不在** `servers.jsonl`, 也不进配置快照 / 云端同步 / `GET /api/export`; 对它们 `GET /api/servers/secret`、`POST /api/servers/delete`、`POST /api/servers/role` 一律 `E_FORBIDDEN`。`first_run` 只看用户自己的服务器。官方节点的标签以保留前缀 `官方-` 开头: 用户导入的节点不能使用这个前缀 (安装端拒绝; 导入器会把别的订阅里的「官方-xx」改名为「官方 xx」)。
 
 `GET /api/apps` · `POST /api/apps/scan` · `POST /api/apps/adopt` (表单 `names` 可选: 换行分隔的应用名, 只处理这几个; 不带 = 所有 flag=new 的应用) · `POST /api/apps/ack?name=|all=1` · `POST /api/override?kind=&value=&state=[&target=]` ·
-`POST /api/servers/import?sub=&mode=merge|replace&save=0|1` (正文=JSONL; **save★**: 1 = 「保存到云端」, 这些节点 (和订阅) 进入云端同步清单, 第一次用时自动打开云端同步; 0 = 只留在本机; 不带 = 不改动, 例如订阅自动刷新) · `POST /api/servers/delete?tag=` · `POST /api/servers/role?tag=&role=pin|auto|off|dl` ·
-`POST /api/cert?name=` · `POST /api/sub/fetch` · `POST /api/sub/save?name=&save=0|1` · `POST /api/sub/delete?name=` · `POST /api/restart` — 形状不变。
+`POST /api/servers/import?sub=&mode=merge|replace&save=0|1` (正文=JSONL; **save★**: 1 = 「保存到云端」, 这些节点 (和订阅) 进入云端同步清单, 第一次用时自动打开云端同步; 0 = 只留在本机; 不带 = 不改动, 例如订阅自动刷新) · `POST /api/servers/delete?tag=[&reassign=][&freeze=1][&accept_orphans=1]` · `POST /api/servers/role?tag=&role=pin|auto|off|dl[&reassign=][&freeze=1][&accept_orphans=1]` (删除 / 改角色的新参数见「出口分配」: 固定出口有人在用时必须先指明去向) ·
+`POST /api/cert?name=` · `POST /api/sub/fetch` · `POST /api/sub/save?name=&save=0|1` · `POST /api/sub/delete?name=[&accept_orphans=1]` · `POST /api/restart` — 形状不变 (订阅里有被使用的固定出口时的新参数见「出口分配」)。
 
 `servers/import` 的 `mode=replace` + `sub` (订阅刷新) 是**就地**合并: 订阅里已有的 tag 留在 `servers.jsonl` 里原来的那一行 (内容变了就原地覆盖), 新的 tag 追加到末尾, 订阅里已经没有的 tag 删掉; 其它来源的行 (手动添加的服务器、别的订阅) 原样不动。内容完全相同的刷新不改动文件, 所以生成的配置不变、核心不重启 (TUN 下也不用管理员授权)。返回的 `added` = 全新的 tag · `replaced` = 文件里已有的 tag (不论内容有没有变; 和 `merge` 一致) · `removed` = 这个订阅里有、新数据里没有的 tag (以前是「先删光再追加」, 订阅整个刷新一次就是 `removed` = 旧节点数、`added` = 新节点数)。`mode=merge` 不变: 已有的 tag 被新行取代并移到末尾。命令行 / 定时刷新 (`enana update`、每日维护) 会把订阅里已有节点的角色 (pin / off / dl) 带回来, 不会被导入器的默认 `auto` 覆盖; 同一批要刷新的多个订阅在一个事务里导入、只应用一次 (合并的事务没通过时退回逐个订阅各一个事务)。
 
 ### `GET /api/job?id=`
 `{"ok":true,"id","name","state":"running|done|error","pct":0-100,"msg":"…","steps":[{"label":"…","state":"todo|run|done|error"}],"result":{}}`; `msg`/`label` 按 `X-Enana-Lang` 翻译。
+
+## 出口分配 ★ (固定出口不是全局的一个开关)
+
+不同的应用 / 网站 / 服务可以走不同的固定出口 (应用 A 走出口 1, 应用 B 走出口 2)。`overrides.tsv` 里状态是 `pin` 的应用 / 网站, 第 5 列 `target` 把它们分成四类, 服务 (`svc-<id>` 选择器, 在核心里) 同理:
+
+| 归属 | 应用 / 网站的 `target` | 服务选择器当前选的 | 说明 |
+|---|---|---|---|
+| 指定 (`bound`) | 某个固定出口的名字 | 某个固定出口的名字 | 只走它; 它不可用时不会换别的出口 |
+| 跟随默认 (`follow`) | 空 | `PIN` | **默认固定出口换了, 它们的出口 IP 也跟着换** —— 所以换默认前必须让用户先看到谁会受影响 |
+| 自动选 (`auto`) | `PINAUTO` | `PINAUTO` | 在固定出口里自动选最快的 |
+| 孤儿 (`orphan`) | 指定的出口已经不是固定出口 | (不会出现: 核心会让选择器回到它的默认) | 被删除 (`deleted`) / 改了角色 (`role`) / 超出 `OVR_PIN_MAX` 个 (`cap`)。**路由语义没变**: 规则集里暂时退回默认固定出口 (不会断网, 没有固定出口时才直连), 但出口 IP / 国家可能变了, 所以现在会被标出来 (界面徽标 · `GET /api/exits` 的 `orphans` · 健康记录 `环境状态变化 item=exit_orphans`) |
+
+**默认固定出口** = 选择器 `PIN` 当前选中的服务器。除了核心自己记住 (`cache.db`), 还另存一份在 `$H/pin-default` (一行服务器名, 属于配置事务的备份范围): 核心没运行时也知道默认是谁; 核心重启后选择被重置 (缓存丢了 / 重装) 时, `proxy_sync_mode` 会按它切回去 (操作记录 `恢复默认固定出口`); 不再靠「文件里的第一个固定出口」(重新导入订阅会改变顺序)。老安装没有这个文件: 默认 = 核心里正在用的, 第一次 `GET /api/exits` 时记下来 (只信核心里读到的值, 核心读不到时绝不拿第一个固定出口去覆盖用户的选择)。`POST /api/policy tag=PIN` 切换时同步记下。
+
+### `GET /api/exits`
+→ `{"ok":true,"default":{"tag":"Tokyo-1","source":"live|stored|first|none","live":"Tokyo-1","stored":"Tokyo-1"},"max":32,"count":3,"pins":[{"tag":"Tokyo-1","targetable":true,"default":true,"apps":["Cursor"],"sites":["a.io"],"services":["svc-claude"]},…],"follow":{"apps":[],"sites":[],"services":["svc-chatgpt"],"dns":false},"auto":{"apps":[],"sites":["b.io"],"services":[]},"orphans":[{"kind":"site","name":"gone.io","target":"Old-1","reason":"deleted|role|cap"}],"orphan_count":1,"services_known":true}`
+- `pins` 是全部 `role=pin` 的服务器 (按配置顺序); `targetable=false` = 排在 `max` 之后, 不能单独指定。`apps` / `sites` 是指定走它的应用名 / 网站域名, `services` 是选择器名 (`svc-<id>`, 显示名用网站目录里的名字)。
+- `follow.dns` = DNS 的「线路」设成了固定出口 (跟着默认出口走, 不能钉住, 只作为影响提示)。
+- `services_known=false` = 核心没运行, 读不到服务的选择 (`services` 全是空, 应用 / 网站照常)。
+- 副作用: 老安装第一次读到时把核心里的默认固定出口记进 `$H/pin-default`。
+
+### `GET /api/exits/impact?op=remove|default&tag=`
+删除 / 改角色 (`remove`) 或把默认固定出口换成 `tag` (`default`) 会让谁换出口 IP —— 仪表盘在确认框里列出来。
+→ `{"ok":true,"op":"remove","tag":"Tokyo-1","is_pin":true,"default":"Tokyo-1","default_changes":true,"bound":{"apps":[],"sites":["a.io"],"services":[]},"follow":{"apps":["ChatGPT"],"sites":[],"services":["svc-chatgpt"],"dns":false},"affected":3,"remaining":2,"candidates":[{"tag":"Osaka-2","targetable":true},…],"services_known":true}`
+- `bound` = 指定了它的 (只有 `remove` 且它现在是固定出口时才有); `follow` = 跟随默认的 (只有默认出口会变时才列: `remove` 的是默认出口, 或 `default` 换成了另一个); `affected` = 两者之和 (+ DNS 算 1); `remaining` = 其余固定出口个数; `candidates` = 可以当去向的其它固定出口。
+
+### `POST /api/exits/move?from=&to=[&kind=]`
+一次改写应用 / 网站 / 服务的出口 (换节点时不用逐个修改)。`from` = `DEFAULT` (跟随默认的) | `PINAUTO` | `ORPHAN` (全部孤儿) | 某个服务器名 (所有指定了它的); `to` = `DEFAULT` (改成跟随默认) | `PINAUTO` | 某个固定出口 (后两者要求固定出口 ≥ 2 个且在 `max` 之内, 否则 `E_INVALID`); `kind` 空 = 全部 | `app` | `site` | `service`。只动状态是 `pin` 的行, 标记设为 `ack`; 幂等。
+- **非 TUN**: 同步完成, 和 `POST /api/override` 一样只写规则集文件 (核心热加载, **不重启**), 服务通过 `PUT /proxies/<svc>` 切换: → `{"ok":true,"moved":{"apps":1,"sites":2,"services":3},"services_known":true,"services_failed":0}`。
+- **TUN**: → `{"ok":true,"job":"exits-move-…"}` (后台任务, 经 `op_txn` → `apply_config` → 免密规则同步助手, **不重启核心**, 也就不要管理员密码; 没有助手时和其它策略改动一样走完整安装)。事务失败 (例如取消了管理员授权) 时覆盖整体回滚, 服务的选择器也切回原来的。
+- 操作记录: `移动固定出口 from=… to=… kind=… apps=… sites=… services=…`。
+
+### `POST /api/exits/freeze[?kind=]`
+「钉住」: 把跟随默认的 (应用 / 网站 / 服务) 全部改成明确指定**当前的默认固定出口** —— 等于 `move from=DEFAULT to=<当前默认>`。之后换默认固定出口不会再带着它们换。只有一个固定出口时没有什么可钉的: `{"ok":true,"moved":{…0},"skipped":"single"}`; 没有固定出口 → `E_INVALID`。
+
+### 删除 / 改角色 / 删订阅的保护 (有人在用时不再悄悄换 IP)
+`POST /api/servers/delete`、`POST /api/servers/role` (新角色不是 `pin`) 作用在一个**现在是固定出口**的服务器上、而有应用 / 网站 / 服务指定了它 (或它是默认固定出口、有项目在跟随它) 时, 必须带下面之一, 否则 **什么也不改**, 返回
+`{"ok":false,"code":"E_EXIT_IN_USE","error":"…","impact":{同 /api/exits/impact 的明细}}`:
+- `reassign=<另一个固定出口 | PINAUTO | DEFAULT>`: 指定了它的应用 / 网站 / 服务改派到这里。`DEFAULT` = 改成跟随默认 (被移除的不是默认出口时才行); `PINAUTO` 要求其余固定出口 ≥ 2 个且被移除的不是默认出口。被移除的**是**默认固定出口时, 默认固定出口同时换成这个去向 (跟随默认的随它走, 仍然跟随); 再加 `freeze=1` = 跟随默认的也钉在去向上 (以后默认再换也不动它们)。去向不合法 (自己 / 不存在 / 超出上限) → `E_INVALID`。
+- `accept_orphans=1`: 明确接受后果, 不改派: 指定了它的项目成为孤儿 (规则集退回默认固定出口), 没有固定出口时直连 (和 2.3.9 起的警告一致)。
+改派发生在**同一个事务**里 (`txn_delete` / `txn_role`: 改写 `overrides.tsv` → 改默认出口 → 删除 / 改角色 → `apply_config`, 失败整体回滚); 核心里的部分 (默认固定出口切到去向、指定了它的服务改选去向) 在任务启动前趁两个出口都还在时用 `PUT /proxies/…` 切好, 响应里带 `services_failed` (仅当 > 0)。服务器本来不是固定出口 / 没人用它时不需要任何参数, 和以前完全一样。
+**兼容性**: 老的调用方 (没带新参数) 对「有人在用的固定出口」的删除 / 改角色现在会得到 `E_EXIT_IN_USE` 而不是一个悄悄换 IP 的任务 —— 这是有意的; `accept_orphans=1` 就是旧行为。命令行 / 任务入口 `txn_delete` `txn_role` `txn_subdel` 同样受保护。
+`POST /api/sub/delete?name=` 删除订阅时, 如果订阅里有被使用的固定出口 (或其中一个是默认出口且有项目在跟随它), 同样返回 `E_EXIT_IN_USE` (`impact` = `{"servers":["Sub-1",…],"affected":N}`), 带 `accept_orphans=1` 才执行 (订阅整体消失, 没有逐个改派; 要改派先在服务器页里逐个处理)。订阅**刷新**删掉节点是自动的、无法询问, 事后由 `exit_orphans` 事件和总览里的孤儿组提示。
+
+### 上限
+可以单独指定的固定出口最多 `OVR_PIN_MAX` = 32 个 (lib/apps.sh; 每个固定出口 3 个规则集文件: 网站 / 应用 / 浏览器, 32 个 = 96 + 11 个固定名字的文件)。TUN 的规则同步助手 (`lib/tunrules-helper.pl`) 一次最多接受 160 个文件; 升级前装好的旧助手上限是 60 (= 最多 16 个固定出口), 超过时它会拒绝, 退回完整安装 (管理员授权), 那一次授权会把助手一并换成新版。保留字: `DEFAULT` `PINAUTO` `ORPHAN` 在这些接口里是特殊值, 不要用它们给服务器命名。
 
 ## 策略切换 / 审计 / 自动识别 ★ (v2.1.1 新增)
 
@@ -446,7 +492,7 @@
 
 `POST /api/network-mode` 表单 `mode=system|tun` → `{ok:true,job}`。设置是本机独有, 不进入跨设备同步; 升级缺省 `system`。`GET /api/state` 与 `/api/settings` 的 `proxy` 增加 `network_mode`、`tun_ready`。
 
-TUN 使用管理员授权后的规则快照。此模式下 `/api/override`、`/api/apps/adopt`、`/api/apps/scan`、`/api/sites/auto/clear` 返回异步 `{ok:true,job}`, 前端必须等 job 完成再显示成功, 取消授权时事务撤销。System Proxy 下这些接口沿用立即响应/文件热加载。自动识别网站也必须先应用快照, 再验证实际连接; 不能把用户目录文件已更改当成 root 核心规则已生效。
+TUN 使用管理员授权后的规则快照。此模式下 `/api/override`、`/api/exits/move`、`/api/exits/freeze`、`/api/apps/adopt`、`/api/apps/scan`、`/api/sites/auto/clear` 返回异步 `{ok:true,job}`, 前端必须等 job 完成再显示成功, 取消授权时事务撤销。System Proxy 下这些接口沿用立即响应/文件热加载。自动识别网站也必须先应用快照, 再验证实际连接; 不能把用户目录文件已更改当成 root 核心规则已生效。
 
 访问记录新增 `capture:"mixed|tun"` (老记录可能为空)。
 

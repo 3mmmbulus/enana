@@ -43,6 +43,7 @@ console_draw() {
   if [ "$CS_srv" -gt 0 ] && [ "$CS_svc" = 1 ]; then
     pf '  固定出口  %s  %s\n' "${CS_pin:-—}" "$(_cs_ms "$CS_pin_ms")"
     [ "$(health_pin_state)" != empty ] || pf '            %s⚠ 没有设置固定出口: 选了「固定出口」的应用 / 服务 (如 ChatGPT) 现在会直连 (真实 IP); 到仪表盘「服务器」页设置%s\n' "$Y" "$N"
+    [ "$(health_orphans)" = 0 ] || pf '            %s⚠ 有 %s 个应用 / 网站指定的固定出口已经不存在, 暂时在用默认固定出口 (出口 IP 可能变了); 到仪表盘「服务器」页的「出口分配」处理%s\n' "$Y" "$(health_orphans)" "$N"
     [ -n "$CS_auto" ] && pf '  自动线路  %s  %s\n' "$CS_auto" "$(_cs_ms "$CS_auto_ms")"
   fi
   if [ -n "$CS_acc" ]; then pf '  账号      已登录 %s\n' "$CS_acc"; else pf '  账号      未登录 (打开仪表盘, 用 enana.cc 账号登录或注册)\n'; fi

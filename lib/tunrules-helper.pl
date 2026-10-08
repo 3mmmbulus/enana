@@ -23,6 +23,7 @@ my $LABEL = '@LABEL@';        # 例: com.enana.proxy.tun.501 (这个用户的 TU
 my $LAUNCHCTL = '@LAUNCHCTL@'; # 生产里是 /bin/launchctl (安装时写死, 测试里换成假的)
 my $VERSION = @VERSION@;
 my $MAX_BYTES = 2_000_000;
+my $MAX_FILES = 160;          # 一次最多同步多少个规则集文件 (必须 >= 11 + 3 * lib/apps.sh 的 OVR_PIN_MAX; 升级前安装的旧助手上限是 60, 固定出口超过 16 个时它会拒绝, 退回完整安装)
 
 my $cmd = shift(@ARGV) // '';
 die "usage: tunrules sync|restart|version\n" if @ARGV || $cmd !~ /^(?:sync|restart|version)$/;
@@ -46,7 +47,7 @@ my $in = ''; my $n = read(STDIN, $in, $MAX_BYTES + 1);
 die "empty input\n" unless $n;
 die "input too large\n" if length($in) > $MAX_BYTES;
 my $doc = eval { JSON::PP->new->utf8->max_depth(8)->decode($in) };
-die "invalid JSON\n" unless ref $doc eq 'HASH' && keys %$doc && keys %$doc <= 60;
+die "invalid JSON\n" unless ref $doc eq 'HASH' && keys %$doc && keys %$doc <= $MAX_FILES;       # 11 个固定名字 + 每个固定出口 3 个 (网站 / 应用 / 浏览器): OVR_PIN_MAX=32 个出口 = 107 个; 留出余量
 
 sub bad { die "rejected: $_[0]\n" }
 # JSON 里的数字和字符串在 Perl 里只能靠内部标志区分, 而且任何字符串操作 (length / 正则) 都会让数字也带上字符串标志: 所以类型检查必须先做。

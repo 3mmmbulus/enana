@@ -4,7 +4,8 @@
 #   direct                      直连
 #   <用户的服务器…>              来自 servers.jsonl
 #   AUTO   (urltest)            自动池里最快的节点; 只有别的节点快过当前 50ms 以上才切换 (tolerance=50)
-#   PIN    (selector)           固定出口: 只含 role=pin 的服务器, 故障时不会漂移到别的国家 (避免账号风控)
+#   PIN    (selector)           固定出口: 只含 role=pin 的服务器, 故障时不会漂移到别的国家 (避免账号风控)。它当前选中的那一台 = 「默认固定出口」(跟随默认的应用 / 网站 / 服务走它);
+#                               配置里的 default 只是第一个固定出口, 用户的选择由核心记住 (cache.db) 并另存一份在 $H/pin-default, 核心重启后由 proxy_sync_mode 校正 (lib/exits.sh)
 #   Global (selector)           「自动线路」: AUTO + 自动池节点 + 固定出口节点, 可在仪表盘手动指定某个节点
 #   svc-<id> (selector)         每个网站/服务一个开关, 选项 PIN / Global / direct (仪表盘一键热切换); 固定出口有 2 个以上时还多出
 #                               PINAUTO 和每个固定出口各一项 (这个网站固定走哪一个固定出口 / 在固定出口里自动选一个)
@@ -105,11 +106,11 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
       done < "$H/custom-rulesets.tsv"
     fi
   fi
-  # 固定出口有 2 个以上时: 每个应用 / 网站可以指定走哪一个固定出口 (ovr-pin-<序号>, 最多 16 个) 或「在固定出口里自动选」(ovr-pinauto → PINAUTO)。
+  # 固定出口有 2 个以上时: 每个应用 / 网站可以指定走哪一个固定出口 (ovr-pin-<序号>, 最多 OVR_PIN_MAX 个, 见 lib/apps.sh) 或「在固定出口里自动选」(ovr-pinauto → PINAUTO)。
   # 规则集的内容由 ovr_sync 按用户的设置写成文件, 切换时核心自己监视文件变化, 不用重启
   : > "$T/pinx"; npinx=0; pinx_opts=''
   if [ -s "$T/pins" ] && [ "$(wc -l < "$T/pins" | tr -d ' ')" -ge 2 ]; then
-    head -16 "$T/pins" > "$T/pinx"; npinx=$(wc -l < "$T/pinx" | tr -d ' ')
+    head -n "${OVR_PIN_MAX:-32}" "$T/pins" > "$T/pinx"; npinx=$(wc -l < "$T/pinx" | tr -d ' ')
     printf '{"type":"urltest","tag":"PINAUTO","outbounds":[%s],"url":"http://www.gstatic.com/generate_204","interval":"10m","tolerance":50,"idle_timeout":"30m"}\n' "$(json_list < "$T/pinx")" >> "$T/ob"
     pinx_opts=",\"PINAUTO\",$(json_list < "$T/pinx")"
   fi
@@ -289,6 +290,7 @@ _proxy_set() { # <PROXY_ENABLED|PROXY_MODE> <值>: 每一次真的变化都记�
 }
 proxy_set_enabled() { proxy_locked _proxy_set PROXY_ENABLED "$1"; }                                           # 0|1
 proxy_set_mode() { case $1 in auto|global) ;; *) return 1 ;; esac; proxy_locked _proxy_set PROXY_MODE "$1"; }   # auto|global
-proxy_sync_mode() { # 核心刚(重新)启动后调用: 让运行时的模式与设置一致 (缓存文件里可能留着旧模式)
+proxy_sync_mode() { # 核心刚(重新)启动后调用: 让运行时的模式与设置一致 (缓存文件里可能留着旧模式); 默认固定出口也一样 (见 lib/exits.sh)
   clash PATCH /configs "{\"mode\":\"$(proxy_clash_mode)\"}" >/dev/null 2>&1 || true
+  if type exits_sync_default >/dev/null 2>&1; then exits_sync_default || true; fi
 }

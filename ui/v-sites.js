@@ -39,7 +39,8 @@
   function polClass(st) { return st === 'pin' || st === 'auto' || st === 'direct' ? st : ''; }                    // 覆盖的状态 -> 路由类别 (跟随规则没有)
   /* 选择器当前选中的名字 -> 三段开关里的哪一段: PIN / Global / direct; 指定了某一个固定出口 (或「固定出口里自动选」) 也算 PIN */
   function segOf(now) { return now === 'PIN' || now === 'Global' || now === 'direct' ? now : (TP.pinTargetOf(now) ? 'PIN' : (now || '')); }
-  function tgName(v) { return v === 'PIN' || !v ? t('apps.tg.default') : v === 'PINAUTO' ? t('apps.tg.auto') : v; }
+  var X = TP.exits;                                                                                        // 出口选择器的公共部分在 exits.js (显示「默认 (当前是哪一个)」)
+  function tgName(v) { return X.targetName(v); }
 
   /* 折叠的分组: prefs 里存「被折叠的分组 id 数组」; 还没存过时, 前两个分组展开、其余折叠 (和以前一样) */
   function collapsedList() { var c = TP.prefs.get(PREF_COLLAPSED, null); return Array.isArray(c) ? c : catalog().order.slice(2); }
@@ -251,13 +252,6 @@
     return row;
   }
   function rsShort(tag) { return String(tag).replace(/^geosite-/, '').replace(/^geoip-/, ''); }
-  function fillTargets(sel) {
-    var sig = TP.pinServers().join('|') + '#' + I.lang;
-    if (sel._sig === sig) return;
-    sel._sig = sig; TP.clear(sel);
-    sel.appendChild(TP.opt('PIN', t('apps.tg.default'))); sel.appendChild(TP.opt('PINAUTO', t('apps.tg.auto')));
-    TP.pinServers().forEach(function (tag) { sel.appendChild(TP.opt(tag, tag)); });
-  }
   function updateEntry(row, e) {
     var r = row._r, p = S.proxies[e.tag || ('svc-' + e.id)], now = p && p.now, ds = (e.domains || []).length, name = eName(e), isFinal = e.id === 'final';
     row._e = e;
@@ -275,10 +269,10 @@
         if (rss.length > 3) r.rs.appendChild(h('span', { class: 'badge', title: rss.slice(3).join(', ') }, '+' + (rss.length - 3)));
       }
     }
-    var cls = segOf(now), canPick = !!p && cls === 'PIN' && TP.canPickPin();
+    var cls = segOf(now), canPick = !!p && cls === 'PIN' && TP.hasPin();
     r.seg.set(cls || '');
     r.tg.hidden = !canPick;
-    if (canPick) { fillTargets(r.tg); var tv = TP.pinTargetOf(now) || 'PIN'; if (r.tg.value !== tv) r.tg.value = tv; r.tg.setAttribute('aria-label', t('apps.tg.aria', { name: name })); ui.avail(r.tg, S.clash === 'down' ? TP.why.clash() : ''); }
+    if (canPick) { X.fillTargets(r.tg); var tv = (TP.canPickPin() && TP.pinTargetOf(now)) || 'PIN'; if (r.tg.value !== tv) r.tg.value = tv; r.tg.setAttribute('aria-label', t('apps.tg.aria', { name: name })); X.targetAvail(r.tg, S.clash === 'down' ? TP.why.clash() : ''); }
     r.seg.el.setAttribute('aria-label', t('sites.seg.aria', { name: name })); row.setAttribute('aria-label', name);
     var ready = !!p, all = (p && p.all) || [];
     ['PIN', 'Global', 'direct'].forEach(function (v) {
@@ -313,7 +307,7 @@
     if (!p || !to) return;
     var prev = p.now, pv = TP.pinTargetOf(prev) || 'PIN';
     if (to === pv) return;
-    var ok = await ui.confirmDialog({ title: t('apps.tg.title'), message: t('apps.tg.msg', { name: name, from: tgName(pv), to: tgName(to) }), detail: [t(to === 'PIN' ? 'apps.tg.dDefault' : to === 'PINAUTO' ? 'apps.tg.dAuto' : 'apps.tg.dOne', { tag: to })], confirmText: t('apps.tg.go'), rememberKey: 'policy' });
+    var ok = await ui.confirmDialog({ title: t('apps.tg.title'), message: t('apps.tg.msg', { name: name, from: tgName(pv), to: tgName(to) }), detail: [X.targetDetail(to)], confirmText: t('apps.tg.go'), rememberKey: 'policy' });
     if (!ok) { updateEntry(row, e); return; }
     p.now = to; updateEntry(row, e);
     try { await TP.setPolicy(tag, to); }
@@ -442,21 +436,24 @@
     setText(el.count, all.length ? t('sites.custom.count', { n: all.length }) : '');
   }
   function paintCustomPin(row, o) {
-    var show = o.state === 'pin' && TP.canPickPin(), tv = !o.target || o.target_ok === false ? 'PIN' : o.target;
-    row._tg.hidden = !show;
+    var noPin = o.state === 'pin' && !TP.hasPin(), show = o.state === 'pin' && !noPin, gone = show && !!o.target && o.target_ok === false, tv = customTarget(o);
+    row._tg.hidden = !show; row._gone.hidden = !(gone || noPin);
+    if (noPin) setText(row._gone, t('apps.tg.none')); else if (gone) setText(row._gone, X.orphanText(o.target));
     if (!show) return;
-    fillTargets(row._tg); if (row._tg.value !== tv) row._tg.value = tv;
+    X.fillTargets(row._tg); if (row._tg.value !== tv) row._tg.value = tv;
+    X.targetAvail(row._tg, S.clash === 'down' ? TP.why.clash() : '');
     row._tg.setAttribute('aria-label', t('apps.tg.aria', { name: o.value }));
   }
+  function customTarget(o) { return !TP.canPickPin() || !o.target || o.target_ok === false ? 'PIN' : o.target; }      // select 的值: PIN = 跟随默认固定出口
   function renderCustomPins() { if (tab === 'catalog') return; Array.prototype.forEach.call(el.cList.children, function (row) { if (row._o) paintCustomPin(row, row._o); }); }
   function makeCustom() {
     var host = h('span', { class: 'mono site-n' }), sel = h('select', { class: 'sel sm' }, SITE_ST.map(function (x) { return TP.opt(x, TP.name.app(x)); }));
     var src = ui.badge(L('sites.src.auto'), 'info', 'scan-search'), meta = h('div', { class: 'muted sm site-d' });
-    var tg = h('select', { class: 'sel sm sx-tg', hidden: true });
+    var tg = h('select', { class: 'sel sm sx-tg', hidden: true }), gone = h('span', { class: 'chip warn apps-tg-gone', hidden: true });
     var del = ui.ibtn('delete', t('common.delete'), { cls: 'danger-t' });
-    var row = h('div', { class: 'site custom' }, h('div', { class: 'site-main' }, h('div', { class: 'site-t' }, host, src), meta), h('div', { class: 'sx-ctl' }, sel, tg), del);
+    var row = h('div', { class: 'site custom' }, h('div', { class: 'site-main' }, h('div', { class: 'site-t' }, host, src), meta, gone), h('div', { class: 'sx-ctl' }, sel, tg), del);
     src.hidden = true; meta.hidden = true;
-    row._host = host; row._sel = sel; row._del = del; row._src = src; row._meta = meta; row._tg = tg;
+    row._host = host; row._sel = sel; row._del = del; row._src = src; row._meta = meta; row._tg = tg; row._gone = gone;
     ui.selectAct(sel, function () { return row._o.state; }, async function (want) {
       var o = row._o, prev = o.state, tx = TP.txt.app(o.value, prev, want);
       var ok = await ui.confirmDialog({ title: t('sites.change.title'), message: tx.message, detail: tx.detail, confirmText: t('sites.change.go'), rememberKey: 'policy' });
@@ -466,10 +463,10 @@
       ui.toast(t('sites.changed', { name: o.value, state: TP.name.app(want) }), 'ok', 2400);
       if (want === 'follow') await TP.loadState();                                                // 「跟随规则」= 删除这条覆盖
     });
-    ui.selectAct(tg, function () { var o = row._o; return !o.target || o.target_ok === false ? 'PIN' : o.target; }, async function (want) {
+    ui.selectAct(tg, function () { return customTarget(row._o); }, async function (want) {
       var o = row._o, prev = o.target || '', to = want === 'PIN' ? '' : want;
       if (to === prev) return;
-      var ok = await ui.confirmDialog({ title: t('apps.tg.title'), message: t('apps.tg.msg', { name: o.value, from: tgName(prev), to: tgName(want) }), detail: [t(want === 'PIN' ? 'apps.tg.dDefault' : want === 'PINAUTO' ? 'apps.tg.dAuto' : 'apps.tg.dOne', { tag: want })], confirmText: t('apps.tg.go'), rememberKey: 'policy' });
+      var ok = await ui.confirmDialog({ title: t('apps.tg.title'), message: t('apps.tg.msg', { name: o.value, from: tgName(prev), to: tgName(want) }), detail: [X.targetDetail(want)], confirmText: t('apps.tg.go'), rememberKey: 'policy' });
       if (!ok) { paintCustomPin(row, o); return; }
       o.target = to; o.target_ok = true;
       try { await TP.override('site', o.value, 'pin', to); } catch (e) { o.target = prev; paintCustomPin(row, o); throw e; }
