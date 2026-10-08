@@ -894,3 +894,10 @@ macOS 没有允许 enana 弹出授权窗口。请在「系统设置 → 隐私�
 完整诊断包含你访问过的域名和应用名, 只发给 enana 开发者, 云端 7 天后自动删除; 不含密码和令牌。	Full diagnostics include the domains you visited and app names, are sent only to the enana developer, and are deleted from the cloud after 7 days; no passwords or tokens.
 确认发送?	Send?
 已发送。报告编号: %s (把它告诉开发者)	Sent. Report code: %s (give it to the developer)
+# --- billing bridge errors and official routes
+付款参数无效	Invalid payment details
+订单编号无效	Invalid order id
+账号服务暂时无法连接，请稍后重试	The account service is unreachable right now. Try again later
+登录已失效或云端会话已结束，请重新登录后再试	Your sign-in has expired or the cloud session has ended. Sign in again and retry
+enana.cc 服务器返回了错误，这次操作可能已生效也可能没有，请先刷新并查看订单和余额	The enana.cc server returned an error. The request may or may not have gone through: refresh and check your orders and balance first
+请求过于频繁，请稍后再试	Too many requests. Try again later

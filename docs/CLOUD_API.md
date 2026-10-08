@@ -18,7 +18,7 @@
 | `audit_events` | 安全审计: `user` · `device` · `type`(register/login/login_failed/logout/kick/limit_blocked/sync_push/sync_pull …) · `detail` · `ip_masked` |
 所有集合只允许通过上面的接口访问 (规则: 只能访问自己的记录), 管理员通过 SSH 隧道进入后台。
 
-Pro 订单、余额、到账记录与验证接口见 [BILLING_API.md](BILLING_API.md)。这一阶段上线服务端基础，正式收款关闭，客户端购买界面和官方线路下发尚未发布。
+Pro 订单、余额、到账记录与验证接口见 [BILLING_API.md](BILLING_API.md)。服务端与客户端的「设置 → 会员」页面(价格、余额、订单、邮箱验证)已经发布；**新订单的收款由服务器配置关闭，直到正式开放**(`payments_available:false`，客户端会明确显示「收款暂未开放」，不是按钮坏了)。官方线路节点的下发见下面的 `GET /api/enana/v1/nodes`。
 
 ## 设备数量限制 (服务端强制)
 同一个账号, **同一平台最多同时在线 2 台设备** (macOS 2 台 + Windows 2 台; 上限来自账号套餐 `plans.max_devices_per_platform`)。

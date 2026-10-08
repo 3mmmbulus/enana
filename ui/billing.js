@@ -12,6 +12,15 @@
   function term(sku) { return labels[sku] ? t(labels[sku]) : String(sku || ''); }
   function msg(e) { return e && e.code && window.I18N.has('billing.err.' + e.code) ? t('billing.err.' + e.code) : TP.errMsg(e); }
   function canUse() { return !S.locked && !TP.why.helper(); }
+  /* 幂等键: 优先 crypto.randomUUID; 没有 (旧浏览器 / 非安全上下文) 就退回 getRandomValues, 再退回 Math.random。只用来让「重试不会重复下单」, 不是密钥, 不能让它抛错。 */
+  function newKey() {
+    try { if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID(); } catch (e) { /* 退回 */ }
+    var a = [], i, s = '';
+    try { var u = new Uint8Array(16); window.crypto.getRandomValues(u); for (i = 0; i < 16; i++) a.push(u[i]); } catch (e) { a = []; }
+    for (i = a.length; i < 16; i++) a.push(Math.floor(Math.random() * 256));
+    for (i = 0; i < 16; i++) s += ('0' + a[i].toString(16)).slice(-2);
+    return s.slice(0, 8) + '-' + s.slice(8, 12) + '-4' + s.slice(13, 16) + '-a' + s.slice(17, 20) + '-' + s.slice(20, 32);
+  }
   function activeOrder() { return data && (data.orders || []).filter(function (o) { return o.status === 'pending' && o.expires_at * 1000 > Date.now(); })[0]; }
   function why(payments) {
     if (!canUse()) return TP.why.helper() || t('why.locked');
@@ -44,7 +53,7 @@
   async function write(op, body, scope) {
     if (mutation) return null;
     var mine = epoch;
-    if (scope) { if (!keys[scope]) keys[scope] = window.crypto.randomUUID(); body.request_key = keys[scope]; }
+    if (scope) { if (!keys[scope]) keys[scope] = newKey(); body.request_key = keys[scope]; }
     mutation = true; redraw();
     try {
       var r = await TP.helper('POST', '/api/' + op, { body: JSON.stringify(body), timeout: 18000 });
@@ -90,15 +99,41 @@
       } }
     ] });
   }
+  /* 为什么现在不能付款 / 为什么按钮是灰的: 常驻的行内说明 (不再只靠灰色按钮 + 点击后 5 秒的提示)。每一条都说明原因, 能自己解决的还带一个动作。 */
+  function signInAgain() { return TP.auth && TP.auth.logout ? TP.auth.logout('switch') : null; }
+  function notices() {
+    var list = [], o;
+    if (!canUse()) return [{ kind: 'warn', text: TP.why.helper() || t('why.locked') }];
+    if (error) {
+      list.push(error.code === 'E_AUTH' && TP.auth && TP.auth.logout
+        ? { kind: 'bad', text: msg(error), action: { label: L('billing.signInAgain'), fn: signInAgain } }
+        : { kind: 'warn', text: msg(error), action: { label: L('common.retry'), fn: function () { return B.load(true); } } });
+    }
+    if (!data) return list;
+    if (!data.email.verified) list.push({ kind: 'warn', text: t(data.email.mail_available ? 'billing.notice.verify' : 'billing.notice.verifyNoMail') });
+    if ((o = activeOrder())) list.push({ kind: 'info', text: t('billing.notice.pending', { amount: o.amount }), action: { label: L('billing.viewPending'), fn: function () { B.openOrder(o); } } });
+    if (!data.payments_available) list.push({ kind: 'info', text: t('billing.notice.closed') });
+    return list;
+  }
+  function renderNotices(box) {
+    TP.clear(box);
+    notices().forEach(function (n) {
+      var row = h('div', { class: 'hint billing-notice ' + n.kind, role: 'status' }, h('p', null, n.text));
+      if (n.action) row.appendChild(button(n.action.label, n.action.fn, mutation ? t('common.loading') : ''));
+      box.appendChild(row);
+    });
+  }
   function render(root) {
     TP.clear(root);
     if (!data) {
-      root.appendChild(h('p', { class: 'muted' }, error ? msg(error) : t('common.loading')));
-      root.appendChild(button(L('common.retry'), function () { return B.load(true); }, !canUse() ? TP.why.helper() || t('why.locked') : '')); return;
+      var nb0 = h('div', { class: 'billing-notices' });
+      if (error || !canUse()) { renderNotices(nb0); root.appendChild(nb0); } else root.appendChild(h('p', { class: 'muted' }, t('common.loading')));
+      root.appendChild(button(L('common.retry'), function () { return B.load(true); }, !canUse() ? TP.why.helper() || t('why.locked') : ''));
+      return;
     }
-    if (error) root.appendChild(h('p', { class: 'hint warn' }, msg(error)));
-    root.appendChild(h('p', { class: 'hint' + (data.payments_available ? '' : ' warn') }, L(data.payments_available ? 'billing.networkNote' : 'billing.unavailable')));
     var email = h('div'); renderEmail(email); root.appendChild(email);
+    var nb = h('div', { class: 'billing-notices' }); renderNotices(nb); root.appendChild(nb);
+    root.appendChild(h('p', { class: 'hint' }, L('billing.networkNote')));
     root.appendChild(h('div', { class: 'billing-wallet row wrap' }, h('strong', null, t('billing.balance', { amount: money(data.wallet.balance) })), button(L('billing.topup'), topup, why(true)), button(L(data.wallet.auto_renew ? 'billing.disableRenew' : 'billing.enableRenew'), autoRenew, why(false)), button(L('common.refresh'), function () { return B.load(true); }, mutation ? t('common.loading') : '')));
     root.appendChild(h('p', { class: 'muted sm' }, L('billing.renewNote')));
     var grid = h('div', { class: 'billing-catalog' });
@@ -128,8 +163,8 @@
       var r = await write('email/send', {});
       if (r && r.sent) { resendUntil = Date.now() + (r.retry_after || 60) * 1000; redraw(); ui.toast(t('billing.mailSent'), 'ok'); }
     }, reason));
-    root.appendChild(button(L('billing.checkVerification'), function () { return B.load(true); }, mutation ? t('common.loading') : ''));
-    root.appendChild(h('p', { class: 'muted sm' }, L(data.email.mail_available ? 'billing.verifyNote' : 'billing.mailUnavailable')));
+    root.appendChild(button(L(data.email.mail_available ? 'billing.checkVerification' : 'billing.checkAgain'), function () { return B.load(true); }, mutation ? t('common.loading') : ''));
+    root.appendChild(h('p', { class: 'muted sm' }, L(data.email.mail_available ? 'billing.verifyNote' : 'billing.mailOffNote')));
   }
   B.mount = function () { var root = h('div', { class: 'billing' }); mounts.push(root); render(root); return root; };
   B.mountEmail = function () { var root = h('div', { class: 'billing-email' }); emailMounts.push(root); renderEmail(root); return root; };

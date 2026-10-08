@@ -393,15 +393,18 @@ ep_prefs_set() { # 正文是 JSON 对象文本
   okj "\"version\":$PREFS_VERSION"
 }
 ep_plan() {
-  local c; c=$(plan_checked)
-  if [ -n "$(session_id)" ] && [ $(( $(now) - c )) -gt "$PLAN_TTL" ]; then
-    if [ "$c" = 0 ]; then plan_refresh || true; else ( plan_refresh >/dev/null 2>&1 & ); fi      # 从没取过: 等一下; 过期了: 先用旧的, 后台刷新
+  local c age; c=$(plan_checked); age=$(( $(now) - c ))
+  if [ -n "$(session_id)" ]; then
+    if [ "$(qp refresh)" = 1 ] && [ "$age" -ge 3 ]; then plan_refresh || true      # ?refresh=1 (付款 / 余额购买成功后、手动刷新): 同步向云端取最新套餐, 否则刚付款的用户最长 1 小时还看到免费版 (3 秒内刚刷新过就不重复)
+    elif [ "$age" -gt "$PLAN_TTL" ]; then
+      if [ "$c" = 0 ]; then plan_refresh || true; else ( plan_refresh >/dev/null 2>&1 & ); fi      # 从没取过: 等一下; 过期了: 先用旧的, 后台刷新
+    fi
   fi
   json "{\"ok\":true,$(plan_json)}"
 }
 
 ep_billing() {
-  local op=$1 route=$2 verb=$3 body='' result id
+  local op=$1 route=$2 verb=$3 body='' result id tmp
   if [ "$op" = order ]; then
     id=$(qp id); printf '%s' "$id" | LC_ALL=C grep -Eq '^[a-z0-9]{15}$' || fail "订单编号无效" E_INVALID
     route="$route?id=$id"
@@ -410,8 +413,16 @@ ep_billing() {
     if [ "$op" = email-send ] && [ ! -s "$BODY" ]; then body='{}'
     else body=$(billing_body "$op" "$BODY") || fail "付款参数无效" E_INVALID; fi
   fi
-  result=$(billing_request "$verb" "$route" "$body") || fail "账号服务暂时无法连接，请稍后重试" E_ACCOUNT_UNREACHABLE
-  json "$result"
+  # 不能写成 result=$(billing_request …): 命令替换在子 shell 里运行, 设置的 BILLING_CODE 会丢; 所以先写到临时文件, 再在当前 shell 里读出。
+  tmp=$(mktemp)
+  if billing_request "$verb" "$route" "$body" > "$tmp"; then result=$(cat "$tmp"); rm -f "$tmp"; json "$result"; return 0; fi
+  rm -f "$tmp"
+  case ${BILLING_CODE:-} in
+    E_AUTH)          fail "登录已失效或云端会话已结束，请重新登录后再试" E_AUTH ;;                       # 不用 deny 401: 那会让本机仪表盘也锁住; 这里只是云端会话的问题
+    E_SERVER_ERROR)  fail "enana.cc 服务器返回了错误，这次操作可能已生效也可能没有，请先刷新并查看订单和余额" E_SERVER_ERROR ;;
+    E_RATE_LIMITED)  fail "请求过于频繁，请稍后再试" E_RATE_LIMITED ;;
+    *)               fail "账号服务暂时无法连接，请稍后重试" E_ACCOUNT_UNREACHABLE ;;
+  esac
 }
 
 # ---------- 状态 ----------
