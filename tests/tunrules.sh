@@ -105,6 +105,28 @@ sed -e "s|@ROOT@|$W/nonexistent|g" -e "s|@ROOTUID@|$ME|g" -e "s|@VERSION@|1|g" "
 printf '%s' '{"ovr-pin.json":{"version":3,"rules":[{"domain":["a"]}]}}' | perl "$W/helper-nodir.pl" sync >/dev/null 2>&1
 eq "快照里还没有规则集目录 (TUN 没装过): 拒绝, 不会凭空创建" "$([ $? != 0 ] && echo rejected || echo accepted):$([ -e "$W/nonexistent" ] && echo created || echo untouched)" "rejected:untouched"
 
+echo "== T3b. 固定出口很多时: 11 个固定名字的规则集 + 每个固定出口 3 个 (网站 / 应用 / 浏览器) —— OVR_PIN_MAX=32 个出口 = 107 个文件, 一个数据包同步完; 超过上限的数据包被拒"
+big() { # big <文件数> <域名>  -> 数据包 JSON: 11 个固定名字 + ovr-pin-N / ovr-apppin-N / ovr-browserpin-N (N 从 1 起, 最多两位)
+  python3 -c '
+import json, sys
+n, dom = int(sys.argv[1]), sys.argv[2]
+names = ["ovr-" + b + ".json" for b in "direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto auto".split()]
+i = 1
+while len(names) < n:
+    for p in ("pin", "apppin", "browserpin"):
+        if len(names) < n: names.append("ovr-%s-%d.json" % (p, i))
+    i += 1
+print(json.dumps({x: {"version": 3, "rules": [{"domain": [dom]}]} for x in names}))' "$1" "$2"
+}
+big 107 a.example | H sync >"$W/out" 2>&1; rc=$?
+eq "32 个固定出口 (107 个文件): 一次同步完" "$rc:$(cat "$W/out")" "0:107 files synced"
+eq "…序号最大的 ovr-browserpin-32 / ovr-pin-32 都写进去了" "$(snap ovr-browserpin-32.json | grep -c a.example):$(snap ovr-pin-32.json | grep -c a.example)" "1:1"
+big 160 a.example | H sync >"$W/out" 2>&1; rc=$?
+eq "上限 160 个文件: 通过 (留有余量)" "$rc:$(cat "$W/out")" "0:160 files synced"
+big 161 b.example | H sync >"$W/out" 2>&1; rc=$?
+eq "161 个文件: 整个数据包被拒, 已有文件一个字节都没变" "$([ "$rc" != 0 ] && echo rejected):$(snap ovr-pin-1.json | grep -c a.example):$(snap ovr-pin-1.json | grep -c b.example)" "rejected:1:0"
+rm -f "$W"/snap/rules/ovr-*-[0-9]*.json
+
 echo "== T4. apply_config 的决策: 免密同步 还是 完整安装 (要管理员授权)"
 export HOME=$W/home ENANA_HOME=$W/h LC_ALL=C ENANA_LANG=zh ENANA_PLATFORM=darwin PORT=37970 UI_PORT=37971 API_PORT=37972 SPEED_PORT=37973 ENANA_NO_DIAG=1
 export FAKE_STATE=$W/state ENANA_ROOT_PREFIX=$W/root FAKE_SUDOERS_DIR=$W/root/etc/sudoers.d ENANA_TUN_ROOT=$W/snap

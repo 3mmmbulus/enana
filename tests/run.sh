@@ -1405,6 +1405,9 @@ echo "  (单元测试 $UP 项通过, $UF 项失败)"
 [ "${UP:-0}" -ge 80 ] || { echo "  ✗ 单元测试通过数异常 ($UP), 见 $W/units.out"; echo f >> "$W/.fail"; }
 _i=0; while [ "$_i" -lt "${UP:-0}" ]; do echo p >> "$W/.pass"; _i=$((_i+1)); done; _i=0; while [ "$_i" -lt "${UF:-0}" ]; do echo f >> "$W/.fail"; _i=$((_i+1)); done      # (BSD 的 seq 1 0 会倒数, 所以不用 seq)
 
+echo "== 18b. 出口分配 (tests/exits.sh: 归属表 / 默认固定出口 / 批量移动与钉住 / 删除与改角色的保护 / 孤儿事件 / 上限 / HTTP 接口)"
+if bash "$HERE/exits.sh" > "$W/exits.out" 2>&1; then tpass "Exit assignment: items, default exit, move/freeze, delete/role/subscription guards, orphan events, cap, HTTP API ($(grep -c '^  ✓' "$W/exits.out") checks)"; else tfail "Exit assignment regression"; grep -E '^==|^  ✗|^      ↳' "$W/exits.out"; fi
+
 echo "== 19. Enhanced/TUN isolated regressions"
 if SINGBOX="$SB" bash "$HERE/enhanced.sh" > "$W/enhanced.out" 2>&1; then tpass "System/TUN schema, exclusions, PIN priority and socket evidence"; else tfail "Enhanced config regression"; cat "$W/enhanced.out"; fi
 if bash "$HERE/tun-service.sh" > "$W/tun-service.out" 2>&1; then tpass "Root snapshot rollback and route ownership"; else tfail "TUN service regression"; cat "$W/tun-service.out"; fi
@@ -1414,6 +1417,7 @@ if command -v node >/dev/null; then
   if node "$HERE/network-mode-ui.test.js" > "$W/network-mode-ui.out" 2>&1; then tpass "App capture onboarding, cancellation and readiness"; else tfail "Capture onboarding regression"; cat "$W/network-mode-ui.out"; fi
   if node "$HERE/vps-ui.test.js" > "$W/vps-ui.out" 2>&1; then tpass "SSH wizard cancellation and failed-cancel races"; else tfail "SSH wizard lifecycle regression"; cat "$W/vps-ui.out"; fi
   if node "$HERE/app-refresh-ui.test.js" > "$W/app-refresh-ui.out" 2>&1; then tpass "Quiet app discovery and visibility/reload cadence"; else tfail "App refresh lifecycle regression"; cat "$W/app-refresh-ui.out"; fi
+  if node "$HERE/exits-ui.test.js" > "$W/exits-ui.out" 2>&1; then tpass "Exit assignment UI: overview model, default-switch and remove pre-flight, pickers"; else tfail "Exit assignment UI regression"; cat "$W/exits-ui.out"; fi
 fi
 
 PASSES=$(cat "$W/.pass" 2>/dev/null | wc -l | tr -d ' '); FAILS=$(cat "$W/.fail" 2>/dev/null | wc -l | tr -d ' ')

@@ -16,7 +16,7 @@ while [ -L "$_p" ]; do _l=$(readlink "$_p"); case $_l in /*) _p=$_l ;; *) _p=$(d
 _d=$(cd "$(dirname "$_p")" && pwd -P)
 . "$_d/lib/common.sh"
 init_paths "$_p"
-for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan sync vps diag menu detect console; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops exits speed stats prefs snapshot plan sync vps diag menu detect console; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 load_settings
 

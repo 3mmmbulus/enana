@@ -4,7 +4,7 @@
 # 因此连续快速的操作不会互相覆盖备份, 坏配置绝不会留在磁盘上。每次操作都会写一条「操作记录」(不含任何密码/令牌)。
 
 APPLY_STEPS='生成配置|校验配置|应用并重启|等待就绪'
-TXN_FILES="servers.jsonl subs.tsv dns.conf rules.state custom-rulesets.tsv settings.env overrides.tsv autosites.tsv autosites.dismissed custom-apps.tsv site-domains.tsv hosts.tsv speedtest-custom.tsv prefs.json vps.jsonl apps.seen"
+TXN_FILES="servers.jsonl subs.tsv dns.conf rules.state custom-rulesets.tsv settings.env overrides.tsv autosites.tsv autosites.dismissed custom-apps.tsv site-domains.tsv hosts.tsv speedtest-custom.tsv prefs.json vps.jsonl apps.seen pin-default"
 TXN_ERR=''; TXN_RESULT=''
 
 op_wait_turn() { # 轮到我了吗? 等所有「更早创建且还在运行」的排队任务结束 (任务进程已死/卡住超过 5 分钟的忽略)
@@ -57,9 +57,10 @@ _txn_detail() { # <变更函数> <参数…>
   local fn=$1 kvp k v out=''; shift
   case $fn in
     txn_import)        kv sub "${1:-}" mode "${2:-merge}" save "${TXN_SAVE:-}" ;;
-    txn_delete)        kv tag "$1" role "$(srv_list | awk -F'\t' -v t="$1" '$1==t {print $5; exit}')" ;;
-    txn_role)          kv tag "$1" from "$(srv_list | awk -F'\t' -v t="$1" '$1==t {print $5; exit}')" to "$2" ;;
-    txn_subdel)        kv sub "$1" ;;
+    txn_delete)        kv tag "$1" role "$(srv_list | awk -F'\t' -v t="$1" '$1==t {print $5; exit}')" reassign "${2:-}" freeze "$([ "${3:-0}" = 1 ] && echo 1)" accept "$([ "${4:-0}" = 1 ] && echo 1)" ;;
+    txn_role)          kv tag "$1" from "$(srv_list | awk -F'\t' -v t="$1" '$1==t {print $5; exit}')" to "$2" reassign "${3:-}" freeze "$([ "${4:-0}" = 1 ] && echo 1)" accept "$([ "${5:-0}" = 1 ] && echo 1)" ;;
+    txn_exit_move)     kv from "$1" to "$2" kind "${3:-}" ;;
+    txn_subdel)        kv sub "$1" accept "$([ "${2:-0}" = 1 ] && echo 1)" ;;
     txn_rules_toggle)  kv rule "$1" enabled "$2" ;;
     txn_rules_add)     kv name "$1" policy "$3" ;;
     txn_rules_delete)  kv rule "$1" ;;
@@ -138,9 +139,18 @@ txn_import() { # sub mode   (内容来自 $JOB_BODY; 订阅信息来自 TXN_* �
   if [ "${TXN_SAVE:-}" = 1 ]; then sync_after_save; fi                    # 勾选了「保存到云端」: 第一次用会自动打开云端同步, 马上上传
   return 0
 }
-txn_delete() { srv_delete "$1"; }
-txn_role()   { srv_set_role "$1" "$2"; }
-txn_subdel() { sub_delete "$1"; }
+txn_delete() { # tag [去向] [冻结] [接受后果]  —— 删除一个正被应用 / 网站 / 服务使用的固定出口前, 必须先指明它们的去向 (reassign) 或明确接受后果 (accept), 见 lib/exits.sh
+  if type exits_remove_prep >/dev/null 2>&1; then exits_remove_prep "$1" "${2:-}" "${3:-0}" "${4:-0}" || return 1; fi
+  srv_delete "$1"
+}
+txn_role() { # tag 新角色 [去向] [冻结] [接受后果]  —— 固定出口改成别的角色等同于移除它, 同样受保护
+  if [ "$2" != pin ] && type exits_remove_prep >/dev/null 2>&1; then exits_remove_prep "$1" "${3:-}" "${4:-0}" "${5:-0}" || return 1; fi
+  srv_set_role "$1" "$2"
+}
+txn_subdel() { # 订阅名 [接受后果]  —— 订阅里有被应用 / 网站 / 服务使用的固定出口时, 必须明确接受后果 (lib/exits.sh)
+  if type exits_sub_prep >/dev/null 2>&1; then exits_sub_prep "$1" "${2:-0}" || return 1; fi
+  sub_delete "$1"
+}
 
 txn_rules_toggle() { # tag 0|1
   rules_set_enabled "$1" "$2"; local rc=$?
@@ -494,9 +504,10 @@ job_dispatch() {
     sysproxy)       op_sysproxy "$@" ;;
     update-rules)   op_update_rules ;;
     servers-import) TXN_INTERVAL=${3:-}; TXN_USED=${4:-}; TXN_TOTAL=${5:-}; TXN_EXPIRE=${6:-}; TXN_SAVE=${7:-}; op_txn "导入服务器" txn_import "${1:-}" "${2:-merge}" ;;
-    servers-delete) op_txn "删除服务器" txn_delete "$1" ;;
-    servers-role)   op_txn "修改服务器角色" txn_role "$1" "$2" ;;
-    sub-delete)     op_txn "删除订阅" txn_subdel "$1" ;;
+    servers-delete) op_txn "删除服务器" txn_delete "$1" "${2:-}" "${3:-0}" "${4:-0}" ;;
+    servers-role)   op_txn "修改服务器角色" txn_role "$1" "$2" "${3:-}" "${4:-0}" "${5:-0}" ;;
+    exits-move)     op_exit_move "$@" ;;
+    sub-delete)     op_txn "删除订阅" txn_subdel "$1" "${2:-0}" ;;
     content-sync)   APPLY_BASE=2; TXN_FORCE=${1:-}; op_txn "更新云端内容" txn_content ;;
     rules-toggle)   APPLY_BASE=2; op_txn "启用/停用规则集" txn_rules_toggle "$1" "$2" ;;
     rules-add)      APPLY_BASE=2; op_txn "添加规则集" txn_rules_add "$1" "$2" "$3" ;;

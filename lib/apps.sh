@@ -2,7 +2,9 @@
 # 覆盖层 = 用户对「某个应用 / 某个网站」的显式设置, 保存在 $H/overrides.tsv:  类型|名称|状态|标记|出口
 #   类型 app|site;  状态 follow(跟随规则=开) direct(直连=关) pin(进入核心的流量走固定出口) auto(全走自动线路);
 #   标记 new(扫描新发现, 还没处理) ack(用户设置过 / 已知晓) def(首次扫描按推荐设置的默认值, 云端推荐更新后可以刷新);
-#   出口 只对 pin 有意义: 空 = 默认固定出口 · PINAUTO = 在固定出口里自动选一个 · 其它 = 指定走这一个固定出口 (固定出口有 2 个以上时才能选)
+#   出口 只对 pin 有意义: 空 = 跟随默认固定出口 · PINAUTO = 在固定出口里自动选一个 · 其它 = 指定走这一个固定出口 (固定出口有 2 个以上时才能选)
+#        「跟随默认」的应用 / 网站会随默认固定出口一起换出口 IP; 要钉住就指定一个 (批量移动 / 冻结 / 删除服务器前的影响检查见 lib/exits.sh)。指定的出口已不是固定出口 (被删除 / 改了角色 / 超过上限) =「孤儿」,
+#        规则集里暂时退回默认固定出口 (见下面 ovr_sync 的 key()), 同时会在界面和健康记录里标出来。
 # 设置分别写成 sing-box 本地规则集 (rules/ovr-<名字>.json): direct(网站直连) appdirect(应用直连) pin(默认固定出口) pinauto(固定出口里自动选) pin-<序号>(指定的固定出口) auto(自动线路),
 # sing-box 监视文件变化, 因此切换应用/网站无需重启、不会断开现有连接。
 #
@@ -23,7 +25,8 @@ ovr_valid() { # kind value
   esac
 }
 
-ovr_pins() { srv_list 2>/dev/null | awk -F'\t' '$5=="pin" && n < 16 { print $1; n++ }'; }      # 可以单独指定的固定出口 (按配置里的顺序, 最多 16 个; 和 config.sh 里的规则集序号一致)
+OVR_PIN_MAX=32      # 可以单独指定的固定出口个数上限: 每个固定出口 3 个规则集 (网站 / 应用 / 浏览器), 32 个 = 96 + 11 个文件。要和 lib/config.sh、ui/data.js (TP.PIN_MAX)、lib/tunrules-helper.pl (一次最多同步的文件数) 保持一致
+ovr_pins() { srv_list 2>/dev/null | awk -F'\t' -v max="$OVR_PIN_MAX" '$5=="pin" && n < max { print $1; n++ }'; }      # 可以单独指定的固定出口 (按配置里的顺序, 最多 OVR_PIN_MAX 个; 和 config.sh 里的规则集序号一致)
 ovr_target_valid() { # 出口: 空 / PINAUTO / 现有的某个固定出口 (固定出口不到 2 个时只能是空)
   local t=$1
   [ -z "$t" ] && return 0

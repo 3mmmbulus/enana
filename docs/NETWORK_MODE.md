@@ -20,8 +20,11 @@ Gemini 自身日志在 12:58:45 接受浏览器回调并开始交换 authorizati
 
 System Proxy 默认不变。Enhanced/TUN 是显式选择, 包含双栈捕获、DNS hijack、进程匹配、系统路由私网排除、默认接口出口绑定。root launchdaemon 使用 root 拥有的核心/规则快照; 用户授权后安装。启动检查实际 utun 地址与 IPv4/IPv6 路由。失败在 root helper 内恢复快照, 上层事务恢复设置。切换时通过控制 API 保存并恢复 Selector 选项, 避免丢失已选 PIN 出口。应用 PIN 使用独立进程规则集, 优先于网站指定的其他 PIN 出口; 浏览器 Direct/Auto/PIN 则作为网站策略之后的兜底。
 
+固定出口分配 (`POST /api/exits/move|freeze`) 在 TUN 下同 `/api/override` 一样是后台任务: 只改 `rules/ovr-*.json` (纯路由数据), 经免密规则同步助手 (`lib/tunrules-helper.pl`) 同步到 root 快照, 核心热加载, 不重启、不要管理员密码; 助手一次最多同步 160 个规则集文件 (32 个固定出口 = 107 个), 旧助手上限 60 (16 个固定出口), 超过时退回完整安装并把助手换成新版。默认固定出口的选择存在 `$H/pin-default`, 核心 (重新) 启动后由 `proxy_sync_mode` 校正, 不改 `config.json`, 所以换默认出口不会触发 TUN 的完整重装。
+
 自动化测试不修改真实系统路由, 不触发管理员授权:
 
+- `tests/exits.sh`: 固定出口分配 (归属表 / 默认出口 / 批量移动与钉住 / 删除与改角色的保护 / 孤儿事件 / 上限 / HTTP 接口 / TUN 任务及回滚), 用假 Clash API。
 - `tests/enhanced.sh`: 默认与已有设置保留、生成配置的真实 sing-box 校验、双栈排除、共享 PIN、浏览器与网站优先级、OS socket 证据。
 - `tests/tun-service.sh`: 临时副本与假系统命令执行真实 helper 逻辑, 校验 bootstrap 失败/外部 VPN 路由冲突回滚、GUI 恢复及 symlink 拒绝。
 - `tests/ui-busy.test.js`: 实际组件回调的重复提交、忙碌状态、错误恢复、切换控件、弹窗按钮重建。

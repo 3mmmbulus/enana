@@ -95,7 +95,7 @@ case $path in /favicon.ico) path="$ADMIN_PATH/favicon.png" ;; esac      # 浏览
 case $path in /|"$ADMIN_PATH"|"$ADMIN_PATH"/*) serve_static ;; esac
 
 # ---------- 以下是 JSON 接口: 到这里才加载其余模块 ----------
-for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops speed stats prefs snapshot plan billing sync vps diag; do . "$LIB/$_f.sh"; done
+for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops exits speed stats prefs snapshot plan billing sync vps diag; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
 i18n_init
 OP_WHO=dashboard; export OP_WHO
@@ -512,9 +512,38 @@ ep_policy() { # 切换一个策略开关 (网站 / 默认出口 / 节点选择):
   [ "${res%%$'\t'*}" = ok ] || fail "这个选项不存在 (可能节点已经被删除或改名)" E_NOT_FOUND
   from=${res#*$'\t'}
   [ "$from" = "$name" ] || { [ -z "$(clash PUT "/proxies/$tag" "{\"name\":\"$(jesc "$name")\"}")" ] || fail "切换失败, 请稍后重试" E_NOT_RUNNING; }
+  if [ "$tag" = PIN ] && exits_has_pin "$name"; then exits_default_save "$name" || true; fi       # 默认固定出口: 另存一份 (核心重启后校正; 见 lib/exits.sh)
   case $tag in svc-rs-*) ;; svc-*) sitename=$(awk -F'|' -v id="${tag#svc-}" '$1==id {print $2; exit}' "$(content_file services.conf)" 2>/dev/null) ;; esac
   oplog dashboard "切换策略" "$(kv kind selector tag "$tag" site "$sitename" from "$from" to "$name")" ok
   okj "\"from\":\"$(jesc "$from")\",\"to\":\"$(jesc "$name")\""
+}
+
+# ---------- 固定出口分配 (设计与语义见 lib/exits.sh) ----------
+ep_exits() { # GET /api/exits: 每个固定出口上有哪些应用 / 网站 / 服务 · 跟随默认的 · 自动选的 · 孤儿 (指定的出口已经不是固定出口); 顺便让持久化的默认固定出口跟上核心里正在用的 (老安装第一次)
+  if lock_take; then exits_adopt; lock_drop; fi
+  json "{\"ok\":true,$(exits_json)}"
+}
+ep_exits_impact() { # GET /api/exits/impact?op=remove|default&tag=: 删除 / 改角色 (remove) 或换默认 (default) 会让谁换出口 —— 仪表盘在确认框里列出来
+  local op tag; op=$(qp op); tag=$(qp tag)
+  case $op in remove|default) ;; *) fail "参数无效" ;; esac
+  [ -n "$tag" ] && [ ${#tag} -le 80 ] || fail "参数无效"
+  json "{\"ok\":true,$(exits_impact_json "$op" "$tag")}"
+}
+ep_exits_apply() { # POST /api/exits/move (from to [kind]) 和 POST /api/exits/freeze ([kind]) 共用: 校验后, 非 TUN 同步改 + 热加载 (和 ep_override 一样不重启核心), TUN 交给后台任务
+  local from=$1 to=$2 kind=$3
+  exits_move_check "$from" "$to" "$kind" || fail "$EXITS_ERR" "$EXITS_CODE"
+  if [ "${NETWORK_MODE:-system}" = tun ]; then okj "\"job\":\"$(job_spawn exits-move "$APPLY_STEPS" "$from" "$to" "$kind")\""; return; fi
+  lock_take || fail "系统繁忙, 请重试" E_BUSY
+  exits_move_run "$from" "$to" "$kind"; lock_drop
+  okj "\"moved\":{\"apps\":$EXITS_M_APPS,\"sites\":$EXITS_M_SITES,\"services\":$EXITS_M_SVC},\"services_known\":$([ "$EXITS_SVC_KNOWN" = 1 ] && echo true || echo false),\"services_failed\":$EXITS_M_SVCFAIL"
+}
+ep_exits_move() { ep_exits_apply "$(fp from)" "$(fp to)" "$(fp kind)"; }
+ep_exits_freeze() { # 把「跟随默认」的应用 / 网站 / 服务钉在当前的默认固定出口上 (之后默认再换也不动它们)
+  local kind; kind=$(fp kind)
+  exits_resolve
+  [ -n "$EXITS_DEF" ] || fail "还没有固定出口" E_INVALID
+  if [ "$(exits_pins_all | wc -l | tr -d ' ')" -lt 2 ]; then okj '"moved":{"apps":0,"sites":0,"services":0},"skipped":"single"'; return; fi      # 只有一个固定出口: 谁都不会因为换默认而变, 没什么可钉的
+  ep_exits_apply DEFAULT "$EXITS_DEF" "$kind"
 }
 
 ep_audit() { # 仪表盘直接对代理核心做的、不经过辅助服务的操作 (目前只有「断开连接」), 事后来这里补一条操作记录
@@ -555,10 +584,20 @@ ep_servers_import() { # 先对副本「干跑」, 立即返回数量与逐行错
 }
 
 ep_servers_change() { # delete | role  (校验后交给后台任务)
-  local tag role; tag=$(qp tag); role=$(qp role)
+  # 保护 (固定出口分配, lib/exits.sh): 删除一个固定出口 / 把它改成别的角色之前, 先看有没有应用 / 网站 / 服务指定了它 (或正在跟随它作默认出口)。
+  #   有 → 必须带 reassign=<另一个固定出口 | PINAUTO | DEFAULT> (改派; freeze=1 再把「跟随默认」的钉在去向上) 或 accept_orphans=1 (明确接受后果), 否则 E_EXIT_IN_USE + impact 明细, 什么也不改。
+  local tag role reassign freeze accept; tag=$(qp tag); role=$(qp role); reassign=$(fp reassign); freeze=$(fp freeze); accept=$(fp accept_orphans)
   [ -n "$tag" ] && srv_has_tag "$tag" || fail "找不到这台服务器" E_NOT_FOUND
-  if [ "$1" = delete ]; then okj "\"job\":\"$(job_spawn servers-delete "$APPLY_STEPS" "$tag")\""
-  else case $role in pin|auto|off|dl) okj "\"job\":\"$(job_spawn servers-role "$APPLY_STEPS" "$tag" "$role")\"" ;; *) fail "角色无效" ;; esac; fi
+  case $freeze in ''|0|1) ;; *) fail "参数无效" ;; esac; case $accept in ''|0|1) ;; *) fail "参数无效" ;; esac
+  [ "$1" = delete ] || case $role in pin|auto|off|dl) ;; *) fail "角色无效" ;; esac
+  if [ "$1" = delete ] || [ "$role" != pin ]; then
+    exits_guard_check "$tag" "$reassign" "${accept:-0}" || fail "$EXITS_ERR" "$EXITS_CODE" "\"impact\":{$EXITS_IMPACT_JSON}"
+    if [ -n "$reassign" ] && [ "$EXITS_ISPIN" = 1 ]; then exits_runtime_reassign "$tag" "$reassign" "${freeze:-0}"; fi       # 核心里的部分 (默认固定出口 / 服务) 必须趁两个出口都还在时切好
+  fi
+  local job sf=''; [ "${EXITS_SVC_FAILED:-0}" -gt 0 ] && sf=",\"services_failed\":$EXITS_SVC_FAILED"
+  if [ "$1" = delete ]; then job=$(job_spawn servers-delete "$APPLY_STEPS" "$tag" "$reassign" "${freeze:-0}" "${accept:-0}")
+  else job=$(job_spawn servers-role "$APPLY_STEPS" "$tag" "$role" "$reassign" "${freeze:-0}" "${accept:-0}"); fi
+  okj "\"job\":\"$job\"$sf"
 }
 
 ep_cert() {
@@ -596,10 +635,12 @@ ep_sub_save() { # name + body=url
   oplog dashboard "保存订阅" "$(kv sub "$name")" ok
   okj
 }
-ep_sub_delete() {
-  local name; name=$(qp name)
+ep_sub_delete() { # 订阅里有被使用的固定出口时: 必须带 accept_orphans=1 (明确接受后果), 否则 E_EXIT_IN_USE + impact{servers,affected} (lib/exits.sh)
+  local name accept; name=$(qp name); accept=$(fp accept_orphans)
   sub_valid_name "$name" || fail "订阅名称不合法"
-  okj "\"job\":\"$(job_spawn sub-delete "$APPLY_STEPS" "$name")\""
+  case $accept in ''|0|1) ;; *) fail "参数无效" ;; esac
+  exits_sub_check "$name" "${accept:-0}" || fail "$EXITS_ERR" "$EXITS_CODE" "\"impact\":{$EXITS_IMPACT_JSON}"
+  okj "\"job\":\"$(job_spawn sub-delete "$APPLY_STEPS" "$name" "${accept:-0}")\""
 }
 
 ep_log() { # 兼容旧接口: 核心实时日志的最后 n 行 (纯文本)
@@ -872,6 +913,10 @@ case "$method $path" in
   "POST /api/apps/ack")        n=$(qp name); [ "$(qp all)" = 1 ] && n=all; [ -n "$n" ] || fail "缺少应用名"; lock_take && { apps_ack "$n"; lock_drop; }; okj ;;
   "POST /api/override")        ep_override ;;
   "POST /api/policy")          ep_policy ;;
+  "GET /api/exits")            ep_exits ;;
+  "GET /api/exits/impact")     ep_exits_impact ;;
+  "POST /api/exits/move")      ep_exits_move ;;
+  "POST /api/exits/freeze")    ep_exits_freeze ;;
   "POST /api/audit")           ep_audit ;;
   "POST /api/sites/auto/clear") ep_sites_auto_clear ;;
   "POST /api/servers/import")  ep_servers_import ;;
