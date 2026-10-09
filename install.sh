@@ -153,6 +153,7 @@ st_preflight() {
 st_core() {
   step "安装 sing-box 核心 (代理引擎)"
   if [ "$SEL_core" = skip ] && [ -z "$FORCE" ]; then ok "已安装 sing-box $(core_version), 无需重装"; return 0; fi
+  info "正在下载 sing-box 核心, 可能需要 1–2 分钟…"
   [ "$SEL_core" = skip ] && SEL_core=chain
   core_install "$SEL_core"; local rc=$?
   case $rc in
@@ -174,6 +175,7 @@ st_rules() {
 
 st_config() {
   step "生成配置"
+  info "正在生成配置并用 sing-box 校验…"
   install_files
   auth_init                                   # 令牌 (= 核心 Clash API 的密钥) 从一开始就存在; 仪表盘登录成功后才会拿到它
   if srv_migrate_v1; then ok "已从 v1 迁移你的服务器配置 (无需重新输入, 在仪表盘「服务器」页可见)"; fi
@@ -195,6 +197,7 @@ st_service() {
   step "注册后台服务"
   local n
   os_write_plists; n=$?
+  info "正在启动代理服务…"
   if ! os_service_running || [ "$n" -gt 0 ]; then os_service_start || die "后台服务注册失败" "运行 enana doctor 查看原因"; fi
   wait_port "$PORT" 15 || die "服务没有启动" "日志: $H/sing-box.log   $(tail -n 3 "$H/sing-box.log" 2>/dev/null | tr '\n' ' ')"
   proxy_sync_mode

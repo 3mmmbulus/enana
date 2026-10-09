@@ -39,8 +39,11 @@ job_write() { # id name state(running|done|error) 当前步骤序号 pct msg res
     "$id" "$name" "$state" "$pct" "$msg" "$arr" "$res" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
-# 在任务进程里使用 (环境变量 JOB_ID/JOB_NAME 由 _job 设置); 非任务模式下是空操作
-job_step() { [ -n "${JOB_ID:-}" ] || return 0; job_write "$JOB_ID" "$JOB_NAME" running "$1" "$2" "$3" '{}'; }
+# 在任务进程里使用 (环境变量 JOB_ID/JOB_NAME 由 _job 设置); 非任务模式 (终端安装、enana update) 下把进度文字打印到终端
+job_step() {
+  if [ -z "${JOB_ID:-}" ]; then [ -t 1 ] && printf '    %s (%s%%)\n' "$(_t "$3")" "$2"; return 0; fi
+  job_write "$JOB_ID" "$JOB_NAME" running "$1" "$2" "$3" '{}'
+}
 job_ok()   { [ -n "${JOB_ID:-}" ] || return 0; local r=${2:-}; [ -n "$r" ] || r='{}'; job_write "$JOB_ID" "$JOB_NAME" done 99 100 "${1:-完成}" "$r"; }
 job_fail() { [ -n "${JOB_ID:-}" ] || return 0; job_write "$JOB_ID" "$JOB_NAME" error "${2:-0}" 100 "$1" '{}'; }
 

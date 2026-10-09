@@ -70,6 +70,7 @@
     "billing.address": "TRON（TRC20）收款地址",
     "billing.copyAmount": "复制完整金额",
     "billing.copyAddress": "复制地址",
+    "billing.qrLabel": "收款地址二维码",
     "billing.expires": "付款截止：{date}",
     "billing.lateNote": "款项已存入余额。过期或取消的订单不会自动开通套餐，可使用余额购买。",
     "billing.cancelInvoice": "取消订单",
