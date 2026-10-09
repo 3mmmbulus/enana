@@ -54,11 +54,8 @@
     el.restartBtn = TP.bindRestartBtn(ui.btn(L('act.restart.label'), { sm: true, icon: 'restart' }));
     var envCard = h('section', { class: 'card' }, h('div', { class: 'card-h' }, h('h3', null, L('ov.env.title'), ui.help('overview.env'))), el.env);
 
-    /* 代理模式: 自动模式 / 全局代理 (和顶栏的小按钮、设置页里的是同一个控件) */
-    el.pm = TP.modeControl();
-    var modeCard = h('section', { class: 'card pmode-card' }, h('div', { class: 'card-h' }, ui.icon('auto', 20, 'ci'), h('h3', null, L('pmode.label'), ui.help('settings.mode'))), el.pm.el);
+    /* 代理模式不在概述里重复显示: 顶栏的按钮和设置页里是同一个控件 (TP.modeControl) */
     root.appendChild(el.wiz);
-    root.appendChild(modeCard);
     root.appendChild(grid);
     root.appendChild(chartCard);
     root.appendChild(h('div', { class: 'grid cols2' }, stCard, envCard));
