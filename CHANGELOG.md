@@ -1,5 +1,17 @@
 # Changelog / 更新日志
 
+## 2.3.18 (2026-10-09)
+
+### 中文
+- **防回滚**: 发布清单带签名的发布序号 (seq) 和过期时间 (expires)。安装器拒绝比已见过的版本更旧的清单和已过期的清单。确需安装旧版本时,使用 `--allow-downgrade` (Windows 为 `-AllowDowngrade`)。
+- **签名提示更清楚**: 区分「取不到清单」「签名无效」「没有 openssl」,并显示签名校验通过。
+- **Mac 与 Windows 同步发布**。
+
+### English
+- **Anti-rollback:** signed manifests carry a release sequence number (seq) and an expiry. The installer refuses manifests older than a version already seen, and expired manifests. To install an older release on purpose, use `--allow-downgrade` (Windows: `-AllowDowngrade`).
+- **Clearer signature messages:** unreachable manifests, invalid signatures and a missing openssl are reported separately, and successful verification is shown.
+- **macOS and Windows ship together.**
+
 ## 2.3.17 (2026-10-09)
 
 ### 中文
