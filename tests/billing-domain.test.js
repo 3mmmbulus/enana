@@ -77,12 +77,19 @@ test('matching: exact amount inside the 24h lease activates; late, wrong, duplic
  const o={id:'o1',address:'A',amount:10*M,created:T0,lease_until:T0+D.LEASE,status:'pending'};
  assert.equal(D.matchPayment([o],{address:'A',amount:10*M,chain_at:T0+3700}).action,'activate','paying after the 1h countdown still activates inside 24h');
  assert.equal(D.matchPayment([o],{address:'A',amount:10*M,chain_at:T0+D.LEASE+1}).action,'manual','after 24h: manual queue');
- assert.equal(D.matchPayment([o],{address:'A',amount:10*M+10000,chain_at:T0+5}).action,'manual','overpaid/underpaid never auto-activates');
- assert.equal(D.matchPayment([o],{address:'A',amount:10*M-10000,chain_at:T0+5}).action,'manual','underpaid never auto-activates');
+ assert.deepEqual(D.matchPayment([o],{address:'A',amount:10*M+10000,chain_at:T0+5}).reason,'overpaid','overpaid never auto-activates; the one order in the window is shown as under manual review');
+ assert.deepEqual(D.matchPayment([o],{address:'A',amount:10*M-10000,chain_at:T0+5}).reason,'underpaid','underpaid never auto-activates');
+ assert.equal(D.matchPayment([o,{...o,id:'o2',amount:10*M+10000}],{address:'A',amount:10*M+20000,chain_at:T0+5}).reason,'ambiguous','several orders in the window and no exact amount: queue, never guess');
  assert.equal(D.matchPayment([o],{address:'A',amount:10*M,chain_at:T0-1}).action,'manual','a transfer before the order was created is not this order');
  const paid={...o,status:'paid'};assert.deepEqual([D.matchPayment([paid],{address:'A',amount:10*M,chain_at:T0+5}).reason],['duplicate']);
 });
 test('trimMoney drops trailing zeros for display only',()=>{
  assert.equal(D.trimMoney('10.000000'),'10');assert.equal(D.trimMoney('10.010000'),'10.01');assert.equal(D.trimMoney('10.100000'),'10.1');
  assert.equal(D.trimMoney('4.008146'),'4.008146');assert.equal(D.trimMoney('0.000000'),'0');
+});
+test('a paid order does not make a later transfer ambiguous: the order still holding the slot wins; only paid matches are duplicates',()=>{
+ const paid={id:'p',address:'A',amount:10*M,created:T0,lease_until:T0+D.LEASE,status:'paid'};
+ const open={id:'n',address:'A',amount:10*M,created:T0+5,lease_until:T0+5+D.LEASE,status:'pending'};
+ assert.equal(D.matchPayment([paid,open],{address:'A',amount:10*M,chain_at:T0+10}).order.id,'n');
+ assert.equal(D.matchPayment([paid],{address:'A',amount:10*M,chain_at:T0+10}).reason,'duplicate');
 });

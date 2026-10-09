@@ -20,15 +20,25 @@ function allocate(price,addresses,orders,t){
  for(let k=1;k<=TAIL_MAX;k++){const n=price+k*TAIL_STEP;for(const a of addresses)if(!held(a,n))return {address:a,amount:n,tail:k}}
  throw Error('E_QUOTE_CAPACITY');
 }
-// 到账匹配: 只认 (地址, 金额) 完全相等, 且转账时间落在订单的租约窗口内 (创建 .. lease_until)。
-// 结果: activate = 按时付款, 直接开通套餐; manual = 进入人工队列 (不自动开通、不自动退款)。
+// 到账匹配: 先取同一地址、租约窗口内 (创建 .. lease_until) 的订单。
+//  - 金额完全相等的唯一订单, 且未付款: activate (按时付款, 直接开通)。
+//  - 窗口内只有一个订单但金额不符: manual (少付/多付, 显示「金额不符, 已转人工处理」, 不自动开通)。
+//  - 其它 (无订单、超过 24 小时、重复付款、已取消后到账等): manual (进人工队列)。
 function matchPayment(orders,ev){
- const cand=orders.filter(o=>o.address===ev.address&&o.amount===ev.amount&&o.created<=ev.chain_at&&ev.chain_at<=o.lease_until);
- if(cand.length===0)return {action:'manual',reason:'unmatched'};
- if(cand.length>1)return {action:'manual',reason:'ambiguous'};
- const o=cand[0];
- if(o.status==='pending'||o.status==='detected')return {action:'activate',order:o};
- return {action:'manual',order:o,reason:o.status==='paid'||o.status==='activated'?'duplicate':'not_payable'};
+ const win=orders.filter(o=>o.address===ev.address&&o.created<=ev.chain_at&&ev.chain_at<=o.lease_until);
+ const exact=win.filter(o=>o.amount===ev.amount);
+ // A paid order releases its slot at once, so a new order may hold the same amount; prefer the order still holding the slot.
+ const open=exact.filter(o=>o.status!=='paid'&&o.status!=='activated');
+ if(open.length>1)return {action:'manual',reason:'ambiguous'};
+ if(open.length===1){
+  const o=open[0];
+  if(o.status==='pending'||o.status==='detected')return {action:'activate',order:o};
+  return {action:'manual',order:o,reason:'not_payable'};
+ }
+ if(exact.length>0)return {action:'manual',order:exact[0],reason:'duplicate'};
+ if(win.length===1)return {action:'manual',order:win[0],reason:ev.amount<win[0].amount?'underpaid':'overpaid'};
+ if(win.length>1)return {action:'manual',reason:'ambiguous'};
+ return {action:'manual',reason:'unmatched'};
 }
 // 金额显示: 去掉末尾的 0 (10 而不是 10.000000; 10.01 而不是 10.010000)
 function trimMoney(v){return /^\d+\.\d{6}$/.test(v)?v.replace(/\.?0+$/,''):v}
