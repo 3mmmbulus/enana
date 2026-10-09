@@ -5,7 +5,7 @@
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, t = window.I18N.t, L = window.I18N.L;
   var B = TP.billing = {}, data = null, error = null, pending = null, loadedAt = 0, epoch = 0;
-  var mutation = false, keys = {}, mounts = [], emailMounts = [], dialogs = [], resendUntil = 0;
+  var busyKeys = {}, ordering = false, keys = {}, mounts = [], emailMounts = [], dialogs = [], resendUntil = 0;   // busyKeys: 按操作区分 (只转圈被点的那个按钮), 不再是全局标志
   var labels = { m1: 'billing.term.m1', m3: 'billing.term.m3', m6: 'billing.term.m6', y1: 'billing.term.y1', y2: 'billing.term.y2', y3: 'billing.term.y3', y5: 'billing.term.y5' };
   function micro(v) { if (typeof v !== 'string' || !/^\d{1,7}\.\d{6}$/.test(v)) return NaN; return Number(v.replace('.', '')); }
   function money(v) { return typeof v === 'string' && /^\d+\.\d{6}$/.test(v) ? v.replace(/\.0+$/, '').replace(/(\.\d*?[1-9])0+$/, '$1') : '—'; }
@@ -26,16 +26,26 @@
     if (!canUse()) return TP.why.helper() || t('why.locked');
     if (!data) return error ? msg(error) : t('common.loading');
     if (!data.email.verified) return t('billing.verifyFirst');
-    if (mutation) return t('common.loading');
     if (payments && !data.payments_available) return t('billing.unavailable');
     if (payments && activeOrder()) return t('billing.pendingFirst');
     return '';
   }
-  function button(label, fn, reason, primary) {
+  function button(label, fn, reason, primary, bk) {
     var b = ui.btn(label, { kind: primary ? 'primary' : undefined, sm: true });
     ui.avail(b, reason || ''); ui.act(b, fn);
-    if (mutation || reason === t('common.loading')) ui.actionBusy(b, true);
+    if (bk) b._busyKey = bk;
+    if ((bk && busyKeys[bk]) || reason === t('common.loading')) ui.actionBusy(b, true);
     return b;
+  }
+  function anyBusy() { return Object.keys(busyKeys).length > 0; }
+  /* 只更新带这个 key 的按钮的转圈状态, 不重建列表 (重建会让同一卡片上所有按钮一起闪) */
+  function setBusy(bk, on) {
+    function walk(n) {
+      if (!n) return;
+      if (n._busyKey === bk) ui.actionBusy(n, on);
+      Array.prototype.forEach.call(n.children || [], walk);
+    }
+    mounts.concat(emailMounts).forEach(walk);
   }
   function redraw() { mounts.forEach(render); emailMounts.forEach(renderEmail); TP.emit('billing', data); }
   B.load = function (force) {
@@ -53,39 +63,44 @@
     }).catch(function (e) { if (mine === epoch) { error = e; redraw(); } return null; }).finally(function () { if (mine === epoch) { pending = null; } });
     return pending;
   };
-  async function write(op, body, scope) {
-    if (mutation) return null;
+  /* 写操作成功后刷新数据, 不阻塞调用方 (下单弹窗要马上打开) */
+  function refresh() { (pending || Promise.resolve()).then(function () { B.load(true); TP.plan.load(true); }); }
+  async function write(op, body, scope, bk) {
+    var key = bk || op;
+    if (busyKeys[key]) return null;
     var mine = epoch;
     if (scope) { if (!keys[scope]) keys[scope] = newKey(); body.request_key = keys[scope]; }
-    mutation = true; redraw();
+    busyKeys[key] = true; setBusy(key, true);
     try {
       var r = await TP.helper('POST', '/api/' + op, { body: JSON.stringify(body), timeout: 18000 });
       if (mine !== epoch) return null;
       if (scope) delete keys[scope];
-      if (pending) await pending;
-      if (mine !== epoch) return null;
-      await B.load(true); TP.plan.load(true); return r;
+      refresh();
+      return r;
     } catch (e) {
       if (mine === epoch) { if (e.code === 'E_ORDER_PENDING') await B.load(true); ui.toast(msg(e), 'err'); }
       return null;
-    } finally { if (mine === epoch) { mutation = false; redraw(); } }
+    } finally { if (mine === epoch) { delete busyKeys[key]; setBusy(key, false); } }
   }
   async function checkout(kind, sku, amount) {
-    if (why(true)) return;
-    var body = kind === 'plan' ? { kind: kind, sku: sku } : { kind: kind, amount: amount };
-    var r = await write('billing/checkout', body, 'invoice:' + JSON.stringify(body));
-    if (r && r.order) B.openOrder(r.order);
+    if (ordering || why(true)) return;
+    ordering = true;
+    try {
+      var body = kind === 'plan' ? { kind: kind, sku: sku } : { kind: kind, amount: amount };
+      var r = await write('billing/checkout', body, 'invoice:' + JSON.stringify(body), kind === 'plan' ? 'plan:' + sku : 'topup');
+      if (r && r.order) B.openOrder(r.order);
+    } finally { ordering = false; }
   }
   async function purchase(item) {
     if (why(false) || !Number.isFinite(micro(item.price)) || micro(data.wallet.balance) < micro(item.price)) return;
     var ok = await ui.confirmDialog({ title: t('billing.balancePay'), message: t('billing.purchaseConfirm', { amount: money(item.price), term: term(item.id) }), confirmText: t('billing.confirmPurchase') });
-    if (ok && !why(false)) await write('billing/purchase', { sku: item.id }, 'wallet:' + item.id);
+    if (ok && !why(false)) await write('billing/purchase', { sku: item.id }, 'wallet:' + item.id, 'wallet:' + item.id);
   }
   async function autoRenew() {
     if (why(false)) return;
     var enabled = !data.wallet.auto_renew;
     var ok = await ui.confirmDialog({ title: t('billing.renew'), message: t(enabled ? 'billing.renewConfirm' : 'billing.renewDisableConfirm'), confirmText: t(enabled ? 'billing.enableRenew' : 'billing.disableRenew') });
-    if (ok && !why(false)) await write('billing/auto-renew', { enabled: enabled });
+    if (ok && !why(false)) await write('billing/auto-renew', { enabled: enabled }, undefined, 'renew');
   }
   function topup() {
     if (why(true)) return;
@@ -96,7 +111,7 @@
         var v = amount.value.trim();
         if (!/^\d{1,4}(\.\d{1,6})?$/.test(v) || Number(v) < 4 || Number(v) > 1000) { ui.toast(t('billing.topupRange'), 'warn'); return false; }
         if (why(true)) { ui.toast(why(true), 'warn'); return false; }
-        var r = await write('billing/checkout', { kind: 'topup', amount: v }, 'topup:' + v);
+        var r = await write('billing/checkout', { kind: 'topup', amount: v }, 'topup:' + v, 'topup');
         if (!r || !r.order) return false;
         dlg.close(); B.openOrder(r.order); return false;
       } }
@@ -122,7 +137,7 @@
     TP.clear(box);
     notices().forEach(function (n) {
       var row = h('div', { class: 'hint billing-notice ' + n.kind, role: 'status' }, h('p', null, n.text));
-      if (n.action) row.appendChild(button(n.action.label, n.action.fn, mutation ? t('common.loading') : ''));
+      if (n.action) row.appendChild(button(n.action.label, n.action.fn, ''));
       box.appendChild(row);
     });
   }
@@ -137,18 +152,18 @@
     var email = h('div'); renderEmail(email); root.appendChild(email);
     var nb = h('div', { class: 'billing-notices' }); renderNotices(nb); root.appendChild(nb);
     root.appendChild(h('p', { class: 'hint' }, L('billing.networkNote')));
-    root.appendChild(h('div', { class: 'billing-wallet row wrap' }, h('strong', null, t('billing.balance', { amount: money(data.wallet.balance) })), button(L('billing.topup'), topup, why(true)), button(L(data.wallet.auto_renew ? 'billing.disableRenew' : 'billing.enableRenew'), autoRenew, why(false)), button(L('common.refresh'), function () { return B.load(true); }, mutation ? t('common.loading') : '')));
+    root.appendChild(h('div', { class: 'billing-wallet row wrap' }, h('strong', null, t('billing.balance', { amount: money(data.wallet.balance) })), button(L('billing.topup'), topup, why(true), false, 'topup'), button(L(data.wallet.auto_renew ? 'billing.disableRenew' : 'billing.enableRenew'), autoRenew, why(false), false, 'renew'), button(L('common.refresh'), function () { return B.load(true); }, '')));
     root.appendChild(h('p', { class: 'muted sm' }, L('billing.renewNote')));
     var grid = h('div', { class: 'billing-catalog' });
     data.catalog.forEach(function (item) {
       if (!labels[item.id] || !Number.isFinite(micro(item.price))) return;
       var balanceWhy = why(false) || (micro(data.wallet.balance) >= micro(item.price) ? '' : t('billing.insufficient'));
-      grid.appendChild(h('article', { class: 'billing-price' }, h('h3', null, term(item.id)), h('strong', null, money(item.price) + ' USDT'), h('span', { class: 'muted sm' }, L('billing.totalPrice')), button(L('billing.payUSDT'), function () { return checkout('plan', item.id); }, why(true), true), button(L('billing.balancePay'), function () { return purchase(item); }, balanceWhy)));
+      grid.appendChild(h('article', { class: 'billing-price' }, h('h3', null, term(item.id)), h('strong', null, money(item.price) + ' USDT'), h('span', { class: 'muted sm' }, L('billing.totalPrice')), button(L('billing.payUSDT'), function () { return checkout('plan', item.id); }, why(true), true, 'plan:' + item.id), button(L('billing.balancePay'), function () { return purchase(item); }, balanceWhy, false, 'wallet:' + item.id)));
     }); root.appendChild(grid);
     root.appendChild(h('h3', null, L('billing.orders')));
     var orders = h('div', { class: 'billing-orders' });
     (data.orders || []).forEach(function (o) {
-      orders.appendChild(h('div', { class: 'billing-history' }, h('span', null, o.kind === 'plan' ? term(o.sku) : t('billing.topup')), h('span', null, o.amount + ' USDT'), h('span', null, t('billing.status.' + o.status)), button(L('billing.details'), function () { B.openOrder(o); }, mutation ? t('common.loading') : '')));
+      orders.appendChild(h('div', { class: 'billing-history' }, h('span', null, o.kind === 'plan' ? term(o.sku) : t('billing.topup')), h('span', null, o.amount + ' USDT'), h('span', null, t('billing.status.' + o.status)), button(L('billing.details'), function () { B.openOrder(o); }, '')));
     }); root.appendChild(data.orders.length ? orders : h('p', { class: 'muted' }, L('billing.noOrders')));
     root.appendChild(h('h3', null, L('billing.ledger')));
     (data.ledger || []).forEach(function (r) { root.appendChild(h('div', { class: 'billing-history' }, h('span', null, t('billing.ledger.' + r.kind)), h('span', null, r.delta + ' USDT'), h('span', { class: 'muted sm' }, TP.fmt.dateTime(r.created_at)))); });
@@ -160,13 +175,13 @@
     root.appendChild(h('p', null, ui.badge(L(data.email.verified ? 'billing.emailVerified' : 'billing.emailUnverified'), data.email.verified ? 'ok' : 'warn'), ' ' + data.email.address));
     if (data.email.verified) return;
     var cooldown = resendUntil > Date.now();
-    var reason = !canUse() ? TP.why.helper() || t('why.locked') : mutation ? t('common.loading') : !data.email.mail_available ? t('billing.mailUnavailable') : cooldown ? t('billing.resendWait') : '';
+    var reason = !canUse() ? TP.why.helper() || t('why.locked') : busyKeys.email ? t('common.loading') : !data.email.mail_available ? t('billing.mailUnavailable') : cooldown ? t('billing.resendWait') : '';
     root.appendChild(button(L('billing.sendVerification'), async function () {
       if (reason) return;
-      var r = await write('email/send', {});
+      var r = await write('email/send', {}, undefined, 'email');
       if (r && r.sent) { resendUntil = Date.now() + (r.retry_after || 60) * 1000; redraw(); ui.toast(t('billing.mailSent'), 'ok'); }
-    }, reason));
-    root.appendChild(button(L(data.email.mail_available ? 'billing.checkVerification' : 'billing.checkAgain'), function () { return B.load(true); }, mutation ? t('common.loading') : ''));
+    }, reason, false, 'email'));
+    root.appendChild(button(L(data.email.mail_available ? 'billing.checkVerification' : 'billing.checkAgain'), function () { return B.load(true); }, ''));
     root.appendChild(h('p', { class: 'muted sm' }, L(data.email.mail_available ? 'billing.verifyNote' : 'billing.mailOffNote')));
   }
   B.mount = function () { var root = h('div', { class: 'billing' }); mounts.push(root); render(root); return root; };
@@ -189,11 +204,11 @@
       if (current.status === 'credited_late') body.appendChild(h('p', { class: 'hint warn' }, L('billing.lateNote')));
       dlg.setActions([{ label: t('common.close'), cancel: true }, { label: t('common.refresh'), keep: true, disabled: busy, onClick: function () { return refresh(true); } }, { label: t('billing.cancelInvoice'), keep: true, kind: 'soft-bad', disabled: current.status !== 'pending' || busy, onClick: async function () {
         var yes = await ui.confirmDialog({ title: t('billing.cancelInvoice'), message: t('billing.cancelNote'), confirmText: t('billing.cancelInvoice'), danger: true });
-        if (yes && !closed && mine === epoch) { revision++; var r = await write('billing/cancel', { id: current.id }); if (r && !closed) { current = r.order; paint(); schedule(); } }
+        if (yes && !closed && mine === epoch) { revision++; var r = await write('billing/cancel', { id: current.id }, undefined, 'cancel:' + current.id); if (r && !closed) { current = r.order; paint(); schedule(); } }
       } }]);
     }
     async function refresh(manual) {
-      if (closed || busy || mine !== epoch || S.locked || mutation) { schedule(); return; }
+      if (closed || busy || mine !== epoch || S.locked || anyBusy()) { schedule(); return; }
       if (document.hidden && !manual) { schedule(); return; }
       busy = true;
       var version = revision;
@@ -210,7 +225,7 @@
     dlg = ui.modal({ title: t('billing.invoice'), icon: 'pro', body: body, size: 'md', onClose: function () { closed = true; clearTimeout(timer); dialogs = dialogs.filter(function (d) { return d !== dlg; }); } });
     dialogs.push(dlg); paint(); schedule();
   };
-  TP.on('auth', function () { epoch++; data = null; error = null; pending = null; loadedAt = 0; mutation = false; keys = {}; resendUntil = 0; dialogs.slice().forEach(function (d) { d.close(); }); redraw(); });
+  TP.on('auth', function () { epoch++; data = null; error = null; pending = null; loadedAt = 0; busyKeys = {}; ordering = false; keys = {}; resendUntil = 0; dialogs.slice().forEach(function (d) { d.close(); }); redraw(); });
   TP.on('lang', redraw);
   TP.on('helper', function () { redraw(); });
   setInterval(function () { if (resendUntil && Date.now() >= resendUntil) { resendUntil = 0; redraw(); } }, 1000);

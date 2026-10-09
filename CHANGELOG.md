@@ -1,5 +1,21 @@
 # Changelog / 更新日志
 
+## 2.3.15 (2026-10-09)
+
+### 中文
+- **Mac 与 Windows 同步发布**: 本版的所有改动同时进入 macOS 与 Windows 安装包。
+- **套餐页「USDT 付款」不再让所有按钮一起转圈**: 只有被点的那个按钮进入加载状态, 卡片不再整块重建; 下单弹窗在服务器返回后立即打开, 不等待刷新。同一时间只允许一笔下单。
+- **服务器页、应用页、网站页不再露出 `pin-none`**: 没有固定出口时, 下拉和服务器列表只显示真实的服务器; 出口选项显示「没有固定出口: 已暂停访问」。
+- **规则未热更新提示更准确 (N15)**: 只看本次核心启动之后的日志 (每次启动前写入一行标记): 重启并修好监视后提示消失; 监视仍然失败时, 之后的流量日志不会让提示消失。
+- **Windows**: 核心启动路径同样写入启动标记, 与 macOS 一致。
+
+### English
+- **macOS and Windows ship together:** every change in this release is in both packages.
+- **The plan page's "Pay with USDT" no longer spins every button:** only the clicked button shows a spinner, cards are no longer rebuilt, and the invoice opens as soon as the server replies. Only one order can be created at a time.
+- **Servers, apps and sites no longer show `pin-none`:** with no fixed exit, dropdowns and the server list show only real servers; the exit option reads "No fixed exit: access paused".
+- **More accurate "rules not reloaded" banner (N15):** only the log since the current core start is checked (a start marker is written before each start). The banner clears after a successful restart; while the watch still fails, later traffic logs do not hide it.
+- **Windows:** the core start path writes the same start marker as macOS.
+
 ## 2.3.14 (2026-10-09)
 
 ### 中文

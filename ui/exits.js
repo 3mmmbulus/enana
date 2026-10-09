@@ -63,7 +63,7 @@
    * 取值: 'PIN' = 跟随默认固定出口 · 'PINAUTO' = 在固定出口里自动选 · 其它 = 指定的固定出口 (服务器名) */
   X.targetName = function (v) {
     if (v === 'PINAUTO') return t('apps.tg.auto');
-    if (v === 'PIN' || !v) { var d = X.defaultTag(); return d ? t('apps.tg.defaultNow', { tag: d }) : t('apps.tg.default'); }
+    if (v === 'PIN' || !v) { if (!TP.pinServers().length) return t('apps.tg.none'); var d = X.defaultTag(); return d ? t('apps.tg.defaultNow', { tag: d }) : t('apps.tg.default'); }
     return v;
   };
   X.targetDetail = function (to) {
