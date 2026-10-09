@@ -37,7 +37,7 @@ try {
         $executable=if($component -eq 'git'){"$HomeDir\runtime\git\bin\bash.exe"}elseif($component -eq 'node'){"$HomeDir\runtime\node\node.exe"}else{"$HomeDir\sing-box.exe"}
         if ((Test-Path -LiteralPath $stamp) -and [IO.File]::ReadAllText($stamp) -eq $pin.sha256 -and (Test-Path -LiteralPath $executable) -and ($component -ne 'core' -or (Test-Path -LiteralPath "$HomeDir\runtime\cache\core.zip"))) { continue }
         $archive=Join-Path $HomeDir "runtime\cache\$component$(if($component -eq 'git'){'.7z.exe'}else{'.zip'})"
-        if (!(Test-Path -LiteralPath $archive) -or (Get-FileHash -LiteralPath $archive).Hash.ToLowerInvariant() -ne $pin.sha256) { Get-VerifiedDownload @($pin.url) $archive $pin.sha256 }
+        if (!(Test-Path -LiteralPath $archive) -or (Get-FileHash -LiteralPath $archive).Hash.ToLowerInvariant() -ne $pin.sha256) { Get-VerifiedDownload @($pin.urls) $archive $pin.sha256 }
         $dest=Join-Path $HomeDir "runtime\$component.next"
         if(Test-Path -LiteralPath $dest){Remove-Item -LiteralPath $dest -Recurse -Force}
         if ($component -eq 'git') {
