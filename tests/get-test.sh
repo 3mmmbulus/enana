@@ -56,6 +56,8 @@ mkpkg() {
   ( cd "$REPO" && cp -R install.sh lib data ui CHANGELOG.md get.sh "$s/" ); printf '%s\n' "$v" > "$s/VERSION"
   # MKPKG_BROKEN=1: the installer exits 1 at once (simulates a failed install)
   [ -z "${MKPKG_BROKEN:-}" ] || { { echo 'exit 1'; cat "$s/install.sh"; } > "$s/install.sh.tmp" && mv "$s/install.sh.tmp" "$s/install.sh"; }
+  # MKPKG_BADCONF=1: the installer fails in the configuration step, after the program files were replaced (N5)
+  [ -z "${MKPKG_BADCONF:-}" ] || { sed 's/^  install_files$/  install_files; die "测试: 模拟配置失败" "simulated configuration failure"/' "$s/install.sh" > "$s/install.sh.tmp" && mv "$s/install.sh.tmp" "$s/install.sh"; }
   tar -C "$W/stage-$v" -czf "$o/enana-$v.tar.gz" "enana-$v"
   sum=$(sha "$o/enana-$v.tar.gz"); size=$(wc -c < "$o/enana-$v.tar.gz" | tr -d ' ')
   printf '{"version":"%s","sha256":"%s","size":%s,"url":"/dl/enana-%s.tar.gz","seq":%s,"expires":%s,"released":"2026-01-01T00:00:00Z"}\n' "$v" "$sum" "$size" "$v" "${MKPKG_SEQ:-$(date +%s)}" "${MKPKG_EXPIRES:-$(( $(date +%s) + 2592000 ))}" > "$o/manifest.json"
@@ -219,6 +221,25 @@ OUT=$(env4 bash "$GET" --yes --lang zh 2>&1); RC=$?
 expect "修好之后重新运行官方命令 → 成功 (不再被回滚检查拦住)" test "$RC" = 0
 expect "成功后序号才前进" sh -c "[ \"\$(cat '$W/s4/h/.release-seq')\" -gt 500 ]"
 
+echo "== 3e. 升级时配置阶段失败: 旧程序文件被还原, 版本号和发布序号不变, 快照目录被清掉 (N5)"
+mkdir -p "$W/s5/"{state,tmp,home/Library/LaunchAgents,shortcut,h/rules}; cp "$SB" "$W/s5/h/sing-box"; chmod +x "$W/s5/h/sing-box"
+env5() { HOME=$W/s5/home ENANA_HOME=$W/s5/h FAKE_STATE=$W/s5/state ENANA_PLIST_DIR=$W/s5/home/Library/LaunchAgents ENANA_SHORTCUT_DIR=$W/s5/shortcut TMPDIR=$W/s5/tmp PORT=$((BASE+30)) UI_PORT=$((BASE+31)) API_PORT=$((BASE+32)) SPEED_PORT=$((BASE+33)) "$@"; }
+GOOD5=9.9.11; mkpkg "$GOOD5" "$W/pkg11"; serve "$W/pkg11"
+OUT=$(env5 bash "$GET" --yes --lang zh 2>&1); RC=$?
+expect "先正常安装 9.9.11 (前提)" test "$RC" = 0
+before=$( cd "$W/s5/h" && find lib data ui enana VERSION -type f 2>/dev/null | sort | xargs shasum -a 256 | shasum -a 256 | cut -d' ' -f1 )
+seq_before=$(cat "$W/s5/h/.release-seq" 2>/dev/null)
+BAD5=9.9.12; MKPKG_BADCONF=1 mkpkg "$BAD5" "$W/pkg12"; serve "$W/pkg12"
+OUT=$(env5 bash "$GET" --upgrade --yes --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
+expect "配置阶段失败 → 升级命令失败" test "$RC" != 0
+expect "失败后 VERSION 仍是 9.9.11" test "$(cat "$W/s5/h/VERSION")" = "$GOOD5"
+after=$( cd "$W/s5/h" && find lib data ui enana VERSION -type f 2>/dev/null | sort | xargs shasum -a 256 | shasum -a 256 | cut -d' ' -f1 )
+expect "失败后程序文件与升级前完全一致 (没有半装的新文件)" test "$before" = "$after"
+expect "失败后发布序号没有前进" test "$(cat "$W/s5/h/.release-seq" 2>/dev/null)" = "$seq_before"
+expect "快照目录已清理" test ! -e "$W/s5/h/.upgrade-snapshot"
+echo "$OUT" | grep -q '已还原到升级前的程序文件' && tpass "提示已还原到升级前的程序文件" || tfail "提示已还原到升级前的程序文件"
+serve "$W/pkg10"   # 3e 最后挂的是故意坏掉的包; 后面的用例 (第 6 节起) 需要重新挂回好的包
+
 echo "== 6. 端口被占用 → 自动换一个随机的空闲端口; 安装完成后打印后台地址 (/enana/admin/)"
 B1=$((BASE+10)); B2=$((BASE+11)); B3=$((BASE+12)); B4=$((BASE+13))
 python3 -c "
@@ -229,6 +250,7 @@ mkdir -p "$W/s2/"{state,tmp,home/Library/LaunchAgents,shortcut,h/rules}; cp "$SB
 env2() { HOME=$W/s2/home ENANA_HOME=$W/s2/h FAKE_STATE=$W/s2/state ENANA_PLIST_DIR=$W/s2/home/Library/LaunchAgents ENANA_SHORTCUT_DIR=$W/s2/shortcut TMPDIR=$W/s2/tmp PORT=$B1 UI_PORT=$B2 API_PORT=$B3 SPEED_PORT=$B4 "$@"; }
 OUT=$(env2 bash "$GET" --yes --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain); echo "$OUT" | grep -E '已自动改用|后台地址' | sed 's/^/    /'
 expect "端口被占用时安装仍然成功 (退出码 0)" test "$RC" = 0
+[ "$RC" = 0 ] || { echo "    (安装器失败时的最后 15 行输出:)"; echo "$OUT" | tail -n 15 | sed "s/^/    | /"; }
 NEWP=$(sed -n 's/^PORT=//p' "$W/s2/h/settings.env" | tail -1)
 expect "代理端口已自动换成别的空闲端口 (写进了设置, 不是被占用的那个)" sh -c "[ -n '$NEWP' ] && [ '$NEWP' != '$B1' ] && [ '$NEWP' -ge 20000 ] && [ '$NEWP' -le 59999 ]"
 echo "$OUT" | grep -q "本地端口 $B1 已被其它程序占用, 已自动改用 ${NEWP}" && tpass "输出里说明了「端口 $B1 被占用, 已自动改用 ${NEWP}」" || tfail "输出里说明了端口被占用并自动改用了哪个"
