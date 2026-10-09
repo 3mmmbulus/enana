@@ -69,7 +69,8 @@ install_files() { # 把程序文件复制到 $H (源码目录与 $H 相同时跳
     rm -rf "$H/lib" "$H/data"; cp -R "$SRC/lib" "$H/lib"; cp -R "$SRC/data" "$H/data"
     cp -R "$SRC/ui/." "$H/ui/"
     [ ! -d "$SRC/windows" ] || { mkdir -p "$H/windows"; cp -R "$SRC/windows/." "$H/windows/"; }
-    local f; for f in VERSION CHANGELOG.md get.sh get.ps1; do [ -f "$SRC/$f" ] && cp "$SRC/$f" "$H/$f"; done
+    # 原子替换 (N4): 升级时正在运行的 get.sh 就是这个文件, 原地 cp 会让 bash 读到错位的新内容; 写临时文件再 mv 则旧进程不受影响
+    local f; for f in VERSION CHANGELOG.md get.sh get.ps1; do [ -f "$SRC/$f" ] && cp "$SRC/$f" "$H/$f.new" && chmod 644 "$H/$f.new" && mv -f "$H/$f.new" "$H/$f"; done
     cp "$SRC/install.sh" "$H/enana.new" && chmod 755 "$H/enana.new" && mv -f "$H/enana.new" "$H/enana"   # 原子替换: 正在运行的旧进程不受影响
   fi
   : > "$H/.enana-home"

@@ -144,6 +144,11 @@ else
   fi
 fi
 OLD=''; [ -f "$HOME_DIR/VERSION" ] && IFS= read -r OLD < "$HOME_DIR/VERSION" || true
+# 防降级 (N2): 清单版本比已安装的旧, 就拒绝, 不论有没有序号记录 (.release-seq 丢失或旧版本安装时同样适用)
+if [ -n "$OLD" ] && [ "$VER" != "$OLD" ] && [ "$(printf '%s\n%s\n' "$VER" "$OLD" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" = "$VER" ]; then
+  if [ "$ALLOW_DOWNGRADE" = 1 ]; then warn "按 --allow-downgrade 安装较旧的版本 (v$VER < 已安装的 v$OLD)" "Installing an older release because of --allow-downgrade (v$VER < installed v$OLD)"
+  else die "版本清单 (v$VER) 比已安装的 v$OLD 旧, 已中止 (可能是回滚攻击)。确需降级请加 --allow-downgrade" "The manifest (v$VER) is older than the installed v$OLD; aborting (possible rollback attack). To downgrade on purpose, add --allow-downgrade"; fi
+fi
 ok "最新版本: v$VER${OLD:+ (已安装 v$OLD)}" "Latest version: v$VER${OLD:+ (installed: v$OLD)}"
 if [ -n "$OLD" ] && [ "$OLD" = "$VER" ] && [ "$FORCE" = 0 ] && [ "$UPGRADE" = 1 ]; then ok "已经是最新版本, 无需升级" "Already up to date"; progress 3 100 "完成"; exit 0; fi
 
@@ -169,7 +174,6 @@ for src in "$INSTALL_BASE/dl/$FILE" "$GH_BASE/$GH_REPO/releases/download/v$VER/$
 done
 [ "$got" = 1 ] || die "安装包下载或校验失败 (已尝试所有线路)" "Package download or verification failed (all sources tried)"
 ok "SHA-256 校验通过" "SHA-256 verified"
-if [ -n "$SEQ" ] && { [ -z "$SEEN" ] || [ "$SEQ" -gt "$SEEN" ]; }; then mkdir -p "$HOME_DIR" && printf '%s\n' "$SEQ" > "$SEQ_FILE.tmp" && mv -f "$SEQ_FILE.tmp" "$SEQ_FILE"; fi
 if tar -tzf "$TMP/pkg.tgz" 2>/dev/null | sed 's#^\./##' | grep -Eq '^/|(^|/)\.\.(/|$)'; then die "安装包里有不安全的路径, 已中止" "The package contains unsafe paths; aborting"; fi
 mkdir -p "$TMP/src"; tar -xzf "$TMP/pkg.tgz" -C "$TMP/src" || die "解压失败" "Extraction failed"
 SRC=$(find "$TMP/src" -maxdepth 2 -name install.sh -print | head -1); [ -n "$SRC" ] || die "安装包里没有 install.sh" "install.sh is missing from the package"
@@ -180,4 +184,6 @@ step "运行安装器" "Running the installer"
 progress 2 50 "安装并重新生成配置"
 args=(--lang "$LANG_OPT"); [ "$YES" = 1 ] && args+=(--yes); [ "$UPGRADE" = 1 ] && args+=(--upgrade); [ "$FORCE" = 1 ] && args+=(--force)
 if [ "$YES" = 0 ] && [ -r /dev/tty ]; then bash "$SRC/install.sh" "${args[@]}" < /dev/tty; else bash "$SRC/install.sh" "${args[@]}" < /dev/null; fi
+# 发布序号只在安装成功之后才记住 (N5): set -e 下安装失败会在这里之前退出, 序号不前进, 重新运行官方命令即可恢复
+if [ -n "$SEQ" ] && { [ -z "$SEEN" ] || [ "$SEQ" -gt "$SEEN" ]; }; then mkdir -p "$HOME_DIR" && printf '%s\n' "$SEQ" > "$SEQ_FILE.tmp" && mv -f "$SEQ_FILE.tmp" "$SEQ_FILE"; fi
 progress 3 100 "完成"
