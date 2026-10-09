@@ -781,7 +781,7 @@
     "apps.changed": "{name} is now set to {state}",
     "apps.opt.pin": "Fixed exit",
     "apps.opt.auto": "Auto route",
-    "apps.opt.direct": "Direct (off)",
+    "apps.opt.direct": "Direct (no proxy)",
     "apps.rec": "Recommended: {state}",
     "apps.recTitle": "Click to adopt the recommendation",
     "apps.col.name": "App",
@@ -891,7 +891,7 @@
     "apps.cu.added": "{name} added — routing: {policy}",
     "apps.group.代理工具": "Proxy tools",
     // ---- sites ----
-    "sites.intro": "Choose an exit for each kind of site: Fixed exit = a stable IP (never switches nodes on failure), Auto route = the lowest-latency node, Direct = no proxy. Changes apply immediately — no restart needed.",
+    "sites.intro": "Choose an exit for each kind of site: Fixed exit = a stable IP (never switches nodes on failure), Auto route = the lowest-latency node, Direct = no proxy. Changes usually apply immediately; if the top banner says the rules were not reloaded, follow it.",
     "sites.how.title": "How rules apply",
     "sites.how.sub": "the first match wins",
     "sites.tab.aria": "Where sites come from",

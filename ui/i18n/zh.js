@@ -781,7 +781,7 @@
     "apps.changed": "「{name}」已设为 {state}",
     "apps.opt.pin": "固定出口",
     "apps.opt.auto": "自动线路",
-    "apps.opt.direct": "直连 (关)",
+    "apps.opt.direct": "直连 (不走代理)",
     "apps.rec": "推荐: {state}",
     "apps.recTitle": "点击采纳推荐设置",
     "apps.col.name": "软件名",
@@ -891,7 +891,7 @@
     "apps.cu.added": "已添加「{name}」, 路由方式: {policy}",
     "apps.group.代理工具": "代理工具",
     // ---- sites ----
-    "sites.intro": "为每类网站选择出口: 固定出口 = 稳定 IP (故障时不会自动换节点), 自动线路 = 自动选延迟最低的节点, 直连 = 不走代理。修改立即生效, 无需重启。",
+    "sites.intro": "为每类网站选择出口: 固定出口 = 稳定 IP (故障时不会自动换节点), 自动线路 = 自动选延迟最低的节点, 直连 = 不走代理。通常立即生效; 如果顶部提示规则未热更新, 请按提示处理。",
     "sites.how.title": "规则如何生效",
     "sites.how.sub": "先匹配到的先生效",
     "sites.tab.aria": "网站来源",

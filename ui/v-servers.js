@@ -405,7 +405,7 @@
   }
   async function delSub(x) {
     var n = x.count || 0, imp = await TP.exits.subImpact(x.name), q = { name: x.name }, detail = [t('servers.subs.delDetail', { n: n })];
-    if (imp && (imp.n > 0 || !imp.known)) {                             // 订阅里有固定出口: 它们一起消失, 指定了它们的应用 / 网站 / 服务会退回默认固定出口 (没有固定出口时直连)
+    if (imp && (imp.n > 0 || !imp.known)) {                             // 订阅里有固定出口: 它们一起消失 (没有固定出口时, 指定它们的项目会暂停访问, 不会直连), 指定了它们的应用 / 网站 / 服务会退回默认固定出口 (没有固定出口时直连)
       detail.push(t(imp.known ? 'servers.subs.delPins' : 'servers.subs.delPinsUnknown', { pins: imp.pins.join(', '), n: imp.n }));
       q.accept_orphans = 1;
     }
