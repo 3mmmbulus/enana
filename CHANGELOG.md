@@ -1,5 +1,15 @@
 # Changelog / 更新日志
 
+## 2.3.17 (2026-10-09)
+
+### 中文
+- **Windows 安装器校验发布签名**: `get.ps1` 在下载安装包前先校验清单签名 (与 macOS 的 `get.sh` 使用同一把发布公钥), 签名不通过就中止安装。Windows 安装器的签名校验已在 Windows PowerShell 5.1 和 PowerShell 7 上通过 CI 测试。
+- **Mac 与 Windows 同步发布**。
+
+### English
+- **The Windows installer verifies the release signature:** `get.ps1` checks the manifest signature before downloading the package, using the same release public key as macOS `get.sh`, and aborts if it does not verify. Tested in CI on Windows PowerShell 5.1 and PowerShell 7.
+- **macOS and Windows ship together.**
+
 ## 2.3.16 (2026-10-09)
 
 ### 中文
