@@ -98,14 +98,20 @@ jobs:
           if [ -z "$PREV" ]; then
             body=$(mktemp); ok=0; hdr=()
             # Automatic job token only, to avoid the unauthenticated API 403. Never printed.
+            # --http1.1: runners often fail this call with curl 56 / HTTP 403 over HTTP/2.
             if [ -n "${GITHUB_TOKEN:-}" ]; then hdr=(-H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" -H "User-Agent: enana-qa"); fi
             for i in 1 2 3 4 5; do
-              curl -fsSL "${hdr[@]}" -o "$body" "https://api.github.com/repos/${{ github.repository }}/releases?per_page=5" && ok=1 && break
+              curl --http1.1 -fsSL "${hdr[@]}" -o "$body" "https://api.github.com/repos/${{ github.repository }}/releases?per_page=5" && ok=1 && break
               sleep $((i * 2))
             done
-            [ "$ok" = 1 ]
-            PREV=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[1]["tag_name"].lstrip("v"))' "$body")
+            if [ "$ok" = 1 ]; then
+              PREV=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[1]["tag_name"].lstrip("v"))' "$body")
+            else
+              curl --http1.1 -fsSL -A enana-qa -o "$body" "https://github.com/${{ github.repository }}/releases.atom"
+              PREV=$(python3 -c 'import re,sys; t=open(sys.argv[1],encoding="utf-8",errors="replace").read(); tags=re.findall(r"enana v([0-9]+\.[0-9]+\.[0-9]+)", t); print(tags[1] if len(tags)>1 else tags[0])' "$body")
+            fi
           fi
+          [ -n "$PREV" ]
           echo "PREV=$PREV" | tee -a "$GITHUB_ENV" "$LOGS/summary.txt"
       - name: Install the previous release fresh
         run: |
@@ -363,6 +369,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Self-tests (bash 3.2 = /bin/bash on macOS, LibreSSL = /usr/bin/openssl)
         run: |
+          # bash 3.2 + set -e does not stop the step when a pipeline fails, and a
+          # failing test inside `for | tee` aborts the loop before FAIL is printed.
+          # Record every result, keep going, then fail the step if any FAIL line exists.
+          set +e
           mkdir -p "$RUNNER_TEMP/logs" "$RUNNER_TEMP/bin"
           if ! command -v sing-box >/dev/null 2>&1; then
             case "$(uname -m)" in arm64) arch=arm64 ;; x86_64) arch=amd64 ;; *) echo "unknown arch $(uname -m)"; exit 1 ;; esac
@@ -373,18 +383,24 @@ jobs:
             chmod +x "$RUNNER_TEMP/bin/sing-box"
           fi
           export PATH="$RUNNER_TEMP/bin:$PATH"
-          rc=0
+          : > "$RUNNER_TEMP/logs/summary.txt"
           for t in get-test.sh units.sh core.sh health.sh stats.sh exits.sh; do
-            echo "== $t"; /bin/bash "tests/$t" > "$RUNNER_TEMP/logs/$t.log" 2>&1
+            echo "== $t" | tee -a "$RUNNER_TEMP/logs/summary.txt"
+            /bin/bash "tests/$t" > "$RUNNER_TEMP/logs/$t.log" 2>&1
             ec=$?
-            if [ "$ec" -eq 0 ]; then echo "PASS $t"
-            elif [ "$ec" -eq 77 ]; then echo "FAIL $t (exit 77, skipped)"; rc=1
-            else echo "FAIL $t"; rc=1; fi
-          done | tee "$RUNNER_TEMP/logs/summary.txt"
+            if [ "$ec" -eq 0 ]; then msg="PASS $t"
+            elif [ "$ec" -eq 77 ]; then msg="FAIL $t (exit 77, skipped)"
+            else msg="FAIL $t (exit $ec)"; fi
+            echo "$msg" | tee -a "$RUNNER_TEMP/logs/summary.txt"
+          done
           for t in billing-domain importer sysproxy-ui exits-ui sorter windows-helper; do
-            node "tests/$t.test.js" > "$RUNNER_TEMP/logs/$t.log" 2>&1 && echo "PASS $t" || echo "FAIL $t"
-          done | tee -a "$RUNNER_TEMP/logs/summary.txt"
-          ! grep -q '^FAIL' "$RUNNER_TEMP/logs/summary.txt"
+            node "tests/$t.test.js" > "$RUNNER_TEMP/logs/$t.log" 2>&1
+            ec=$?
+            if [ "$ec" -eq 0 ]; then msg="PASS $t"; else msg="FAIL $t (exit $ec)"; fi
+            echo "$msg" | tee -a "$RUNNER_TEMP/logs/summary.txt"
+          done
+          if grep -q '^FAIL' "$RUNNER_TEMP/logs/summary.txt"; then exit 1; fi
+          exit 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -435,4 +451,188 @@ jobs:
         with:
           name: selftest-${{ matrix.os }}
           path: ${{ runner.temp }}\logs
+          retention-days: 14
+
+  # ---------------------------------------------------------------- privilege prompts, macOS
+  # Counts how many times each user action would ask for an administrator password.
+  # GitHub runners have passwordless sudo, which makes enana take the sudo-nopass
+  # branch and never call osascript. PATH shadows force the dialog branch:
+  #   sudo -n true  -> fail (so the passwordless shortcut is not taken)
+  #   sudo -v / interactive sudo -> one PROMPT, then /usr/bin/sudo -n (no GUI wait)
+  #   osascript "... with administrator privileges" -> one PROMPT, command run under alarm
+  #   networksetup -set* as the user -> fail, so "direct" admin-without-password is not counted as zero
+  # Every action is under perl alarm so a dialog cannot hang the job.
+  mac-priv:
+    name: mac priv (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-15-intel, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      LOGS: ${{ github.workspace }}/qa-logs
+    steps:
+      - name: Count privileged invocations (2.3.15 vs latest)
+        run: |
+          set +e
+          set +u
+          mkdir -p "$LOGS/priv" "$RUNNER_TEMP/privbin" "$RUNNER_TEMP/src"
+          printf '%s' 'IyEvYmluL2Jhc2gKbG9nPSR7RU5BTkFfUFJJVl9MT0c6LS90bXAvZW5hbmEtcHJpdi5sb2d9Cm5vbmludD0wCndoaWxlIFsgJCMgLWd0IDAgXTsgZG8KICBjYXNlICQxIGluCiAgICAtbikgbm9uaW50PTE7IHNoaWZ0IDs7CiAgICAtdikKICAgICAgc3RhbXA9IiRsb2cuc3Vkby1zdGFtcCIKICAgICAgbm93PSQoZGF0ZSArJXMpCiAgICAgIGlmIFsgLWYgIiRzdGFtcCIgXSAmJiBbICQoKCBub3cgLSAkKHN0YXQgLWYgJW0gIiRzdGFtcCIgMj4vZGV2L251bGwgfHwgc3RhdCAtYyAlWSAiJHN0YW1wIikgKSkgLWx0IDMwMCBdOyB0aGVuCiAgICAgICAgcHJpbnRmICdTVURPX0NBQ0hFRCBzdWRvIC12XG4nID4+ICIkbG9nIgogICAgICBlbHNlCiAgICAgICAgcHJpbnRmICdQUk9NUFQgc3VkbyAtdlxuJyA+PiAiJGxvZyIKICAgICAgICB0b3VjaCAiJHN0YW1wIgogICAgICBmaQogICAgICBleGl0IDAKICAgICAgOzsKICAgIC1wKSBzaGlmdDsgWyAkIyAtZ3QgMCBdICYmIHNoaWZ0OyBjb250aW51ZSA7OwogICAgLUF8LUV8LUh8LWt8LUspIHNoaWZ0IDs7CiAgICAtLSkgc2hpZnQ7IGJyZWFrIDs7CiAgICAtKikgc2hpZnQgOzsKICAgICopIGJyZWFrIDs7CiAgZXNhYwpkb25lCnNob3J0PSQocHJpbnRmICclcycgIiQqIiB8IGN1dCAtYzEtMjIwKQppZiBbICIkbm9uaW50IiA9IDEgXTsgdGhlbgogIGlmIFsgIiR7MTotfSIgPSB0cnVlIF0gJiYgWyAkIyAtZXEgMSBdOyB0aGVuCiAgICBwcmludGYgJ1NVRE9fTl9UUlVFIGRlbnlcbicgPj4gIiRsb2ciCiAgICBleGl0IDEKICBmaQogIHByaW50ZiAnU1VET19OICVzXG4nICIkc2hvcnQiID4+ICIkbG9nIgogIGV4ZWMgL3Vzci9iaW4vc3VkbyAtbiAiJEAiCmZpCiMgQSByZWFsIHN1ZG8gdGltZXN0YW1wIGNvdmVycyBsYXRlciBzdWRvIGNhbGxzIGZvciBhIGZldyBtaW51dGVzLiBvc2FzY3JpcHQKIyBhZG1pbiBkaWFsb2dzIGRvIG5vdC4gQ29sbGFwc2Ugb25seSB0aGlzIGludGVyYWN0aXZlLXN1ZG8gYnVyc3QuCnN0YW1wPSIkbG9nLnN1ZG8tc3RhbXAiCm5vdz0kKGRhdGUgKyVzKQppZiBbIC1mICIkc3RhbXAiIF0gJiYgWyAkKCggbm93IC0gJChzdGF0IC1mICVtICIkc3RhbXAiIDI+L2Rldi9udWxsIHx8IHN0YXQgLWMgJVkgIiRzdGFtcCIpICkpIC1sdCAzMDAgXTsgdGhlbgogIHByaW50ZiAnU1VET19DQUNIRUQgJXNcbicgIiRzaG9ydCIgPj4gIiRsb2ciCmVsc2UKICBwcmludGYgJ1BST01QVCBzdWRvICVzXG4nICIkc2hvcnQiID4+ICIkbG9nIgogIHRvdWNoICIkc3RhbXAiCmZpCmV4ZWMgL3Vzci9iaW4vc3VkbyAtbiAiJEAiCg==' | base64 -d > "$RUNNER_TEMP/privbin/sudo"
+          printf '%s' 'IyEvYmluL2Jhc2gKaWYgWyAiJChpZCAtdSkiIC1lcSAwIF07IHRoZW4KICBleGVjIC91c3Ivc2Jpbi9uZXR3b3Jrc2V0dXAgIiRAIgpmaQpjYXNlICIkezE6LX0iIGluCiAgLXNldCopCiAgICBwcmludGYgJ0RJUkVDVF9ERU5JRUQgJXNcbicgIiQocHJpbnRmICclcycgIiQqIiB8IGN1dCAtYzEtMTgwKSIgPj4gIiR7RU5BTkFfUFJJVl9MT0c6LS90bXAvZW5hbmEtcHJpdi5sb2d9IgogICAgZXhpdCAxCiAgICA7Owplc2FjCmV4ZWMgL3Vzci9zYmluL25ldHdvcmtzZXR1cCAiJEAiCg==' | base64 -d > "$RUNNER_TEMP/privbin/networksetup"
+          printf '%s' 'IyEvYmluL2Jhc2gKbG9nPSR7RU5BTkFfUFJJVl9MT0c6LS90bXAvZW5hbmEtcHJpdi5sb2d9CmV4cG9ydCBFTkFOQV9QUklWX0xPRz0iJGxvZyIKZXhlYyAvdXNyL2Jpbi9weXRob24zIC0gIiRAIiA8PCdQWScKaW1wb3J0IG9zLCByZSwgc3lzLCBzdWJwcm9jZXNzCmxvZyA9IG9zLmVudmlyb24uZ2V0KCJFTkFOQV9QUklWX0xPRyIsICIvdG1wL2VuYW5hLXByaXYubG9nIikKYXJncyA9IHN5cy5hcmd2WzE6XQpibG9iID0gIiAiLmpvaW4oYXJncykKCmRlZiBhcHBlbmQobGluZSk6CiAgICB3aXRoIG9wZW4obG9nLCAiYSIsIGVuY29kaW5nPSJ1dGYtOCIsIGVycm9ycz0icmVwbGFjZSIpIGFzIGZoOgogICAgICAgIGZoLndyaXRlKGxpbmVbOjUwMF0gKyAiXG4iKQoKaWYgIndpdGggYWRtaW5pc3RyYXRvciBwcml2aWxlZ2VzIiBpbiBibG9iOgogICAgYXBwZW5kKCJQUk9NUFQgb3Nhc2NyaXB0LWFkbWluIikKICAgIG0gPSByZS5zZWFyY2gocidkbyBzaGVsbCBzY3JpcHQgIiguKikiIHdpdGggYWRtaW5pc3RyYXRvciBwcml2aWxlZ2VzXHMqJCcsIGJsb2IsIHJlLlMpCiAgICBpZiBub3QgbToKICAgICAgICBhcHBlbmQoIkVWSURFTkNFIG9zYXNjcmlwdC1hZG1pbiB1bnBhcnNlZCIpCiAgICAgICAgc3lzLmV4aXQoMSkKICAgIGNtZCA9IG0uZ3JvdXAoMSkKICAgIGFwcGVuZCgiRVZJREVOQ0Ugb3Nhc2NyaXB0LWNtZCAiICsgY21kWzoyNDBdKQogICAgdHJ5OgogICAgICAgIHAgPSBzdWJwcm9jZXNzLnJ1bigKICAgICAgICAgICAgWyIvdXNyL2Jpbi9wZXJsIiwgIi1lIiwgImFsYXJtIHNoaWZ0OyBleGVjIEBBUkdWIiwgIjkwIiwgIi91c3IvYmluL3N1ZG8iLCAiLW4iLCAiL2Jpbi9iYXNoIiwgIi1jIiwgY21kXSwKICAgICAgICAgICAgdGltZW91dD0xMDAsCiAgICAgICAgKQogICAgICAgIHN5cy5leGl0KHAucmV0dXJuY29kZSkKICAgIGV4Y2VwdCBFeGNlcHRpb24gYXMgZXhjOgogICAgICAgIGFwcGVuZCgiRVZJREVOQ0Ugb3Nhc2NyaXB0LXJ1bi1lcnJvciAiICsgc3RyKGV4YylbOjE4MF0pCiAgICAgICAgc3lzLmV4aXQoMSkKCmFwcGVuZCgiT1NBU0NSSVBUICIgKyBibG9iWzoxODBdKQp0cnk6CiAgICBwID0gc3VicHJvY2Vzcy5ydW4oCiAgICAgICAgWyIvdXNyL2Jpbi9wZXJsIiwgIi1lIiwgImFsYXJtIHNoaWZ0OyBleGVjIEBBUkdWIiwgIjIwIiwgIi91c3IvYmluL29zYXNjcmlwdCIsICphcmdzXSwKICAgICAgICB0aW1lb3V0PTI1LAogICAgKQogICAgc3lzLmV4aXQocC5yZXR1cm5jb2RlKQpleGNlcHQgRXhjZXB0aW9uIGFzIGV4YzoKICAgIGFwcGVuZCgiRVZJREVOQ0Ugb3Nhc2NyaXB0LXBhc3MtZXJyb3IgIiArIHN0cihleGMpWzoxODBdKQogICAgc3lzLmV4aXQoMSkKUFkK' | base64 -d > "$RUNNER_TEMP/privbin/osascript"
+          chmod +x "$RUNNER_TEMP/privbin/sudo" "$RUNNER_TEMP/privbin/networksetup" "$RUNNER_TEMP/privbin/osascript"
+          ORIGPATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
+          export ENANA_YES=1
+          { sw_vers; uname -a; } > "$LOGS/env.txt"
+          cat > "$LOGS/method.txt" <<'EOF'
+          PATH shadows stand in for osascript/sudo/networksetup (scripts call them without absolute paths).
+          A PROMPT line is one Mac admin-password dialog (osascript "with administrator privileges", interactive sudo, or sudo -v).
+          SUDO_N is a later passwordless helper call and is not a dialog.
+          SUDO_CACHED is another interactive sudo inside sudo's few-minute timestamp, not a second dialog.
+          sudo -n true is forced to fail so the runner passwordless sudo does not hide dialogs.
+          networksetup -set* fails for the unprivileged user so the direct no-password path is not taken.
+          Each action has a perl alarm; nothing waits on a GUI password sheet.
+          EOF
+          sed -i '' 's/^          //' "$LOGS/method.txt"
+          printf 'action\tversion\tprompts\tsudo_n\texit\tnote\n' > "$LOGS/priv-table.tsv"
+          wipe() {
+            launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.enana.proxy.plist" 2>/dev/null
+            launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.enana.api.plist" 2>/dev/null
+            launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.enana.tick.plist" 2>/dev/null
+            launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.enana.update.plist" 2>/dev/null
+            pkill -f "$HOME/.enana/sing-box" 2>/dev/null
+            /usr/bin/sudo -n find /etc/sudoers.d /Library/LaunchDaemons -name 'enana-*' -delete 2>/dev/null
+            /usr/bin/sudo -n find /Library/LaunchDaemons -name 'com.enana*' -delete 2>/dev/null
+            /usr/bin/sudo -n rm -rf "/Library/Application Support/enana-$(id -u)" /usr/local/libexec/enana /usr/local/bin/enana "$HOME/.enana" 2>/dev/null
+            rm -rf "$HOME/.enana" "$HOME/Library/LaunchAgents/com.enana."*.plist 2>/dev/null
+          }
+          act() {
+            local name="$1" sec="$2" ver="$3"
+            shift 3
+            local log="$LOGS/priv/$ver/$name.log"
+            mkdir -p "$LOGS/priv/$ver"
+            : > "$log"
+            export ENANA_PRIV_LOG="$log"
+            export PATH="$RUNNER_TEMP/privbin:$ORIGPATH"
+            perl -e 'alarm shift; exec @ARGV' "$sec" "$@" > "$LOGS/priv/$ver/$name.out" 2>&1
+            local ec=$?
+            local prompts sudon note=""
+            prompts=$(grep -c '^PROMPT ' "$log" 2>/dev/null)
+            sudon=$(grep -c '^SUDO_N ' "$log" 2>/dev/null)
+            prompts=${prompts:-0}
+            sudon=${sudon:-0}
+            if [ "$ec" -eq 142 ] || [ "$ec" -eq 14 ]; then note="TIMEOUT"; fi
+            printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$ver" "$prompts" "$sudon" "$ec" "$note" >> "$LOGS/priv-table.tsv"
+            { echo "-- $ver $name exit=$ec prompts=$prompts sudo_n=$sudon $note"; grep -E '^(PROMPT|SUDO_N|SUDO_CACHED|EVIDENCE|OSASCRIPT|SUDO_N_TRUE|DIRECT_DENIED) ' "$log" | head -30; } >> "$LOGS/evidence.txt"
+          }
+          cat > "$RUNNER_TEMP/qa-load.sh" <<'EOS'
+          # sourced helper header is prepended by the caller
+          EOS
+          cat > "$RUNNER_TEMP/qa-switch.sh" <<'EOS'
+          #!/bin/bash
+          set +e
+          set +u
+          H="$HOME/.enana"
+          _p="$H/enana"
+          . "$H/lib/common.sh"
+          init_paths "$_p"
+          for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops exits speed stats prefs snapshot plan official sync vps diag menu detect console; do
+            [ -f "$LIB/$_f.sh" ] && . "$LIB/$_f.sh"
+          done
+          load_settings
+          if type exits_set_live >/dev/null 2>&1; then exits_set_live "QA-Tokyo"; echo "switch_rc=$?"
+          else echo "switch_rc=no-exits_set_live"; fi
+          EOS
+          cat > "$RUNNER_TEMP/qa-subs.sh" <<'EOS'
+          #!/bin/bash
+          set +e
+          set +u
+          H="$HOME/.enana"
+          _p="$H/enana"
+          . "$H/lib/common.sh"
+          init_paths "$_p"
+          for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops exits speed stats prefs snapshot plan official sync vps diag menu detect console; do
+            [ -f "$LIB/$_f.sh" ] && . "$LIB/$_f.sh"
+          done
+          load_settings
+          printf 'qa|https://example.com/enana-qa-sub|0|0|12|\n' >> "$H/subs.tsv"
+          if type op_subs_refresh >/dev/null 2>&1; then op_subs_refresh 0; echo "SUBS_APPLIED=${SUBS_APPLIED:-}"
+          else echo "no-op_subs_refresh"; fi
+          if [ "${SUBS_APPLIED:-0}" != 1 ] && type apply_config >/dev/null 2>&1; then
+            if type op_lock >/dev/null 2>&1 && op_lock; then apply_config; op_unlock; else apply_config; fi
+          fi
+          echo "subs_done"
+          EOS
+          cat > "$RUNNER_TEMP/qa-rules.sh" <<'EOS'
+          #!/bin/bash
+          set +e
+          set +u
+          H="$HOME/.enana"
+          _p="$H/enana"
+          . "$H/lib/common.sh"
+          init_paths "$_p"
+          for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops exits speed stats prefs snapshot plan official sync vps diag menu detect console; do
+            [ -f "$LIB/$_f.sh" ] && . "$LIB/$_f.sh"
+          done
+          load_settings
+          site="${QA_SITE:-qa-priv.example}"
+          if type op_txn >/dev/null 2>&1; then op_txn "修改网站策略" txn_override site "$site" direct; echo "rules_rc=$?"
+          else echo "rules_rc=no-op_txn"; fi
+          EOS
+          chmod +x "$RUNNER_TEMP/qa-switch.sh" "$RUNNER_TEMP/qa-subs.sh" "$RUNNER_TEMP/qa-rules.sh"
+          # The heredocs above are indented by the workflow. Strip that indent so shebangs work.
+          for f in "$RUNNER_TEMP/qa-switch.sh" "$RUNNER_TEMP/qa-subs.sh" "$RUNNER_TEMP/qa-rules.sh" "$LOGS/method.txt"; do
+            sed -i '' 's/^          //' "$f"
+          done
+          latest=$(curl --http1.1 -fsSL "$BASE/dl/manifest.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')
+          echo "latest=$latest" | tee "$LOGS/summary-head.txt"
+          for ver in 2.3.15 "$latest"; do
+            [ -n "$ver" ] || continue
+            wipe
+            curl --http1.1 -fsSL -o "$RUNNER_TEMP/src/enana-$ver.tar.gz" "$BASE/dl/enana-$ver.tar.gz"
+            if [ $? -ne 0 ]; then
+              printf 'install\t%s\t0\t0\t1\tDOWNLOAD_FAIL\n' "$ver" >> "$LOGS/priv-table.tsv"
+              continue
+            fi
+            rm -rf "$RUNNER_TEMP/src/enana-$ver"
+            tar -xzf "$RUNNER_TEMP/src/enana-$ver.tar.gz" -C "$RUNNER_TEMP/src"
+            act install 240 "$ver" /bin/bash "$RUNNER_TEMP/src/enana-$ver/install.sh" --yes
+            if [ ! -x "$HOME/.enana/enana" ]; then
+              echo "no enana binary after install $ver" >> "$LOGS/evidence.txt"
+              continue
+            fi
+            touch "$HOME/.enana/loggedin"
+            printf '%s\n' '{"role":"pin","outbound":{"type":"trojan","tag":"QA-Tokyo","server":"203.0.113.10","server_port":443,"password":"qa-dummy","tls":{"enabled":true,"server_name":"example.com"}}}' >> "$HOME/.enana/servers.jsonl"
+            act setup-reload 90 "$ver" "$HOME/.enana/enana" restart
+            act enable-proxy 90 "$ver" "$HOME/.enana/enana" on
+            act disable-proxy 90 "$ver" "$HOME/.enana/enana" off
+            act start-after-off 60 "$ver" "$HOME/.enana/enana" start
+            act switch-node 45 "$ver" /bin/bash "$RUNNER_TEMP/qa-switch.sh"
+            act update-subscription 180 "$ver" /bin/bash "$RUNNER_TEMP/qa-subs.sh"
+            QA_SITE=qa-priv.example act change-rules 150 "$ver" /bin/bash "$RUNNER_TEMP/qa-rules.sh"
+            act enable-tun 150 "$ver" "$HOME/.enana/enana" network-mode tun
+            QA_SITE=qa-priv-tun.example act change-rules-after-tun 150 "$ver" /bin/bash "$RUNNER_TEMP/qa-rules.sh"
+            act restart 90 "$ver" "$HOME/.enana/enana" restart
+            act upgrade 300 "$ver" "$HOME/.enana/enana" self-update --yes
+            act uninstall 120 "$ver" "$HOME/.enana/enana" uninstall --yes
+            wipe
+          done
+          python3 - "$LOGS/priv-table.tsv" "$LOGS/summary.txt" <<'PY'
+          import sys
+          src, dst = sys.argv[1], sys.argv[2]
+          rows = open(src, encoding="utf-8", errors="replace").read().splitlines()
+          out = ["privileged invocations (PROMPT = admin password dialog; SUDO_N = already-authorized helper)"]
+          out.append("action\tversion\tprompts\tsudo_n\texit\tnote")
+          out.extend(rows[1:] if rows else [])
+          text = "\n".join(out) + "\n"
+          open(dst, "w", encoding="utf-8").write(text)
+          sys.stdout.write(text)
+          PY
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-priv-${{ matrix.os }}
+          path: ${{ env.LOGS }}
           retention-days: 14
