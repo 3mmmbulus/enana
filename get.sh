@@ -19,6 +19,12 @@ set -eu
 INSTALL_BASE=${ENANA_INSTALL_BASE:-https://install.enana.cc}
 GH_REPO=${ENANA_GH_REPO:-3mmmbulus/enana}
 GH_BASE=${ENANA_GH_BASE:-https://github.com}      # 测试时指向本机模拟的 GitHub
+# 发布清单的签名公钥 (与云端内容包是同一把; 私钥只在发布者手里, 见 tools/sign-release.sh)。
+# 测试时可以用 ENANA_RELEASE_PUBKEY_FILE 指向测试公钥; 正常安装不要设置它。
+RELEASE_PUBKEY_PEM='-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEFzvklsj38dawlKKUkgvci5JwFLr7
+4TFk/YYshV52yvJY3AP1BN5+u2TKt58a+0BNf5BHwpanuG/SpkCZJ9njHA==
+-----END PUBLIC KEY-----'
 HOME_DIR=${ENANA_HOME:-$HOME/.enana}
 YES=0; UPGRADE=0; FORCE=0; LANG_OPT=''
 
@@ -75,6 +81,18 @@ sha256_of() { $SUMCMD "$1" | cut -d' ' -f1; }
 fetch() { # fetch <url> [最长秒数] -> stdout
   if [ "$DL" = wget ]; then wget -qO- -T "${2:-20}" --tries=1 "$1" 2>/dev/null; else curl -fsSL --connect-timeout 8 --max-time "${2:-20}" "$1" 2>/dev/null; fi
 }
+get_to() { # get_to <url> <输出文件> (不显示进度, 失败返回非 0)
+  if [ "$DL" = wget ]; then wget -q -O "$2" -T 15 --tries=1 "$1" 2>/dev/null; else curl -fsSL --connect-timeout 8 --max-time 15 -o "$2" "$1" 2>/dev/null; fi
+}
+fetch_signed_manifest() { # fetch_signed_manifest <基址> -> 标准输出: 清单原文; 签名不通过或取不到时什么都不输出
+  local base=$1 m s p
+  m=$(mktemp) s=$(mktemp) p=$(mktemp)
+  if get_to "$base/manifest.json" "$m" && get_to "$base/manifest.json.sig" "$s"; then
+    if [ -n "${ENANA_RELEASE_PUBKEY_FILE:-}" ]; then cp "$ENANA_RELEASE_PUBKEY_FILE" "$p"; else printf '%s\n' "$RELEASE_PUBKEY_PEM" > "$p"; fi
+    if command -v openssl >/dev/null 2>&1 && openssl dgst -sha256 -verify "$p" -signature "$s" "$m" >/dev/null 2>&1; then cat "$m"; fi
+  fi
+  rm -f "$m" "$s" "$p"
+}
 fetch_file() { # fetch_file <url> <输出文件>  (显示进度)
   if [ "$DL" = wget ]; then wget -q --show-progress -T 30 --tries=1 -O "$2" "$1" 2>/dev/null || wget -q -T 30 --tries=1 -O "$2" "$1"; else curl -fL --connect-timeout 10 --max-time 600 --progress-bar -o "$2" "$1"; fi
 }
@@ -83,9 +101,9 @@ mnum()   { printf '%s' "$1" | sed -n "s/.*\"$2\":\\([0-9]*\\).*/\\1/p" | head -1
 
 step "查询最新版本" "Looking up the latest version"
 progress 0 10 "检查新版本"
-M1=$(fetch "$INSTALL_BASE/dl/manifest.json" 15 || true)
-M2=$(fetch "$GH_BASE/$GH_REPO/releases/latest/download/manifest.json" 15 || true)
-[ -n "$M1$M2" ] || die "连不上下载服务, 请检查网络后重试" "Cannot reach the download service; check your network and retry" "离线安装: 在有网络的电脑下载 $INSTALL_BASE/dl/ 里的 enana-<版本>.tar.gz, 解压后运行 bash install.sh" "Offline: download enana-<version>.tar.gz from $INSTALL_BASE/dl/ on another machine, extract it and run bash install.sh"
+M1=$(fetch_signed_manifest "$INSTALL_BASE/dl" || true)
+M2=$(fetch_signed_manifest "$GH_BASE/$GH_REPO/releases/latest/download" || true)
+[ -n "$M1$M2" ] || die "连不上下载服务, 或版本清单签名无效, 请检查网络后重试" "Cannot reach the download service, or the version manifest signature is invalid; check your network and retry" "离线安装: 在有网络的电脑下载 $INSTALL_BASE/dl/ 里的 enana-<版本>.tar.gz, 解压后运行 bash install.sh" "Offline: download enana-<version>.tar.gz from $INSTALL_BASE/dl/ on another machine, extract it and run bash install.sh"
 MAN=${M1:-$M2}
 VER=$(mfield "$MAN" version); SHA=$(mfield "$MAN" sha256); SIZE=$(mnum "$MAN" size); URL=$(mfield "$MAN" url)
 [ -n "$VER" ] && [ ${#SHA} -eq 64 ] && [ -n "$SIZE" ] && [ -n "$URL" ] || die "版本清单格式不对, 已中止" "The version manifest is malformed; aborting"
