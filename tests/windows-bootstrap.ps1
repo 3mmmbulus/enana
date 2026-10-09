@@ -8,7 +8,13 @@ $oldPath=[Environment]::GetEnvironmentVariable('Path','User')
 $work=Join-Path $env:TEMP ('enana-bootstrap-test-'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($work)|Out-Null
 try{
-    $manifest=Invoke-RestMethod -Uri 'https://install.enana.cc/dl/windows-manifest.json' -TimeoutSec 30
+    # The release is uploaded after the tag is pushed: wait (up to 10 minutes) until the published version matches this checkout.
+    $deadline=(Get-Date).AddMinutes(10)
+    while($true){
+        try{ $manifest=Invoke-RestMethod -Uri 'https://install.enana.cc/dl/windows-manifest.json' -TimeoutSec 30; if($manifest.version -eq $version){break} } catch { Write-Host "manifest not ready: $($_.Exception.Message)" }
+        if((Get-Date) -gt $deadline){break}
+        Start-Sleep -Seconds 20
+    }
     if($manifest.platform -ne 'windows' -or $manifest.version -ne $version){throw 'Published Windows version does not match this checkout'}
     $bootstrap=Join-Path $work 'get.ps1'
     Invoke-WebRequest -UseBasicParsing -Uri 'https://install.enana.cc/get.ps1' -OutFile $bootstrap -TimeoutSec 30

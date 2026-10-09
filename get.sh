@@ -6,6 +6,7 @@
 #   升级:                    enana self-update        (或再执行一遍上面的命令)
 #   选项 (curl … | bash -s -- <选项>):
 #       --yes        不询问, 直接安装          --upgrade   升级模式 (沿用现有设置, 不弹菜单)
+#       --allow-downgrade  允许安装比已见过的版本更旧的版本 (默认拒绝, 防回滚)
 #       --lang zh|en 指定界面语言              --force     已是最新版本时也重新安装
 #
 # 它会: 查询最新的 enana 版本 → 下载安装包 → 校验 SHA-256 (清单与安装包来自不同线路时要求一致) → 运行安装器。
@@ -26,13 +27,14 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE4dmCCdutTP+gEoaT413bGYJWib/0
 olPxbogWv3Z5lftak+4Mndh9O5PWbWzDR3QyArxxFc0NQzqOBR8o20HsJQ==
 -----END PUBLIC KEY-----'
 HOME_DIR=${ENANA_HOME:-$HOME/.enana}
-YES=0; UPGRADE=0; FORCE=0; LANG_OPT=''
+YES=0; UPGRADE=0; FORCE=0; LANG_OPT=''; ALLOW_DOWNGRADE=0
 
 while [ $# -gt 0 ]; do
   case $1 in
     --yes|-y) YES=1 ;;
     --upgrade) UPGRADE=1; YES=1 ;;
     --force) FORCE=1 ;;
+    --allow-downgrade) ALLOW_DOWNGRADE=1 ;;   # 确实要装比已见过的版本更旧的版本时才加
     --lang) shift; LANG_OPT=${1:-} ;;
     --lang=*) LANG_OPT=${1#--lang=} ;;
     -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
@@ -84,14 +86,30 @@ fetch() { # fetch <url> [最长秒数] -> stdout
 get_to() { # get_to <url> <输出文件> (不显示进度, 失败返回非 0)
   if [ "$DL" = wget ]; then wget -q -O "$2" -T 15 --tries=1 "$1" 2>/dev/null; else curl -fsSL --connect-timeout 8 --max-time 15 -o "$2" "$1" 2>/dev/null; fi
 }
-fetch_signed_manifest() { # fetch_signed_manifest <基址> -> 标准输出: 清单原文; 签名不通过或取不到时什么都不输出
-  local base=$1 m s p
+OSSL=/usr/bin/openssl; [ -x "$OSSL" ] || OSSL=$(command -v openssl || true)
+# verify_manifest_from <基址> <输出文件>: 0 = 签名通过 (清单写入输出文件); 1 = 取不到清单或签名; 2 = 签名无效; 3 = 没有 openssl
+verify_manifest_from() {
+  local base=$1 out=$2 m s p rc=1
   m=$(mktemp) s=$(mktemp) p=$(mktemp)
   if get_to "$base/manifest.json" "$m" && get_to "$base/manifest.json.sig" "$s"; then
     if [ -n "${ENANA_RELEASE_PUBKEY_FILE:-}" ]; then cp "$ENANA_RELEASE_PUBKEY_FILE" "$p"; else printf '%s\n' "$RELEASE_PUBKEY_PEM" > "$p"; fi
-    if command -v openssl >/dev/null 2>&1 && openssl dgst -sha256 -verify "$p" -signature "$s" "$m" >/dev/null 2>&1; then cat "$m"; fi
+    if [ -z "$OSSL" ]; then rc=3
+    elif "$OSSL" dgst -sha256 -verify "$p" -signature "$s" "$m" >/dev/null 2>&1; then cp "$m" "$out"; rc=0
+    else rc=2; fi
   fi
-  rm -f "$m" "$s" "$p"
+  rm -f "$m" "$s" "$p"; return $rc
+}
+# verified_manifest <基址> <来源名 zh> <来源名 en>: 标准输出只放清单原文; 提示信息走标准错误
+verified_manifest() {
+  local out rc=0
+  out=$(mktemp); verify_manifest_from "$1" "$out" || rc=$?
+  case $rc in
+    0) { ok "$2 的版本清单签名校验通过" "$3: version manifest signature verified"; } >&2; cat "$out" ;;
+    1) { info "$2 取不到版本清单或签名, 跳过这条线路" "$3: could not fetch the manifest or its signature; skipping"; } >&2 ;;
+    2) { warn "$2 的版本清单签名无效 (可能被篡改), 已拒绝这条线路" "$3: the manifest signature is invalid (possibly tampered); this source is rejected"; } >&2 ;;
+    3) { warn "这台电脑没有 openssl, 无法校验版本清单签名 (请安装 openssl 后重试)" "This computer has no openssl, so the manifest signature cannot be checked (install openssl and retry)"; } >&2 ;;
+  esac
+  rm -f "$out"; return 0
 }
 fetch_file() { # fetch_file <url> <输出文件>  (显示进度)
   if [ "$DL" = wget ]; then wget -q --show-progress -T 30 --tries=1 -O "$2" "$1" 2>/dev/null || wget -q -T 30 --tries=1 -O "$2" "$1"; else curl -fL --connect-timeout 10 --max-time 600 --progress-bar -o "$2" "$1"; fi
@@ -101,8 +119,8 @@ mnum()   { printf '%s' "$1" | sed -n "s/.*\"$2\":\\([0-9]*\\).*/\\1/p" | head -1
 
 step "查询最新版本" "Looking up the latest version"
 progress 0 10 "检查新版本"
-M1=$(fetch_signed_manifest "$INSTALL_BASE/dl" || true)
-M2=$(fetch_signed_manifest "$GH_BASE/$GH_REPO/releases/latest/download" || true)
+M1=$(verified_manifest "$INSTALL_BASE/dl" "官方源" "official source")
+M2=$(verified_manifest "$GH_BASE/$GH_REPO/releases/latest/download" "GitHub 源" "GitHub source")
 [ -n "$M1$M2" ] || die "连不上下载服务, 或版本清单签名无效, 请检查网络后重试" "Cannot reach the download service, or the version manifest signature is invalid; check your network and retry" "离线安装: 在有网络的电脑下载 $INSTALL_BASE/dl/ 里的 enana-<版本>.tar.gz, 解压后运行 bash install.sh" "Offline: download enana-<version>.tar.gz from $INSTALL_BASE/dl/ on another machine, extract it and run bash install.sh"
 MAN=${M1:-$M2}
 VER=$(mfield "$MAN" version); SHA=$(mfield "$MAN" sha256); SIZE=$(mnum "$MAN" size); URL=$(mfield "$MAN" url)
@@ -110,6 +128,20 @@ VER=$(mfield "$MAN" version); SHA=$(mfield "$MAN" sha256); SIZE=$(mnum "$MAN" si
 case $VER in *[!0-9.]*|'') die "版本号不合法: $VER" "Invalid version number: $VER" ;; esac
 if [ -n "$M1" ] && [ -n "$M2" ]; then      # 两条线路都能连上: 两份清单必须一致 (防单点被篡改)
   [ "$(mfield "$M2" sha256)" = "$SHA" ] && [ "$(mfield "$M2" version)" = "$VER" ] || die "两条线路的版本清单不一致, 已中止 (可能被篡改)" "The manifests from the two sources disagree; aborting (possible tampering)"
+fi
+# 防回滚 (T1): 清单带发布序号 seq 和过期时间 expires (都在签名范围内)。见过的最大 seq 存在 $HOME_DIR/.release-seq。
+SEQ=$(mnum "$MAN" seq); EXP=$(mnum "$MAN" expires); SEQ_FILE="$HOME_DIR/.release-seq"; SEEN=''
+[ -f "$SEQ_FILE" ] && IFS= read -r SEEN < "$SEQ_FILE" || true
+case $SEEN in ''|*[!0-9]*) SEEN='' ;; esac
+if [ -z "$SEQ" ]; then
+  [ -z "$SEEN" ] || die "版本清单没有发布序号, 但这台电脑已经见过带序号的清单, 已中止 (可能是回滚攻击)" "The manifest has no sequence number, but this computer has seen one; aborting (possible rollback)"
+  warn "版本清单没有发布序号, 无法检查回滚 (旧版清单)" "The manifest has no sequence number, so rollback cannot be checked (legacy manifest)"
+else
+  if [ -n "$EXP" ] && [ "$(date +%s)" -gt "$EXP" ]; then die "版本清单已过期, 已中止 (请确认系统时间正确)" "The version manifest has expired; aborting (check your clock)"; fi
+  if [ -n "$SEEN" ] && [ "$SEQ" -lt "$SEEN" ]; then
+    if [ "$ALLOW_DOWNGRADE" = 1 ]; then warn "按 --allow-downgrade 安装较旧的版本 (序号 $SEQ < 已见过的 $SEEN)" "Installing an older release because of --allow-downgrade (seq $SEQ < seen $SEEN)"
+    else die "版本清单比已见过的版本旧 (序号 $SEQ < $SEEN), 可能是回滚攻击, 已中止。确需安装旧版本请加 --allow-downgrade" "The manifest is older than one already seen (seq $SEQ < $SEEN); possible rollback attack; aborting. To install an older release on purpose, add --allow-downgrade"; fi
+  fi
 fi
 OLD=''; [ -f "$HOME_DIR/VERSION" ] && IFS= read -r OLD < "$HOME_DIR/VERSION" || true
 ok "最新版本: v$VER${OLD:+ (已安装 v$OLD)}" "Latest version: v$VER${OLD:+ (installed: v$OLD)}"
@@ -137,6 +169,7 @@ for src in "$INSTALL_BASE/dl/$FILE" "$GH_BASE/$GH_REPO/releases/download/v$VER/$
 done
 [ "$got" = 1 ] || die "安装包下载或校验失败 (已尝试所有线路)" "Package download or verification failed (all sources tried)"
 ok "SHA-256 校验通过" "SHA-256 verified"
+if [ -n "$SEQ" ] && { [ -z "$SEEN" ] || [ "$SEQ" -gt "$SEEN" ]; }; then mkdir -p "$HOME_DIR" && printf '%s\n' "$SEQ" > "$SEQ_FILE.tmp" && mv -f "$SEQ_FILE.tmp" "$SEQ_FILE"; fi
 if tar -tzf "$TMP/pkg.tgz" 2>/dev/null | sed 's#^\./##' | grep -Eq '^/|(^|/)\.\.(/|$)'; then die "安装包里有不安全的路径, 已中止" "The package contains unsafe paths; aborting"; fi
 mkdir -p "$TMP/src"; tar -xzf "$TMP/pkg.tgz" -C "$TMP/src" || die "解压失败" "Extraction failed"
 SRC=$(find "$TMP/src" -maxdepth 2 -name install.sh -print | head -1); [ -n "$SRC" ] || die "安装包里没有 install.sh" "install.sh is missing from the package"

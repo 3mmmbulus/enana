@@ -15,8 +15,9 @@ done
 COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -C "$stage" -czf "$out/$bundle.tar.gz" "$bundle"
 sum=$(shasum -a 256 "$out/$bundle.tar.gz" | awk '{print $1}')
 size=$(wc -c < "$out/$bundle.tar.gz" | tr -d ' ')
-printf '{"version":"%s","sha256":"%s","size":%s,"url":"/dl/%s.tar.gz","released":"%s"}\n' \
-  "$version" "$sum" "$size" "$bundle" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$out/manifest.json"
+seq=$(date -u +%s)   # release sequence: monotonically increasing (anti-rollback); expires after 30 days; both are signed
+printf '{"version":"%s","sha256":"%s","size":%s,"url":"/dl/%s.tar.gz","seq":%s,"expires":%s,"released":"%s"}\n' \
+  "$version" "$sum" "$size" "$bundle" "$seq" "$((seq + 2592000))" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$out/manifest.json"
 cp "$repo/VERSION" "$repo/CHANGELOG.md" "$repo/get.sh" "$out/"
 chmod 644 "$out/$bundle.tar.gz" "$out/manifest.json" "$out/VERSION" "$out/CHANGELOG.md" "$out/get.sh"
 printf 'Built %s (%s bytes), SHA-256 %s\n' "$bundle" "$size" "$sum"

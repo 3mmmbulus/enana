@@ -18,6 +18,8 @@ with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
 manifest = dict(platform="windows", channel="preview", version=version,
                 sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
                 size=archive.stat().st_size, url=f"/dl/{archive.name}",
+                # seq: monotonically increasing release sequence (build time); expires: 30 days. Both are signed.
+                seq=int(datetime.now(timezone.utc).timestamp()), expires=int(datetime.now(timezone.utc).timestamp()) + 30 * 86400,
                 released=datetime.now(timezone.utc).isoformat())
 (out / "windows-manifest.json").write_text(json.dumps(manifest, separators=(",", ":")) + "\n")
 (out / "get.ps1").write_bytes((stage / "get.ps1").read_bytes())
