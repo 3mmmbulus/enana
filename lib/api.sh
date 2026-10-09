@@ -474,6 +474,7 @@ ep_sites_domains_reset() {
   [ -n "$(site_entry "$id")" ] || fail "找不到这个网站条目" E_NOT_FOUND
   okj "\"job\":\"$(job_spawn site-domain-reset "$APPLY_STEPS" "$id")\""
 }
+ep_sites_reset() { okj "\"job\":\"$(job_spawn sites-reset "$APPLY_STEPS")\""; }      # 网站页「恢复网站默认」 (后台任务)
 ep_apps_inspect() { local in; in=$(fp input); json "{\"ok\":true,\"candidates\":[$(apps_inspect "$in")]}"; }
 ep_apps_custom() {
   local p st j; p=$(fp path); st=$(fp state)
@@ -940,6 +941,7 @@ case "$method $path" in
   "GET /api/sites/domains")    ep_sites_domains_get ;;
   "POST /api/sites/domains")   ep_sites_domains_post ;;
   "POST /api/sites/domains/reset") ep_sites_domains_reset ;;
+  "POST /api/sites/reset")     ep_sites_reset ;;
   "POST /api/apps/inspect")    ep_apps_inspect ;;
   "POST /api/apps/custom")     ep_apps_custom ;;
   "POST /api/apps/custom/delete") ep_apps_custom_delete ;;

@@ -82,8 +82,17 @@
 
     /* 出口类型图例: 三种策略各一个「!」 */
     function lg(v, icon, nameKey) { return h('span', { class: 'sx-lg sx-lg-' + v }, ui.icon(icon, 15, 'ci'), h('span', null, L(nameKey)), help(v)); }
+    /* 误删 / 设错了: 一键把网站页的改动全部恢复为系统默认 (后台任务, 清掉之前先备份) */
+    function resetAllSites() {
+      return ui.confirmDialog({ title: t('sites.resetAll.title'), message: t('sites.resetAll.msg'), detail: [t('sites.resetAll.detail')], confirmText: t('sites.resetAll.go'), danger: true }).then(function (ok) {
+        if (!ok) return;
+        return TP.jobs.runInDock(t('sites.resetAll.title'), function () { return TP.helper('POST', '/api/sites/reset'); }).then(function () { return TP.loadState(); });
+      });
+    }
+    el.resetAll = ui.btn(L('sites.resetAll.btn'), { sm: true, icon: 'refresh', cls: 'soft-bad' });
+    ui.act(el.resetAll, resetAllSites);
     el.legend = h('div', { class: 'sx-legend', role: 'group', 'aria-label': L('sites.legend') },
-      h('span', { class: 'muted sm' }, L('sites.legend')), lg('pin', 'pin', 'name.policy.PIN'), lg('auto', 'auto', 'name.policy.Global'), lg('direct', 'direct', 'name.policy.direct'));
+      h('span', { class: 'muted sm' }, L('sites.legend')), lg('pin', 'pin', 'name.policy.PIN'), lg('auto', 'auto', 'name.policy.Global'), lg('direct', 'direct', 'name.policy.direct'), el.resetAll);
 
     /* 左侧二级导航 (按标签重建) */
     el.nav = h('nav', { class: 'sx-nav', 'aria-label': L('sites.nav.aria') });
