@@ -208,6 +208,7 @@ eq "网站直连 → ovr-direct (domain_suffix); 应用直连 → ovr-appdirect 
 eq "固定出口网站 → ovr-pin; 浏览器 PIN → 独立兜底规则; 网站自动 → ovr-auto; 应用自动 → ovr-appauto (N1: 不和网站自动共用); 跟随的不写进任何规则集" "$(rs pin | grep -c proxy.io):$(rs browserpin | grep -c 'Odd Browser'):$(rs pin | grep -c 'Odd Browser'):$(rs auto | grep -c auto.io):$(rs appauto | grep -c 'Auto App'):$(cat "$H"/rules/ovr-*.json | grep -c Cursor)" "1:1:0:1:1:0"
 eq "应用名按正则转义写入 (点号 / 括号不会匹配到别的应用)" "$(printf 'app|Foo.Bar (x)|direct|ack|\n' >> "$H/overrides.tsv"; ovr_sync; rs appdirect | grep -o '(?i)/Foo[^"]*' | head -1)" '(?i)/Foo\\.Bar \\(x\\)\\.app/'
 eq "覆盖规则: 名字里的换行 / 竖线被拒绝 (N2)" "$(ovr_valid site "$(printf 'a.com\nx')" && echo ok || echo no):$(ovr_valid site 'a.com' && echo ok || echo no):$(ovr_valid app "$(printf 'Foo\nSite')" && echo ok || echo no):$(ovr_valid app 'Foo|x' && echo ok || echo no)" "no:ok:no:no"
+eq "规则监视失败 (N13): 核心日志最近 200 行里有 watch rule-set file → 状态 true, 否则 false" "$(printf "x watch rule-set file: fswatch\n" > "$H/sing-box.log"; rules_watch_state):$(: > "$H/sing-box.log"; rules_watch_state)" "true:false"
 eq "只有 1 个固定出口: 不能指定出口 (只能是默认)" "$(ovr_target_valid '' && echo ok1; ovr_target_valid Pin-A || echo no1; ovr_target_valid PINAUTO || echo no2)" "ok1
 no1
 no2"

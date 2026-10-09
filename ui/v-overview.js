@@ -142,7 +142,7 @@
     var P = S.proxies, pinLeaf = TP.leaf('PIN'), gl = P.Global, glLeaf = TP.leaf('Global');
     var c = RC.pin, ok;
     // 固定出口
-    ok = pinLeaf && pinLeaf !== 'direct';
+    ok = pinLeaf && pinLeaf !== 'direct' && pinLeaf !== 'pin-none';   // pin-none = 没有固定出口 (fail-closed 黑洞), 不是节点
     setText(c.node, ok ? pinLeaf : t('ov.unset')); setText(c.sub, ok ? typeLine(pinLeaf) : '');
     c.note.hidden = !!ok || !S.state || !S.state.servers;
     if (!c.note.hidden && !c.note._b) {
@@ -186,7 +186,7 @@
     if (TP.isApplying() || S.clash === 'down') return;
     var jobs = [];
     KEYS.forEach(function (k) {
-      var tag = k === 'direct' ? 'direct' : TP.leaf(k === 'pin' ? 'PIN' : 'Global');
+      var tag = k === 'direct' ? 'direct' : TP.leaf(k === 'pin' ? 'PIN' : 'Global'); if (tag === 'pin-none') tag = '';
       if (!tag || (k !== 'direct' && tag === 'direct')) { lat[k] = { tag: '' }; return; }
       jobs.push(TP.testDelay(tag).then(function (ms) { lat[k] = { tag: tag, ms: ms }; }));
     });
@@ -253,7 +253,7 @@
     var first = false, changed = false;
     ['pin', 'auto'].forEach(function (k) {
       var leaf = TP.leaf(k === 'pin' ? 'PIN' : 'Global');
-      if (!leaf || leaf === 'direct') return;
+      if (!leaf || leaf === 'direct' || leaf === 'pin-none') return;
       if (!ipInfo[k]) first = true; else if (ipFor[k] && ipFor[k] !== leaf) changed = true;
     });
     if ((first || changed) && (!ipLast.all || Date.now() - ipLast.all > 30000)) fetchIp(changed, false);

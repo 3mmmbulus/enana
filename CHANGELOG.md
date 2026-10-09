@@ -1,5 +1,21 @@
 # Changelog / 更新日志
 
+## 2.3.14 (2026-10-09)
+
+### 中文
+- **概览不再显示 `pin-none` / SOCKS**: 没有固定出口时, 固定出口卡片显示「未设置」并给出添加服务器的提示, 不测延迟、不查出口 IP。
+- **文案统一为「暂停访问, 不会直连」**: 无固定出口的提示、孤儿项目提示、删除唯一固定出口的确认、应用页与帮助文案 (中英文)。
+- **规则没有热更新时给出提示**: 核心日志出现规则文件监视失败时, 顶部横幅提示「重启核心」, 不再只写日志 (N13)。
+- **自动线路的固定出口组**: 同样改为 3 分钟重新检测。
+- **添加服务器**: 已部署的服务器提示改为准确描述 (密钥和端口不变, 本机会按新名字再添加一组节点)。
+
+### English
+- **The overview no longer shows `pin-none` / SOCKS:** with no Fixed exit the card reads "Not set" with an add-server hint, and latency and exit-IP checks are skipped.
+- **Wording now says "paused, never direct"** for the no-fixed-exit hints, orphan notice, sole-exit removal confirmation and the apps help (zh and en).
+- **Banner when rule changes were not reloaded:** if the core logs a rule-file watch failure, the top banner offers "Restart core" instead of only writing to the log (N13).
+- **Fixed-exit auto group** re-tests every 3 minutes as well.
+- **Add server:** the already-deployed hint now says keys and ports stay the same and this computer gets another set of nodes under the new name.
+
 ## 2.3.13 (2026-10-09)
 
 ### 中文
