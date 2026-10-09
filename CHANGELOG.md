@@ -1,5 +1,29 @@
 # Changelog / 更新日志
 
+## 2.3.20 (2026-10-09)
+
+### 中文
+- **防回滚**: 没有发布序号记录的电脑 (旧版本安装, 或 `.release-seq` 丢失), 比已安装版本旧的清单也会被拒绝。
+- **安装失败不再消耗发布序号**: 序号只在安装成功后才记住, 安装失败后重新运行官方命令即可恢复。
+- **发布包只从已提交的代码构建**: 工作区有未提交改动时拒绝打包; 清单带 `commit` 字段并纳入签名。Windows 的 `get.ps1` 与已审阅的代码一致。
+- **升级时程序文件原子替换**: 正在运行的 `get.sh` 不再被原地覆盖, 升级日志不再出现 `syntax error`。
+- **配置阶段失败时还原**: 升级过程中生成配置失败, 会还原升级前的程序文件, 不留下半装的新版本。
+- **支付页显示收款地址二维码**: 只编码地址本身; 金额仍以文字显示。
+- **终端安装显示进度**: 规则集下载、sing-box 下载、配置生成、服务启动时都有文字提示。
+- **2.3.16 之前的版本请重新安装**: 旧版本的应用内升级不校验签名, 重新执行官方安装命令即可恢复签名校验。
+- **Mac 与 Windows 同步发布**。
+
+### English
+- **Anti-rollback:** computers with no recorded release sequence (an old install, or a lost `.release-seq`) also refuse a manifest older than the installed version.
+- **A failed install no longer uses up the release sequence:** the sequence is recorded only after a successful install, so rerunning the official command recovers.
+- **Packages come only from committed code:** the build refuses uncommitted changes to tracked files; the manifest carries a `commit` field covered by the signature. The Windows `get.ps1` matches the reviewed source.
+- **Atomic program file replacement during upgrades:** the running `get.sh` is no longer overwritten in place; upgrade logs no longer show `syntax error`.
+- **Restore on configuration failure:** if generating the configuration fails during an upgrade, the previous program files are restored instead of leaving a half-installed version.
+- **Payment page shows a QR code of the receive address:** it encodes the address only; the amount stays in text.
+- **Terminal install shows progress text** during the rule-set download, the sing-box download, the configuration step and the service start.
+- **Versions before 2.3.16: reinstall:** older versions upgrade in place without checking signatures; rerunning the official install command restores verified upgrades.
+- **macOS and Windows ship together.**
+
 ## 2.3.19 (2026-10-09)
 
 ### 中文
