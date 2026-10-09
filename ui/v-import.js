@@ -183,7 +183,8 @@
     el.saveCb.addEventListener('change', function () { el.saveCb._touched = true; });
     el.saveNote = h('span', { class: 'muted sm imp-save-n' });
     el.saveBox = h('label', { class: 'chk-inline imp-save' }, el.saveCb, h('span', null, L('imp.save')), el.saveNote);
-    function paintSave(d) { if (!el.saveCb._touched) el.saveCb.checked = !!d.checked; setText(el.saveNote, d.off ? t('imp.saveOff') : ''); el.saveNote.hidden = !d.off; }
+    /* 不再让用户选择: 添加的服务器默认加入官方服务器池 (和云端同步 / 其它电脑), 跟随云端同步的开关; 不显示选项 */
+    function paintSave(d) { el.saveCb.checked = !!d.checked; el.saveNote.hidden = true; }
     if (TP.sync && TP.sync.prime) TP.sync.prime().then(paintSave);
     el.root = h('div', { class: 'imp-in' }, el.tabs.el, el.tabSub, el.subRow, el.paneImp, el.paneMan, el.paneVps, el.stepBox, el.job, el.preview, el.result);
 
@@ -259,7 +260,6 @@
           { label: t('common.close'), kind: 'primary', id: 'close', cancel: true }];
       } else list = [];
       api.setActions(list);
-      if (p === 'idle' || p === 'preview') api.foot.insertBefore(el.saveBox, api.foot.firstChild);        // 底部左侧: 「保存到云端」
       api.setBusy(p === 'working' || p === 'committing');
       if (p === 'preview') refresh();
     }
@@ -578,7 +578,6 @@
         } else lines.push(t('imp.cf.single', { n: g.servers.length }));
       });
       lines.push(t('imp.cf.roles', { pin: cnt.pin, auto: cnt.auto, dl: cnt.dl, off: cnt.off }));
-      lines.push(t(el.saveCb.checked ? 'imp.cf.saveYes' : 'imp.cf.saveNo'));
       lines.push(t('imp.cf.apply'));
       var ok = await ui.confirmDialog({ title: t('imp.cf.title'), message: t('imp.cf.msg', { n: total }), detail: lines, confirmText: t('imp.cf.go') });
       if (!ok) return;
@@ -744,7 +743,6 @@
       var sv = res.servers[0]; sv.role = f.role; sv.sel = true;
       var summary = [t('imp.man.cf.type', { type: ty.label }), t('imp.man.cf.addr', { addr: hostPart(f.host) + ':' + f.port }), t('imp.man.cf.role', { role: TP.name.role(f.role) })];
       if (pem) summary.push(t('imp.man.cf.cert'));
-      summary.push(t(el.saveCb.checked ? 'imp.cf.saveYes' : 'imp.cf.saveNo'));
       summary.push(t('imp.cf.apply'));
       var ok = await ui.confirmDialog({ title: t('imp.man.cf.title'), message: t('imp.man.cf.msg', { tag: sv.outbound.tag }), detail: summary, confirmText: t('imp.cf.go') });
       f = null;

@@ -211,6 +211,28 @@ txn_app_custom_delete() { apps_custom_delete "$1" || { TXN_ERR=$APPS_ERR; return
 txn_site_domain() { sites_edit "$@" || { TXN_ERR=$SITES_ERR; return 1; }; }       # 条目id 操作 域名 [新域名]
 txn_site_reset() { sites_reset "$1" || { TXN_ERR=$SITES_ERR; return 1; }; }
 
+# 网站页的「恢复网站默认」: 清掉网站的出口选择、域名增删、我添加的网站和自动识别的记录, 回到系统默认。
+# 不动: 服务器 / 订阅 / 应用 / 规则库 / DNS。清掉之前把这些文件打包到 $H/backups/sites-<时间>.tgz (最近 3 份)。
+SITES_RESET_FILES="site-domains.tsv autosites.tsv autosites.dismissed"
+txn_sites_reset() {
+  local f list='' sel ts old
+  job_step 0 10 "备份网站设置"
+  mkdir -p "$H/backups"; chmod 700 "$H/backups" 2>/dev/null || true
+  for f in $SITES_RESET_FILES overrides.tsv; do [ -f "$H/$f" ] && list="$list $f"; done
+  ts=$(date +%s)
+  [ -z "$list" ] || tar -czf "$H/backups/sites-$ts.tgz" -C "$H" $list 2>/dev/null
+  ls -1 "$H"/backups/sites-*.tgz 2>/dev/null | sort | awk '{ a[NR] = $0 } END { for (i = 1; i <= NR - 3; i++) print a[i] }' | while IFS= read -r old; do rm -f "$old"; done
+  sel=$(mktemp); reset_selector_diff > "$sel" 2>/dev/null || true                 # 网站 / 兜底出口的开关 (在代理核心里, 不在文件里)
+  job_step 1 40 "清除网站改动"
+  for f in $SITES_RESET_FILES; do rm -f "$H/$f"; done
+  if [ -f "$H/overrides.tsv" ]; then awk -F'|' '$1 != "site"' "$H/overrides.tsv" > "$H/overrides.tsv.new" && mv -f "$H/overrides.tsv.new" "$H/overrides.tsv"; fi
+  settings_set AUTO_SITES 0; AUTO_SITES=0
+  job_step 2 70 "切回默认出口"
+  [ -s "$sel" ] && reset_selectors_apply "$sel" >/dev/null
+  rm -f "$sel"
+  return 0
+}
+
 # ---- 恢复官方默认规则 (设置 → 代理 → 恢复默认规则) ----
 # 清掉所有「自己改过的规则」, 回到官方默认: 以云端下发的官方内容 (签名校验) 为准 —— 不是云同步里保存的那一份 (那份可能已经带着错误的设置)。
 # 不动: 服务器 / 订阅 / 账号 / 流量接管模式 / 端口 / 语言 / 日志设置 / 测速自定义目标 / 界面偏好。重置前把被清掉的文件打包到 $H/backups/ (最近 3 份), 可以在设置里撤销。
@@ -565,6 +587,7 @@ job_dispatch() {
     settings-apply) APPLY_BASE=2; op_txn "修改设置" txn_settings "$@" ;;
     site-domain)    op_txn "修改网站域名" txn_site_domain "$@" ;;
     site-domain-reset) op_txn "重置网站域名" txn_site_reset "$1" ;;
+    sites-reset)    op_txn "恢复网站默认" txn_sites_reset ;;
     app-custom)     op_txn "添加自定义软件" txn_app_custom_add "$1" "$2" ;;
     app-custom-delete) op_txn "删除自定义软件" txn_app_custom_delete "$1" ;;
     rules-reset)    APPLY_BASE=2; op_rules_reset ;;

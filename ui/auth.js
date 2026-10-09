@@ -3,7 +3,7 @@
  *   -> POST /api/login 或 /api/register (urlencoded user= password=, 辅助服务要向 enana.cc 校验, 超时 25 秒)
  *   -> 令牌只放 sessionStorage; 之后辅助服务请求带 X-Enana-Token, Clash API 请求带 Authorization: Bearer; 任何 401 -> 清除令牌并重新显示登录框 (界面状态保留)。
  * 本机不保存、不生成任何管理员密码; 暂不支持找回密码。「退出账号 / 切换账号」= POST /api/logout (会自动关闭代理、让所有浏览器退出)。
- * 最近输入的邮箱会记在 localStorage (只记邮箱, 绝不记密码)。无操作 TP.CFG.AUTO_LOCK_MIN 分钟自动锁定。 */
+ * 最近输入的邮箱会记在 localStorage (只记邮箱, 绝不记密码)。无操作超过 TP.lockIdleMin() 分钟 (设置里可改, 默认 3 天) 自动锁定。 */
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, I = window.I18N, t = I.t, L = I.L;
@@ -12,6 +12,11 @@
   var firstPage = (/^(.*\/)([^/]*)$/.exec(location.pathname) || [])[2] === 'register' ? 'register' : 'login';      // 打开的地址是 …/register 就先显示注册页 (在 app.js 把地址改成当前页之前记下来)
   /* 登录页顶部的提示: 带词典键的对象, 切换语言后会按新语言重新生成文字 (String(x) 取当前语言的文字) */
   A.msg = function (key, vars) { return { key: key, vars: vars || null, toString: function () { return t(key, vars); } }; };
+  /* 分钟数 → 文字 (例如 4320 → 「3 天」, 60 → 「1 小时」, 15 → 「15 分钟」), 按当前语言 */
+  A.idleLabel = function (min) {
+    var kind = min % 1440 === 0 ? 'day' : min % 60 === 0 ? 'hour' : 'min', n = kind === 'day' ? min / 1440 : kind === 'hour' ? min / 60 : min;
+    return t('dur.' + kind + (n === 1 && kind !== 'min' ? '1' : ''), { n: n });
+  };
   var DEF = { account_url: 'https://enana.cc' };      // 官网只有一个首页: 注册 / 登录 / 改密码 / 设备管理都在仪表盘里完成
 
   /* 来自辅助服务的链接只接受 https:// ; 否则用默认地址 */
@@ -29,7 +34,8 @@
   A.touch = function () { lastActive = Date.now(); };
   ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(function (ev) { document.addEventListener(ev, A.touch, { passive: true, capture: true }); });
   setInterval(function () {
-    if (!S.locked && A.required && Date.now() - lastActive > TP.CFG.AUTO_LOCK_MIN * 60000) A.lock(A.msg('auth.autoLock', { n: TP.CFG.AUTO_LOCK_MIN / 60 }));
+    var idle = TP.lockIdleMin();
+    if (!S.locked && A.required && Date.now() - lastActive > idle * 60000) A.lock(A.msg('auth.autoLock', { n: A.idleLabel(idle) }));
   }, 15000);
 
   function unlock(relogin) {

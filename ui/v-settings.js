@@ -331,6 +331,11 @@
     el.btnOut = ui.btn(L('set.acc.logout'), { icon: 'logout', kind: 'soft-bad' }); ui.act(el.btnOut, function () { return TP.auth.logout('logout'); });
     var c = card('account', 'account', L('set.acc.title'), L('set.acc.sub'), 'settings.account');
     c.appendChild(row(L('set.acc.signedIn'), el.accWho)); c.appendChild(el.accNote);
+    /* 无操作多久后需要重新输入密码 (默认 3 天, 1 分钟 ~ 30 天; 偏好 lock.idleMin 会同步到其它电脑) */
+    el.lockSel = h('select', { class: 'sel', 'aria-label': L('set.lock.title') });
+    TP.CFG.LOCK_IDLE_PRESETS.forEach(function (m) { el.lockSel.appendChild(TP.opt(String(m), TP.auth.idleLabel(m) + (m === TP.CFG.LOCK_IDLE_DEFAULT_MIN ? t('set.lock.default') : ''))); });
+    ui.selectAct(el.lockSel, function () { return String(TP.lockIdleMin()); }, function (v) { TP.prefs.set('lock.idleMin', +v); });
+    c.appendChild(row(L('set.lock.title'), el.lockSel)); c.appendChild(h('p', { class: 'hint sm' }, L('set.lock.hint')));
     if (TP.billing) c.appendChild(TP.billing.mountEmail());
     c.appendChild(h('div', { class: 'row wrap set-btns' }, el.btnPw, el.btnSwitch, el.btnOut));
     c.appendChild(h('p', { class: 'hint sudo-hint' }, ui.icon('lock', 14, 'ci'), h('span', null, L('set.acc.sudoNote'), hl('settings.sudo'))));
@@ -339,7 +344,10 @@
   function renderAccount() {
     var A = TP.auth;
     setText(el.accWho, A.email() || t('set.acc.unknown'));
-    setText(el.accNote, t('set.acc.note', { n: TP.CFG.AUTO_LOCK_MIN / 60 }));
+    setText(el.accNote, t('set.acc.note', { n: A.idleLabel(TP.lockIdleMin()) }));
+    var cur = String(TP.lockIdleMin());      // 同步来的自定义值不在下拉里时补一项, 让显示和实际生效的值一致
+    if (!Array.prototype.some.call(el.lockSel.options, function (o) { return o.value === cur; })) el.lockSel.appendChild(TP.opt(cur, A.idleLabel(+cur)));
+    el.lockSel.value = cur;
     var why = TP.why.helper();
     ui.avail(el.btnSwitch, why); ui.avail(el.btnOut, why); ui.avail(el.btnPw, why);
   }

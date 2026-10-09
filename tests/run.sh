@@ -1071,7 +1071,7 @@ api "$A/api/logs?type=ops&q=%E5%AF%BC%E5%87%BA%E8%AF%8A%E6%96%AD" | chk "每次�
 python3 "$REPO/tools/diag-summary.py" "$W/bundle.txt" 2>&1 | grep -q '== 自动判断' && tpass "tools/diag-summary.py 能解读这份导出文件" || tfail "tools/diag-summary.py 解读导出文件"
 "$W/shortcut/enana" diag 6 2>/dev/null | head -1 | grep -q '^#ENANA-DIAGNOSTICS format=1$' && tpass "终端 enana diag (接管道): 直接输出诊断文件" || tfail "终端 enana diag (接管道)"
 "$W/shortcut/enana" diag abc >/dev/null 2>&1 && tfail "enana diag 时间范围无效 → 应报错退出" || tpass "enana diag 时间范围无效 → 报错退出"
-mkdir -p "$HOME/Downloads"; script -q /dev/null "$W/shortcut/enana" diag 1 >/dev/null 2>&1
+mkdir -p "$HOME/Downloads"; python3 -c 'import pty,sys; pty.spawn([sys.argv[1], "diag", "1"])' "$W/shortcut/enana" </dev/null >/dev/null 2>&1   # 需要真的终端: script 在没有终端的环境 (CI、后台任务) 里会失败
 DG=$(ls "$HOME/Downloads"/enana-diagnostics-*.txt 2>/dev/null | head -1)
 [ -n "$DG" ] && head -1 "$DG" | grep -q '^#ENANA-DIAGNOSTICS format=1$' && grep -q '^@@SECTION access ' "$DG" && tpass "终端 enana diag (在终端里): 存成 ~/Downloads/enana-diagnostics-<时间>.txt" || tfail "终端 enana diag (在终端里) 保存文件"
 api "$A/api/logs?type=ops&f=terminal" | chk "终端导出也留下操作记录 (来源 terminal)" 'assert any(r["action"]=="导出诊断日志" and r["who"]=="terminal" for r in d["rows"])'
@@ -1422,6 +1422,8 @@ if command -v node >/dev/null; then
   if node "$HERE/app-refresh-ui.test.js" > "$W/app-refresh-ui.out" 2>&1; then tpass "Quiet app discovery and visibility/reload cadence"; else tfail "App refresh lifecycle regression"; cat "$W/app-refresh-ui.out"; fi
   if node "$HERE/exits-ui.test.js" > "$W/exits-ui.out" 2>&1; then tpass "Exit assignment UI: overview model, default-switch and remove pre-flight, pickers"; else tfail "Exit assignment UI regression"; cat "$W/exits-ui.out"; fi
   if node "$HERE/billing-qr.test.js" > "$W/billing-qr.out" 2>&1; then tpass "Payment invoice QR code encodes the TRON address (version 3, 29 modules)"; else tfail "Payment QR code regression"; cat "$W/billing-qr.out"; fi
+  if node "$HERE/auto-lock.test.js" > "$W/auto-lock.out" 2>&1; then tpass "Idle lock: default 3 days, clamped between 1 minute and 30 days"; else tfail "Idle lock regression"; cat "$W/auto-lock.out"; fi
+  if bash "$HERE/sites-reset.sh" > "$W/sites-reset.out" 2>&1; then tpass "Restore site defaults: keeps app settings, backs up, keeps 3 backups"; else tfail "Site reset regression"; cat "$W/sites-reset.out"; fi
 fi
 
 PASSES=$(cat "$W/.pass" 2>/dev/null | wc -l | tr -d ' '); FAILS=$(cat "$W/.fail" 2>/dev/null | wc -l | tr -d ' ')

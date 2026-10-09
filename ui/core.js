@@ -11,8 +11,16 @@
     /* 可调常量 */
     CFG: {
       ALLOW_SKIP_CONFIRM: true,     // 低风险开关 (策略切换/监控) 的确认框是否提供「本次登录期间不再询问」
-      AUTO_LOCK_MIN: 300,           // 无操作 5 小时后自动锁定 (回到登录框)
+      LOCK_IDLE_DEFAULT_MIN: 4320,  // 无操作多久后需要重新输入密码: 默认 3 天 (设置里可改, 1 分钟 ~ 30 天)
+      LOCK_IDLE_MAX_MIN: 43200,     // 30 天
+      LOCK_IDLE_PRESETS: [1, 15, 60, 1440, 4320, 10080, 43200],   // 设置页下拉: 1 分钟 · 15 分钟 · 1 小时 · 1 天 · 3 天 (默认) · 7 天 · 30 天
       UPDATE_CHECK_HOURS: 6         // 自动检查更新的间隔
+    },
+    /* 空闲锁定的分钟数: 偏好 lock.idleMin (同步到其它电脑); 没有设置、不是数字或越界时取默认值 / 边界值 */
+    lockIdleMin: function () {
+      var v = Math.round(Number(TP.prefs && TP.prefs.get ? TP.prefs.get('lock.idleMin', TP.CFG.LOCK_IDLE_DEFAULT_MIN) : TP.CFG.LOCK_IDLE_DEFAULT_MIN));
+      if (!isFinite(v)) v = TP.CFG.LOCK_IDLE_DEFAULT_MIN;
+      return Math.min(TP.CFG.LOCK_IDLE_MAX_MIN, Math.max(1, v));
     },
     /* 请求头名称 (只在这里定义一次; 后端过渡期内也接受旧名字 X-TProxy / X-TProxy-Token) */
     HDR: { app: 'X-Enana', token: 'X-Enana-Token', lang: 'X-Enana-Lang', sudo: 'X-Enana-Sudo' },

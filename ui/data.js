@@ -35,7 +35,10 @@
   TP.loadCatalog = async function () {
     var cat = { groups: {}, groups_en: {}, order: [], entries: [], failed: false, schema: 0 };
     try {
-      var r = await TP.fetchT('catalog.json', {}, 8000);
+      /* 非中文界面读 catalog.<语言>.json (名称 / 说明 / 分组名已翻译); 没有这个文件时用中文的 catalog.json */
+      var lang = window.I18N && window.I18N.lang, r = null;
+      if (lang && lang !== 'zh') { try { r = await TP.fetchT('catalog.' + lang + '.json', {}, 8000); } catch (e) { r = null; } }
+      if (!r || !r.ok) r = await TP.fetchT('catalog.json', {}, 8000);
       if (!r.ok) throw new Error('HTTP ' + r.status);
       var j = await r.json();
       cat.schema = +j.schema || 2; cat.groups = j.groups || {}; cat.groups_en = j.groups_en || {}; cat.entries = Array.isArray(j.entries) ? j.entries : [];
@@ -313,6 +316,7 @@
   TP.setLang = function (code) {
     if (!window.I18N.setLang(code)) return;
     TP.emit('lang', code);
+    if (!S.locked) TP.loadCatalog();       // 目录的名称 / 说明 / 分组名跟着语言变 (catalog.<语言>.json)
     if (!S.locked && S.helperUp !== false) TP.helper('POST', '/api/settings', { form: { lang: code } }).catch(function () { /* 同步失败不影响界面 */ });
   };
 
