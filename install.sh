@@ -63,6 +63,14 @@ build_menu() {
   menu_add shortcut "快捷命令 enana" toggle "$REC_shortcut" '' "$WHY_shortcut"
 }
 
+# 升级时的程序文件快照 (N5): 配置阶段失败就还原旧文件, 不留下半装半停的新版本 (代理配置本身由 apply_config 回滚)
+PROGRAM_FILES="lib data ui windows enana VERSION CHANGELOG.md get.sh get.ps1"
+snapshot_program() { local s=$H/.upgrade-snapshot p; rm -rf "$s"; mkdir -p "$s"; for p in $PROGRAM_FILES; do [ -e "$H/$p" ] && cp -Rp "$H/$p" "$s/$p"; done; return 0; }
+restore_program() { local s=$H/.upgrade-snapshot p; [ -d "$s" ] || return 0; for p in $PROGRAM_FILES; do if [ -e "$s/$p" ]; then rm -rf "$H/$p"; mv "$s/$p" "$H/$p"; fi; done; rm -rf "$s"; }
+restore_on_fail() { # EXIT 陷阱: 配置阶段失败时还原
+  [ "$1" = 0 ] || { restore_program; info "已还原到升级前的程序文件, 代理配置没有改变" "Restored the previous program files; the proxy configuration was not changed"; }
+}
+
 install_files() { # 把程序文件复制到 $H (源码目录与 $H 相同时跳过)
   mkdir -p "$H" "$H/ui" "$H/certs"; chmod 700 "$H"
   if [ "$SRC" != "$H" ]; then
@@ -175,6 +183,7 @@ st_rules() {
 
 st_config() {
   step "生成配置"
+  if [ "$SRC" != "$H" ] && [ -f "$H/VERSION" ]; then snapshot_program; trap 'restore_on_fail $?' EXIT; fi   # 升级: 配置失败时还原旧程序文件 (N5)
   info "正在生成配置并用 sing-box 校验…"
   install_files
   auth_init                                   # 令牌 (= 核心 Clash API 的密钥) 从一开始就存在; 仪表盘登录成功后才会拿到它
@@ -191,6 +200,7 @@ st_config() {
     *) die "生成的配置没有通过 sing-box 校验" "$(head -c 400 "$H/check.log" 2>/dev/null | tr '\n' ' ') — 请把这段信息反馈出来" ;;
   esac
   ok "配置已生成并通过 sing-box 校验 (服务器 $(srv_count) 台 · 目录 $(catalog_list | wc -l | tr -d ' ') 项)"
+  rm -rf "$H/.upgrade-snapshot"; trap - EXIT                # 配置已生效: 之后的步骤失败不再还原程序文件
 }
 
 st_service() {
