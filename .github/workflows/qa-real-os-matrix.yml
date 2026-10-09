@@ -56,7 +56,7 @@ jobs:
           chk "no bash syntax errors" '! grep -q "syntax error" "$LOGS/install.log"'
           chk "sing-box config check" '"$H/sing-box" check -c "$H/config.json" > "$LOGS/config-check.txt" 2>&1'
           chk "exactly one sing-box" '[ "$(pgrep -f "$H/sing-box run" | wc -l | tr -d " ")" = 1 ]'
-          chk "api /api/auth/status" 'curl -fsS "http://127.0.0.1:$API/api/auth/status" > "$LOGS/auth-status.json"'
+          chk "api /api/auth/status" 'curl -fsS --noproxy "*" -H "X-Enana: 1" "http://127.0.0.1:$API/api/auth/status" > "$LOGS/auth-status.json"'
           chk "dashboard 200" '[ "$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$API/enana/admin/")" = 200 ]'
           chk "proxy smoke (direct, logged out)" '[ "$(curl -s -o /dev/null -w "%{http_code}" -x "http://127.0.0.1:$P" --max-time 20 https://www.apple.com/)" = 200 ]'
           } 2>&1 | tee -a "$LOGS/summary.txt"
@@ -67,7 +67,8 @@ jobs:
         if: always()
         run: |
           H="$HOME/.enana"; cp "$H"/*.log "$H"/logs/*.log "$LOGS/" 2>/dev/null || true
-          [ -x "$H/enana" ] && yes | "$H/enana" uninstall > "$LOGS/uninstall.log" 2>&1 || true
+          # Non-interactive stdin takes the default (no). --yes is what actually uninstalls.
+          [ -x "$H/enana" ] && "$H/enana" uninstall --yes > "$LOGS/uninstall.log" 2>&1 || true
           { echo "leftover dir: $([ -e "$H" ] && echo yes || echo no)"; echo "leftover procs: $(pgrep -f '.enana/sing-box' | wc -l | tr -d ' ')"; launchctl list | grep -i enana || echo "no launchd jobs"; } | tee -a "$LOGS/summary.txt"
       - uses: actions/upload-artifact@v4
         if: always()
@@ -94,7 +95,17 @@ jobs:
         run: |
           mkdir -p "$LOGS"
           PREV=$PREV_INPUT
-          [ -n "$PREV" ] || PREV=$(curl -fsSL "https://api.github.com/repos/${{ github.repository }}/releases?per_page=5" | python3 -c 'import json,sys;print([r["tag_name"].lstrip("v") for r in json.load(sys.stdin)][1])')
+          if [ -z "$PREV" ]; then
+            body=$(mktemp); ok=0; hdr=()
+            # Automatic job token only, to avoid the unauthenticated API 403. Never printed.
+            if [ -n "${GITHUB_TOKEN:-}" ]; then hdr=(-H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" -H "User-Agent: enana-qa"); fi
+            for i in 1 2 3 4 5; do
+              curl -fsSL "${hdr[@]}" -o "$body" "https://api.github.com/repos/${{ github.repository }}/releases?per_page=5" && ok=1 && break
+              sleep $((i * 2))
+            done
+            [ "$ok" = 1 ]
+            PREV=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[1]["tag_name"].lstrip("v"))' "$body")
+          fi
           echo "PREV=$PREV" | tee -a "$GITHUB_ENV" "$LOGS/summary.txt"
       - name: Install the previous release fresh
         run: |
@@ -114,7 +125,14 @@ jobs:
           grep -q '^LOG_HOURS=' "$H/settings.env" && sed -i '' 's/^LOG_HOURS=.*/LOG_HOURS=48/' "$H/settings.env" || echo 'LOG_HOURS=48' >> "$H/settings.env"
           "$H/enana" restart > "$LOGS/restart-old.log" 2>&1 || true
           sleep 5
-          ( cd "$H" && shasum -a 256 servers.jsonl overrides.tsv settings.env prefs.json 2>/dev/null ) | tee "$LOGS/before.sha"
+          # A missing prefs.json makes shasum exit 1. Under bash -e that aborted the
+          # verify step before any PASS/FAIL line. Record MISSING instead.
+          : > "$LOGS/before.sha"
+          for f in servers.jsonl overrides.tsv settings.env prefs.json; do
+            if [ -f "$H/$f" ]; then shasum -a 256 "$H/$f" | awk -v n="$f" '{print $1, n}' >> "$LOGS/before.sha"
+            else echo "MISSING $f" >> "$LOGS/before.sha"; fi
+          done
+          cp "$H/settings.env" "$LOGS/settings-before.env"
           cat "$H/VERSION" | tee "$LOGS/version-before.txt"
       - name: Upgrade (${{ matrix.path }})
         run: |
@@ -126,14 +144,20 @@ jobs:
         run: |
           H="$HOME/.enana"; sleep 5; chk(){ if eval "$2"; then echo "PASS $1"; else echo "${3:-FAIL} $1"; fi; }
           WANT=$(curl -fsSL "$BASE/dl/manifest.json" | python3 -c 'import json,sys;print(json.load(sys.stdin)["version"])')
-          ( cd "$H" && shasum -a 256 servers.jsonl overrides.tsv settings.env prefs.json 2>/dev/null ) > "$LOGS/after.sha"
+          : > "$LOGS/after.sha"
+          for f in servers.jsonl overrides.tsv settings.env prefs.json; do
+            if [ -f "$H/$f" ]; then shasum -a 256 "$H/$f" | awk -v n="$f" '{print $1, n}' >> "$LOGS/after.sha"
+            else echo "MISSING $f" >> "$LOGS/after.sha"; fi
+          done
+          cp "$H/settings.env" "$LOGS/settings-after.env" 2>/dev/null || true
+          diff -u "$LOGS/settings-before.env" "$LOGS/settings-after.env" > "$LOGS/settings.diff" || true
           . "$H/settings.env"; API=${API_PORT:-9091}; P=${PORT:-7890}
           {
           chk "version $PREV -> $WANT" '[ "$(cat "$H/VERSION")" = "$WANT" ]'
           chk "user files unchanged" 'diff "$LOGS/before.sha" "$LOGS/after.sha"'
           chk "exactly one sing-box" '[ "$(pgrep -f "$H/sing-box run" | wc -l | tr -d " ")" = 1 ]'
           chk "sing-box config check" '"$H/sing-box" check -c "$H/config.json" > "$LOGS/config-check.txt" 2>&1'
-          chk "api reports new version" 'curl -fsS "http://127.0.0.1:$API/api/auth/status" | tee "$LOGS/auth-status.json" | grep -q .'
+          chk "api reports new version" 'curl -fsS --noproxy "*" -H "X-Enana: 1" "http://127.0.0.1:$API/api/auth/status" | tee "$LOGS/auth-status.json" | grep -q .'
           chk "proxy smoke (direct)" '[ "$(curl -s -o /dev/null -w "%{http_code}" -x "http://127.0.0.1:$P" --max-time 20 https://www.apple.com/)" = 200 ]'
           # Known gaps (report-only): old get.sh runs for self-update; get.sh overwritten while executing.
           chk "upgrade verified manifest signature" 'grep -Eq "签名校验通过|signature verified" "$LOGS/upgrade.log"' KNOWN-GAP
@@ -173,9 +197,26 @@ jobs:
           @("$([Environment]::OSVersion.VersionString)", "build $([Environment]::OSVersion.Version.Build)", "PS $($PSVersionTable.PSVersion) $($PSVersionTable.PSEdition)") | Tee-Object "$env:LOGS\env.txt"
       - name: Fresh install via the official command (irm | iex)
         run: |
+          # Actions dot-sources this step with ErrorActionPreference=Stop. Piping
+          # `iex *>&1` in that host binds a progress hashtable to an Int64 and
+          # ends the step during download. Run the official one-liner in a child.
+          $ErrorActionPreference = 'Continue'
           $t0 = Get-Date
-          irm https://install.enana.cc/get.ps1 | iex *>&1 | Tee-Object "$env:LOGS\install.log"
+          $log = Join-Path $env:LOGS 'install.log'
+          $wrapper = Join-Path $env:RUNNER_TEMP 'qa-enana-official.ps1'
+          @(
+            '$ProgressPreference = "SilentlyContinue"'
+            '$ErrorActionPreference = "Stop"'
+            'irm https://install.enana.cc/get.ps1 | iex'
+          ) | Set-Content -LiteralPath $wrapper -Encoding Ascii
+          $exe = (Get-Process -Id $PID).Path
+          $p = Start-Process -FilePath $exe -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$wrapper) -Wait -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+          $merged = @(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue) + @(Get-Content -LiteralPath "$log.err" -ErrorAction SilentlyContinue)
+          $merged | Set-Content -LiteralPath $log
+          $merged | Write-Output
+          $code = $p.ExitCode
           "install_seconds=$([int]((Get-Date)-$t0).TotalSeconds)" | Tee-Object -Append "$env:LOGS\summary.txt"
+          if ($code -ne 0) { exit $code }
       - name: Verify install
         run: |
           $H = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'enana'; $r = @()
@@ -186,7 +227,7 @@ jobs:
           $r += chk "version=$want" { (Get-Content "$H\VERSION" -Raw).Trim() -eq $want }
           $r += chk "manifest signature verified" { Select-String -Quiet -Path "$env:LOGS\install.log" -Pattern 'signature verified' }
           $r += chk "release-seq recorded" { Test-Path "$H\.release-seq" }
-          $r += chk "api /api/auth/status" { (Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$api/api/auth/status").StatusCode -eq 200 }
+          $r += chk "api /api/auth/status" { $resp = Invoke-WebRequest -UseBasicParsing -Headers @{ 'X-Enana' = '1' } "http://127.0.0.1:$api/api/auth/status"; $resp.Content | Set-Content -LiteralPath "$env:LOGS\auth-status.json"; $resp.StatusCode -eq 200 }
           $r += chk "dashboard 200" { (Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$api/enana/admin/").StatusCode -eq 200 }
           $r += chk "proxy smoke (direct)" { (curl.exe -s -o NUL -w "%{http_code}" -x "http://127.0.0.1:$p" --max-time 20 https://www.microsoft.com/) -eq '200' }
           $r += chk "exactly one sing-box" { @(Get-Process sing-box -ErrorAction SilentlyContinue).Count -eq 1 }
@@ -197,7 +238,12 @@ jobs:
         run: |
           $H = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'enana'
           Copy-Item "$H\*.log" $env:LOGS -ErrorAction SilentlyContinue
-          if (Test-Path "$H\bin\enana.cmd") { cmd /c "echo y| `"$H\bin\enana.cmd`" uninstall" *>&1 | Tee-Object "$env:LOGS\uninstall.log" }
+          if (Test-Path "$H\bin\enana.cmd") {
+            $ulog = Join-Path $env:LOGS 'uninstall.log'
+            $p = Start-Process -FilePath "$env:ComSpec" -ArgumentList @('/c', "`"$H\bin\enana.cmd`" uninstall --yes") -Wait -PassThru -RedirectStandardOutput $ulog -RedirectStandardError "$ulog.err"
+            $merged = @(Get-Content -LiteralPath $ulog -ErrorAction SilentlyContinue) + @(Get-Content -LiteralPath "$ulog.err" -ErrorAction SilentlyContinue)
+            $merged | Set-Content -LiteralPath $ulog
+          }
           "leftover dir: $(Test-Path $H)"; "leftover sing-box: $(@(Get-Process sing-box -ErrorAction SilentlyContinue).Count)" | Tee-Object -Append "$env:LOGS\summary.txt"
       - uses: actions/upload-artifact@v4
         if: always()
@@ -227,26 +273,61 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force $env:LOGS | Out-Null
           $prev = $env:PREV_INPUT
-          if (!$prev) { $prev = ((Invoke-RestMethod "https://api.github.com/repos/${{ github.repository }}/releases?per_page=5")[1].tag_name).TrimStart('v') }
-          "PREV=$prev" | Tee-Object -Append "$env:LOGS\summary.txt"; "PREV=$prev" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          if (!$prev) {
+            $headers = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'enana-qa' }
+            if ($env:GITHUB_TOKEN) { $headers.Authorization = "Bearer $env:GITHUB_TOKEN" }
+            $rel = $null
+            foreach ($i in 1..5) {
+              try { $rel = Invoke-RestMethod -Headers $headers "https://api.github.com/repos/${{ github.repository }}/releases?per_page=5"; break }
+              catch { if ($i -eq 5) { throw }; Start-Sleep -Seconds ($i * 2) }
+            }
+            $prev = ([string]$rel[1].tag_name).TrimStart('v')
+          }
+          "PREV=$prev" | Tee-Object -Append "$env:LOGS\summary.txt"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "PREV=$prev" -Encoding ascii
           $z = "$env:RUNNER_TEMP\old.zip"; Invoke-WebRequest -UseBasicParsing "$env:BASE/dl/enana-$prev-windows.zip" -OutFile $z
           Expand-Archive $z "$env:RUNNER_TEMP\old" -Force
           $src = (Get-ChildItem "$env:RUNNER_TEMP\old" -Recurse -Filter install.ps1 | Where-Object { $_.Directory.Name -eq 'windows' } | Select-Object -First 1).Directory.Parent.FullName
           $H = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'enana'
-          powershell -NoProfile -ExecutionPolicy Bypass -File "$src\windows\install.ps1" -SourceDir $src -HomeDir $H -Lang en -NoOpen *>&1 | Tee-Object "$env:LOGS\install-old.log"
+          $plog = Join-Path $env:LOGS 'install-old.log'
+          $p = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',"$src\windows\install.ps1",'-SourceDir',$src,'-HomeDir',$H,'-Lang','en','-NoOpen') -Wait -PassThru -RedirectStandardOutput $plog -RedirectStandardError "$plog.err"
+          $merged = @(Get-Content -LiteralPath $plog -ErrorAction SilentlyContinue) + @(Get-Content -LiteralPath "$plog.err" -ErrorAction SilentlyContinue)
+          $merged | Set-Content -LiteralPath $plog
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
       - name: Configure without an account and snapshot
         run: |
           $H = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'enana'; $u = New-Object Text.UTF8Encoding $false
           [IO.File]::AppendAllText("$H\servers.jsonl", '{"role":"pin","outbound":{"type":"trojan","tag":"QA-Tokyo","server":"203.0.113.10","server_port":443,"password":"qa-dummy","tls":{"enabled":true,"server_name":"example.com"}}}' + "`n", $u)
           [IO.File]::AppendAllText("$H\overrides.tsv", "site|qa-upgrade.example|pin|ack|`n", $u)
-          cmd /c "`"$H\bin\enana.cmd`" restart" *>&1 | Tee-Object "$env:LOGS\restart-old.log"
+          $rlog = Join-Path $env:LOGS 'restart-old.log'
+          $p = Start-Process -FilePath "$env:ComSpec" -ArgumentList @('/c', "`"$H\bin\enana.cmd`" restart") -Wait -PassThru -RedirectStandardOutput $rlog -RedirectStandardError "$rlog.err"
+          $merged = @(Get-Content -LiteralPath $rlog -ErrorAction SilentlyContinue) + @(Get-Content -LiteralPath "$rlog.err" -ErrorAction SilentlyContinue)
+          $merged | Set-Content -LiteralPath $rlog
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
           Get-FileHash "$H\servers.jsonl","$H\overrides.tsv","$H\settings.env" -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Hash) $(Split-Path -Leaf $_.Path)" } | Tee-Object "$env:LOGS\before.sha"
       - name: Upgrade (${{ matrix.path }})
         run: |
           $H = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'enana'; $t0 = Get-Date
-          if ('${{ matrix.path }}' -eq 'self-update') { cmd /c "`"$H\bin\enana.cmd`" self-update --yes" *>&1 | Tee-Object "$env:LOGS\upgrade.log" }
-          else { irm https://install.enana.cc/get.ps1 | iex *>&1 | Tee-Object "$env:LOGS\upgrade.log" }
+          $ErrorActionPreference = 'Continue'
+          $log = Join-Path $env:LOGS 'upgrade.log'
+          if ('${{ matrix.path }}' -eq 'self-update') {
+            $p = Start-Process -FilePath "$env:ComSpec" -ArgumentList @('/c', "`"$H\bin\enana.cmd`" self-update --yes") -Wait -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+          } else {
+            $wrapper = Join-Path $env:RUNNER_TEMP 'qa-enana-official.ps1'
+            @(
+              '$ProgressPreference = "SilentlyContinue"'
+              '$ErrorActionPreference = "Stop"'
+              'irm https://install.enana.cc/get.ps1 | iex'
+            ) | Set-Content -LiteralPath $wrapper -Encoding Ascii
+            $exe = (Get-Process -Id $PID).Path
+            $p = Start-Process -FilePath $exe -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$wrapper) -Wait -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+          }
+          $merged = @(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue) + @(Get-Content -LiteralPath "$log.err" -ErrorAction SilentlyContinue)
+          $merged | Set-Content -LiteralPath $log
+          $merged | Write-Output
+          $code = $p.ExitCode
           "upgrade_seconds=$([int]((Get-Date)-$t0).TotalSeconds)" | Tee-Object -Append "$env:LOGS\summary.txt"
+          if ($code -ne 0) { exit $code }
       - name: Verify
         run: |
           $H = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'enana'; Start-Sleep 5; $r = @()
@@ -282,9 +363,23 @@ jobs:
       - uses: actions/checkout@v4
       - name: Self-tests (bash 3.2 = /bin/bash on macOS, LibreSSL = /usr/bin/openssl)
         run: |
-          mkdir -p "$RUNNER_TEMP/logs"; rc=0
+          mkdir -p "$RUNNER_TEMP/logs" "$RUNNER_TEMP/bin"
+          if ! command -v sing-box >/dev/null 2>&1; then
+            case "$(uname -m)" in arm64) arch=arm64 ;; x86_64) arch=amd64 ;; *) echo "unknown arch $(uname -m)"; exit 1 ;; esac
+            tmp=$(mktemp -d)
+            curl -fsSL -o "$tmp/sb.tgz" "https://github.com/SagerNet/sing-box/releases/download/v1.14.2/sing-box-1.14.2-darwin-${arch}.tar.gz"
+            tar -xzf "$tmp/sb.tgz" -C "$tmp"
+            cp "$tmp"/sing-box-*/sing-box "$RUNNER_TEMP/bin/sing-box"
+            chmod +x "$RUNNER_TEMP/bin/sing-box"
+          fi
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+          rc=0
           for t in get-test.sh units.sh core.sh health.sh stats.sh exits.sh; do
-            echo "== $t"; /bin/bash "tests/$t" > "$RUNNER_TEMP/logs/$t.log" 2>&1 && echo "PASS $t" || { echo "FAIL $t"; rc=1; }
+            echo "== $t"; /bin/bash "tests/$t" > "$RUNNER_TEMP/logs/$t.log" 2>&1
+            ec=$?
+            if [ "$ec" -eq 0 ]; then echo "PASS $t"
+            elif [ "$ec" -eq 77 ]; then echo "FAIL $t (exit 77, skipped)"; rc=1
+            else echo "FAIL $t"; rc=1; fi
           done | tee "$RUNNER_TEMP/logs/summary.txt"
           for t in billing-domain importer sysproxy-ui exits-ui sorter windows-helper; do
             node "tests/$t.test.js" > "$RUNNER_TEMP/logs/$t.log" 2>&1 && echo "PASS $t" || echo "FAIL $t"
@@ -312,17 +407,29 @@ jobs:
       - uses: actions/checkout@v4
       - name: Windows self-tests (PS 5.1)
         run: |
+          $ErrorActionPreference = 'Continue'
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\logs" | Out-Null; $r = @()
-          foreach ($t in 'windows-bootstrap-language','windows-cli','windows-launcher','windows-acl','windows-snapshot-remove','windows-signature') {
-            & powershell -NoProfile -ExecutionPolicy Bypass -File "tests\$t.ps1" *> "$env:RUNNER_TEMP\logs\$t.log"
-            $r += if ($LASTEXITCODE -eq 0) { "PASS $t" } else { "FAIL $t" }
+          # windows-signature.ps1 requires -Data/-Sig; tests/windows-signature.sh calls it.
+          foreach ($t in 'windows-bootstrap-language','windows-cli','windows-launcher','windows-acl','windows-snapshot-remove') {
+            $log = Join-Path $env:RUNNER_TEMP "logs\$t.log"
+            $p = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path (Get-Location) "tests\$t.ps1")) -Wait -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+            $merged = @(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue) + @(Get-Content -LiteralPath "$log.err" -ErrorAction SilentlyContinue)
+            $merged | Set-Content -LiteralPath $log
+            $r += if ($p.ExitCode -eq 0) { "PASS $t" } else { "FAIL $t" }
           }
           $r | Tee-Object "$env:RUNNER_TEMP\logs\summary.txt"; if ($r -match '^FAIL') { exit 1 }
       - name: get.ps1 signature logic on PS 5.1 and PS 7 (CNG path)
         shell: bash
         run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          set +e
           PS_BIN=powershell bash tests/windows-signature.sh > "$RUNNER_TEMP/logs/sig-ps51.log" 2>&1
+          ec1=$?
           PS_BIN=pwsh bash tests/windows-signature.sh > "$RUNNER_TEMP/logs/sig-ps7.log" 2>&1
+          ec2=$?
+          set -e
+          { [ "$ec1" -eq 0 ] && echo "PASS sig-ps51" || echo "FAIL sig-ps51"; [ "$ec2" -eq 0 ] && echo "PASS sig-ps7" || echo "FAIL sig-ps7"; } | tee -a "$RUNNER_TEMP/logs/summary.txt"
+          [ "$ec1" -eq 0 ] && [ "$ec2" -eq 0 ]
       - uses: actions/upload-artifact@v4
         if: always()
         with:
