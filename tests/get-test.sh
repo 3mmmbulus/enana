@@ -56,7 +56,7 @@ mkpkg() {
   ( cd "$REPO" && cp -R install.sh lib data ui CHANGELOG.md get.sh "$s/" ); printf '%s\n' "$v" > "$s/VERSION"
   tar -C "$W/stage-$v" -czf "$o/enana-$v.tar.gz" "enana-$v"
   sum=$(sha "$o/enana-$v.tar.gz"); size=$(wc -c < "$o/enana-$v.tar.gz" | tr -d ' ')
-  printf '{"version":"%s","sha256":"%s","size":%s,"url":"/dl/enana-%s.tar.gz","released":"2026-01-01T00:00:00Z"}\n' "$v" "$sum" "$size" "$v" > "$o/manifest.json"
+  printf '{"version":"%s","sha256":"%s","size":%s,"url":"/dl/enana-%s.tar.gz","seq":%s,"expires":%s,"released":"2026-01-01T00:00:00Z"}\n' "$v" "$sum" "$size" "$v" "${MKPKG_SEQ:-$(date +%s)}" "${MKPKG_EXPIRES:-$(( $(date +%s) + 2592000 ))}" > "$o/manifest.json"
   sign_manifest "$o/manifest.json"
   printf '%s\n' "$v" > "$o/VERSION"; cp "$REPO/CHANGELOG.md" "$REPO/get.sh" "$o/"
 }
@@ -169,6 +169,24 @@ OUT=$(ENANA_DL=nothing PATH=/usr/bin:/bin bash "$GET" --upgrade --lang zh 2>&1);
 echo "(指定一个不存在的下载工具) 退出码 $RC"; [ "$RC" != 0 ] && tpass "指定的下载工具用不了 → 失败, 而不是半路崩溃" || tfail "指定的下载工具用不了 → 失败"
 OUT=$(sh "$GET" --help 2>&1 | head -3 | plain); echo "$OUT" | grep -q 'enana' && tpass "sh 运行 get.sh 也能切回 bash (--help)" || tfail "sh 运行 get.sh 也能切回 bash (--help)"
 OUT=$(cat "$GET" | zsh -s -- --help 2>&1 | plain); echo "$OUT" | grep -q 'run the installer with bash' && tpass "管道给 zsh 运行 → 提示用 bash (不是一堆语法错误)" || tfail "管道给 zsh 运行 → 提示用 bash"
+
+echo "== 3b. 防回滚 (T1): 旧序号 / 过期清单必须拒绝, --allow-downgrade 才能降级"
+# state after section 3: NEW3 (9.9.11) installed and its sequence number remembered
+ROLL=9.9.10; ( MKPKG_SEQ=1000 mkpkg "$ROLL" "$W/pkg5" ); serve "$W/pkg5"
+OUT=$(bash "$GET" --upgrade --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
+expect "序号比已见过的旧 (回滚) → 失败 (退出码非 0)" test "$RC" != 0
+echo "$OUT" | grep -q '回滚' && tpass "提示「回滚」" || tfail "提示「回滚」"
+expect "回滚被拒绝后, 已安装的版本没有被改动" test "$(installed)" = "$NEW3"
+EXPD=9.9.12; ( MKPKG_SEQ=$(( $(date +%s) + 1 )) MKPKG_EXPIRES=1000 mkpkg "$EXPD" "$W/pkg6" ); serve "$W/pkg6"
+OUT=$(bash "$GET" --upgrade --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
+expect "清单已过期 → 失败" test "$RC" != 0
+echo "$OUT" | grep -q '已过期' && tpass "提示「已过期」" || tfail "提示「已过期」"
+expect "过期清单被拒绝后, 已安装的版本没有被改动" test "$(installed)" = "$NEW3"
+( MKPKG_SEQ=1000 mkpkg "$ROLL" "$W/pkg5" ); serve "$W/pkg5"
+OUT=$(bash "$GET" --upgrade --allow-downgrade --lang zh 2>&1); RC=$?
+expect "--allow-downgrade 明确降级 → 成功" test "$RC" = 0
+expect "降级后安装的是 9.9.10" test "$(installed)" = "$ROLL"
+expect "降级不会把记住的序号调低 (之后仍拒绝旧序号)" test "$(cat "$W/h/.release-seq")" -gt 1000
 
 echo "== 6. 端口被占用 → 自动换一个随机的空闲端口; 安装完成后打印后台地址 (/enana/admin/)"
 B1=$((BASE+10)); B2=$((BASE+11)); B3=$((BASE+12)); B4=$((BASE+13))

@@ -47,6 +47,13 @@ jobs:
           PS_BIN: pwsh
           REAL_SIG_DIR: ${{ runner.temp }}/published
         run: bash tests/windows-signature.sh
+      - name: Parse get.ps1 and the bootstrap acceptance test (Windows PowerShell 5.1)
+        run: |
+          foreach ($f in 'get.ps1','tests/windows-bootstrap.ps1') { $e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f).Path, [ref]$null, [ref]$e); if ($e) { $e | ForEach-Object { $_.Message }; throw "$f has syntax errors" } }
+      - name: Parse get.ps1 and the bootstrap acceptance test (PowerShell 7)
+        shell: pwsh
+        run: |
+          foreach ($f in 'get.ps1','tests/windows-bootstrap.ps1') { $e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f).Path, [ref]$null, [ref]$e); if ($e) { $e | ForEach-Object { $_.Message }; throw "$f has syntax errors" } }
       - name: Install and exercise the real Windows client
         run: ./tests/windows-native.ps1 -HomeDir '${{ runner.temp }}/enana-native-acceptance'
       - name: Retain failure diagnostics without account or server credentials
