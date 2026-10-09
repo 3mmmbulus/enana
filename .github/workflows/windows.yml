@@ -28,6 +28,25 @@ jobs:
         run: ./tests/windows-acl.ps1
       - name: Remove protected orphaned snapshots without affecting other users
         run: ./tests/windows-snapshot-remove.ps1
+      - name: Fetch the published Windows manifest and its signature
+        shell: pwsh
+        run: |
+          $d = Join-Path $env:RUNNER_TEMP 'published'
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://install.enana.cc/dl/windows-manifest.json' -OutFile (Join-Path $d 'windows-manifest.json') -TimeoutSec 60
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://install.enana.cc/dl/windows-manifest.json.sig' -OutFile (Join-Path $d 'windows-manifest.json.sig') -TimeoutSec 60
+      - name: Check get.ps1 release-signature logic (Windows PowerShell 5.1)
+        shell: bash
+        env:
+          PS_BIN: powershell
+          REAL_SIG_DIR: ${{ runner.temp }}/published
+        run: bash tests/windows-signature.sh
+      - name: Check get.ps1 release-signature logic (PowerShell 7)
+        shell: bash
+        env:
+          PS_BIN: pwsh
+          REAL_SIG_DIR: ${{ runner.temp }}/published
+        run: bash tests/windows-signature.sh
       - name: Install and exercise the real Windows client
         run: ./tests/windows-native.ps1 -HomeDir '${{ runner.temp }}/enana-native-acceptance'
       - name: Retain failure diagnostics without account or server credentials
