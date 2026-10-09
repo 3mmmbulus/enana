@@ -7,7 +7,7 @@
 set -euo pipefail
 release=${1:?Usage: sign-release.sh RELEASE_DIR PRIVATE_KEY_PEM [PUBLIC_KEY_PEM]}
 key=${2:?private key path}
-pub=${3:-$(cd "$(dirname "$0")/.." && pwd -P)/data/cloud-pub.pem}
+pub=${3:-$(cd "$(dirname "$0")/.." && pwd -P)/data/release-pub.pem}
 [ -d "$release" ] && [ -f "$key" ] && [ -f "$pub" ] || { echo 'release directory, private key and public key must exist' >&2; exit 2; }
 signed=0
 for name in manifest.json windows-manifest.json; do

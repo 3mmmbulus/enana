@@ -19,11 +19,11 @@ set -eu
 INSTALL_BASE=${ENANA_INSTALL_BASE:-https://install.enana.cc}
 GH_REPO=${ENANA_GH_REPO:-3mmmbulus/enana}
 GH_BASE=${ENANA_GH_BASE:-https://github.com}      # 测试时指向本机模拟的 GitHub
-# 发布清单的签名公钥 (与云端内容包是同一把; 私钥只在发布者手里, 见 tools/sign-release.sh)。
+# 发布清单的签名公钥 (发布私钥只在发布者手里, 见 tools/sign-release.sh; 与云端内容签名的密钥是分开的)。
 # 测试时可以用 ENANA_RELEASE_PUBKEY_FILE 指向测试公钥; 正常安装不要设置它。
 RELEASE_PUBKEY_PEM='-----BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEFzvklsj38dawlKKUkgvci5JwFLr7
-4TFk/YYshV52yvJY3AP1BN5+u2TKt58a+0BNf5BHwpanuG/SpkCZJ9njHA==
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE4dmCCdutTP+gEoaT413bGYJWib/0
+olPxbogWv3Z5lftak+4Mndh9O5PWbWzDR3QyArxxFc0NQzqOBR8o20HsJQ==
 -----END PUBLIC KEY-----'
 HOME_DIR=${ENANA_HOME:-$HOME/.enana}
 YES=0; UPGRADE=0; FORCE=0; LANG_OPT=''
