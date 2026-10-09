@@ -151,6 +151,7 @@ echo "== 4. enana self-update (安装目录里的 get.sh)"
 NEW2=9.9.10; mkpkg "$NEW2" "$W/pkg3"; serve "$W/pkg3"
 OUT=$(ENANA_YES=1 "$W/shortcut/enana" self-update 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
 expect "self-update 退出码 0" test "$RC" = 0
+echo "$OUT" | grep -q 'syntax error' && tfail "self-update 没有 bash 语法错误 (N4: 正在运行的 get.sh 不再被原地覆盖)" || tpass "self-update 没有 bash 语法错误 (N4: 正在运行的 get.sh 不再被原地覆盖)"
 expect "self-update 升到更新的版本" test "$(installed)" = "$NEW2"
 expect "self-update 后快捷命令版本一致" test "$("$W/shortcut/enana" version)" = "enana $NEW2"
 OUT=$(ENANA_YES=1 "$W/shortcut/enana" self-update 2>&1 | plain); echo "$OUT" | grep -q '已经是最新版本' && tpass "再次 self-update: 已经是最新版本" || tfail "再次 self-update: 已经是最新版本"
