@@ -100,6 +100,10 @@ expect "辅助服务在监听且要求自定义请求头" test "$(curl -s -o /de
 expect "没有生成任何本地密码文件" test ! -e "$W/h/auth.conf"
 ls -d "$TMPDIR"/enana-get.* >/dev/null 2>&1 && tfail "get.sh 退出后清理了自己的临时目录" || tpass "get.sh 退出后清理了自己的临时目录"
 
+# 真正要发布的那一份 (PKG): 它是用正式发布密钥签的, 后面的用例要靠测试密钥重新签名清单, 所以只验证首次安装。
+if [ -n "$PKG" ]; then
+  echo "  (真正发布的包: 到此为止; 其余用例需要测试密钥重新签名, 在生成的测试包上运行: bash tests/get-test.sh)"
+else
 echo "== 2. 安全: 包被篡改 / 清单不一致时必须拒绝, 且不改动已安装的版本"
 cp "$W/www/dl/manifest.json" "$W/manifest.good"; cp "$W/gh/test/enana/releases/latest/download/manifest.json" "$W/manifest.gh.good"
 sed -i '' 's/"sha256":"[0-9a-f]\{64\}"/"sha256":"0000000000000000000000000000000000000000000000000000000000000000"/' "$W/www/dl/manifest.json"
@@ -200,6 +204,7 @@ R=$(SC /bin/zsh "/usr/bin:/bin" "$W/binA"); echo "$R" | grep -q "^SHORTCUT=$W/sc
 R=$(SC /usr/local/bin/fish "/usr/bin:/bin" "$W/binA"); echo "$R" | grep -q "enana.fish\$" && grep -q 'set -gx PATH' "$W/sc/home/.config/fish/conf.d/enana.fish" && tpass "fish: 写 ~/.config/fish/conf.d/enana.fish" || tfail "fish 的 PATH 配置 ($R)"
 R=$(SC /bin/bash "/usr/bin:/bin" "$W/binA"); echo "$R" | grep -q "RC=$W/sc/home/.bash_profile\$" && tpass "bash: 写 ~/.bash_profile" || tfail "bash 的 PATH 配置 ($R)"
 
+fi
 P=$(grep -c p "$W/.pass" 2>/dev/null); F=$(grep -c f "$W/.fail" 2>/dev/null)
 echo; echo "通过 ${P:-0} · 失败 ${F:-0}"
 [ "${F:-0}" = 0 ]
