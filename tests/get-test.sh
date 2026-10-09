@@ -18,8 +18,8 @@ PKG=${1:-}; [ -z "$PKG" ] || PKG=$(cd "$PKG" && pwd -P)
 W=$(mktemp -d /tmp/enana-gettest.XXXXXX)
 # 测试专用的签名密钥 (只在这份临时目录里, 不是发布密钥); get.sh 通过 ENANA_RELEASE_PUBKEY_FILE 用它的公钥校验清单
 openssl ecparam -name prime256v1 -genkey -noout -out "$W/test-key.pem" && openssl ec -in "$W/test-key.pem" -pubout -out "$W/test-pub.pem" 2>/dev/null
-# 用生成的测试公钥校验; 指定了 PKG_DIR (真正要发布的那一份) 时不覆盖, 让 get.sh 用内置的正式公钥校验
-[ -n "${PKG_DIR:-}" ] || export ENANA_RELEASE_PUBKEY_FILE="$W/test-pub.pem"
+# 用生成的测试公钥校验; 指定了发布目录 (真正要发布的那一份) 时不覆盖, 让 get.sh 用内置的正式公钥校验
+[ -n "$PKG" ] || export ENANA_RELEASE_PUBKEY_FILE="$W/test-pub.pem"
 sign_manifest() { openssl dgst -sha256 -sign "$W/test-key.pem" -out "$1.sig" "$1"; }   # 与 tools/sign-release.sh 一样的签名方式
 BASE=$((20000 + RANDOM % 20000))
 export PORT=$BASE UI_PORT=$((BASE+1)) API_PORT=$((BASE+2)) SPEED_PORT=$((BASE+3))
