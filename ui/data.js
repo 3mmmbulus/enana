@@ -65,7 +65,7 @@
     var P = S.proxies, out = [];
     Object.keys(P).forEach(function (tag) {
       var p = P[tag];
-      if (p.all || tag === 'direct' || /^(Direct|Selector|URLTest|Fallback|LoadBalance|Reject|Block|DNS)$/i.test(p.type || '')) return;
+      if (p.all || tag === 'direct' || tag === 'pin-none' || /^(Direct|Selector|URLTest|Fallback|LoadBalance|Reject|Block|DNS)$/i.test(p.type || '')) return;   // pin-none = 没有固定出口时的黑洞, 不是服务器
       out.push({ tag: tag, type: String(p.type || '').toLowerCase(), server: '', port: '', role: P.PIN && P.PIN.all && P.PIN.all.indexOf(tag) >= 0 ? 'pin' : 'auto', sub: '', derived: true });
     });
     return out;
@@ -145,6 +145,8 @@
   TP.PIN_MAX = 32;
   TP.pinServers = function () { return TP.servers().filter(function (s) { return s.role === 'pin'; }).slice(0, TP.PIN_MAX).map(function (s) { return s.tag; }); };
   TP.canPickPin = function () { return TP.pinServers().length >= 2; };
+  /* 固定出口组里真正的服务器 (不含 pin-none 黑洞占位) */
+  TP.pinAll = function () { var P = S.proxies || {}; return ((P.PIN && P.PIN.all) || []).filter(function (x) { return x !== 'pin-none'; }); };
   TP.hasPin = function () { return TP.pinServers().length >= 1; };
   /* 一个出口选择 (selector 当前选中的名字 / 覆盖的 target) 是不是「某个具体的固定出口」: 返回 'PINAUTO' | 服务器名 | '' */
   TP.pinTargetOf = function (v) { return v === 'PINAUTO' || TP.pinServers().indexOf(v) >= 0 ? v : ''; };

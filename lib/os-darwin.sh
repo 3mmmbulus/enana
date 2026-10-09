@@ -100,6 +100,7 @@ os_service_loaded() { enhanced_loaded || os_system_service_loaded; }
 os_service_running() { os_service_info; [ "$SVC_RUNNING" = 1 ]; }
 os_service_pid() { os_service_info; printf '%s' "$SVC_PID"; }
 os_service_start() {
+  type core_mark_start >/dev/null 2>&1 && core_mark_start
   if enhanced_configured; then enhanced_start
   else
     local selected='' rc=0
@@ -119,6 +120,7 @@ os_service_start() {
   fi
 }
 os_service_restart() {
+  type core_mark_start >/dev/null 2>&1 && core_mark_start
   type core_restart_note >/dev/null 2>&1 && core_restart_note
   if enhanced_configured || enhanced_loaded; then
     # TUN: when the root snapshot is exactly what is installed (fingerprint unchanged) and the root helper is trusted, bounce the daemon through the

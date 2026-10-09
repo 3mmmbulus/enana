@@ -43,8 +43,15 @@ gen_catalog_json() { # $1 = 临时目录 (含 cat) -> $H/ui/catalog.json (中文
 
 seqn() { local i=1; while [ "$i" -le "${1:-0}" ]; do printf '%s ' "$i"; i=$((i + 1)); done; }      # 1..N (N=0 什么也不打印; BSD 的 seq 1 0 会倒着数)
 
-rules_watch_state() { # 最近的核心日志里有「规则文件监视失败」: 规则已写入但核心没有重读 (N13) -> true / false
-  [ -s "$H/sing-box.log" ] && tail -n 200 "$H/sing-box.log" 2>/dev/null | grep -q 'watch rule-set file' && echo true || echo false
+core_mark_start() { # 每次要(重)启动核心前写一行标记: 之后的日志才属于「这一次」核心 (N15)
+  printf 'enana: core start %s\n' "$(date '+%F %T')" >> "$H/sing-box.log" 2>/dev/null || true
+}
+rules_watch_state() { # 这一次核心启动之后, 日志里有没有「规则文件监视失败」 (规则已写入但核心没有重读, N13) -> true / false
+  local off
+  [ -s "$H/sing-box.log" ] || { echo false; return; }
+  off=$(grep -b '^enana: core start ' "$H/sing-box.log" 2>/dev/null | tail -n 1 | cut -d: -f1)
+  [ -n "$off" ] || off=0
+  tail -c +"$((off + 1))" "$H/sing-box.log" 2>/dev/null | grep -q 'watch rule-set file' && echo true || echo false
 }
 gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
   local norules=0 T role tag ob dns_block='' resolver='' rs_defs='' i ctag cname cpol lvl logoff secret ads=0 tun_in='' tun_route=''

@@ -137,9 +137,9 @@
   }
   function renderStrip() {
     var P = S.proxies, pin = P.PIN, gl = P.Global, why = TP.why.clash();
-    var pinAll = (pin && pin.all) || [];
+    var pinAll = TP.pinAll();
     fillSelect(el.pinSel, pinAll, function (x) { return x; });
-    if (pin && pin.now && el.pinSel.value !== pin.now) el.pinSel.value = pin.now;
+    if (pin && pinAll.indexOf(pin.now) >= 0 && el.pinSel.value !== pin.now) el.pinSel.value = pin.now;
     ui.avail(el.pinSel, why || (pinAll.length < 1 ? t('servers.pin.none') : ''), pinAll.length < 1 && !why ? addFix() : null);
     var pl = TP.leaf('PIN'), d = pl ? TP.delayOf(pl) : null;
     setText(el.pinInfo, !pinAll.length ? t('servers.pin.noneHint') : t('servers.pin.hint') + (d ? ' ' + t('servers.pin.delay', { ms: fmtMs(d.ms) }) : ''));

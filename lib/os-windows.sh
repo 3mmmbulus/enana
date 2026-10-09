@@ -37,10 +37,11 @@ os_service_loaded() { os_service_info; [ "${SVC_LOADED:-0}" = 1 ]; }
 os_service_running() { os_service_info; [ "${SVC_RUNNING:-0}" = 1 ]; }
 os_service_pid() { os_service_info; printf '%s' "${SVC_PID:-}"; }
 os_service_start() {
+  type core_mark_start >/dev/null 2>&1 && core_mark_start
   if enhanced_configured; then enhanced_start
   else enhanced_stop || return 1; os_system_service_start; fi
 }
-os_service_restart() { if enhanced_configured || enhanced_loaded; then os_service_start; else os_system_service_restart; fi; }
+os_service_restart() { type core_mark_start >/dev/null 2>&1 && core_mark_start; if enhanced_configured || enhanced_loaded; then os_service_start; else os_system_service_restart; fi; }
 os_service_stop() { enhanced_stop || return 1; os_system_service_stop; }
 os_write_plists() { local out; out=$(win_bridge task-register) || return 2; [ "$out" = unchanged ] && return 0; return 1; }
 os_aux_load() {
