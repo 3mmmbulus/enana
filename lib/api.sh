@@ -921,6 +921,7 @@ case "$method $path" in
   "POST /api/billing/checkout") ep_billing checkout billing/checkout POST ;;
   "GET /api/billing/order")    ep_billing order billing/order GET ;;
   "POST /api/billing/cancel")   ep_billing cancel billing/cancel POST ;;
+  "POST /api/billing/order/recheck") ep_billing recheck billing/order/recheck POST ;;
   "POST /api/billing/purchase") ep_billing purchase billing/purchase POST ;;
   "POST /api/billing/auto-renew") ep_billing auto-renew billing/auto-renew POST ;;
   "GET /api/email/status")     ep_billing email-status email/status GET ;;

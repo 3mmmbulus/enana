@@ -9,6 +9,7 @@
   var labels = { m1: 'billing.term.m1', m3: 'billing.term.m3', m6: 'billing.term.m6', y1: 'billing.term.y1', y2: 'billing.term.y2', y3: 'billing.term.y3', y5: 'billing.term.y5' };
   function micro(v) { if (typeof v !== 'string' || !/^\d{1,7}\.\d{6}$/.test(v)) return NaN; return Number(v.replace('.', '')); }
   function money(v) { return typeof v === 'string' && /^\d+\.\d{6}$/.test(v) ? v.replace(/\.0+$/, '').replace(/(\.\d*?[1-9])0+$/, '$1') : '—'; }
+  function fmtLeft(ms) { var s = Math.max(0, Math.floor(ms / 1000)), hh = Math.floor(s / 3600), mm = Math.floor(s % 3600 / 60), ss = s % 60; return (hh ? hh + ':' : '') + (hh && mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss; }
   function term(sku) { return labels[sku] ? t(labels[sku]) : String(sku || ''); }
   function msg(e) { return e && e.code && window.I18N.has('billing.err.' + e.code) ? t('billing.err.' + e.code) : TP.errMsg(e); }
   function canUse() { return !S.locked && !TP.why.helper(); }
@@ -163,7 +164,7 @@
     root.appendChild(h('h3', null, L('billing.orders')));
     var orders = h('div', { class: 'billing-orders' });
     (data.orders || []).forEach(function (o) {
-      orders.appendChild(h('div', { class: 'billing-history' }, h('span', null, o.kind === 'plan' ? term(o.sku) : t('billing.topup')), h('span', null, o.amount + ' USDT'), h('span', null, t('billing.status.' + o.status)), button(L('billing.details'), function () { B.openOrder(o); }, '')));
+      orders.appendChild(h('div', { class: 'billing-history' }, h('span', null, o.kind === 'plan' ? term(o.sku) : t('billing.topup')), h('span', null, money(o.amount) + ' USDT'), h('span', null, t('billing.status.' + o.status)), h('span', { class: 'muted sm' }, TP.fmt.dateTime(o.created_at)), o.tx_hash ? h('a', { href: 'https://tronscan.org/#/transaction/' + o.tx_hash, target: '_blank', rel: 'noopener' }, L('billing.txLink')) : null, button(L('billing.details'), function () { B.openOrder(o); }, '')));
     }); root.appendChild(data.orders.length ? orders : h('p', { class: 'muted' }, L('billing.noOrders')));
     root.appendChild(h('h3', null, L('billing.ledger')));
     (data.ledger || []).forEach(function (r) { root.appendChild(h('div', { class: 'billing-history' }, h('span', null, t('billing.ledger.' + r.kind)), h('span', null, r.delta + ' USDT'), h('span', { class: 'muted sm' }, TP.fmt.dateTime(r.created_at)))); });
@@ -190,22 +191,41 @@
     if (!order || !/^[a-z0-9]{15}$/.test(order.id) || typeof order.amount !== 'string' || !/^\d+\.\d{6}$/.test(order.amount) || !/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(order.address)) return;
     var mine = epoch, timer, closed = false, busy = false, failures = 0, current = order, revision = 0;
     var body = h('div', { class: 'billing-invoice' }), dlg;
-    function schedule() { clearTimeout(timer); if (!closed && current.status === 'pending') timer = setTimeout(refresh, document.hidden ? 15000 : Math.min(30000, failures ? 5000 * failures : 3000)); }
+    var recheckUntil = 0;
+    function schedule() { clearTimeout(timer); if (!closed && (current.status === 'pending' || current.status === 'manual')) timer = setTimeout(refresh, document.hidden ? 15000 : Math.min(30000, failures ? 5000 * failures : 3000)); }
     function paint(note) {
       TP.clear(body);
       var payable = current.status === 'pending' && current.expires_at * 1000 > Date.now();
       body.appendChild(h('p', { class: 'hint warn' }, L(payable ? 'billing.exactNote' : 'billing.invoiceClosed')));
       var copyReason = payable ? '' : t('billing.invoiceClosed');
       var copyAmount = button(L('billing.copyAmount'), function () { return ui.copy(current.amount); }, copyReason), copyAddress = button(L('billing.copyAddress'), function () { return ui.copy(current.address); }, copyReason);
-      body.appendChild(h('div', { class: 'billing-exact' }, h('label', null, L('billing.exactAmount'), h('code', null, current.amount + ' USDT')), copyAmount));
+      body.appendChild(h('div', { class: 'billing-exact' }, h('label', null, L('billing.exactAmount'), h('code', null, money(current.amount) + ' USDT')), copyAmount));
       body.appendChild(h('div', { class: 'billing-exact' }, h('label', null, L('billing.address'), h('code', null, current.address)), copyAddress));
-      body.appendChild(h('p', { class: 'muted sm' }, t('billing.expires', { date: TP.fmt.dateTime(current.expires_at) })));
+      if (payable) {
+        var payLeft = (current.pay_by || 0) * 1000 - Date.now();
+        if (current.status === 'pending') body.appendChild(h('p', { class: 'muted sm' }, payLeft > 0 ? t('billing.countdown', { time: fmtLeft(payLeft) }) : t('billing.payWindow')));
+        body.appendChild(h('p', { class: 'muted sm' }, t('billing.leaseLeft', { time: fmtLeft(current.expires_at * 1000 - Date.now()) })));
+      }
+      if (current.status === 'manual') body.appendChild(h('p', { class: 'hint warn' }, L('billing.manualNote')));
       body.appendChild(h('p', { role: 'status', 'aria-live': 'polite' }, t('billing.status.' + current.status), note ? ' · ' + note : ''));
       if (current.status === 'credited_late') body.appendChild(h('p', { class: 'hint warn' }, L('billing.lateNote')));
-      dlg.setActions([{ label: t('common.close'), cancel: true }, { label: t('common.refresh'), keep: true, disabled: busy, onClick: function () { return refresh(true); } }, { label: t('billing.cancelInvoice'), keep: true, kind: 'soft-bad', disabled: current.status !== 'pending' || busy, onClick: async function () {
+      var canCheck = (current.status === 'pending' || current.status === 'manual') && recheckUntil <= Date.now();
+      dlg.setActions([{ label: t('common.close'), cancel: true }, { label: t('common.refresh'), keep: true, disabled: busy, onClick: function () { return refresh(true); } }, { label: t('billing.recheck'), keep: true, disabled: !canCheck || busy, onClick: function () { return recheck(); } }, { label: t('billing.cancelInvoice'), keep: true, kind: 'soft-bad', disabled: current.status !== 'pending' || busy, onClick: async function () {
         var yes = await ui.confirmDialog({ title: t('billing.cancelInvoice'), message: t('billing.cancelNote'), confirmText: t('billing.cancelInvoice'), danger: true });
         if (yes && !closed && mine === epoch) { revision++; var r = await write('billing/cancel', { id: current.id }, undefined, 'cancel:' + current.id); if (r && !closed) { current = r.order; paint(); schedule(); } }
       } }]);
+    }
+    /* 再次核实: 服务端让扫链器下一轮优先查这个地址; 同一笔订单 30 秒内只能点一次 */
+    async function recheck() {
+      if (closed || busy || mine !== epoch) return;
+      busy = true; paint();
+      try {
+        var r = await TP.helper('POST', '/api/billing/order/recheck', { body: JSON.stringify({ id: current.id }), timeout: 12000 });
+        if (r && r.order && !closed && mine === epoch) current = r.order;
+        recheckUntil = Date.now() + 30000; setTimeout(function () { if (!closed && mine === epoch) paint(); }, 30000);
+        ui.toast(t('billing.recheckDone'), 'ok');
+      } catch (e) { ui.toast(msg(e), 'err'); }
+      finally { busy = false; if (!closed && mine === epoch) paint(); }
     }
     async function refresh(manual) {
       if (closed || busy || mine !== epoch || S.locked || anyBusy()) { schedule(); return; }

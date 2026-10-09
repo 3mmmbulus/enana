@@ -32,6 +32,16 @@ test('shared folders match only the selected executable; regular-expression meta
  assert.ok(match(rx,'C:/Windows/System32/A+B.exe'));assert.ok(!match(rx,'C:/Windows/System32/Other.exe'));assert.ok(!match(rx,'C:/Windows/System32/AAAB.exe'));
  const bracket=applicationRegex('Example','C:/Program Files/Example (Beta)/example.exe');assert.ok(match(bracket,'C:/Program Files/Example (Beta)/helper.exe'));
 });
+test('drive-root executables match only themselves (W1: no empty path segment)',()=>{
+ const rx=applicationRegex('Tool','D:/tool.exe');
+ assert.ok(match(rx,'D:/tool.exe'));assert.ok(match(rx,'D:\\tool.exe'));assert.ok(!match(rx,'D:/other.exe'));
+});
+test('executables directly in a user folder or scoop shims do not claim their neighbours (W2)',()=>{
+ const user=applicationRegex('Tool','C:/Users/张 三/tool.exe');
+ assert.ok(match(user,'C:/Users/张 三/tool.exe'));assert.ok(!match(user,'C:/Users/张 三/AppData/Local/Claude/Claude.exe'));
+ const shim=applicationRegex('Git','C:/Users/x/scoop/shims/git.exe');
+ assert.ok(match(shim,'C:/Users/x/scoop/shims/git.exe'));assert.ok(!match(shim,'C:/Users/x/scoop/shims/node.exe'));
+});
 test('uninstalled overrides remain scoped to an exe name',()=>{
  const rx=applicationRegex('Gemini',null);assert.ok(match(rx,'C:/Apps/Gemini.exe'));assert.ok(!match(rx,'C:/Apps/MyGemini.exe'));
 });

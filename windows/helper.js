@@ -37,13 +37,16 @@ function probe(host, port, timeout=1200) {
 function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 function applicationRegex(name, exe) {
   if (!exe || !/^[A-Za-z]:[\\/]/.test(exe)) return '(?i)[\\\\/]'+escapeRegex(name.replace(/\.exe$/i,''))+'\\.exe$';
-  let dir=path.win32.dirname(exe);
-  if (/^(app-[\d.]+|[\d.]+)$/i.test(path.win32.basename(dir))) dir=path.win32.dirname(dir);
-  const generic=/^(windows|system32|syswow64|program files(?: \(x86\))?|windowsapps|programs|local|roaming|desktop|downloads|bin)$/i.test(path.win32.basename(dir));
-  // Never match an entire shared directory because one executable lives there.
-  const target=generic ? exe : dir+'\\';
-  const rx=target.replace(/\//g,'\\').split('\\').map(escapeRegex).join('[\\\\/]');
-  return '(?i)^'+rx+(generic?'$':'.*\\.exe$');
+  // Drop trailing separators first: dirname('D:\\tool.exe') is 'D:\\', and a trailing separator used to become an empty segment (W1).
+  let dir=path.win32.dirname(exe).replace(/[\\/]+$/,'');
+  if (/^(app-[\d.]+|[\d.]+)$/i.test(path.win32.basename(dir))) dir=path.win32.dirname(dir).replace(/[\\/]+$/,'');
+  const seg=dir.split(/[\\/]+/).filter(Boolean);
+  // A shared directory (drive root, C:\Users\<name>, scoop\shims, bin, ...) must never match every executable in it (W2): match this exe only.
+  const shared=seg.length<=2 || (seg.length===3 && /^users$/i.test(seg[1])) ||
+    /^(windows|system32|syswow64|program files(?: \(x86\))?|windowsapps|programs|local|roaming|desktop|downloads|bin|shims|scripts|tools|temp|documents|onedrive|appdata|users)$/i.test(seg[seg.length-1]);
+  const esc=t=>t.split(/[\\/]+/).map(escapeRegex).join('[\\\\/]');
+  if (shared) return '(?i)^'+esc(exe)+'$';
+  return '(?i)^'+esc(dir)+'[\\\\/].*\\.exe$';
 }
 function windowsRules(home) {
   const names=new Map();

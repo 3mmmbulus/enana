@@ -3,6 +3,7 @@
  * 账号是 enana.cc 账号 (邮箱 + 密码), 可以在这里直接修改密码; 导出备份 / 下线设备等敏感操作会再要一次登录密码 (TP.sudo)。
  * 其它模块要跳到某个标签: TP.settingsTab('sync')。每个设置项旁边有「!」说明图标 (ui.help)。 */
 (function () {
+  function pt(k) { return TP.pt ? TP.pt(k) : k; }   // 平台专用文案 (见 core.js 的 TP.pt)
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, setText = TP.setText, I = window.I18N, t = I.t, L = I.L;
   var V = TP.V.settings = { id: 'settings' };
@@ -242,7 +243,7 @@
     });
     el.networkNote = h('p', { class: 'muted sm', 'aria-live': 'polite' });
     c.appendChild(row(L('set.network.title'), el.networkMode));
-    c.appendChild(h('p', { class: 'muted sm' }, L('set.network.note')));
+    c.appendChild(h('p', { class: 'muted sm' }, L(pt('set.network.note'))));
     c.appendChild(el.networkNote);
     c.appendChild(row(L('set.proxy.service'), el.svcTxt, el.restart, 'settings.service'));
     return c;
