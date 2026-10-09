@@ -966,3 +966,23 @@ enana.cc 服务器返回了错误，这次操作可能已生效也可能没有�
 正在下载 sing-box 核心, 可能需要 1–2 分钟…	Downloading the sing-box core; this can take 1–2 minutes…
 正在生成配置并用 sing-box 校验…	Generating the configuration and checking it with sing-box…
 正在启动代理服务…	Starting the proxy service…
+开发者与云服务	Developers & cloud
+社交与影音	Social & media
+工具与查询	Tools & lookups
+AI 搜索 (Perplexity)	AI search (Perplexity)
+Grok 与 xAI API	Grok and the xAI API
+Mistral AI 与 Le Chat	Mistral AI and Le Chat
+Copilot 网页版	Copilot web app
+DeepSeek (国内可直连)	DeepSeek (reachable directly from mainland China)
+代码托管与 Pages	Code hosting and Pages
+模型与数据集	Models and datasets
+开发者问答	Developer Q&A
+视频	Video
+社交	Social
+社区	Community
+即时通讯	Messaging
+语音与社区	Voice and community
+百科	Encyclopedia
+笔记与文档	Notes and documents
+查询本机的出口 IP 地址; 设为直连, 查到的是你的真实网络出口 (与代理无关)	Looks up this computer's exit IP. Set to direct, so it shows your real network exit rather than the proxy's.
+IP 查询 (本机出口 IP)	IP lookup (this computer's exit IP)
