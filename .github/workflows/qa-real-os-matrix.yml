@@ -1,0 +1,331 @@
+# QA: real-OS fresh install / upgrade / self-test matrix for enana.
+# Branch-only workflow (qa/real-os-matrix). Uses NO repository secrets and never logs in:
+# the account, subscription URL and server passwords are intentionally absent.
+# Runner labels (GitHub, 2026-10): macos-13 retired 2025-12, windows-2019 retired 2025-06-30 -> dropped.
+#   macos-15-intel replaces macos-13 for Intel coverage; macos-14 is deprecated but still offered.
+name: QA real-OS matrix
+on:
+  push:
+    branches: [qa/real-os-matrix]
+  workflow_dispatch:
+    inputs:
+      previous_version:
+        description: "Old release to upgrade from (blank = 2nd newest GitHub release)"
+        required: false
+        default: ""
+permissions:
+  contents: read
+concurrency:
+  group: qa-real-os-matrix-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  BASE: https://install.enana.cc
+
+jobs:
+  # ---------------------------------------------------------------- (a) fresh install, macOS
+  mac-fresh:
+    name: mac fresh (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-15-intel, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      LOGS: ${{ github.workspace }}/qa-logs
+    steps:
+      - name: Environment
+        run: |
+          mkdir -p "$LOGS"
+          { sw_vers; uname -a; echo "login shell: $SHELL"; /bin/bash --version | head -1; /usr/bin/openssl version; } | tee "$LOGS/env.txt"
+      - name: Fresh install via the official command (as a user, non-interactive --yes)
+        run: |
+          set -o pipefail
+          t0=$(date +%s)
+          curl -fsSL "$BASE" | bash -s -- --yes 2>&1 | tee "$LOGS/install.log"
+          echo "install_seconds=$(( $(date +%s) - t0 ))" | tee -a "$LOGS/summary.txt"
+      - name: Verify install (version, signature, services, API, proxy smoke)
+        run: |
+          H="$HOME/.enana"; fail=0; chk(){ if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
+          WANT=$(curl -fsSL "$BASE/dl/manifest.json" | python3 -c 'import json,sys;print(json.load(sys.stdin)["version"])')
+          . "$H/settings.env" 2>/dev/null || true; API=${API_PORT:-9091}; P=${PORT:-7890}
+          {
+          chk "version=$WANT" '[ "$(cat "$H/VERSION")" = "$WANT" ]'
+          chk "manifest signature verified" 'grep -Eq "签名校验通过|signature verified" "$LOGS/install.log"'
+          chk "release-seq recorded" '[ -s "$H/.release-seq" ]'
+          chk "no bash syntax errors" '! grep -q "syntax error" "$LOGS/install.log"'
+          chk "sing-box config check" '"$H/sing-box" check -c "$H/config.json" > "$LOGS/config-check.txt" 2>&1'
+          chk "exactly one sing-box" '[ "$(pgrep -f "$H/sing-box run" | wc -l | tr -d " ")" = 1 ]'
+          chk "api /api/auth/status" 'curl -fsS "http://127.0.0.1:$API/api/auth/status" > "$LOGS/auth-status.json"'
+          chk "dashboard 200" '[ "$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$API/enana/admin/")" = 200 ]'
+          chk "proxy smoke (direct, logged out)" '[ "$(curl -s -o /dev/null -w "%{http_code}" -x "http://127.0.0.1:$P" --max-time 20 https://www.apple.com/)" = 200 ]'
+          } 2>&1 | tee -a "$LOGS/summary.txt"
+          "$H/enana" status > "$LOGS/enana-status.txt" 2>&1 || true
+          scutil --proxy > "$LOGS/scutil-proxy.txt" 2>&1 || true
+          ! grep -q '^FAIL' "$LOGS/summary.txt"
+      - name: Uninstall leaves nothing behind
+        if: always()
+        run: |
+          H="$HOME/.enana"; cp "$H"/*.log "$H"/logs/*.log "$LOGS/" 2>/dev/null || true
+          [ -x "$H/enana" ] && yes | "$H/enana" uninstall > "$LOGS/uninstall.log" 2>&1 || true
+          { echo "leftover dir: $([ -e "$H" ] && echo yes || echo no)"; echo "leftover procs: $(pgrep -f '.enana/sing-box' | wc -l | tr -d ' ')"; launchctl list | grep -i enana || echo "no launchd jobs"; } | tee -a "$LOGS/summary.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-fresh-${{ matrix.os }}
+          path: ${{ env.LOGS }}
+          retention-days: 14
+
+  # ---------------------------------------------------------------- (b) upgrade, macOS
+  mac-upgrade:
+    name: mac upgrade ${{ matrix.path }} (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-15-intel]
+        path: [self-update, official]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      LOGS: ${{ github.workspace }}/qa-logs
+      PREV_INPUT: ${{ github.event.inputs.previous_version }}
+    steps:
+      - name: Pick previous release
+        run: |
+          mkdir -p "$LOGS"
+          PREV=$PREV_INPUT
+          [ -n "$PREV" ] || PREV=$(curl -fsSL "https://api.github.com/repos/${{ github.repository }}/releases?per_page=5" | python3 -c 'import json,sys;print([r["tag_name"].lstrip("v") for r in json.load(sys.stdin)][1])')
+          echo "PREV=$PREV" | tee -a "$GITHUB_ENV" "$LOGS/summary.txt"
+      - name: Install the previous release fresh
+        run: |
+          set -o pipefail
+          mkdir -p ~/Downloads && cd ~/Downloads
+          curl -fsSLO "$BASE/dl/enana-$PREV.tar.gz" && tar xzf "enana-$PREV.tar.gz"
+          bash "enana-$PREV/install.sh" --yes 2>&1 | tee "$LOGS/install-old.log"
+      - name: Configure without an account (dummy servers, rules, settings)
+        run: |
+          H="$HOME/.enana"
+          cat >> "$H/servers.jsonl" <<'J'
+          {"role":"pin","outbound":{"type":"trojan","tag":"QA-Tokyo","server":"203.0.113.10","server_port":443,"password":"qa-dummy","tls":{"enabled":true,"server_name":"example.com"}}}
+          {"role":"auto","outbound":{"type":"trojan","tag":"QA-Auto","server":"203.0.113.12","server_port":443,"password":"qa-dummy","tls":{"enabled":true,"server_name":"example.com"}}}
+          J
+          sed -i '' 's/^ *//' "$H/servers.jsonl"
+          printf 'app|TestCurl|pin|ack|\nsite|qa-upgrade.example|pin|ack|\n' >> "$H/overrides.tsv"
+          grep -q '^LOG_HOURS=' "$H/settings.env" && sed -i '' 's/^LOG_HOURS=.*/LOG_HOURS=48/' "$H/settings.env" || echo 'LOG_HOURS=48' >> "$H/settings.env"
+          "$H/enana" restart > "$LOGS/restart-old.log" 2>&1 || true
+          sleep 5
+          ( cd "$H" && shasum -a 256 servers.jsonl overrides.tsv settings.env prefs.json 2>/dev/null ) | tee "$LOGS/before.sha"
+          cat "$H/VERSION" | tee "$LOGS/version-before.txt"
+      - name: Upgrade (${{ matrix.path }})
+        run: |
+          set -o pipefail; H="$HOME/.enana"; t0=$(date +%s)
+          if [ "${{ matrix.path }}" = self-update ]; then "$H/enana" self-update --yes 2>&1 | tee "$LOGS/upgrade.log"
+          else curl -fsSL "$BASE" | bash -s -- --yes 2>&1 | tee "$LOGS/upgrade.log"; fi
+          echo "upgrade_seconds=$(( $(date +%s) - t0 ))" | tee -a "$LOGS/summary.txt"
+      - name: Verify persistence, services, signature
+        run: |
+          H="$HOME/.enana"; sleep 5; chk(){ if eval "$2"; then echo "PASS $1"; else echo "${3:-FAIL} $1"; fi; }
+          WANT=$(curl -fsSL "$BASE/dl/manifest.json" | python3 -c 'import json,sys;print(json.load(sys.stdin)["version"])')
+          ( cd "$H" && shasum -a 256 servers.jsonl overrides.tsv settings.env prefs.json 2>/dev/null ) > "$LOGS/after.sha"
+          . "$H/settings.env"; API=${API_PORT:-9091}; P=${PORT:-7890}
+          {
+          chk "version $PREV -> $WANT" '[ "$(cat "$H/VERSION")" = "$WANT" ]'
+          chk "user files unchanged" 'diff "$LOGS/before.sha" "$LOGS/after.sha"'
+          chk "exactly one sing-box" '[ "$(pgrep -f "$H/sing-box run" | wc -l | tr -d " ")" = 1 ]'
+          chk "sing-box config check" '"$H/sing-box" check -c "$H/config.json" > "$LOGS/config-check.txt" 2>&1'
+          chk "api reports new version" 'curl -fsS "http://127.0.0.1:$API/api/auth/status" | tee "$LOGS/auth-status.json" | grep -q .'
+          chk "proxy smoke (direct)" '[ "$(curl -s -o /dev/null -w "%{http_code}" -x "http://127.0.0.1:$P" --max-time 20 https://www.apple.com/)" = 200 ]'
+          # Known gaps (report-only): old get.sh runs for self-update; get.sh overwritten while executing.
+          chk "upgrade verified manifest signature" 'grep -Eq "签名校验通过|signature verified" "$LOGS/upgrade.log"' KNOWN-GAP
+          chk "release-seq recorded" '[ -s "$H/.release-seq" ]' KNOWN-GAP
+          chk "no 'syntax error' during upgrade" '! grep -q "syntax error" "$LOGS/upgrade.log"' KNOWN-GAP
+          } 2>&1 | tee -a "$LOGS/summary.txt"
+          ! grep -q '^FAIL' "$LOGS/summary.txt"
+      - name: Collect logs
+        if: always()
+        run: cp "$HOME"/.enana/*.log "$HOME"/.enana/logs/*.log "$LOGS/" 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-upgrade-${{ matrix.path }}-${{ matrix.os }}
+          path: ${{ env.LOGS }}
+          retention-days: 14
+
+  # ---------------------------------------------------------------- (a) fresh install, Windows (PS 5.1 and PS 7 entry)
+  win-fresh:
+    name: win fresh ${{ matrix.shell }} (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+        shell: [powershell, pwsh]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      LOGS: ${{ github.workspace }}\qa-logs
+    steps:
+      - name: Environment
+        run: |
+          New-Item -ItemType Directory -Force $env:LOGS | Out-Null
+          @("$([Environment]::OSVersion.VersionString)", "build $([Environment]::OSVersion.Version.Build)", "PS $($PSVersionTable.PSVersion) $($PSVersionTable.PSEdition)") | Tee-Object "$env:LOGS\env.txt"
+      - name: Fresh install via the official command (irm | iex)
+        run: |
+          $t0 = Get-Date
+          irm https://install.enana.cc/get.ps1 | iex *>&1 | Tee-Object "$env:LOGS\install.log"
+          "install_seconds=$([int]((Get-Date)-$t0).TotalSeconds)" | Tee-Object -Append "$env:LOGS\summary.txt"
+      - name: Verify install
+        run: |
+          $H = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'enana'; $r = @()
+          function chk($n, [scriptblock]$b) { try { if (& $b) { "PASS $n" } else { "FAIL $n" } } catch { "FAIL $n ($_)" } }
+          $want = (Invoke-RestMethod "$env:BASE/dl/windows-manifest.json").version
+          $s = @{}; Get-Content "$H\settings.env" | ForEach-Object { if ($_ -match '^(\w+)=(.*)$') { $s[$matches[1]] = $matches[2].Trim("'`"") } }
+          $api = if ($s.API_PORT) { $s.API_PORT } else { 9091 }; $p = if ($s.PORT) { $s.PORT } else { 7890 }
+          $r += chk "version=$want" { (Get-Content "$H\VERSION" -Raw).Trim() -eq $want }
+          $r += chk "manifest signature verified" { Select-String -Quiet -Path "$env:LOGS\install.log" -Pattern 'signature verified' }
+          $r += chk "release-seq recorded" { Test-Path "$H\.release-seq" }
+          $r += chk "api /api/auth/status" { (Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$api/api/auth/status").StatusCode -eq 200 }
+          $r += chk "dashboard 200" { (Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$api/enana/admin/").StatusCode -eq 200 }
+          $r += chk "proxy smoke (direct)" { (curl.exe -s -o NUL -w "%{http_code}" -x "http://127.0.0.1:$p" --max-time 20 https://www.microsoft.com/) -eq '200' }
+          $r += chk "exactly one sing-box" { @(Get-Process sing-box -ErrorAction SilentlyContinue).Count -eq 1 }
+          $r | Tee-Object -Append "$env:LOGS\summary.txt"
+          if ($r -match '^FAIL') { exit 1 }
+      - name: Uninstall
+        if: always()
+        run: |
+          $H = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'enana'
+          Copy-Item "$H\*.log" $env:LOGS -ErrorAction SilentlyContinue
+          if (Test-Path "$H\bin\enana.cmd") { cmd /c "echo y| `"$H\bin\enana.cmd`" uninstall" *>&1 | Tee-Object "$env:LOGS\uninstall.log" }
+          "leftover dir: $(Test-Path $H)"; "leftover sing-box: $(@(Get-Process sing-box -ErrorAction SilentlyContinue).Count)" | Tee-Object -Append "$env:LOGS\summary.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: win-fresh-${{ matrix.shell }}-${{ matrix.os }}
+          path: ${{ env.LOGS }}
+          retention-days: 14
+
+  # ---------------------------------------------------------------- (b) upgrade, Windows
+  win-upgrade:
+    name: win upgrade ${{ matrix.path }} (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+        path: [self-update, official]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: powershell
+    env:
+      LOGS: ${{ github.workspace }}\qa-logs
+      PREV_INPUT: ${{ github.event.inputs.previous_version }}
+    steps:
+      - name: Install the previous release fresh
+        run: |
+          New-Item -ItemType Directory -Force $env:LOGS | Out-Null
+          $prev = $env:PREV_INPUT
+          if (!$prev) { $prev = ((Invoke-RestMethod "https://api.github.com/repos/${{ github.repository }}/releases?per_page=5")[1].tag_name).TrimStart('v') }
+          "PREV=$prev" | Tee-Object -Append "$env:LOGS\summary.txt"; "PREV=$prev" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          $z = "$env:RUNNER_TEMP\old.zip"; Invoke-WebRequest -UseBasicParsing "$env:BASE/dl/enana-$prev-windows.zip" -OutFile $z
+          Expand-Archive $z "$env:RUNNER_TEMP\old" -Force
+          $src = (Get-ChildItem "$env:RUNNER_TEMP\old" -Recurse -Filter install.ps1 | Where-Object { $_.Directory.Name -eq 'windows' } | Select-Object -First 1).Directory.Parent.FullName
+          $H = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'enana'
+          powershell -NoProfile -ExecutionPolicy Bypass -File "$src\windows\install.ps1" -SourceDir $src -HomeDir $H -Lang en -NoOpen *>&1 | Tee-Object "$env:LOGS\install-old.log"
+      - name: Configure without an account and snapshot
+        run: |
+          $H = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'enana'; $u = New-Object Text.UTF8Encoding $false
+          [IO.File]::AppendAllText("$H\servers.jsonl", '{"role":"pin","outbound":{"type":"trojan","tag":"QA-Tokyo","server":"203.0.113.10","server_port":443,"password":"qa-dummy","tls":{"enabled":true,"server_name":"example.com"}}}' + "`n", $u)
+          [IO.File]::AppendAllText("$H\overrides.tsv", "site|qa-upgrade.example|pin|ack|`n", $u)
+          cmd /c "`"$H\bin\enana.cmd`" restart" *>&1 | Tee-Object "$env:LOGS\restart-old.log"
+          Get-FileHash "$H\servers.jsonl","$H\overrides.tsv","$H\settings.env" -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Hash) $(Split-Path -Leaf $_.Path)" } | Tee-Object "$env:LOGS\before.sha"
+      - name: Upgrade (${{ matrix.path }})
+        run: |
+          $H = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'enana'; $t0 = Get-Date
+          if ('${{ matrix.path }}' -eq 'self-update') { cmd /c "`"$H\bin\enana.cmd`" self-update --yes" *>&1 | Tee-Object "$env:LOGS\upgrade.log" }
+          else { irm https://install.enana.cc/get.ps1 | iex *>&1 | Tee-Object "$env:LOGS\upgrade.log" }
+          "upgrade_seconds=$([int]((Get-Date)-$t0).TotalSeconds)" | Tee-Object -Append "$env:LOGS\summary.txt"
+      - name: Verify
+        run: |
+          $H = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'enana'; Start-Sleep 5; $r = @()
+          function chk($n, [scriptblock]$b, $bad = 'FAIL') { try { if (& $b) { "PASS $n" } else { "$bad $n" } } catch { "$bad $n ($_)" } }
+          $want = (Invoke-RestMethod "$env:BASE/dl/windows-manifest.json").version
+          Get-FileHash "$H\servers.jsonl","$H\overrides.tsv","$H\settings.env" -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Hash) $(Split-Path -Leaf $_.Path)" } | Set-Content "$env:LOGS\after.sha"
+          $r += chk "version $env:PREV -> $want" { (Get-Content "$H\VERSION" -Raw).Trim() -eq $want }
+          $r += chk "user files unchanged" { !(Compare-Object (Get-Content "$env:LOGS\before.sha") (Get-Content "$env:LOGS\after.sha")) }
+          $r += chk "exactly one sing-box" { @(Get-Process sing-box -ErrorAction SilentlyContinue).Count -eq 1 }
+          $r += chk "upgrade verified manifest signature" { Select-String -Quiet -Path "$env:LOGS\upgrade.log" -Pattern 'signature verified' } 'KNOWN-GAP'
+          $r += chk "release-seq recorded" { Test-Path "$H\.release-seq" } 'KNOWN-GAP'
+          $r += chk "backup dirs (pruning)" { @(Get-ChildItem "$H\backups" -Filter 'windows-install-*' -ErrorAction SilentlyContinue).Count -le 1 } 'KNOWN-GAP'
+          $r | Tee-Object -Append "$env:LOGS\summary.txt"
+          Copy-Item "$H\*.log" $env:LOGS -ErrorAction SilentlyContinue
+          if ($r -match '^FAIL') { exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: win-upgrade-${{ matrix.path }}-${{ matrix.os }}
+          path: ${{ env.LOGS }}
+          retention-days: 14
+
+  # ---------------------------------------------------------------- (c) repo self-tests
+  selftest-mac:
+    name: self-tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Self-tests (bash 3.2 = /bin/bash on macOS, LibreSSL = /usr/bin/openssl)
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"; rc=0
+          for t in get-test.sh units.sh core.sh health.sh stats.sh exits.sh; do
+            echo "== $t"; /bin/bash "tests/$t" > "$RUNNER_TEMP/logs/$t.log" 2>&1 && echo "PASS $t" || { echo "FAIL $t"; rc=1; }
+          done | tee "$RUNNER_TEMP/logs/summary.txt"
+          for t in billing-domain importer sysproxy-ui exits-ui sorter windows-helper; do
+            node "tests/$t.test.js" > "$RUNNER_TEMP/logs/$t.log" 2>&1 && echo "PASS $t" || echo "FAIL $t"
+          done | tee -a "$RUNNER_TEMP/logs/summary.txt"
+          ! grep -q '^FAIL' "$RUNNER_TEMP/logs/summary.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest-${{ matrix.os }}
+          path: ${{ runner.temp }}/logs
+          retention-days: 14
+
+  selftest-win:
+    name: self-tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Windows self-tests (PS 5.1)
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\logs" | Out-Null; $r = @()
+          foreach ($t in 'windows-bootstrap-language','windows-cli','windows-launcher','windows-acl','windows-snapshot-remove','windows-signature') {
+            & powershell -NoProfile -ExecutionPolicy Bypass -File "tests\$t.ps1" *> "$env:RUNNER_TEMP\logs\$t.log"
+            $r += if ($LASTEXITCODE -eq 0) { "PASS $t" } else { "FAIL $t" }
+          }
+          $r | Tee-Object "$env:RUNNER_TEMP\logs\summary.txt"; if ($r -match '^FAIL') { exit 1 }
+      - name: get.ps1 signature logic on PS 5.1 and PS 7 (CNG path)
+        shell: bash
+        run: |
+          PS_BIN=powershell bash tests/windows-signature.sh > "$RUNNER_TEMP/logs/sig-ps51.log" 2>&1
+          PS_BIN=pwsh bash tests/windows-signature.sh > "$RUNNER_TEMP/logs/sig-ps7.log" 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest-${{ matrix.os }}
+          path: ${{ runner.temp }}\logs
+          retention-days: 14
