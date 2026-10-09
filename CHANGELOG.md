@@ -1,5 +1,23 @@
 # Changelog / 更新日志
 
+## 2.3.21 (2026-10-10)
+
+### 中文
+- **Windows 安装更稳:** 安装所需的运行时 (Git、Node、sing-box) 现在优先从 install.enana.cc 下载, 失败再回退到 GitHub / nodejs.org; 每个文件都仍然按固定的 SHA-256 校验。
+- **空闲锁定可以设置:** 设置 → 账号与设备 里选择「无操作多久后需要重新输入密码」, 默认 3 天, 可选 1 分钟到 30 天, 设置会同步到你的其它电脑。
+- **网站页:** 英文界面显示英文的网站名和说明; 查询本机 IP 的网站默认直连; 新增一批常用网站; 新增「恢复网站默认」按钮 (清掉网站的改动前先备份)。
+- **概述页:** 不再重复显示代理模式 (顶栏和设置里已有)。
+- **添加服务器:** 不再显示「保存到云端」选项; 添加的服务器默认同步到云端 (是否加入官方服务器池由云端决定)。
+- **Mac 与 Windows 同步发布**。
+
+### English
+- **More reliable Windows install:** the runtimes (Git, Node, sing-box) are now downloaded from install.enana.cc first, then from GitHub / nodejs.org if that fails. Every file is still checked against its pinned SHA-256.
+- **Configurable idle lock:** Settings → Account & devices sets how long you can be inactive before the password is asked again. The default is 3 days; you can choose 1 minute to 30 days. The setting syncs to your other computers.
+- **Sites page:** the English interface shows English site names and descriptions; IP lookup sites default to direct; more common sites are included; a "Restore site defaults" button clears your site changes after taking a backup.
+- **Overview:** the proxy mode is no longer shown twice (it is in the top bar and in Settings).
+- **Adding servers:** the "save to cloud" option is gone; added servers are synced to the cloud by default (whether they join the shared official pool is decided by the cloud service).
+- **macOS and Windows ship together.**
+
 ## 2.3.20 (2026-10-09)
 
 ### 中文
