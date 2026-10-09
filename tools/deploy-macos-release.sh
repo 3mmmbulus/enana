@@ -13,6 +13,8 @@ archive="enana-$version.tar.gz"
 mkdir -p /var/backups/enana/releases
 exec 9>/var/backups/enana/macos-publish.lock
 flock -n 9 || exit 2
+[ -f "$release/manifest.json.sig" ] && [ -f "$release/release-pubkey.pem" ] || { echo 'Missing manifest.json.sig or release-pubkey.pem: run tools/sign-release.sh first.' >&2; exit 2; }
+openssl dgst -sha256 -verify "$release/release-pubkey.pem" -signature "$release/manifest.json.sig" "$release/manifest.json" >/dev/null 2>&1 || { echo 'manifest.json signature does not verify; refusing to publish.' >&2; exit 2; }
 python3 - "$release" "$version" <<'PY'
 import hashlib,json,pathlib,sys,tarfile
 r=pathlib.Path(sys.argv[1]);v=sys.argv[2];m=json.loads((r/'manifest.json').read_text());a=r/f'enana-{v}.tar.gz'
@@ -34,17 +36,17 @@ snapshot_services() {
 }
 snapshot_config() { find /etc/nginx /etc/systemd/system -type f -exec sha256sum {} + | sort; }
 snapshot_other_downloads() {
-  (cd "$dl"; find . -maxdepth 1 -type f ! -name manifest.json ! -name VERSION ! -name CHANGELOG.md ! -name get.sh ! -name "$archive" ! -name '.enana-macos-publish-*' -exec sha256sum {} + | sort)
+  (cd "$dl"; find . -maxdepth 1 -type f ! -name manifest.json ! -name manifest.json.sig ! -name VERSION ! -name CHANGELOG.md ! -name get.sh ! -name "$archive" ! -name '.enana-macos-publish-*' -exec sha256sum {} + | sort)
 }
 snapshot_services > "$backup/services.before"
 snapshot_config > "$backup/config.before"
 snapshot_other_downloads > "$backup/other-downloads.before"
-for name in manifest.json VERSION CHANGELOG.md get.sh; do [ ! -e "$dl/$name" ] || cp -p "$dl/$name" "$backup/download/$name"; done
+for name in manifest.json manifest.json.sig VERSION CHANGELOG.md get.sh; do [ ! -e "$dl/$name" ] || cp -p "$dl/$name" "$backup/download/$name"; done
 committed=0
 rollback() {
   rc=$?
   if [ "$committed" = 0 ]; then
-    for name in manifest.json VERSION CHANGELOG.md get.sh; do
+    for name in manifest.json manifest.json.sig VERSION CHANGELOG.md get.sh; do
       if [ -e "$backup/download/$name" ]; then cp -p "$backup/download/$name" "$dl/$name"; else rm -f "$dl/$name"; fi
     done
     rm -f "$dl/$archive"
@@ -53,7 +55,7 @@ rollback() {
   exit "$rc"
 }
 trap rollback EXIT
-for name in "$archive" get.sh CHANGELOG.md VERSION manifest.json; do
+for name in "$archive" get.sh CHANGELOG.md VERSION manifest.json.sig manifest.json; do   # 签名先于清单: 线上的清单和签名始终配套
   install -m 644 -o root -g root "$release/$name" "$dl/.enana-macos-publish-$$"
   mv -f "$dl/.enana-macos-publish-$$" "$dl/$name"
 done

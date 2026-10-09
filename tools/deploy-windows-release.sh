@@ -17,6 +17,8 @@ archive="enana-$version-windows.zip"
 mkdir -p /var/backups/enana/releases
 exec 9>/var/backups/enana/windows-publish.lock
 flock -n 9 || { echo 'Another Windows publication is running.' >&2; exit 2; }
+[ -f "$release/windows-manifest.json.sig" ] && [ -f "$release/release-pubkey.pem" ] || { echo 'Missing windows-manifest.json.sig or release-pubkey.pem: run tools/sign-release.sh first.' >&2; exit 2; }
+openssl dgst -sha256 -verify "$release/release-pubkey.pem" -signature "$release/windows-manifest.json.sig" "$release/windows-manifest.json" >/dev/null 2>&1 || { echo 'windows-manifest.json signature does not verify; refusing to publish.' >&2; exit 2; }
 python3 - "$release" "$site_source" "$version" <<'PY'
 import hashlib,json,pathlib,sys,zipfile
 release,site=map(pathlib.Path,sys.argv[1:3]); version=sys.argv[3]
@@ -49,7 +51,7 @@ snapshot_macos() {
 snapshot_services > "$backup/services.before"
 snapshot_config > "$backup/config.before"
 snapshot_macos > "$backup/macos.before"
-for name in get.ps1 windows-manifest.json windows-CHANGELOG.md; do
+for name in get.ps1 windows-manifest.json windows-manifest.json.sig windows-CHANGELOG.md; do
   [ ! -e "$dl/$name" ] || cp -p "$dl/$name" "$backup/download/$name"
 done
 for name in index.html site.js; do cp -p "$site/$name" "$backup/site/$name"; done
@@ -57,7 +59,7 @@ committed=0
 rollback() {
   rc=$?
   if [ "$committed" = 0 ]; then
-    for name in get.ps1 windows-manifest.json windows-CHANGELOG.md; do
+    for name in get.ps1 windows-manifest.json windows-manifest.json.sig windows-CHANGELOG.md; do
       if [ -e "$backup/download/$name" ]; then cp -p "$backup/download/$name" "$dl/$name"; else rm -f "$dl/$name"; fi
     done
     for name in index.html site.js; do cp -p "$backup/site/$name" "$site/$name"; done
@@ -68,7 +70,7 @@ rollback() {
 }
 trap rollback EXIT
 # Exact allowlist; publish the manifest after its immutable archive is present.
-for name in "$archive" get.ps1 windows-CHANGELOG.md windows-manifest.json; do
+for name in "$archive" get.ps1 windows-CHANGELOG.md windows-manifest.json.sig windows-manifest.json; do   # 签名先于清单
   install -m 644 -o root -g root "$release/$name" "$dl/.enana-windows-publish-$$"
   mv -f "$dl/.enana-windows-publish-$$" "$dl/$name"
 done

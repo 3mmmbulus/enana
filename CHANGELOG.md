@@ -1,5 +1,23 @@
 # Changelog / 更新日志
 
+## 2.3.16 (2026-10-09)
+
+### 中文
+- **付款（USDT）**: 默认收整数价，只有该价格被占用时才加 +0.01 起的区分尾数；收款槽位保留 24 小时，1 小时付款倒计时只是界面提示；24 小时内按金额精确到账即按时开通。
+- **少付、多付、超时到账、重复付款、取消后到账、无法匹配的转账**：一律进入人工处理，不自动开通、不自动退款；订单会显示「已转人工处理」。
+- **再次核实**：订单详情里可以立即核查链上到账，同一订单 30 秒内只能点一次。
+- **历史订单**：显示时间、交易链接；金额去掉末尾 0。
+- **安装包签名**：发布的清单带签名（与云端内容包同一把签名密钥），安装脚本和发布脚本会校验签名，签名不通过就拒绝安装或发布。
+- **Windows**: 应用路径识别修正（盘符根目录和共享目录里的程序不再误配），Windows 上不再提示「Mac 登录密码」等文案。
+
+### English
+- **USDT payments:** the integer price is used by default; a +0.01 to +0.99 tail is added only while the price is taken on every address. Payment slots are held for 24 hours; the 1-hour countdown is display-only. A transfer of the exact amount within 24 hours activates the plan on time.
+- **Underpaid, overpaid, late, duplicate, paid-after-cancel and unmatched transfers** go to manual review: nothing is activated or refunded automatically, and the order shows "Under manual review".
+- **Check again:** the order dialog can check the chain now; at most once per order every 30 seconds.
+- **Order history** shows time and a transaction link; amounts drop trailing zeros.
+- **Signed release manifests:** the manifests carry a signature made with the same key as the cloud content bundles. The installer and the publish scripts verify it and refuse unsigned or altered manifests.
+- **Windows:** app-path matching fixed (programs in drive roots and shared folders no longer claim their neighbours); Windows-specific wording replaces "Mac login password" and similar text.
+
 ## 2.3.15 (2026-10-09)
 
 ### 中文

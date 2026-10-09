@@ -16,6 +16,11 @@ command -v python3 >/dev/null || { echo "跳过: 需要 python3"; exit 77; }
 PKG=${1:-}; [ -z "$PKG" ] || PKG=$(cd "$PKG" && pwd -P)
 
 W=$(mktemp -d /tmp/enana-gettest.XXXXXX)
+# 测试专用的签名密钥 (只在这份临时目录里, 不是发布密钥); get.sh 通过 ENANA_RELEASE_PUBKEY_FILE 用它的公钥校验清单
+openssl ecparam -name prime256v1 -genkey -noout -out "$W/test-key.pem" && openssl ec -in "$W/test-key.pem" -pubout -out "$W/test-pub.pem" 2>/dev/null
+# 用生成的测试公钥校验; 指定了 PKG_DIR (真正要发布的那一份) 时不覆盖, 让 get.sh 用内置的正式公钥校验
+[ -n "${PKG_DIR:-}" ] || export ENANA_RELEASE_PUBKEY_FILE="$W/test-pub.pem"
+sign_manifest() { openssl dgst -sha256 -sign "$W/test-key.pem" -out "$1.sig" "$1"; }   # 与 tools/sign-release.sh 一样的签名方式
 BASE=$((20000 + RANDOM % 20000))
 export PORT=$BASE UI_PORT=$((BASE+1)) API_PORT=$((BASE+2)) SPEED_PORT=$((BASE+3))
 DL_PORT=$((BASE+4)); GH_PORT=$((BASE+5)); N_PORT=$((BASE+6))
@@ -52,6 +57,7 @@ mkpkg() {
   tar -C "$W/stage-$v" -czf "$o/enana-$v.tar.gz" "enana-$v"
   sum=$(sha "$o/enana-$v.tar.gz"); size=$(wc -c < "$o/enana-$v.tar.gz" | tr -d ' ')
   printf '{"version":"%s","sha256":"%s","size":%s,"url":"/dl/enana-%s.tar.gz","released":"2026-01-01T00:00:00Z"}\n' "$v" "$sum" "$size" "$v" > "$o/manifest.json"
+  sign_manifest "$o/manifest.json"
   printf '%s\n' "$v" > "$o/VERSION"; cp "$REPO/CHANGELOG.md" "$REPO/get.sh" "$o/"
 }
 # 把一个发布目录挂到「官网」(DL) 和「GitHub」(GH) 两条线路上
@@ -59,7 +65,7 @@ serve() { # serve <发布目录>
   local d=$1 v; v=$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$d/manifest.json")
   mkdir -p "$W/www/dl" "$W/gh/test/enana/releases/latest/download" "$W/gh/test/enana/releases/download/v$v"
   cp "$d"/* "$W/www/dl/"
-  cp "$d/manifest.json" "$W/gh/test/enana/releases/latest/download/manifest.json"; cp "$d/enana-$v.tar.gz" "$W/gh/test/enana/releases/download/v$v/"
+  cp "$d/manifest.json" "$d/manifest.json.sig" "$W/gh/test/enana/releases/latest/download/"; cp "$d/enana-$v.tar.gz" "$W/gh/test/enana/releases/download/v$v/"
 }
 
 echo "== 准备夹具 (本机模拟的下载服务 / GitHub / 互联网)"
@@ -97,17 +103,17 @@ ls -d "$TMPDIR"/enana-get.* >/dev/null 2>&1 && tfail "get.sh 退出后清理了�
 echo "== 2. 安全: 包被篡改 / 清单不一致时必须拒绝, 且不改动已安装的版本"
 cp "$W/www/dl/manifest.json" "$W/manifest.good"; cp "$W/gh/test/enana/releases/latest/download/manifest.json" "$W/manifest.gh.good"
 sed -i '' 's/"sha256":"[0-9a-f]\{64\}"/"sha256":"0000000000000000000000000000000000000000000000000000000000000000"/' "$W/www/dl/manifest.json"
-rm -f "$W/gh/test/enana/releases/latest/download/manifest.json"
+rm -f "$W/gh/test/enana/releases/latest/download/manifest.json" "$W/gh/test/enana/releases/latest/download/manifest.json.sig"
 OUT=$(ENANA_GH_BASE=http://127.0.0.1:1 bash "$GET" --yes --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
 expect "清单里的哈希与包不符 → 失败 (退出码非 0)" test "$RC" != 0
-echo "$OUT" | grep -q '下载或校验失败' && tpass "提示「下载或校验失败」" || tfail "提示「下载或校验失败」"
+if echo "$OUT" | grep -q '签名无效'; then tpass "提示「签名无效」(清单被改过, 签名对不上)"; else tfail "提示「签名无效」(清单被改过, 签名对不上)"; echo "$OUT" | head -6 | sed 's/^/      got: /'; fi
 expect "已安装的版本没有被改动" test "$(installed)" = "$VER"
 cp "$W/manifest.good" "$W/www/dl/manifest.json"                      # 官网清单恢复; GitHub 线路给一份「不一致」的清单
-sed 's/"sha256":"[0-9a-f]\{64\}"/"sha256":"1111111111111111111111111111111111111111111111111111111111111111"/' "$W/manifest.gh.good" > "$W/gh/test/enana/releases/latest/download/manifest.json"
+sed 's/"sha256":"[0-9a-f]\{64\}"/"sha256":"1111111111111111111111111111111111111111111111111111111111111111"/' "$W/manifest.gh.good" > "$W/gh/test/enana/releases/latest/download/manifest.json"; sign_manifest "$W/gh/test/enana/releases/latest/download/manifest.json"
 OUT=$(bash "$GET" --yes --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
 expect "两条线路的清单不一致 → 失败" test "$RC" != 0
 echo "$OUT" | grep -q '清单不一致' && tpass "提示「清单不一致」(可能被篡改)" || tfail "提示「清单不一致」(可能被篡改)"
-cp "$W/manifest.gh.good" "$W/gh/test/enana/releases/latest/download/manifest.json"
+cp "$W/manifest.gh.good" "$W/gh/test/enana/releases/latest/download/manifest.json"; sign_manifest "$W/gh/test/enana/releases/latest/download/manifest.json"
 : > "$W/www/dl/enana-$VER.tar.gz"                                    # 官网线路的包坏了 (空文件), GitHub 线路是好的 → 自动换线路
 OUT=$(bash "$GET" --yes --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
 expect "主线路的包损坏 → 自动换到下一条线路并成功" test "$RC" = 0
