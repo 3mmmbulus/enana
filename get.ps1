@@ -2,7 +2,7 @@
 # Saved script options: -Upgrade -NoOpen -Force -Lang auto|zh|en
 # Invoke-Expression validates defaults too: an empty Lang outside ValidateSet
 # fails before any download. Keep auto valid, then resolve the user's culture.
-param([switch]$Upgrade, [switch]$NoOpen, [switch]$Force, [ValidateSet('auto','zh','en')][string]$Lang = 'auto', [string]$HomeDir = '')
+param([switch]$Upgrade, [switch]$NoOpen, [switch]$Force, [switch]$AllowDowngrade, [ValidateSet('auto','zh','en')][string]$Lang = 'auto', [string]$HomeDir = '')
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 if ([Environment]::OSVersion.Platform -ne 'Win32NT' -or ![Environment]::Is64BitOperatingSystem -or ![Environment]::Is64BitProcess) { throw 'Use 64-bit PowerShell on Windows 10/11 (x64 or ARM64).' }
@@ -99,12 +99,30 @@ function Get-SignedWindowsManifest([string]$baseUrl) {
 }
 $manifests = @()
 foreach ($source in @("$base/dl","$github/releases/latest/download")) {
-    try { $manifests += (Get-SignedWindowsManifest $source) } catch { Write-Warning "Manifest source rejected: $($_.Exception.Message)" }
+    try { $manifests += (Get-SignedWindowsManifest $source); Write-Host "Manifest signature verified: $source" } catch { Write-Warning "Manifest source rejected: $($_.Exception.Message)" }
 }
 if ($manifests.Count -eq 0) { throw 'Windows release is unavailable. Check the download service and retry.' }
 $m = $manifests[0]
 if ($m.platform -ne 'windows' -or $m.version -notmatch '^\d+\.\d+\.\d+$' -or $m.sha256 -notmatch '^[0-9a-f]{64}$' -or $m.size -le 0 -or $m.size -gt 104857600 -or $m.url -ne "/dl/enana-$($m.version)-windows.zip") { throw 'Invalid Windows manifest; installation stopped.' }
 foreach ($other in $manifests) { if ($other.platform -ne 'windows' -or $other.version -ne $m.version -or $other.sha256 -ne $m.sha256 -or $other.size -ne $m.size -or $other.url -ne $m.url) { throw 'Windows manifests disagree; installation stopped.' } }
+# Anti-rollback: the manifest carries a signed, increasing release sequence (seq) and an expiry.
+# The highest seq ever installed is kept in $HomeDir\.release-seq and written only after a successful install.
+# (Not named $seen: the package extraction below reuses that name for a hashtable.)
+$seqFile = Join-Path $HomeDir '.release-seq'; [long]$highestSeq = 0
+if (Test-Path -LiteralPath $seqFile) { $parsed = 0L; if ([long]::TryParse(([IO.File]::ReadAllText($seqFile)).Trim(), [ref]$parsed)) { $highestSeq = $parsed } }
+# A version older than the installed one is refused even when no seq is recorded (N2).
+$installedVersion = $null; if (Test-Path -LiteralPath "$HomeDir\VERSION") { $installedVersion = [IO.File]::ReadAllText("$HomeDir\VERSION").Trim() }
+if ($installedVersion -match '^\d+\.\d+\.\d+$' -and [version]$m.version -lt [version]$installedVersion -and !$AllowDowngrade) { throw "The manifest (v$($m.version)) is older than the installed v$installedVersion; possible rollback attack; aborting. Use -AllowDowngrade to install an older release on purpose." }
+if ($null -eq $m.seq) {
+    if ($highestSeq -gt 0) { throw 'The manifest has no sequence number, but this computer has seen one; aborting (possible rollback attack).' }
+    Write-Warning 'The manifest has no sequence number, so rollback cannot be checked (legacy manifest).'
+} else {
+    if ($m.expires -and [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() -gt [long]$m.expires) { throw 'The version manifest has expired; aborting (check your clock).' }
+    if ([long]$m.seq -lt $highestSeq) {
+        if (!$AllowDowngrade) { throw "The manifest is older than one already seen (seq $($m.seq) < $highestSeq); possible rollback attack; aborting. Use -AllowDowngrade to install an older release on purpose." }
+        Write-Warning "Installing an older release because of -AllowDowngrade (seq $($m.seq) < seen $highestSeq)."
+    }
+}
 if ($Upgrade -and !$Force -and (Test-Path -LiteralPath "$HomeDir\VERSION") -and [IO.File]::ReadAllText("$HomeDir\VERSION").Trim() -eq $m.version) { Write-Host "enana $($m.version) is already installed."; return }
 $stage = Join-Path ([IO.Path]::GetTempPath()) ('enana-get-'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($stage) | Out-Null
@@ -148,5 +166,7 @@ try {
     if($Upgrade){$installerArgs+='-Upgrade'};if($NoOpen){$installerArgs+='-NoOpen'}
     & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" @installerArgs
     if($LASTEXITCODE -ne 0){throw "Windows installation failed (exit $LASTEXITCODE)."}
+    # Remember the sequence only after a successful install (N5): a failed install leaves it unchanged.
+    if ($null -ne $m.seq -and [long]$m.seq -gt $highestSeq) { [IO.Directory]::CreateDirectory($HomeDir) | Out-Null; [IO.File]::WriteAllText($seqFile, ([string][long]$m.seq) + "`n") }
     $env:Path="$(Join-Path $HomeDir 'bin');$env:Path"
 } finally { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }

@@ -54,9 +54,13 @@ mkpkg() {
   local v=$1 o=$2 s="$W/stage-$1/enana-$1" sum size
   rm -rf "$W/stage-$v"; mkdir -p "$s" "$o"
   ( cd "$REPO" && cp -R install.sh lib data ui CHANGELOG.md get.sh "$s/" ); printf '%s\n' "$v" > "$s/VERSION"
+  # MKPKG_BROKEN=1: the installer exits 1 at once (simulates a failed install)
+  [ -z "${MKPKG_BROKEN:-}" ] || { { echo 'exit 1'; cat "$s/install.sh"; } > "$s/install.sh.tmp" && mv "$s/install.sh.tmp" "$s/install.sh"; }
   tar -C "$W/stage-$v" -czf "$o/enana-$v.tar.gz" "enana-$v"
   sum=$(sha "$o/enana-$v.tar.gz"); size=$(wc -c < "$o/enana-$v.tar.gz" | tr -d ' ')
   printf '{"version":"%s","sha256":"%s","size":%s,"url":"/dl/enana-%s.tar.gz","seq":%s,"expires":%s,"released":"2026-01-01T00:00:00Z"}\n' "$v" "$sum" "$size" "$v" "${MKPKG_SEQ:-$(date +%s)}" "${MKPKG_EXPIRES:-$(( $(date +%s) + 2592000 ))}" > "$o/manifest.json"
+  # MKPKG_NOSEQ=1: a legacy manifest without seq / expires (signed as it is)
+  [ -z "${MKPKG_NOSEQ:-}" ] || { sed 's/"seq":[0-9]*,"expires":[0-9]*,//' "$o/manifest.json" > "$o/manifest.tmp" && mv "$o/manifest.tmp" "$o/manifest.json"; }
   sign_manifest "$o/manifest.json"
   printf '%s\n' "$v" > "$o/VERSION"; cp "$REPO/CHANGELOG.md" "$REPO/get.sh" "$o/"
 }
@@ -187,6 +191,32 @@ OUT=$(bash "$GET" --upgrade --allow-downgrade --lang zh 2>&1); RC=$?
 expect "--allow-downgrade 明确降级 → 成功" test "$RC" = 0
 expect "降级后安装的是 9.9.10" test "$(installed)" = "$ROLL"
 expect "降级不会把记住的序号调低 (之后仍拒绝旧序号)" test "$(cat "$W/h/.release-seq")" -gt 1000
+
+echo "== 3c. 没有序号记录 (.release-seq 丢失 / 旧版本安装) 时, 比已安装版本旧的清单也必须拒绝 (N2)"
+mkdir -p "$W/s3/h"; printf '9.9.11\n' > "$W/s3/h/VERSION"   # 已装 9.9.11, 没有 .release-seq
+MKPKG_NOSEQ=1 mkpkg 9.9.10 "$W/pkg7"; serve "$W/pkg7"
+OUT=$(ENANA_HOME=$W/s3/h bash "$GET" --yes --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
+expect "R6 无序号的旧清单 (9.9.10 < 已装 9.9.11) → 失败" test "$RC" != 0
+expect "R6 提示「旧」且说明是回滚" sh -c "printf '%s' '$OUT' | grep -q '比已安装的 v9.9.11 旧'"
+expect "R6 被拒绝后, 已安装的版本没有被改动" test "$(cat "$W/s3/h/VERSION")" = 9.9.11
+mkpkg 9.9.10 "$W/pkg8"; serve "$W/pkg8"
+OUT=$(ENANA_HOME=$W/s3/h bash "$GET" --yes --lang zh 2>&1); RC=$?; OUT=$(echo "$OUT" | plain)
+expect "R7 有序号但版本更旧 (9.9.10 < 已装 9.9.11), 没有序号记录 → 失败" test "$RC" != 0
+expect "R7 提示「旧」且说明是回滚" sh -c "printf '%s' '$OUT' | grep -q '回滚'"
+expect "R7 被拒绝后, 已安装的版本没有被改动" test "$(cat "$W/s3/h/VERSION")" = 9.9.11
+
+echo "== 3d. 安装失败时发布序号不前进 (N5): 失败后重新运行官方命令才能恢复"
+mkdir -p "$W/s4/"{state,tmp,home/Library/LaunchAgents,shortcut,h/rules}; cp "$SB" "$W/s4/h/sing-box"; chmod +x "$W/s4/h/sing-box"
+printf '9.9.11\n' > "$W/s4/h/VERSION"; printf '500\n' > "$W/s4/h/.release-seq"
+env4() { HOME=$W/s4/home ENANA_HOME=$W/s4/h FAKE_STATE=$W/s4/state ENANA_PLIST_DIR=$W/s4/home/Library/LaunchAgents ENANA_SHORTCUT_DIR=$W/s4/shortcut TMPDIR=$W/s4/tmp PORT=$((BASE+20)) UI_PORT=$((BASE+21)) API_PORT=$((BASE+22)) SPEED_PORT=$((BASE+23)) "$@"; }
+MKPKG_BROKEN=1 mkpkg 9.9.13 "$W/pkg9"; serve "$W/pkg9"
+OUT=$(env4 bash "$GET" --yes --lang zh 2>&1); RC=$?
+expect "安装器失败 → 安装命令失败 (退出码非 0)" test "$RC" != 0
+expect "安装失败后 .release-seq 仍是 500 (没有提前前进)" test "$(cat "$W/s4/h/.release-seq")" = 500
+mkpkg 9.9.13 "$W/pkg10"; serve "$W/pkg10"
+OUT=$(env4 bash "$GET" --yes --lang zh 2>&1); RC=$?
+expect "修好之后重新运行官方命令 → 成功 (不再被回滚检查拦住)" test "$RC" = 0
+expect "成功后序号才前进" sh -c "[ \"\$(cat '$W/s4/h/.release-seq')\" -gt 500 ]"
 
 echo "== 6. 端口被占用 → 自动换一个随机的空闲端口; 安装完成后打印后台地址 (/enana/admin/)"
 B1=$((BASE+10)); B2=$((BASE+11)); B3=$((BASE+12)); B4=$((BASE+13))

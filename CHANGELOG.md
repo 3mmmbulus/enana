@@ -1,5 +1,19 @@
 # Changelog / 更新日志
 
+## 2.3.19 (2026-10-09)
+
+### 中文
+- **防回滚修复**: 没有发布序号记录的电脑 (旧版本安装, 或 `.release-seq` 丢失), 比已安装版本旧的清单也会被拒绝。
+- **安装失败不再「消耗」发布序号**: 序号只在安装成功后才记住, 安装失败后重新运行官方命令即可恢复。
+- **发布包只从已提交的代码构建**: 工作区有未提交的改动时拒绝打包; 清单带 `commit` 字段, 并纳入签名。
+- **Mac 与 Windows 同步发布**。
+
+### English
+- **Anti-rollback fixes:** computers with no recorded release sequence (an old install, or a lost `.release-seq`) also refuse a manifest older than the installed version.
+- **A failed install no longer uses up the release sequence:** the sequence is recorded only after a successful install, so rerunning the official command recovers.
+- **Packages come only from committed code:** the build refuses uncommitted changes to tracked files; the manifest carries a `commit` field and it is covered by the signature.
+- **macOS and Windows ship together.**
+
 ## 2.3.18 (2026-10-09)
 
 ### 中文
