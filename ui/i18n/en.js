@@ -70,6 +70,7 @@
     "billing.address": "TRON (TRC20) receive address",
     "billing.copyAmount": "Copy exact amount",
     "billing.copyAddress": "Copy address",
+    "billing.qrLabel": "QR code of the receive address",
     "billing.expires": "Pay before: {date}",
     "billing.lateNote": "Funds are in your wallet. Expired or cancelled invoices do not activate a plan automatically; you can buy from balance.",
     "billing.cancelInvoice": "Cancel invoice",

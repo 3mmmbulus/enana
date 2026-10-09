@@ -12,7 +12,7 @@ function fixture(handler,opts={}){
  const ui={btn(label){return Object.assign(node('button'),{label});},avail(b,why){b.reason=why;},actionBusy(b,on){b.disabled=on;},act(b,fn){b.click=async()=>b.reason||b.disabled?null:fn();},badge(label){return node('badge',null,label);},toast(...x){toasts.push(x);},copy(v){copies.push(v);},confirmDialog:async o=>{confirmations.push(o);return true;},modal(o){const d={body:o.body,actions:o.actions||[],setActions(a){d.actions=a;},close(){d.closed=true;o.onClose?.();}};modals.push(d);return d;}};
  const TP={S:{locked:false},h:node,ui,why:{helper:()=>''},clear:n=>{n.children=[];},on:(ev,fn)=>{(callbacks[ev]||=[]).push(fn);},emit,errMsg:e=>e.message||e.code||'error',mkErr:(kind,message)=>({kind,message}),helper:async(...args)=>{calls.push(args);return handler(...args);},plan:{load:(...a)=>{planLoads.push(a)}},fmt:{dateTime:String},auth:{logout:async(kind)=>{signIns.push(kind)}}};
  const document={hidden:false};const I={t:(k,args)=>k+(args?JSON.stringify(args):''),L:k=>k,has:k=>k.startsWith('billing.err.')};
- vm.runInNewContext(script,{window:{TP,I18N:I,crypto:'crypto' in opts?opts.crypto:crypto},document,setInterval:()=>0,setTimeout:fn=>{timers.set(++id,fn);return id},clearTimeout:i=>timers.delete(i),console});
+ vm.runInNewContext(script,{window:{TP,I18N:I,crypto:'crypto' in opts?opts.crypto:crypto,qrcode:opts.qrcode},document,setInterval:()=>0,setTimeout:fn=>{timers.set(++id,fn);return id},clearTimeout:i=>timers.delete(i),console});
  return {B:TP.billing,TP,calls,modals,copies,toasts,confirmations,timers,document,emit,signIns,planLoads};
 }
 test('receiving disabled and unverified email independently block checkout; free account remains usable',async()=>{
@@ -118,4 +118,13 @@ test('the idempotency key survives a browser without crypto.randomUUID (or witho
   await find(root,'billing.payUSDT').click();const post=f.calls.find(x=>x[0]==='POST');
   assert.ok(post,'checkout still sends');assert.match(JSON.parse(post[2].body).request_key,/^[A-Za-z0-9_-]{16,80}$/);
  }
+});
+test('payable invoice shows a QR code of the receive address (vendored library, inline SVG)',()=>{
+ const qrSrc=fs.readFileSync(require('node:path').join(__dirname,'../ui/vendor/qrcode.js'),'utf8');
+ const sandbox={};sandbox.window=sandbox;vm.createContext(sandbox);vm.runInContext(qrSrc,sandbox);
+ const f=fixture(async()=>({ok:true,order:invoice}),{qrcode:sandbox.qrcode});
+ f.B.openOrder(invoice);const d=f.modals[0];
+ const box=flatten(d.body).find(n=>n.attrs&&n.attrs.class==='billing-qr');
+ assert.ok(box,'a payable invoice should render the QR box');
+ assert.match(box.innerHTML,/^<svg/);
 });

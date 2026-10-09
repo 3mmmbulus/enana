@@ -13,6 +13,14 @@
   function term(sku) { return labels[sku] ? t(labels[sku]) : String(sku || ''); }
   function msg(e) { return e && e.code && window.I18N.has('billing.err.' + e.code) ? t('billing.err.' + e.code) : TP.errMsg(e); }
   function canUse() { return !S.locked && !TP.why.helper(); }
+  // 收款地址二维码 (vendor/qrcode.js, 内联 SVG; 不用 data: 图片, 因为生产环境的 CSP 是 img-src 'self'). 只编码地址本身, 金额仍以文字显示.
+  function qrBlock(text) {
+    if (typeof window.qrcode !== 'function') return null;
+    var q = window.qrcode(0, 'M'); q.addData(text); q.make();
+    var box = h('div', { class: 'billing-qr' });
+    box.innerHTML = q.createSvgTag(4, 4, t('billing.qrLabel'), '');   // 内容只来自已校验的 TRON 地址 (见 openOrder 的正则)
+    return box;
+  }
   /* 幂等键: 优先 crypto.randomUUID; 没有 (旧浏览器 / 非安全上下文) 就退回 getRandomValues, 再退回 Math.random。只用来让「重试不会重复下单」, 不是密钥, 不能让它抛错。 */
   function newKey() {
     try { if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID(); } catch (e) { /* 退回 */ }
@@ -202,6 +210,7 @@
       body.appendChild(h('div', { class: 'billing-exact' }, h('label', null, L('billing.exactAmount'), h('code', null, money(current.amount) + ' USDT')), copyAmount));
       body.appendChild(h('div', { class: 'billing-exact' }, h('label', null, L('billing.address'), h('code', null, current.address)), copyAddress));
       if (payable) {
+        var qr = qrBlock(current.address); if (qr) body.appendChild(qr);
         var payLeft = (current.pay_by || 0) * 1000 - Date.now();
         if (current.status === 'pending') body.appendChild(h('p', { class: 'muted sm' }, payLeft > 0 ? t('billing.countdown', { time: fmtLeft(payLeft) }) : t('billing.payWindow')));
         body.appendChild(h('p', { class: 'muted sm' }, t('billing.leaseLeft', { time: fmtLeft(current.expires_at * 1000 - Date.now()) })));

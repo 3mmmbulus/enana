@@ -7,6 +7,7 @@
 - **云端下发的内容** (服务目录、规则库清单、服务器部署脚本等) 属于 enana 云端服务, 登录后下发并验签, 不属于本仓库。
 - **Git for Windows PortableGit** (<https://gitforwindows.org/>): Windows 安装器从官方发布下载并校验 SHA-256, 安装在 enana 私有目录。Git、Bash、Perl、OpenSSL、OpenSSH 等组件各有自己的许可证; 保留完整上游包中的 LICENSE 与声明, 不裁剪许可证。
 - **Node.js** (<https://nodejs.org/>): Windows 本机 HTTP 桥与辅助程序的私有运行时, 从官方分发下载并校验 SHA-256, 保留上游 LICENSE (Node.js MIT 及依赖声明)。
+- **qrcode-generator 2.0.4** (<https://github.com/kazuhikoarase/qrcode-generator>, Copyright (c) 2009 Kazuhiko Arase, MIT): 收款页的二维码生成, 随 `ui/vendor/qrcode.js` 原样分发 (npm tarball 的 sha512 已核对)。
 - 本机使用的系统自带工具 (`curl`、`openssl` (LibreSSL)、`ssh` / `ssh-keyscan`、`perl`、`dig` 等) 来自 macOS, 不随本仓库分发。
 
 
