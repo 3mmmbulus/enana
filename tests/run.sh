@@ -1421,6 +1421,7 @@ if command -v node >/dev/null; then
   if node "$HERE/vps-verify-ui.test.js" > "$W/vps-verify-ui.out" 2>&1; then tpass "Wizard: deployed-but-unverified state, actual-port guidance, verify-only retry"; else tfail "Wizard verification-state regression"; cat "$W/vps-verify-ui.out"; fi
   if node "$HERE/app-refresh-ui.test.js" > "$W/app-refresh-ui.out" 2>&1; then tpass "Quiet app discovery and visibility/reload cadence"; else tfail "App refresh lifecycle regression"; cat "$W/app-refresh-ui.out"; fi
   if node "$HERE/exits-ui.test.js" > "$W/exits-ui.out" 2>&1; then tpass "Exit assignment UI: overview model, default-switch and remove pre-flight, pickers"; else tfail "Exit assignment UI regression"; cat "$W/exits-ui.out"; fi
+  if node "$HERE/billing-qr.test.js" > "$W/billing-qr.out" 2>&1; then tpass "Payment invoice QR code encodes the TRON address (version 3, 29 modules)"; else tfail "Payment QR code regression"; cat "$W/billing-qr.out"; fi
 fi
 
 PASSES=$(cat "$W/.pass" 2>/dev/null | wc -l | tr -d ' '); FAILS=$(cat "$W/.fail" 2>/dev/null | wc -l | tr -d ' ')
