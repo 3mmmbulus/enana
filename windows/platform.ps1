@@ -172,7 +172,7 @@ switch ($Action) {
         $arch=if(($env:PROCESSOR_ARCHITEW6432,$env:PROCESSOR_ARCHITECTURE) -contains 'ARM64'){'arm64'}else{'amd64'}
         $pin=(Read-JsonFile "$HomeDir\windows\runtime-pins.json").core.$arch
         $archive="$HomeDir\runtime\cache\core.zip"
-        if(!(Test-Path -LiteralPath $archive) -or (Get-FileHash -LiteralPath $archive).Hash.ToLowerInvariant() -ne $pin.sha256){Get-VerifiedDownload @($pin.url) $archive $pin.sha256}
+        if(!(Test-Path -LiteralPath $archive) -or (Get-FileHash -LiteralPath $archive).Hash.ToLowerInvariant() -ne $pin.sha256){Get-VerifiedDownload @($pin.urls) $archive $pin.sha256}
         $stage="$HomeDir\runtime\core-upgrade-$([Guid]::NewGuid().ToString('N'))"
         try{
             Expand-SafeZip $archive $stage

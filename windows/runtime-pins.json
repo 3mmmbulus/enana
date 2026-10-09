@@ -1,31 +1,49 @@
 {
   "git": {
     "amd64": {
-      "url": "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.1/PortableGit-2.53.0-64-bit.7z.exe",
+      "urls": [
+        "https://install.enana.cc/dl/runtime/PortableGit-2.53.0-64-bit.7z.exe",
+        "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.1/PortableGit-2.53.0-64-bit.7z.exe"
+      ],
       "sha256": "08713a710ec91ac90de1c09f861289a3b103175f098676e5e664c04dd6c6bf23"
     },
     "arm64": {
-      "url": "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.1/PortableGit-2.53.0-arm64.7z.exe",
+      "urls": [
+        "https://install.enana.cc/dl/runtime/PortableGit-2.53.0-arm64.7z.exe",
+        "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.1/PortableGit-2.53.0-arm64.7z.exe"
+      ],
       "sha256": "dc59b7383104d57110e370638854cc1b1fd50de0fa6d293dc941f35094594298"
     }
   },
   "node": {
     "amd64": {
-      "url": "https://nodejs.org/dist/v22.23.3/node-v22.23.3-win-x64.zip",
+      "urls": [
+        "https://install.enana.cc/dl/runtime/node-v22.23.3-win-x64.zip",
+        "https://nodejs.org/dist/v22.23.3/node-v22.23.3-win-x64.zip"
+      ],
       "sha256": "2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71"
     },
     "arm64": {
-      "url": "https://nodejs.org/dist/v22.23.3/node-v22.23.3-win-arm64.zip",
+      "urls": [
+        "https://install.enana.cc/dl/runtime/node-v22.23.3-win-arm64.zip",
+        "https://nodejs.org/dist/v22.23.3/node-v22.23.3-win-arm64.zip"
+      ],
       "sha256": "33dad22e4cef5ee8f9fbb1b0d037fdacd0e56d12a4580f0d63f68b894deab535"
     }
   },
   "core": {
     "amd64": {
-      "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.2/sing-box-1.14.2-windows-amd64.zip",
+      "urls": [
+        "https://install.enana.cc/dl/runtime/sing-box-1.14.2-windows-amd64.zip",
+        "https://github.com/SagerNet/sing-box/releases/download/v1.14.2/sing-box-1.14.2-windows-amd64.zip"
+      ],
       "sha256": "c2d8bfff918755808781dfdeeb8581b6c91eb3a243d9a7b55483cfc0c0684d32"
     },
     "arm64": {
-      "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.2/sing-box-1.14.2-windows-arm64.zip",
+      "urls": [
+        "https://install.enana.cc/dl/runtime/sing-box-1.14.2-windows-arm64.zip",
+        "https://github.com/SagerNet/sing-box/releases/download/v1.14.2/sing-box-1.14.2-windows-arm64.zip"
+      ],
       "sha256": "2bb467039310452380958b821983d5bb4f78fb70a2583914e4bea8b011582b64"
     },
     "version": "1.14.2"
