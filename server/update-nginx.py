@@ -25,7 +25,7 @@ def update(text):
 '''
     text=text.replace(anchor,verify+anchor)
     old='auth/login|session/heartbeat|session/logout|devices|devices/kick|plan|account/password|nodes'
-    new=old+'|billing|billing/checkout|billing/order|billing/cancel|billing/purchase|billing/auto-renew|email/status|email/send'
+    new=old+'|billing|billing/checkout|billing/order|billing/order/recheck|billing/cancel|billing/purchase|billing/auto-renew|email/status|email/send'
     assert text.count(old)==1, 'unexpected API allowlist'
     text=text.replace(old,new)
     anchor='    # 同步快照:'

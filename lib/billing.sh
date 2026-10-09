@@ -21,6 +21,8 @@ billing_body() {
       exit 1 unless ($d->{id}//"")=~/\A[a-z0-9]{15}\z/; $v{id}=$d->{id};
     } elsif($op eq "auto-renew") {
       exit 1 unless JSON::PP::is_bool($d->{enabled}); $v{enabled}=$d->{enabled};
+    } elsif($op eq "recheck") {
+      exit 1 unless ($d->{id}//"")=~/\A[a-z0-9]{15}\z/; $v{id}=$d->{id};
     } elsif($op ne "email-send") {exit 1}
     print JSON::PP->new->canonical->encode(\%v);
   ' "$1" "$2"
