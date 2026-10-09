@@ -10,6 +10,6 @@ $end = $src.IndexOf('function Get-SignedWindowsManifest')
 if ($start -lt 0 -or $end -lt $start) { throw 'verification block not found in get.ps1' }
 . ([ScriptBlock]::Create($src.Substring($start, $end - $start)))
 if ($Pub) { $env:ENANA_RELEASE_PUBKEY_FILE = $Pub }
-$bytes = [IO.File]::ReadAllBytes($Data); $sig = [IO.File]::ReadAllBytes($Sig)
-try { Write-Output ('RESULT:' + [bool](Test-ReleaseSignature $bytes $sig)) }
+$dataBytes = [IO.File]::ReadAllBytes($Data); $sigBytes = [IO.File]::ReadAllBytes($Sig)
+try { Write-Output ('RESULT:' + [bool](Test-ReleaseSignature $dataBytes $sigBytes)) }
 catch { Write-Output ('RESULT:THROW ' + $_.Exception.Message) }
