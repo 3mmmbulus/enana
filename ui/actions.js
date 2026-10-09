@@ -4,6 +4,7 @@
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, setText = TP.setText, I = window.I18N, t = I.t, L = I.L;
+  function pt(k) { return TP.pt ? TP.pt(k) : k; }   // 平台专用文案 (见 core.js 的 TP.pt)
   var A = TP.actions = {};
   var rules = { running: false, pct: 0, doneAt: 0 }, restarting = false, killing = false;
   var changingCapture = false;
@@ -11,7 +12,7 @@
     if (changingCapture) return false;
     var why = TP.why.helper();
     if (why) { ui.toast(why, 'warn'); return false; }
-    if (!confirmed && !await ui.confirmDialog({ title: t('set.network.title'), message: t('set.network.confirm'), detail: t('set.network.note'), confirmText: t(mode === 'tun' ? 'apps.capture.enable' : 'common.apply') })) return false;
+    if (!confirmed && !await ui.confirmDialog({ title: t('set.network.title'), message: t('set.network.confirm'), detail: t(pt('set.network.note')), confirmText: t(mode === 'tun' ? 'apps.capture.enable' : 'common.apply') })) return false;
     changingCapture = true;
     try {
       await TP.jobs.runInDock(t('set.network.title'), function () { return TP.helper('POST', '/api/network-mode', { form: { mode: mode } }); });
@@ -22,7 +23,7 @@
   };
   A.offerAppCapture = async function (name) {
     var choice = await ui.modal({ title: t('apps.capture.title'), size: 'md', icon: 'warning', iconKind: 'warn',
-      body: h('div', null, h('p', null, t('apps.capture.choose', { name: name })), h('p', { class: 'muted sm' }, t('set.network.note'))),
+      body: h('div', null, h('p', null, t(pt('apps.capture.choose'), { name: name })), h('p', { class: 'muted sm' }, t(pt('set.network.note')))),
       actions: [
         { label: t('common.cancel'), cancel: true },
         { label: t('apps.capture.limited'), value: 'system' },
@@ -188,9 +189,9 @@
     finally { sysproxyBusy = false; try { await TP.loadState(); } catch (e) { /* 状态稍后会自己刷新 */ } TP.emit('proxy', A.proxyOn()); TP.syncBtns(); }
   }
   A.fixSysproxy = async function (confirmed) {
-    if (sysproxyBusy) { ui.toast(t('sysproxy.busy'), 'warn'); return; }
+    if (sysproxyBusy) { ui.toast(t(pt('sysproxy.busy')), 'warn'); return; }
     var why = TP.why.helper(); if (why) { ui.toast(why, 'warn'); return; }
-    if (!confirmed && !await ui.confirmDialog({ title: t('sysproxy.fix.title'), message: t('sysproxy.fix.msg'), detail: [t('sysproxy.fix.d1'), t('sysproxy.fix.d2'), t('sysproxy.fix.d3')], confirmText: t('sysproxy.fix.go'), kind: 'success', confirmIcon: 'power' })) return;
+    if (!confirmed && !await ui.confirmDialog({ title: t('sysproxy.fix.title'), message: t(pt('sysproxy.fix.msg')), detail: [t(pt('sysproxy.fix.d1')), t('sysproxy.fix.d2'), t('sysproxy.fix.d3')], confirmText: t('sysproxy.fix.go'), kind: 'success', confirmIcon: 'power' })) return;
     await runSysproxyJob(function () { return TP.helper('POST', '/api/sysproxy', { form: { on: 1 } }); });
   };
   /* POST /api/proxy 的 sysproxy 字段: on = 已经指向 enana · foreign = 系统里正用着别的代理设置 (不擅自覆盖) · pending = 已在后台开启 (job) */
@@ -205,7 +206,7 @@
     var cur = A.proxyOn();
     if (cur === on) { ui.toast(t(on ? 'proxy.alreadyOn' : 'proxy.alreadyOff'), ''); return; }
     var onDetail = [t('proxy.on.d1'), t('proxy.on.d2')];
-    if (on && S.state && S.state.proxy && S.state.proxy.network_mode !== 'tun' && S.state.env && S.state.env.sysproxy === false) onDetail.push(t('proxy.on.d3'));      // 系统代理还没指向 enana: 说明会一并开启, 以及 macOS 可能弹出密码窗口
+    if (on && S.state && S.state.proxy && S.state.proxy.network_mode !== 'tun' && S.state.env && S.state.env.sysproxy === false) onDetail.push(t(pt('proxy.on.d3')));      // 系统代理还没指向 enana: 说明会一并开启, 以及 macOS 可能弹出密码窗口
     var ok = await ui.confirmDialog(on
       ? { title: t('proxy.on.title'), message: t('proxy.on.msg'), detail: onDetail, confirmText: t('proxy.on.go'), kind: 'success', confirmIcon: 'power' }
       : { title: t('proxy.off.title'), message: t('proxy.off.msg'), detail: [t('proxy.off.d1'), t('proxy.off.d2'), t('proxy.off.d3')], confirmText: t('proxy.off.go'), danger: true, confirmIcon: 'power' });

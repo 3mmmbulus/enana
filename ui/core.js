@@ -89,6 +89,8 @@
   var fieldSeq = 0;
   TP.h = h;
   TP.clear = function (el) { while (el.firstChild) el.removeChild(el.firstChild); return el; };
+  /* 平台专用文案: Windows 下如果有 <key>.win 就用它 (例如不要说「Mac 登录密码」) */
+  TP.pt = function (key) { var win = S.state && S.state.platform && S.state.platform.os === 'windows'; return win && window.I18N.has(key + '.win') ? key + '.win' : key; };
   TP.opt = function (value, text) { return h('option', { value: value }, text); };
   TP.setText = function (el, v) { v = String(v); if (el.textContent !== v) el.textContent = v; };
   TP.setCls = function (el, cls) { if (el.className !== cls) el.className = cls; };

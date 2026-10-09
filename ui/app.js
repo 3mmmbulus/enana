@@ -5,6 +5,7 @@
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, setText = TP.setText, I = window.I18N, t = I.t, L = I.L;
+  function pt(k) { return TP.pt ? TP.pt(k) : k; }   // 平台专用文案 (见 core.js 的 TP.pt)
   /* [页面 id, 图标别名]; 词典键 nav.<id> */
   var NAV = [['overview', 'nav-overview'], ['apps', 'nav-apps'], ['sites', 'nav-sites'], ['rules', 'nav-rules'], ['dns', 'nav-dns'], ['servers', 'nav-servers'], ['conns', 'nav-connections'], ['traffic', 'nav-traffic'], ['speed', 'nav-speed'], ['logs', 'nav-logs'], ['settings', 'nav-settings']];
   var navEls = {}, panels = {}, badges = {}, hd = {}, root = document.documentElement;
@@ -262,7 +263,7 @@
       else if (S.clash === 'down' && !TP.isApplying()) out.push({ id: 'core', kind: 'err', icon: 'plug', title: t('banner.core.title'), text: t('banner.core.text'), hint: t('banner.core.hint'), start: true });
       else if (navigator.onLine === false) out.push({ id: 'net', kind: 'warn', icon: 'wifi-off', title: t('banner.net.title'), text: t('banner.net.text') });
       if (TP.actions.proxyOn() === false) out.push({ id: 'proxyoff', kind: 'info', icon: 'power', title: t('banner.proxyOff.title'), text: t('banner.proxyOff.text'), btn: t('banner.proxyOff.btn'), btnIcon: 'power', btnKind: 'success', fn: function () { return TP.actions.setProxy(true); } });
-      else if (TP.actions.sysproxyNeeded() && !TP.actions.sysproxyBusy()) out.push({ id: 'sysproxy', kind: 'warn', icon: 'plug', title: t('banner.sysproxy.title'), text: t('banner.sysproxy.text'), hint: t('banner.sysproxy.hint'), btn: t('banner.sysproxy.btn'), btnIcon: 'power', btnKind: 'success', fn: function () { return TP.actions.fixSysproxy(false); } });
+      else if (TP.actions.sysproxyNeeded() && !TP.actions.sysproxyBusy()) out.push({ id: 'sysproxy', kind: 'warn', icon: 'plug', title: t('banner.sysproxy.title'), text: t('banner.sysproxy.text'), hint: t(pt('banner.sysproxy.hint')), btn: t('banner.sysproxy.btn'), btnIcon: 'power', btnKind: 'success', fn: function () { return TP.actions.fixSysproxy(false); } });
       if (!out.length && modeOf(S.mode) === 'Direct') out.push({ id: 'direct', kind: 'warn', icon: 'direct', title: t('banner.direct.title'), text: t('banner.direct.text'), btn: t('banner.direct.btn'), btnIcon: 'list-checks', fn: function () { return TP.actions.setMode('Rule'); } });
       if (S.state && S.state.rules_watch_error) out.push({ id: 'rulesWatch', kind: 'warn', icon: 'refresh', title: t('banner.rulesWatch.title'), text: t('banner.rulesWatch.text'), btn: t('banner.rulesWatch.btn'), btnIcon: 'restart', fn: function () { return TP.actions.restart(); } });
       if (S.state && !(S.state.servers || []).length) out.push({ id: 'noservers', kind: 'warn', icon: 'server', title: t('banner.noServers.title'), text: t('banner.noServers.text'), btn: t('banner.noServers.btn'), btnIcon: 'plus', fn: function () { TP.goAdd('import'); } });
