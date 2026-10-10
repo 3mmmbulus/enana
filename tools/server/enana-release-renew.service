@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew enana download manifests before they expire
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/enana-release/renew.sh
