@@ -1423,6 +1423,7 @@ if command -v node >/dev/null; then
   if node "$HERE/exits-ui.test.js" > "$W/exits-ui.out" 2>&1; then tpass "Exit assignment UI: overview model, default-switch and remove pre-flight, pickers"; else tfail "Exit assignment UI regression"; cat "$W/exits-ui.out"; fi
   if node "$HERE/billing-qr.test.js" > "$W/billing-qr.out" 2>&1; then tpass "Payment invoice QR code encodes the TRON address (version 3, 29 modules)"; else tfail "Payment QR code regression"; cat "$W/billing-qr.out"; fi
   if node "$HERE/auto-lock.test.js" > "$W/auto-lock.out" 2>&1; then tpass "Idle lock: default 3 days, clamped between 1 minute and 30 days"; else tfail "Idle lock regression"; cat "$W/auto-lock.out"; fi
+  if bash "$HERE/resign-release.sh" > "$W/resign-release.out" 2>&1; then tpass "Manifest re-sign: content unchanged, seq increases, tampered package refused, expiry capped at 90 days"; else tfail "Manifest re-sign regression"; cat "$W/resign-release.out"; fi
   if bash "$HERE/sites-reset.sh" > "$W/sites-reset.out" 2>&1; then tpass "Restore site defaults: keeps app settings, backs up, keeps 3 backups"; else tfail "Site reset regression"; cat "$W/sites-reset.out"; fi
 fi
 
