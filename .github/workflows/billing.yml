@@ -38,5 +38,7 @@ jobs:
           bash -n server/deploy-billing.sh
           bash -n server/update-official.sh
           python3 -m py_compile server/update-nginx.py
+          bash -n server/deploy-prefs.sh
+          python3 -m py_compile server/update-nginx-prefs.py
       - name: Check the official-hooks update script (fake host, rollback paths, no secrets printed)
         run: bash tests/update-official.sh
