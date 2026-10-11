@@ -54,7 +54,7 @@ rules_watch_state() { # 这一次核心启动之后, 日志里有没有「规则
   tail -c +"$((off + 1))" "$H/sing-box.log" 2>/dev/null | grep -q 'watch rule-set file' && echo true || echo false
 }
 gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
-  local norules=0 T role tag ob dns_block='' resolver='' rs_defs='' i ctag cname cpol lvl logoff secret ads=0 tun_in='' tun_route=''
+  local norules=0 T role tag ob dns_block='' resolver='' rs_defs='' i ctag cname cpol lvl logoff secret ads=0 tun_in='' tun_route='' rf
   [ "${1:-}" = "--no-rulesets" ] && norules=1
   sb_ver; dns_load
   if [ "${NETWORK_MODE:-system}" = tun ]; then
@@ -105,16 +105,17 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
 
   # 规则集: 规则库里启用且已下载的 + 用户自定义的 (只引用非空文件)
   local tag_rs
+  rules_layout_migrate || { rm -rf "$T"; warn "规则集目录整理失败 (磁盘满或没有写权限?), 已保留现有配置"; return 1; }
   if [ "$norules" = 0 ]; then
     while IFS='|' read -r tag_rs _; do
-      [ -s "$H/rules/$tag_rs.srs" ] || continue
-      rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"$tag_rs\",\"format\":\"binary\",\"path\":\"$H/rules/$tag_rs.srs\"}"
+      rf=$(rule_file "$tag_rs.srs"); [ -s "$rf" ] || continue
+      rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"$tag_rs\",\"format\":\"binary\",\"path\":\"$rf\"}"
       printf '%s\n' "$tag_rs" >> "$T/have"
     done < <(rules_wanted)
     if [ -s "$H/custom-rulesets.tsv" ]; then
       while IFS='|' read -r ctag cname cpol _; do
-        [ -s "$H/rules/custom-$ctag.srs" ] || continue
-        rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"custom-$ctag\",\"format\":\"binary\",\"path\":\"$H/rules/custom-$ctag.srs\"}"
+        rf=$(rule_file "custom-$ctag.srs"); [ -s "$rf" ] || continue
+        rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"custom-$ctag\",\"format\":\"binary\",\"path\":\"$rf\"}"
         printf '%s|%s|%s\n' "$ctag" "$cname" "$cpol" >> "$T/cust"
       done < "$H/custom-rulesets.tsv"
     fi
@@ -129,10 +130,10 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
   fi
   for i in direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto appauto auto $(seqn "$npinx"); do
     case $i in [0-9]*)
-      rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"ovr-apppin-$i\",\"format\":\"source\",\"path\":\"$H/rules/ovr-apppin-$i.json\"}"
-      rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"ovr-browserpin-$i\",\"format\":\"source\",\"path\":\"$H/rules/ovr-browserpin-$i.json\"}"
+      rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"ovr-apppin-$i\",\"format\":\"source\",\"path\":\"$(rule_file "ovr-apppin-$i.json")\"}"
+      rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"ovr-browserpin-$i\",\"format\":\"source\",\"path\":\"$(rule_file "ovr-browserpin-$i.json")\"}"
       i="pin-$i" ;; esac
-    rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"ovr-$i\",\"format\":\"source\",\"path\":\"$H/rules/ovr-$i.json\"}"
+    rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"ovr-$i\",\"format\":\"source\",\"path\":\"$(rule_file "ovr-$i.json")\"}"
   done
 
   # 服务目录 -> 每项一个开关 + 路由规则 (固定出口类在前, 其它在后)
@@ -234,7 +235,7 @@ apply_config() {
   if [ -f "$H/config.json" ] && cmp -s "$H/config.json" "$H/config.json.new"; then
     if [ "${NETWORK_MODE:-system}" != tun ]; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi
     if enhanced_loaded && [ "$(enhanced_fingerprint)" = "$(cat "$H/.enhanced-fingerprint" 2>/dev/null)" ]; then
-      # 核心、配置、规则库都没变 (指纹不含 default_mode 和 rules/.updated 这类记账内容, 见 enhanced_fingerprint): 只有应用 / 网站的代理策略 (rules/ovr-*.json, 纯路由数据)
+      # 核心、配置、规则库都没变 (指纹不含 default_mode 和 rules/.updated 这类记账内容, 见 enhanced_fingerprint): 只有应用 / 网站的代理策略 (rules/*/ovr-*.json, 纯路由数据)
       # 可能变了。已经装过规则同步助手 (上一次管理员授权时顺带装的) 就免密同步到 root 快照, 核心自己热加载 —— 不重启, 也就不用再输入管理员密码。没有助手 /
       # 被拒绝就走下面的完整安装 (要管理员授权, 同时把助手装上)。总开关 / 模式只改了 default_mode 的话, 运行中的核心靠接口和缓存记住模式, 这里补一次同步即可。
       type enhanced_mode_resync >/dev/null 2>&1 && enhanced_mode_resync
@@ -256,15 +257,25 @@ apply_config() {
         # authorization cancellation also leaves the old core alive. Avoid a
         # second admin prompt/restart when that old backend is still healthy.
         if ! { os_service_running && wait_port "$PORT" 2 && { { enhanced_configured && enhanced_ready; } || { [ -n "$previous_pid" ] && [ "$(os_service_pid)" = "$previous_pid" ]; }; }; }; then
-          os_service_restart; wait_port "$PORT" 15 || true
+          tun_residual_clean; os_service_restart; wait_port "$PORT" 15 || true; tun_residual_clean
         fi
         proxy_sync_mode
       fi
+      sysproxy_off_if_core_down
       return 3
     fi
     proxy_sync_mode
+    rules_layout_prune
   fi
   return 0
+}
+
+# 核心没起来 (端口不通) 时才动系统代理: 静默关闭, 不弹管理员框; TUN 模式也一样 (否则指向死端口的系统代理会断网)
+sysproxy_off_if_core_down() {
+  os_sysproxy_mine || return 0
+  wait_port "$PORT" 1 && return 0
+  if os_sysproxy_apply off quiet >/dev/null 2>&1; then sysproxy_record "${OP_WHO:-auto}" off 0; warn "核心没有起来, 已先关闭系统代理 (应用不再连接已停止的代理); 若仍无法上网, 运行 enana doctor 查看原因"
+  else sysproxy_record "${OP_WHO:-auto}" off 1; warn "核心没有起来, 系统代理也没能自动关闭 (需要管理员授权), 请在仪表盘概览里关闭系统代理; 运行 enana doctor 查看原因"; fi
 }
 
 wait_port() { # 端口 秒数

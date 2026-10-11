@@ -247,8 +247,9 @@ os_admin_dialog() { # <命令串>  弹出 macOS 原生的管理员密码框 (仪
 #   ① 当前用户直接修改 (管理员账户多数不需要密码)  ①b 系统代理助手 (授权过一次, 免密)  ② 终端里用 sudo  ③ 已有免密 sudo  ④ 弹出 macOS 原生管理员密码框 (仪表盘用)
 # 每次修改后回读确认, 结果记在 SYSPROXY_METHOD (already|direct|helper|sudo|sudo-nopass|dialog)、SYSPROXY_HELPER (used|installed|failed: 系统代理助手这次的情况) 与 SYSPROXY_ERR (失败原因, 英文短码)。
 # 这个函数不向标准输出打印任何内容: 仪表盘的辅助服务里标准输出就是 HTTP 响应。
-os_sysproxy_apply() { # on|off [force]  -> 0 = 已是想要的状态 · 1 = 没有改成功; force = 已经是想要的状态也重新写一遍 (修复被改过的绕过列表)
-  local want=$1 c errf msg rc inst
+os_sysproxy_apply() { # on|off [force|quiet]  -> 0 = 已是想要的状态 · 1 = 没有改成功; force = 已经是想要的状态也重新写一遍 (修复被改过的绕过列表); quiet = 不弹任何授权框, 需要管理员授权时直接返回 1 (SYSPROXY_ERR=needs-admin)
+  local want=$1 c errf msg rc inst quiet=''
+  [ "${2:-}" = quiet ] && quiet=1
   SYSPROXY_METHOD=''; SYSPROXY_ERR=''; SYSPROXY_HELPER=''
   rm -f "$H/.cache-sysproxy"
   if [ "${2:-}" != force ] && os_sysproxy_verify "$want"; then SYSPROXY_METHOD=already; return 0; fi
@@ -266,8 +267,9 @@ os_sysproxy_apply() { # on|off [force]  -> 0 = 已是想要的状态 · 1 = 没�
   fi
   # 助手还没装 (或失败): 这一次的授权顺便把助手装上 (inst), 以后打开 / 关闭系统代理都不再要密码
   inst=$(os_sysproxy_helper_install_cmds 2>/dev/null || true)
-  if [ -t 0 ] && [ -t 1 ]; then SYSPROXY_METHOD=sudo; sudo /bin/bash -c "$inst$c" 2>"$errf" >/dev/null; rc=$?     # ② 终端: 密码提示走 /dev/tty
+  if [ -z "$quiet" ] && [ -t 0 ] && [ -t 1 ]; then SYSPROXY_METHOD=sudo; sudo /bin/bash -c "$inst$c" 2>"$errf" >/dev/null; rc=$?     # ② 终端: 密码提示走 /dev/tty
   elif sudo -n true >/dev/null 2>&1; then SYSPROXY_METHOD=sudo-nopass; sudo -n /bin/bash -c "$c" >/dev/null 2>"$errf"; rc=$?   # ③ 本来就有免密 sudo: 不需要助手
+  elif [ -n "$quiet" ]; then rm -f "$errf" "$H/.cache-sysproxy"; SYSPROXY_ERR=needs-admin; return 1
   else SYSPROXY_METHOD=dialog; os_admin_dialog "$inst$c" >/dev/null 2>"$errf"; rc=$?; fi                      # ④
   rm -f "$H/.cache-sysproxy"
   if [ -n "$inst" ] && [ "$SYSPROXY_METHOD" != sudo-nopass ] && os_sysproxy_helper_ok; then SYSPROXY_HELPER=installed; fi

@@ -40,11 +40,11 @@ print(json.dumps({"version":3,"rules":[{key:vals}]}))
 PY
 }
 bundle() { python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])))' "$1"; }
-snap() { cat "$W/snap/rules/$1" 2>/dev/null; }
-inode() { stat -f %i "$W/snap/rules/$1" 2>/dev/null; }
+snap() { cat "$W/snap/rules/${1%.*}/$1" 2>/dev/null; }
+inode() { stat -f %i "$W/snap/rules/${1%.*}/$1" 2>/dev/null; }
 
 echo "== T1. 助手: 合法数据包 → 原地写进规则集目录"
-eq "version 输出版本号 ($HV: 第 2 版增加了 restart)" "$(H version)" "$HV"
+eq "version 输出版本号 ($HV: 第 3 版改为每个规则集一个目录)" "$(H version)" "$HV"
 B1='{"ovr-pin.json":{"version":3,"rules":[{"process_path_regex":["(?i)/ChatGPT\\.app/"]},{"domain_suffix":["openai.com","chatgpt.com"]}]},"ovr-apppin-1.json":{"version":3,"rules":[{"process_name":["curl"]}]},"ovr-direct.json":{"version":3,"rules":[{"domain":["enana-placeholder.invalid"]}]}}'
 printf '%s' "$B1" | H sync >"$W/out" 2>&1; rc=$?
 eq "合法数据包: 退出码 0, 写了 3 个文件" "$rc:$(cat "$W/out")" "0:3 files synced"
@@ -100,14 +100,22 @@ eq "输入超过 2 MB: 拒绝" "$([ $? != 0 ] && echo rejected || echo accepted)
 eq "上面所有拒绝之后, 已有文件一个字节都没变" "$(snap ovr-pin.json)" "$BASE"
 
 echo "== T3. 助手: 符号链接 / 目录归属 / 参数"
-printf 'TOP-SECRET' > "$W/secret.txt"; rm -f "$W/snap/rules/ovr-apppin.json"; ln -s "$W/secret.txt" "$W/snap/rules/ovr-apppin.json"
+printf 'TOP-SECRET' > "$W/secret.txt"; mkdir -p "$W/snap/rules/ovr-apppin"; rm -f "$W/snap/rules/ovr-apppin/ovr-apppin.json"; ln -s "$W/secret.txt" "$W/snap/rules/ovr-apppin/ovr-apppin.json"
 printf '%s' '{"ovr-apppin.json":{"version":3,"rules":[{"domain":["a"]}]}}' | H sync >/dev/null 2>&1; rc=$?
 eq "目标文件是符号链接: 拒绝, 链接指向的文件没被改" "$([ $rc != 0 ] && echo rejected || echo accepted):$(cat "$W/secret.txt")" "rejected:TOP-SECRET"
-rm -f "$W/snap/rules/ovr-apppin.json"
+rm -f "$W/snap/rules/ovr-apppin/ovr-apppin.json"
 mv "$W/snap/rules" "$W/snap/rules.real"; ln -s "$W/snap/rules.real" "$W/snap/rules"
 printf '%s' '{"ovr-pin.json":{"version":3,"rules":[{"domain":["a"]}]}}' | H sync >/dev/null 2>&1
 eq "规则集目录本身是符号链接: 拒绝" "$([ $? != 0 ] && echo rejected || echo accepted)" "rejected"
 rm -f "$W/snap/rules"; mv "$W/snap/rules.real" "$W/snap/rules"
+mkdir -p "$W/evil"; mv "$W/snap/rules/ovr-pin" "$W/snap/rules/ovr-pin.real"; ln -s "$W/evil" "$W/snap/rules/ovr-pin"
+printf '%s' '{"ovr-direct.json":{"version":3,"rules":[{"domain":["MUST-NOT-APPEAR.example"]}]},"ovr-pin.json":{"version":3,"rules":[{"domain":["a"]}]}}' | H sync >/dev/null 2>&1; rc=$?
+eq "子目录 rules/ovr-pin 是符号链接: 拒绝; 同一包里排在前面的合法文件 ovr-direct 也不写 (先检查全部目标, 再开始写)" "$([ $rc != 0 ] && echo rejected):$(ls "$W/evil" | wc -l | tr -d ' '):$(snap ovr-direct.json | grep -c MUST-NOT-APPEAR)" "rejected:0:0"
+rm -f "$W/snap/rules/ovr-pin"; mv "$W/snap/rules/ovr-pin.real" "$W/snap/rules/ovr-pin"
+mv "$W/snap/rules/ovr-auto" "$W/snap/rules/ovr-auto.real"; : > "$W/snap/rules/ovr-auto"
+printf '%s' '{"ovr-auto.json":{"version":3,"rules":[{"domain":["a"]}]}}' | H sync >/dev/null 2>&1; rc=$?
+eq "子目录 rules/ovr-auto 是普通文件: 拒绝" "$([ $rc != 0 ] && echo rejected || echo accepted)" "rejected"
+rm -f "$W/snap/rules/ovr-auto"; mv "$W/snap/rules/ovr-auto.real" "$W/snap/rules/ovr-auto"
 mkhelper "$W/helper-other.pl" "$HV" "$LBL" "$W/bin/mock-launchctl" "$((ME + 1))"
 printf '%s' '{"ovr-pin.json":{"version":3,"rules":[{"domain":["a"]}]}}' | perl "$W/helper-other.pl" sync >/dev/null 2>&1
 eq "目录不归预期的 uid (生产里是 root): 拒绝" "$([ $? != 0 ] && echo rejected || echo accepted)" "rejected"
@@ -148,7 +156,7 @@ touch "$W/lc-fail"; : > "$W/lc.calls"; H restart >"$W/out" 2>&1; rc=$?
 eq "launchctl 失败: 助手退出码非 0 (不假装成功)" "$([ "$rc" != 0 ] && echo failed || echo ok):$(cat "$W/lc.calls")" "failed:kickstart -k system/$LBL"
 rm -f "$W/lc-fail"
 echo "== T3c. 固定出口很多时: 12 个固定名字的规则集 + 每个固定出口 3 个 (网站 / 应用 / 浏览器) —— OVR_PIN_MAX=32 个出口 = 108 个文件, 一个数据包同步完; 超过上限的数据包被拒"
-big() { # big <文件数> <域名>  -> 数据包 JSON: 11 个固定名字 + ovr-pin-N / ovr-apppin-N / ovr-browserpin-N (N 从 1 起, 最多两位)
+big() { # big <文件数> <域名>  -> 数据包 JSON: 12 个固定名字 + ovr-pin-N / ovr-apppin-N / ovr-browserpin-N (N 从 1 起, 最多两位)
   python3 -c '
 import json, sys
 n, dom = int(sys.argv[1]), sys.argv[2]
@@ -167,7 +175,7 @@ big 160 a.example | H sync >"$W/out" 2>&1; rc=$?
 eq "上限 160 个文件: 通过 (留有余量)" "$rc:$(cat "$W/out")" "0:160 files synced"
 big 161 b.example | H sync >"$W/out" 2>&1; rc=$?
 eq "161 个文件: 整个数据包被拒, 已有文件一个字节都没变" "$([ "$rc" != 0 ] && echo rejected):$(snap ovr-pin-1.json | grep -c a.example):$(snap ovr-pin-1.json | grep -c b.example)" "rejected:1:0"
-rm -f "$W"/snap/rules/ovr-*-[0-9]*.json
+rm -rf "$W"/snap/rules/ovr-*-[0-9]*
 
 echo "== T4. apply_config 的决策: 免密同步 还是 完整安装 (要管理员授权)"
 export HOME=$W/home ENANA_HOME=$W/h LC_ALL=C ENANA_LANG=zh ENANA_PLATFORM=darwin PORT=37970 UI_PORT=37971 API_PORT=37972 SPEED_PORT=37973 ENANA_NO_DIAG=1
@@ -197,8 +205,8 @@ state() { # 把「现状」记成基线: 配置, 再让真实的 enhanced_record
   cp "$H/config.json.new" "$H/config.json" 2>/dev/null || printf '{"fixed":"config"}' > "$H/config.json"
   enhanced_record_install
 }
-ovr() { printf '{"version":3,"rules":[{"domain_suffix":["%s"]}]}\n' "$1" > "$H/rules/ovr-pin.json"; }
-reset() { rm -rf "$H/rules" "$W/snap/rules" "$W/root" "$LOGS"; mkdir -p "$H/rules" "$W/snap/rules" "$LOGS"; : > "$W/snap/rules/ovr-pin.json"; RESTARTS=0; ovr base.example; printf 'x' > "$H/rules/geosite-cn.srs"; gen_config; state; }
+ovr() { mkdir -p "$H/rules/ovr-pin"; printf '{"version":3,"rules":[{"domain_suffix":["%s"]}]}\n' "$1" > "$H/rules/ovr-pin/ovr-pin.json"; }
+reset() { rm -rf "$H/rules" "$W/snap/rules" "$W/root" "$LOGS"; mkdir -p "$H/rules/geosite-cn" "$W/snap/rules/ovr-pin" "$LOGS"; : > "$W/snap/rules/ovr-pin/ovr-pin.json"; RESTARTS=0; ovr base.example; printf 'x' > "$H/rules/geosite-cn/geosite-cn.srs"; gen_config; state; }
 ops() { cat "$LOGS"/ops-*.log 2>/dev/null; }
 
 reset; install_helper
@@ -207,7 +215,7 @@ eq "什么都没变: 返回 0, 没有重启, 没有同步" "$rc:$RESTARTS:$(ops 
 reset; install_helper; ovr changed.example
 apply_config; rc=$?
 eq "应用 / 网站策略变了 + 助手可用: 返回 0, 核心没有重启 (= 不弹管理员密码)" "$rc:$RESTARTS" "0:0"
-eq "…新规则已经写进 root 快照 (核心热加载这个文件)" "$(grep -c changed.example "$W/snap/rules/ovr-pin.json")" "1"
+eq "…新规则已经写进 root 快照 (核心热加载这个文件)" "$(grep -c changed.example "$W/snap/rules/ovr-pin/ovr-pin.json")" "1"
 eq "…策略指纹已更新, 再来一次什么都不做" "$(enhanced_ovr_fingerprint)" "$(cat "$H/.enhanced-ovr-fingerprint")"
 hs "…操作记录里写明是免密同步、没有重启" "同步策略规则	mode=tun via=helper restart=no	ok" "$(ops)"
 RESTARTS=0; apply_config; eq "…第二次 apply: 无事可做" "$RESTARTS" "0"
@@ -215,11 +223,11 @@ reset; ovr changed.example
 apply_config; rc=$?
 eq "策略变了但助手还没装 (旧版本升级后的第一次): 走完整安装 (重启一次, 要管理员授权)" "$rc:$RESTARTS" "0:1"
 hs "…操作记录写明原因 no-helper" "同步策略规则	mode=tun via=helper restart=yes err=no-helper" "$(ops)"
-reset; install_helper; printf '{"version":2,"rules":[{"domain":["a"]}]}\n' > "$H/rules/ovr-pin.json"
+reset; install_helper; mkdir -p "$H/rules/ovr-pin"; printf '{"version":2,"rules":[{"domain":["a"]}]}\n' > "$H/rules/ovr-pin/ovr-pin.json"
 apply_config; rc=$?
 eq "助手拒绝了这份数据 (版本不对): 退回完整安装, 不会假装成功" "$rc:$RESTARTS" "0:1"
 hs "…操作记录写明 rejected" "restart=yes err=rejected" "$(ops)"
-reset; install_helper; printf 'changed' > "$H/rules/geosite-cn.srs"
+reset; install_helper; printf 'changed' > "$H/rules/geosite-cn/geosite-cn.srs"
 apply_config
 eq "规则库 (geosite) 变了 (不是策略): 必须完整安装" "$RESTARTS" "1"
 reset; install_helper; printf '{"fixed":"config","new":1}' > "$H/config.json.new"; gen_config() { printf '{"fixed":"config","new":1}' > "$H/config.json.new"; }
@@ -242,7 +250,7 @@ reset; F0=$(enhanced_fingerprint); O0=$(enhanced_ovr_fingerprint)
 ovr other.example
 eq "改 ovr-*.json: 核心指纹不变, 策略指纹变" "$([ "$(enhanced_fingerprint)" = "$F0" ] && echo core-same):$([ "$(enhanced_ovr_fingerprint)" != "$O0" ] && echo ovr-changed)" "core-same:ovr-changed"
 reset; F0=$(enhanced_fingerprint); O0=$(enhanced_ovr_fingerprint)
-printf 'y' > "$H/rules/geosite-cn.srs"
+printf 'y' > "$H/rules/geosite-cn/geosite-cn.srs"
 eq "改 geosite-cn.srs: 核心指纹变, 策略指纹不变" "$([ "$(enhanced_fingerprint)" != "$F0" ] && echo core-changed):$([ "$(enhanced_ovr_fingerprint)" != "$O0" ] && echo ovr-changed || echo ovr-same)" "core-changed:ovr-same"
 
 echo "== T5b. 指纹: 只有真的会让 root 快照不同的东西才计入 (记账文件 / 开关模式不算)"
@@ -250,11 +258,11 @@ fp_same() { [ "$(enhanced_fingerprint)" = "$1" ] && echo same || echo changed; }
 reset; printf '1\n' > "$H/rules/.updated"; F0=$(enhanced_fingerprint)
 printf '2\n' > "$H/rules/.updated"
 eq "rules/.updated 被改写 (每次 enana update / 每日维护都写, 即使没有任何规则变化): 指纹不变" "$(fp_same "$F0")" "same"
-printf 'x' > "$H/rules/geosite-cn.srs.new"; printf 'x' > "$H/rules/ovr-pin.json.tmp"; printf 'x' > "$H/rules/.DS_Store"; mkdir -p "$H/certs"; printf 'x' > "$H/certs/.DS_Store"
+printf 'x' > "$H/rules/geosite-cn/geosite-cn.srs.new"; mkdir -p "$H/rules/ovr-pin"; printf 'x' > "$H/rules/ovr-pin/ovr-pin.json.tmp"; printf 'x' > "$H/rules/.DS_Store"; mkdir -p "$H/certs"; printf 'x' > "$H/certs/.DS_Store"
 eq "下载 / 写入过程中的 *.new *.tmp 和 .DS_Store: 指纹不变" "$(fp_same "$F0")" "same"
-printf 'y' > "$H/rules/geosite-cn.srs"
+printf 'y' > "$H/rules/geosite-cn/geosite-cn.srs"
 eq "…但 .srs 的内容变了: 指纹变 (必须完整安装)" "$(fp_same "$F0")" "changed"
-reset; F0=$(enhanced_fingerprint); printf 'n' > "$H/rules/geosite-new.srs"
+reset; F0=$(enhanced_fingerprint); mkdir -p "$H/rules/geosite-new"; printf 'n' > "$H/rules/geosite-new/geosite-new.srs"
 eq "新增一个 .srs: 指纹变" "$(fp_same "$F0")" "changed"
 reset; F0=$(enhanced_fingerprint); mkdir -p "$H/certs"; printf 'cert' > "$H/certs/a.crt"
 eq "新增 / 改动证书: 指纹变" "$(fp_same "$F0")" "changed"
@@ -265,18 +273,30 @@ printf '{"a":2,"clash_api":{"default_mode":"Global"}}' > "$H/config.json"
 eq "config.json 别的内容变了: 指纹变" "$(fp_same "$F0")" "changed"
 printf '{"a":1,"clash_api":{"default_mode":"Global"}}' > "$H/config.json"; F1=$(enhanced_fingerprint); AUTOSTART=0
 eq "开机自启设置变了: 指纹变 (守护进程的 plist 不同)" "$(fp_same "$F1")" "changed"; AUTOSTART=1
+reset; F0=$(enhanced_fingerprint)
+printf 'x' > "$H/rules/geosite-old.srs"; printf 'x' > "$H/rules/ovr-old.json"
+eq "升级前平铺在 rules/ 下的 .srs / ovr-*.json 新增: 指纹不变 (升级复制到子目录后会删掉它们, 不能触发完整安装)" "$(fp_same "$F0")" "same"
+printf 'y' > "$H/rules/geosite-old.srs"; rm -f "$H/rules/ovr-old.json"
+eq "…平铺文件内容改了 / 删掉了: 指纹仍不变" "$(fp_same "$F0")" "same"
+rm -f "$H/rules/geosite-old.srs"
+eq "…平铺文件全部删掉: 指纹仍不变" "$(fp_same "$F0")" "same"
 # Windows 的指纹 (没有免密助手, 策略规则集仍然计入): 同样不受 .updated / default_mode 影响, 真正的变化仍然计入
 (
   eval "$(sed -n '/^enhanced_fingerprint()/,/^}/p' "$LIB/enhanced-windows.sh")"
   command -v sha256sum >/dev/null 2>&1 || { printf '#!/bin/sh\nexec shasum -a 256 "$@"\n' > "$W/bin/sha256sum"; chmod +x "$W/bin/sha256sum"; PATH="$W/bin:$PATH"; }
   mkdir -p "$H/windows"; printf 'a' > "$H/windows/tun.ps1"; printf 'b' > "$H/windows/common.ps1"; reset
   printf '{"a":1,"clash_api":{"default_mode":"Direct"}}' > "$H/config.json"; printf '1\n' > "$H/rules/.updated"; F0=$(enhanced_fingerprint)
-  printf '2\n' > "$H/rules/.updated"; printf '{"a":1,"clash_api":{"default_mode":"Rule"}}' > "$H/config.json"; printf 'x' > "$H/rules/geosite-cn.srs.new"
+  printf '2\n' > "$H/rules/.updated"; printf '{"a":1,"clash_api":{"default_mode":"Rule"}}' > "$H/config.json"; printf 'x' > "$H/rules/geosite-cn/geosite-cn.srs.new"
   eq "Windows 指纹: .updated / default_mode / *.new 变了, 指纹不变" "$(fp_same "$F0")" "same"
-  printf 'y' > "$H/rules/geosite-cn.srs"
+  printf 'y' > "$H/rules/geosite-cn/geosite-cn.srs"
   eq "Windows 指纹: .srs 变了, 指纹变" "$(fp_same "$F0")" "changed"
   reset; printf '{"a":1}' > "$H/config.json"; F0=$(enhanced_fingerprint); ovr other.example
   eq "Windows 指纹: 策略规则集 (ovr-*.json) 变了, 指纹变 (Windows 没有免密助手, 仍需要完整安装)" "$(fp_same "$F0")" "changed"
+  reset; printf '{"a":1}' > "$H/config.json"; F0=$(enhanced_fingerprint)
+  printf 'x' > "$H/rules/geosite-old.srs"; printf 'x' > "$H/rules/ovr-old.json"
+  eq "Windows 指纹: 升级前平铺的 .srs / ovr-*.json 新增, 指纹不变 (升级会把它们删掉)" "$(fp_same "$F0")" "same"
+  rm -f "$H/rules/geosite-old.srs" "$H/rules/ovr-old.json"
+  eq "Windows 指纹: 平铺文件删掉后仍不变" "$(fp_same "$F0")" "same"
 )
 
 echo "== T4b. 只是记账内容 / 总开关模式变了: 不重启核心 (= 不弹管理员密码框); 真的变了才重启"
@@ -311,7 +331,7 @@ echo "== T4b. 只是记账内容 / 总开关模式变了: 不重启核心 (= 不
   _proxy_set PROXY_ENABLED 1; RESTARTS=0
   apply_config
   eq "default_mode 和别的内容一起变了: 必须完整安装" "$RESTARTS" "1"
-  reset; state; printf 'z' > "$H/rules/geosite-cn.srs"; printf '3\n' > "$H/rules/.updated"; RESTARTS=0
+  reset; state; printf 'z' > "$H/rules/geosite-cn/geosite-cn.srs"; printf '3\n' > "$H/rules/.updated"; RESTARTS=0
   apply_config
   eq ".updated 和 .srs 一起变了 (每日更新真的下载到新规则): 必须完整安装" "$RESTARTS" "1"
 )
@@ -333,7 +353,7 @@ echo "== T6. 重启核心 (os_service_restart): 指纹没变 + 助手可信 → 
   hs "…sudo 调用的是助手本身, 带 restart 参数, 而且是 -n (不等密码)" "^sudo -n $(enhanced_helper_path) restart" "$(cat "$FAKE_STATE/calls.log" 2>/dev/null)"
   fresh; ovr changed.example
   os_service_restart
-  eq "还有没同步的应用 / 网站策略: 先同步进 root 快照, 再用助手重启 (仍然不走完整安装)" "$FULL:$(grep -c changed.example "$W/snap/rules/ovr-pin.json"):$(lc)" "0:1:kickstart -k system/$LBL"
+  eq "还有没同步的应用 / 网站策略: 先同步进 root 快照, 再用助手重启 (仍然不走完整安装)" "$FULL:$(grep -c changed.example "$W/snap/rules/ovr-pin/ovr-pin.json"):$(lc)" "0:1:kickstart -k system/$LBL"
   reset; : > "$W/lc.calls"; FULL=0
   os_service_restart
   eq "助手还没装 (旧版本升级后的第一次): 走完整安装, 不调用助手" "$FULL:$(lc)" "1:"
@@ -341,7 +361,7 @@ echo "== T6. 重启核心 (os_service_restart): 指纹没变 + 助手可信 → 
   fresh; mkhelper "$W/helper-v1.pl" 1; cp "$W/helper-v1.pl" "$(enhanced_helper_path)"
   os_service_restart
   eq "助手是旧版本 (版本 1, 没有 restart): 视为不可用, 走完整安装 (装上新版本)" "$FULL:$(lc)" "1:"
-  fresh; printf 'changed' > "$H/rules/geosite-cn.srs"
+  fresh; printf 'changed' > "$H/rules/geosite-cn/geosite-cn.srs"
   os_service_restart
   eq "规则库 (.srs) 变了: 快照要更新, 走完整安装, 不调用助手" "$FULL:$(lc)" "1:"
   hs "…操作记录写明 changed" "via=admin why=changed" "$(ops)"
@@ -399,6 +419,84 @@ echo "== T8. 内容没变的订阅刷新不改动 servers.jsonl (否则文件顺
   eq "两个订阅和手动服务器交错, 内容相同的刷新: servers.jsonl 一个字节没变" "$(cmp -s "$SF" "$W/before" && echo same || echo changed):$r1:$r2" "same:0 2 0:0 2 0"
   { s A A1; s A A3; } | srv_import A replace >/dev/null
   eq "订阅 A 换了一个节点: A2 消失, A3 追加到末尾, 其它每个节点的位置不变" "$(tags)" "M1,A1,B1,M2,B2,A3"
+)
+
+echo "== T9. 残留 TUN 路由清理 (cleanup): 只删网关是 enana 的 TUN 地址、接口是没有 IPv4 的 utun 的路由; 守护进程或核心在运行时什么都不删"
+(
+  CW=$W/cleanup; rm -rf "$CW"; mkdir -p "$CW/bin"
+  cat > "$CW/bin/netstat" <<NS
+#!/bin/sh
+case "\$3" in inet) cat "$CW/netstat.inet" ;; inet6) cat "$CW/netstat.inet6" ;; esac
+NS
+  cat > "$CW/bin/ifconfig" <<IF
+#!/bin/sh
+cat "$CW/ifconfig.\$1" 2>/dev/null
+IF
+  cat > "$CW/bin/route" <<RT
+#!/bin/sh
+echo "\$*" >> "$CW/route.calls"
+grep -qxF -- "\$*" "$CW/route.fail" 2>/dev/null && exit 1
+exit 0
+RT
+  cat > "$CW/bin/ps" <<PS
+#!/bin/sh
+cat "$CW/ps.out" 2>/dev/null
+PS
+  cat > "$CW/bin/launchctl-mock" <<LC
+#!/bin/sh
+if [ "\$1" = print ] && [ -f "$CW/daemon.running" ]; then printf '\tpid = 123\n'; fi
+exit 0
+LC
+  chmod +x "$CW"/bin/*
+  mkhelper "$CW/raw.pl" "" "" "$CW/bin/launchctl-mock"
+  sed -e "s|/usr/sbin/netstat|$CW/bin/netstat|g" -e "s|'/sbin/ifconfig'|'$CW/bin/ifconfig'|g" -e "s|'/sbin/route'|'$CW/bin/route'|g" -e "s|'/bin/ps'|'$CW/bin/ps'|g" "$CW/raw.pl" > "$CW/helper.pl"
+  eq "测试副本里的系统命令都已换成假的 (没有残留的真命令路径)" "$(grep -cF -e '/usr/sbin/netstat' -e "'/sbin/ifconfig'" -e "'/sbin/route'" -e "'/bin/ps'" "$CW/helper.pl")" "0"
+  cc() { # 运行助手的一个子命令 → 退出码|输出|route 调用
+    local rc=0 out
+    : > "$CW/route.calls"
+    out=$(perl "$CW/helper.pl" "$@" 2>&1) || rc=$?
+    printf '%s|%s|%s\n' "$([ "$rc" = 0 ] && echo 0 || echo fail)" "$out" "$(paste -sd';' "$CW/route.calls")"
+  }
+  scene() { # 夹具: enana 的残留路由 (0/1 重复一行, utun9 没有 IPv4) · 默认路由 (en0) · 别的 VPN (utun2 经 10.8.0.1)
+    rm -f "$CW/route.fail" "$CW/daemon.running" "$CW/ps.out"
+    cat > "$CW/netstat.inet" <<'T'
+Destination        Gateway            Flags        Netif Expire
+default            192.168.1.1        UGScg          en0
+0/1                172.19.0.1         UGSc         utun9
+0/1                172.19.0.1         UGSc         utun9
+128.0.0.0/1        172.19.0.1         UGSc         utun9
+10.0.0.0/8         10.8.0.1           UGSc         utun2
+T
+    cat > "$CW/netstat.inet6" <<'T'
+Destination                             Gateway                        Flags        Netif Expire
+::/1                                    fdfe:dcba:9876::1              UGSc         utun9
+8000::/1                                fdfe:dcba:9876::1              UGSc         utun9
+T
+    cat > "$CW/ifconfig.utun9" <<'T'
+utun9: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380
+  inet6 fe80::1234:5678:9abc:def0%utun9 prefixlen 64 scopeid 0x12
+T
+    cat > "$CW/ifconfig.utun2" <<'T'
+utun2: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380
+  inet 10.8.0.2 --> 10.8.0.1 netmask 0xff000000
+T
+  }
+  four="-n delete -net 0.0.0.0/1 172.19.0.1;-n delete -net 128.0.0.0/1 172.19.0.1;-n delete -inet6 ::/1 fdfe:dcba:9876::1;-n delete -inet6 8000::/1 fdfe:dcba:9876::1"
+  scene; eq "残留的 enana 路由 (IPv4 的 0/1 与 128/1, IPv6 的 ::/1 与 8000::/1; 重复行只删一次) 全部删掉; 默认路由 (en0) 和别的 VPN (utun2, 经 10.8.0.1) 不动" "$(cc cleanup)" "0|removed 4, kept 0, failed 0|$four"
+  scene; printf '  inet 172.19.0.1 --> 172.19.0.2 netmask 0xfffffffc\n' >> "$CW/ifconfig.utun9"
+  eq "同一个 utun 上还有 IPv4 地址 (说明仍在使用): 一条都不删" "$(cc cleanup)" "0|removed 0, kept 4, failed 0|"
+  scene; touch "$CW/daemon.running"
+  eq "守护进程还在运行: 拒绝, 什么都不删" "$(cc cleanup)" "fail|daemon running|"
+  scene; printf '%s/sing-box run -c %s/config.json\n' "$W/snap" "$W/snap" > "$CW/ps.out"
+  eq "enana 自己的核心 (根快照里的 sing-box) 在运行: 拒绝, 什么都不删" "$(cc cleanup)" "fail|core running|"
+  scene; printf '/Applications/enana.app/Contents/Resources/sing-box run -c /Users/x/config.json\n' > "$CW/ps.out"
+  eq "用户另外装的 sing-box (不在 enana 的根快照里) 不影响清理" "$(cc cleanup)" "0|removed 4, kept 0, failed 0|$four"
+  scene; printf -- '-n delete -net 128.0.0.0/1 172.19.0.1\n' > "$CW/route.fail"
+  eq "某条路由删除失败: 其余照常删, 退出码非零 (报告失败, 不静默)" "$(cc cleanup)" "fail|removed 3, kept 0, failed 1|$four"
+  scene; printf 'Destination Gateway Flags Netif Expire\ndefault 192.168.1.1 UGScg en0\n' > "$CW/netstat.inet"; : > "$CW/netstat.inet6"
+  eq "没有任何残留路由 (正常断开后的状态): 什么也不做, 成功" "$(cc cleanup)" "0|removed 0, kept 0, failed 0|"
+  scene; eq "多余的参数: 拒绝 (用法提示), 不删任何路由" "$(cc cleanup extra)" "fail|usage: tunrules sync|restart|cleanup|version|"
+  eq "未知的子命令 (cleanupx): 拒绝, 不删任何路由" "$(cc cleanupx)" "fail|usage: tunrules sync|restart|cleanup|version|"
 )
 
 P=$(wc -l < "$W/.pass" | tr -d ' '); F=$(wc -l < "$W/.fail" | tr -d ' ')

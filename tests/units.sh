@@ -199,13 +199,13 @@ apps_adopt
 eq "采用推荐: 已知 → 推荐值并确认 (ack), 未知保持关 (仍是 new)" "$(awk -F'|' '$2 ~ /^New / {print $2 "=" $3 "/" $4}' "$H/overrides.tsv" | sort | paste -sd, -)" "New Known=follow/ack,New Unknown=direct/new"
 
 echo "== U5. 覆盖层 → 规则集: 应用直连 / 网站直连 分开 · 固定出口指定 · 自动选 · 出口被删除"
-rs() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps(d["rules"], ensure_ascii=False, sort_keys=True))' "$H/rules/ovr-$1.json"; }
+rs() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps(d["rules"], ensure_ascii=False, sort_keys=True))' "$H/rules/ovr-$1/ovr-$1.json"; }
 printf '%s\n' '{"role":"pin","outbound":{"type":"socks","tag":"Pin-A","server":"127.0.0.1","server_port":1}}' > "$H/servers.jsonl"
 : > "$H/overrides.tsv"
 printf 'site|direct.io|direct|ack|\nsite|proxy.io|pin|ack|\nsite|auto.io|auto|ack|\napp|Plain App|direct|ack|\napp|Odd Browser|pin|ack|\napp|Auto App|auto|ack|\napp|Cursor|follow|ack|\n' > "$H/overrides.tsv"
 ovr_sync
 eq "网站直连 → ovr-direct (domain_suffix); 应用直连 → ovr-appdirect (process_path_regex) —— 两个规则集分开, 才能在日志里区分原因" "$(rs direct | grep -c direct.io):$(rs direct | grep -c Plain):$(rs appdirect | grep -c 'Plain App'):$(rs appdirect | grep -c direct.io)" "1:0:1:0"
-eq "固定出口网站 → ovr-pin; 浏览器 PIN → 独立兜底规则; 网站自动 → ovr-auto; 应用自动 → ovr-appauto (N1: 不和网站自动共用); 跟随的不写进任何规则集" "$(rs pin | grep -c proxy.io):$(rs browserpin | grep -c 'Odd Browser'):$(rs pin | grep -c 'Odd Browser'):$(rs auto | grep -c auto.io):$(rs appauto | grep -c 'Auto App'):$(cat "$H"/rules/ovr-*.json | grep -c Cursor)" "1:1:0:1:1:0"
+eq "固定出口网站 → ovr-pin; 浏览器 PIN → 独立兜底规则; 网站自动 → ovr-auto; 应用自动 → ovr-appauto (N1: 不和网站自动共用); 跟随的不写进任何规则集" "$(rs pin | grep -c proxy.io):$(rs browserpin | grep -c 'Odd Browser'):$(rs pin | grep -c 'Odd Browser'):$(rs auto | grep -c auto.io):$(rs appauto | grep -c 'Auto App'):$(cat "$H"/rules/ovr-*/ovr-*.json | grep -c Cursor)" "1:1:0:1:1:0"
 eq "应用名按正则转义写入 (点号 / 括号不会匹配到别的应用)" "$(printf 'app|Foo.Bar (x)|direct|ack|\n' >> "$H/overrides.tsv"; ovr_sync; rs appdirect | grep -o '(?i)/Foo[^"]*' | head -1)" '(?i)/Foo\\.Bar \\(x\\)\\.app/'
 eq "覆盖规则: 名字里的换行 / 竖线被拒绝 (N2)" "$(ovr_valid site "$(printf 'a.com\nx')" && echo ok || echo no):$(ovr_valid site 'a.com' && echo ok || echo no):$(ovr_valid app "$(printf 'Foo\nSite')" && echo ok || echo no):$(ovr_valid app 'Foo|x' && echo ok || echo no)" "no:ok:no:no"
 eq "规则监视失败 (N13/N15): 只看本次核心启动之后的日志: 空日志 → false; 启动后有错误 → true" "$(: > "$H/sing-box.log"; rules_watch_state):$(printf "enana: core start A\nwatch rule-set file: x\n" > "$H/sing-box.log"; rules_watch_state)" "false:true"
@@ -228,7 +228,7 @@ eq "PINAUTO → ovr-pinauto; 没指定 → 默认固定出口 ovr-pin" "$(rs pin
 eq "指定的出口已被删除 (Pin-Z) → 退回默认固定出口 ovr-pin, 不会丢设置" "$(rs pin | grep -c gone.io)" "1"
 eq "没有任何设置的规则集写入占位 (文件一定存在, 核心才能加载)" "$(rs appdirect | grep -c placeholder)" "1"
 printf '%s\n' '{"role":"pin","outbound":{"type":"socks","tag":"Pin-C","server":"127.0.0.3","server_port":1}}' >> "$H/servers.jsonl"
-ovr_sync; t "第 3 个固定出口也有自己的规则集 (ovr-pin-3)" test -f "$H/rules/ovr-pin-3.json"
+ovr_sync; t "第 3 个固定出口也有自己的规则集 (ovr-pin-3)" test -f "$H/rules/ovr-pin-3/ovr-pin-3.json"
 eq "ovr_pins 只列固定出口, 顺序和配置里一致 (和规则集序号对应)" "$(ovr_pins | paste -sd, -)" "Pin-A,Pin-B,Pin-C"
 ovr_json=$(overrides_json)
 printf '%s' "$ovr_json" | chk "网站覆盖 JSON: target / target_ok (出口已删除 → false) / src (user 自己加的)" 'o={x["value"]:x for x in d}; assert o["b.io"]["target"]=="Pin-B" and o["b.io"]["target_ok"] and not o["gone.io"]["target_ok"] and o["c.io"]["target"]=="PINAUTO" and o["a.io"]["src"]=="user"'
@@ -581,6 +581,204 @@ eq "plan_official_on: 免费版 / 即将推出 → 0" "$(plan_official_on)" "0"
 rm -f "$H/plan.json"; eq "plan_official_on: 没有缓存 → 0" "$(plan_official_on)" "0"
 t "退出账号 (auth_logout_local) 会删除 official.jsonl、它的备份和 official.state: 官方节点属于账号" sh -c "grep -q '\$H/official.jsonl\" \"\$H/official.jsonl.prev\" \"\$H/official.state' '$LIB/auth.sh'"
 unset -f auth_logged_in session_id session_token session_call apply_config
+echo "== U10. 规则集目录布局: 迁移是复制 (旧文件留给回滚) · 清理只删有副本的旧文件 · 自定义规则集删除不会越出 rules/"
+mig=$(H=$UW/mig; rm -rf "$H"; mkdir -p "$H/rules/ovr-auto"; printf 'OLD' > "$H/rules/geosite-cn.srs"; printf 'PIN' > "$H/rules/ovr-pin.json"; printf 'NEW' > "$H/rules/ovr-auto/ovr-auto.json"; printf 'STALE' > "$H/rules/ovr-auto.json"; touch -t 202001010000 "$H/rules/geosite-cn.srs" "$H/rules/ovr-pin.json" "$H/rules/ovr-auto.json"; touch -t 202601010000 "$H/rules/ovr-auto/ovr-auto.json"; rules_layout_migrate; echo "$(cat "$H/rules/geosite-cn/geosite-cn.srs"):$(cat "$H/rules/ovr-pin/ovr-pin.json"):$(cat "$H/rules/ovr-auto/ovr-auto.json"):$(ls "$H"/rules/*.srs "$H"/rules/ovr-*.json 2>/dev/null | wc -l | tr -d ' ')")
+eq "迁移: 平铺的规则集复制到 rules/<名字>/; 新位置里更新的文件保留; 平铺的旧文件不删 (回滚还要用)" "$mig" "OLD:PIN:NEW:3"
+eq "迁移重复执行: 不覆盖更新过的副本" "$(H=$UW/mig; printf 'EDIT' > "$H/rules/geosite-cn/geosite-cn.srs"; touch -t 202602010000 "$H/rules/geosite-cn/geosite-cn.srs"; rules_layout_migrate; cat "$H/rules/geosite-cn/geosite-cn.srs")" "EDIT"
+mf=$(H=$UW/mfail; rm -rf "$H"; mkdir -p "$H/rules"; printf 'OLD' > "$H/rules/geosite-cn.srs"; printf 'file' > "$H/rules/geosite-cn"; rules_layout_migrate 2>/dev/null; echo "rc=$?:$(cat "$H/rules/geosite-cn.srs")")
+eq "迁移失败 (新位置被占用): 返回 1, 旧文件原样保留 (gen_config 据此放弃生成新配置)" "$mf" "rc=1:OLD"
+pr=$(H=$UW/prune; rm -rf "$H"; mkdir -p "$H/rules/newer"; printf 'A' > "$H/rules/nocopy.srs"; printf 'N' > "$H/rules/newer.srs"; printf 'OLDCOPY' > "$H/rules/newer/newer.srs"; touch -t 202001010000 "$H/rules/newer/newer.srs"; touch -t 202601010000 "$H/rules/newer.srs"; rules_layout_prune; echo "$(test -f "$H/rules/nocopy.srs" && echo nocopy-kept):$(test -f "$H/rules/newer.srs" && echo newer-kept)")
+eq "清理: 没有副本的旧文件保留; 比副本新的旧文件保留 (副本可能是过期的)" "$pr" "nocopy-kept:newer-kept"
+pm=$(H=$UW/mig2; rm -rf "$H"; mkdir -p "$H/rules/ovr-auto"; printf 'OLD' > "$H/rules/geosite-cn.srs"; printf 'NEW' > "$H/rules/ovr-auto/ovr-auto.json"; printf 'STALE' > "$H/rules/ovr-auto.json"; touch -t 202001010000 "$H/rules/geosite-cn.srs" "$H/rules/ovr-auto.json"; touch -t 202601010000 "$H/rules/ovr-auto/ovr-auto.json"; rules_layout_migrate; rules_layout_prune; echo "$(ls "$H"/rules/*.srs "$H"/rules/ovr-*.json 2>/dev/null | wc -l | tr -d ' '):$(cat "$H/rules/geosite-cn/geosite-cn.srs"):$(cat "$H/rules/ovr-auto/ovr-auto.json")")
+eq "成功启动后清理: 平铺的旧文件删掉, 副本内容不变" "$pm" "0:OLD:NEW"
+del=$(H=$UW/cdel; mkdir -p "$H/rules/custom-a" "$H/rules/custom-x"; printf 'a|A|pin|0|https://example.invalid/a.srs\nx/../..|X|pin|0|https://example.invalid/x.srs\n' > "$H/custom-rulesets.tsv"; printf 'SRS' > "$H/rules/custom-a/custom-a.srs"; printf 'keep' > "$H/keep.txt"; custom_rs_delete 'x/../..'; echo "rc=$?:$(cat "$H/keep.txt"):$(wc -l < "$H/custom-rulesets.tsv" | tr -d ' ')"; custom_rs_delete a; echo "rc=$?:$(test -e "$H/rules/custom-a" && echo y || echo n):$(wc -l < "$H/custom-rulesets.tsv" | tr -d ' ')")
+eq "自定义规则集删除: 登记里的路径名 (x/../..) 被拒绝, 什么都不删; 合法名字删掉目录和登记" "$del" $'rc=1:keep:2\nrc=0:n:1'
+echo
+echo "== U11. apply_config 启动失败路径: 系统代理先关 (不弹框, 应用不再连已停止的代理) · 旧规则集文件保留到确认启动成功 · 迁移失败不写新配置"
+apply_mocks() {
+  load_settings() { :; }
+  ovr_sync() { :; }
+  gen_config() { printf '{"new":1}' > "$H/config.json.new"; }
+  proxy_sync_mode() { echo proxy_sync >> "$LOG"; }
+  os_service_loaded() { return "${LOADED_RC:-0}"; }
+  os_service_running() { return "${RUNNING_RC:-0}"; }
+  os_service_pid() { echo 123; }
+  os_service_restart() { echo restart >> "$LOG"; return "${RESTART_RC:-0}"; }
+  wait_port() { echo "wait $2" >> "$LOG"; return "${WAIT_RC:-0}"; }
+  enhanced_ready() { return 0; }
+  enhanced_configured() { return 1; }
+  tun_residual_clean() { echo cleanup >> "$LOG"; }
+  os_sysproxy_mine() { return "${MINE_RC:-1}"; }
+  os_sysproxy_apply() { echo "apply $*" >> "$LOG"; return "${APPLY_RC:-0}"; }
+  sysproxy_record() { echo "record $*" >> "$LOG"; }
+  SB=/usr/bin/true; APPLY_QUIET=1
+}
+apply_run() { # 名字 [变量=值 ...] -> rc|调用顺序|配置|平铺旧文件|警告
+  local name=$1; shift
+  (
+    H=$UW/ap-$name; rm -rf "$H"; mkdir -p "$H/rules/geosite-cn"
+    printf '{"old":1}' > "$H/config.json"
+    printf 'OLD' > "$H/rules/geosite-cn.srs"; printf 'OLD' > "$H/rules/geosite-cn/geosite-cn.srs"
+    touch -t 202001010000 "$H/rules/geosite-cn.srs" "$H/rules/geosite-cn/geosite-cn.srs"
+    NETWORK_MODE=system; unset OP_WHO
+    [ $# -gt 0 ] && export "$@"
+    . "$LIB/config.sh"; apply_mocks
+    LOG=$UW/ap-$name.log; : > "$LOG"
+    rc=0; out=$(apply_config 2>&1) || rc=$?
+    printf '%s|%s|%s|%s|%s\n' "$rc" "$(paste -sd';' "$LOG")" "$(cat "$H/config.json")" \
+      "$([ -f "$H/rules/geosite-cn.srs" ] && echo kept || echo pruned)" \
+      "$(printf '%s' "$out" | grep -Eo '已先关闭|没能自动关闭' | paste -sd',' -)"
+  )
+}
+eq "启动成功: 配置换成新的; 启动确认之后才清理平铺的旧规则集文件" "$(apply_run ok)" '0|restart;wait 15;proxy_sync|{"new":1}|pruned|'
+eq "新核心没起来, 旧核心还活着 (授权取消后已回滚): 不重启, 系统代理不动, 旧规则集文件保留" "$(apply_run alive RESTART_RC=1)" '3|restart;wait 2;proxy_sync|{"old":1}|kept|'
+eq "…旧核心还活着且系统代理指向 enana: 端口仍通, 不关系统代理" "$(apply_run alive2 RESTART_RC=1 MINE_RC=0)" '3|restart;wait 2;proxy_sync;wait 1|{"old":1}|kept|'
+eq "核心没起来 + 系统代理指向 enana: 先静默关闭系统代理 (应用不再连已停止的代理), 记入操作记录, 提示用户" "$(apply_run down RESTART_RC=1 WAIT_RC=1 RUNNING_RC=1 MINE_RC=0)" '3|restart;cleanup;restart;wait 15;cleanup;proxy_sync;wait 1;apply off quiet;record auto off 0|{"old":1}|kept|已先关闭'
+eq "核心没起来 + 系统代理关不掉 (需要管理员授权): 记入操作记录 (off 1), 提示去仪表盘关闭" "$(apply_run stuck RESTART_RC=1 WAIT_RC=1 RUNNING_RC=1 MINE_RC=0 APPLY_RC=1)" '3|restart;cleanup;restart;wait 15;cleanup;proxy_sync;wait 1;apply off quiet;record auto off 1|{"old":1}|kept|没能自动关闭'
+eq "核心没起来 + 系统代理不是 enana 的: 不碰系统代理" "$(apply_run other RESTART_RC=1 WAIT_RC=1 RUNNING_RC=1 MINE_RC=1)" '3|restart;cleanup;restart;wait 15;cleanup;proxy_sync|{"old":1}|kept|'
+eq "TUN 模式核心没起来 + 系统代理指向 enana: 同样先静默关闭系统代理 (指向死端口的代理会断网)" "$(apply_run tun NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=1 RUNNING_RC=1 MINE_RC=0)" '3|restart;cleanup;restart;wait 15;cleanup;proxy_sync;wait 1;apply off quiet;record auto off 0|{"old":1}|kept|已先关闭'
+eq "TUN 模式核心没起来 + 系统代理关不掉: 记入操作记录 (off 1), 提示去仪表盘关闭" "$(apply_run tunstuck NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=1 RUNNING_RC=1 MINE_RC=0 APPLY_RC=1)" '3|restart;cleanup;restart;wait 15;cleanup;proxy_sync;wait 1;apply off quiet;record auto off 1|{"old":1}|kept|没能自动关闭'
+eq "服务没有加载 (还没启动核心): 只写配置, 不重启, 不清理旧文件" "$(apply_run noload LOADED_RC=1)" '0||{"new":1}|kept|'
+gcf=$(H=$UW/gcfail; rm -rf "$H"; mkdir -p "$H/rules"; printf 'file' > "$H/rules/geosite-cn"; printf 'OLD' > "$H/rules/geosite-cn.srs"; printf '{"old":1}' > "$H/config.json"; . "$LIB/config.sh"; sb_ver() { :; }; dns_load() { :; }; srv_emit() { :; }; official_emit() { :; }; NETWORK_MODE=system; rc=0; out=$(gen_config 2>&1) || rc=$?; echo "rc=$rc|$(test -e "$H/config.json.new" && echo new-written || echo no-new)|$(cat "$H/config.json")|$(printf '%s' "$out" | grep -c '规则集目录整理失败')")
+eq "规则集迁移失败 (新位置被占用): gen_config 返回 1, 不写新配置, 原配置不动, 给出提示" "$gcf" 'rc=1|no-new|{"old":1}|1'
+echo
+echo "== U12. 核心升级 (op_core_upgrade): 先在临时端口试运行新核心, 通过才重启; 失败时还原旧二进制、清残留 TUN 路由; 试运行失败不碰服务和系统代理"
+upg_run() { # 名字 [变量=值 ...] -> rc|调用顺序|警告|当前二进制 (old/new)
+  local name=$1; shift
+  (
+    H=$UW/up-$name; rm -rf "$H"; mkdir -p "$H"; SB=$H/sing-box
+    printf '#!/bin/sh\n# OLD\nexit 0\n' > "$SB"; chmod +x "$SB"; printf '{"old":1}' > "$H/config.json"
+    NETWORK_MODE=system; unset OP_WHO
+    [ $# -gt 0 ] && export "$@"
+    core_version() { echo 1.14.2; }; job_step() { :; }; update_check() { :; }; proxy_sync_mode() { :; }
+    core_install() { # 新核心带 NEW 标记; CHECK_RC 控制它的 check 子命令; STOP_IN_INSTALL 模拟 Windows 替换前先停掉核心
+      [ -z "${STOP_IN_INSTALL:-}" ] || WAIT_RC=1
+      [ "${INSTALL_RC:-0}" = 0 ] || return 1
+      printf '#!/bin/sh\n# NEW\n[ "$1" = check ] && exit "${CHECK_RC:-0}"\nexit 0\n' > "$SB"; chmod +x "$SB"
+    }
+    core_trial() { echo trial >> "$LOG"; return "${TRIAL_RC:-0}"; }
+    os_service_restart() { echo restart >> "$LOG"; [ -z "${UP_AFTER_RESTART:-}" ] || WAIT_RC=0; return "${RESTART_RC:-0}"; }
+    wait_port() { echo "wait $2" >> "$LOG"; return "${WAIT_RC:-0}"; }
+    tun_residual_clean() { echo cleanup >> "$LOG"; }
+    enhanced_ready() { return 0; }
+    os_sysproxy_mine() { return "${MINE_RC:-1}"; }
+    os_sysproxy_apply() { echo "apply $*" >> "$LOG"; return "${APPLY_RC:-0}"; }
+    sysproxy_record() { echo "record $*" >> "$LOG"; }
+    oplog() { :; }; _txn_end() { echo "txn $1${3:+ $3}" >> "$LOG"; echo "$2"; }
+    LOG=$UW/up-$name.log; : > "$LOG"
+    [ -z "${BACKUP_FAIL:-}" ] || chmod 500 "$H"
+    rc=0; out=$(op_core_upgrade 1.14.3 2>&1) || rc=$?
+    chmod 700 "$H"
+    printf '%s|%s|%s|%s\n' "$rc" "$(paste -sd';' "$LOG")" "$(printf '%s' "$out" | grep -Eo '已先关闭|没能自动关闭|没能自动启动' | paste -sd',' -)" "$(grep -q '# NEW' "$SB" && echo new || echo old)"
+  )
+}
+eq "核心升级成功: 试运行通过 → 才重启 → 新二进制保留" "$(upg_run ok)" '0|wait 1;trial;restart;wait 15;txn ok||new'
+eq "新核心试运行没通过 (临时端口没起来): 不重启、不动系统代理, 还原旧二进制, 失败码 3" "$(upg_run trialfail TRIAL_RC=1 MINE_RC=0 WAIT_RC=1)" '1|wait 1;trial;txn fail 3||old'
+eq "…TUN 模式同样: 服务和系统代理都不碰" "$(upg_run trialtun NETWORK_MODE=tun TRIAL_RC=1 MINE_RC=0 WAIT_RC=1)" '1|wait 1;trial;txn fail 3||old'
+eq "新核心 check 不通过 (不能加载现有配置): 不试运行, 还原旧二进制, 失败码 2" "$(upg_run checkfail CHECK_RC=1)" '1|wait 1;wait 1;txn fail 2||old'
+eq "下载失败: 不试运行, 不重启, 失败码 1" "$(upg_run dlfail INSTALL_RC=1)" '1|wait 1;wait 1;txn fail 1||old'
+eq "新核心重启后没就绪 (TUN): 清残留路由 → 还原旧二进制 → 重启旧核心 → 再清一次 → 关系统代理, 失败码 4" "$(upg_run tun NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=1 MINE_RC=0)" '1|wait 1;trial;restart;cleanup;restart;wait 15;cleanup;wait 1;apply off quiet;record auto off 0;txn fail 4|已先关闭|old'
+eq "…系统代理模式: 同上" "$(upg_run sys RESTART_RC=1 WAIT_RC=1 MINE_RC=0)" '1|wait 1;trial;restart;cleanup;restart;wait 15;cleanup;wait 1;apply off quiet;record auto off 0;txn fail 4|已先关闭|old'
+eq "…系统代理关不掉 (需要管理员授权): 记入操作记录 (off 1), 提示去仪表盘关闭" "$(upg_run stuck NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=1 MINE_RC=0 APPLY_RC=1)" '1|wait 1;trial;restart;cleanup;restart;wait 15;cleanup;wait 1;apply off quiet;record auto off 1;txn fail 4|没能自动关闭|old'
+eq "…旧核心还活着 (端口通): 不关系统代理" "$(upg_run alive NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=0 MINE_RC=0)" '1|wait 1;trial;restart;cleanup;restart;wait 15;cleanup;wait 1;txn fail 4||old'
+eq "…系统代理不是 enana 的: 不碰系统代理" "$(upg_run other NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=1 MINE_RC=1)" '1|wait 1;trial;restart;cleanup;restart;wait 15;cleanup;txn fail 4||old'
+eq "重启成功但 15 秒内端口不通 (TUN): 同样回退" "$(upg_run notready NETWORK_MODE=tun WAIT_RC=1 MINE_RC=0)" '1|wait 1;trial;restart;wait 15;cleanup;restart;wait 15;cleanup;wait 1;apply off quiet;record auto off 0;txn fail 4|已先关闭|old'
+eq "核心没在运行时升级失败: 不拉起服务 (用户停掉的服务不能被升级顺手启动)" "$(upg_run stopdl WAIT_RC=1 INSTALL_RC=1)" '1|wait 1;txn fail 1||old'
+eq "升级前在运行, 替换时核心被停掉 (Windows), 随后失败: 拉起旧核心, 报告保持原版本" "$(upg_run winrevive STOP_IN_INSTALL=1 INSTALL_RC=1 UP_AFTER_RESTART=1)" '1|wait 1;wait 1;restart;wait 15;txn fail 1||old'
+eq "…旧核心也拉不起来: 报告请手动启动" "$(upg_run winfail STOP_IN_INSTALL=1 INSTALL_RC=1)" '1|wait 1;wait 1;restart;wait 15;txn fail 1|没能自动启动|old'
+eq "备份旧核心失败: 不下载、不替换、不碰服务" "$(upg_run nobackup BACKUP_FAIL=1)" '1|wait 1;txn fail 1||old'
+echo
+echo "== U13. 核心试运行 (core_trial): 副本换成临时端口、临时缓存和日志, 去掉 TUN 入站与系统代理开关 → 不改动 config.json, 不写正式的缓存和日志"
+TR=$UW/trial; rm -rf "$TR"; mkdir -p "$TR"
+cat > "$TR/fake-sb" <<'PY'
+#!/usr/bin/env python3
+# 假的 sing-box: 只检查 core_trial 生成的副本是否合规; 合规就在 external_controller 上提供带令牌的 /version
+import http.server, json, os, socket, sys
+if sys.argv[1:2] != ['run']: sys.exit(0)
+path = sys.argv[sys.argv.index('-c') + 1]
+cfg = json.load(open(path))
+def fail(msg):
+    print('fake-sb: ' + msg, file=sys.stderr); sys.exit(1)
+if os.environ.get('FAKE_CRASH'): fail('crash on start')
+inb = cfg.get('inbounds', [])
+tags = {i.get('tag') for i in inb}
+for i in inb:
+    if i.get('type') == 'tun': fail('tun inbound left in trial config')
+    if 'set_system_proxy' in i: fail('set_system_proxy left in trial config')
+    if 'listen_port' in i:
+        s = socket.socket()
+        try: s.bind((i.get('listen', '127.0.0.1'), i['listen_port']))
+        except OSError as e: fail('port %s unavailable: %s' % (i['listen_port'], e))
+        finally: s.close()
+if 'output' in cfg.get('log', {}): fail('log.output left in trial config')
+cache = cfg.get('experimental', {}).get('cache_file', {}).get('path')
+if cache and not cache.startswith(os.path.dirname(path) + os.sep): fail('cache file outside trial dir: ' + cache)
+def check_rules(rules):
+    for r in rules or []:
+        if not isinstance(r, dict): continue
+        v = r.get('inbound', [])
+        for t in (v if isinstance(v, list) else [v]):
+            if t not in tags: fail('rule refers to missing inbound %r' % t)
+        check_rules(r.get('rules'))
+for sec in ('route', 'dns'):
+    check_rules(cfg.get(sec, {}).get('rules'))
+api = cfg['experimental']['clash_api']
+host, port = api['external_controller'].rsplit(':', 1)
+secret = api.get('secret', '')
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path != '/version': return self.reply(404, b'')
+        if self.headers.get('Authorization') != 'Bearer ' + secret: return self.reply(401, b'')
+        self.reply(200, b'{"version":"fake"}')
+    def reply(self, code, body):
+        self.send_response(code); self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
+    def log_message(self, *a): pass
+http.server.HTTPServer((host, int(port)), Handler).serve_forever()
+PY
+cat > "$TR/mkcfg.py" <<'PY'
+import json, sys
+# mkcfg.py <H> <混合端口> api|noapi: 正式配置 (有 TUN 入站、系统代理开关、日志文件、缓存文件, 规则引用 TUN)
+h, port, mode = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+cfg = {
+  "log": {"level": "info", "output": h + "/sing-box.log"},
+  "experimental": {"clash_api": {"external_controller": "127.0.0.1:39800", "secret": "tok"},
+                   "cache_file": {"enabled": True, "path": h + "/cache.db"}},
+  "inbounds": [
+    {"type": "tun", "tag": "tun-in", "interface_name": "utun9", "address": ["172.19.0.1/30"]},
+    {"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": port, "set_system_proxy": True}],
+  "route": {"rules": [{"inbound": "tun-in", "action": "sniff"},
+                      {"type": "logical", "mode": "and", "outbound": "direct",
+                       "rules": [{"inbound": ["tun-in"], "domain_suffix": ["x.example"]}]}],
+            "final": "direct"},
+  "dns": {"rules": [{"inbound": "tun-in", "server": "local"}]}
+}
+if mode == "noapi": del cfg["experimental"]["clash_api"]
+json.dump(cfg, sys.stdout, indent=1)
+PY
+chmod +x "$TR/fake-sb"
+trial_run() { # 名字 混合端口 api|noapi [变量=值 ...] -> rc|config.json|正式的日志/缓存|临时目录|日志文件|日志内容
+  local name=$1 port=$2 mode=$3; shift 3
+  (
+    H=$TR/h-$name; LOGS=$TR/logs-$name; rm -rf "$H" "$LOGS"; mkdir -p "$H"; SB=$TR/fake-sb
+    python3 "$TR/mkcfg.py" "$H" "$port" "$mode" > "$H/config.json"; cp "$H/config.json" "$TR/$name.orig"
+    [ $# -gt 0 ] && export "$@"
+    rc=0; core_trial || rc=$?
+    same=$(cmp -s "$H/config.json" "$TR/$name.orig" && echo same || echo changed)
+    live=$(ls "$H" | grep -E '^(sing-box\.log|cache\.db)$' | paste -sd, -)
+    left=$(test -e "$H/core-trial" && echo left || echo cleaned)
+    logf=$(test -f "$LOGS/core-trial.log" && echo log || echo nolog)
+    echo "$rc|$same|${live:-none}|$left|$logf|$(grep -Eo 'crash on start|no clash_api' "$LOGS/core-trial.log" 2>/dev/null | paste -sd, -)"
+  )
+}
+eq "健康配置 (TUN 入站、系统代理开关、日志和缓存文件, 规则引用 TUN): 试运行通过; config.json 一个字节没变; 不写正式的日志和缓存; 临时目录清掉" "$(trial_run ok 39810 api)" '0|same|none|cleaned|nolog|'
+busy=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+python3 -c 'import socket, sys, time; s = socket.socket(); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(60)' "$busy" &
+busy_pid=$!
+for _ in $(seq 1 50); do nc -z 127.0.0.1 "$busy" 2>/dev/null && break; sleep 0.1; done
+eq "正式的混合端口被别的程序占用: 副本换用空闲端口, 试运行照样通过" "$(trial_run busy "$busy" api)" '0|same|none|cleaned|nolog|'
+kill "$busy_pid" 2>/dev/null; wait "$busy_pid" 2>/dev/null || true
+eq "假核心启动即崩溃: 试运行失败, 原因写进 core-trial.log, 临时目录清掉" "$(trial_run crash 39811 api FAKE_CRASH=1)" '1|same|none|cleaned|log|crash on start'
+eq "配置里没有 clash_api (无法确认就绪): 不启动核心, 失败, 日志写明原因" "$(trial_run noapi 39812 noapi)" '1|same|none|cleaned|log|no clash_api'
 echo
 PASS=$(wc -l < "$UW/.pass" 2>/dev/null | tr -d ' '); FAIL=$(wc -l < "$UW/.fail" 2>/dev/null | tr -d ' ')
 echo "单元测试: ${PASS:-0} 通过, ${FAIL:-0} 失败"

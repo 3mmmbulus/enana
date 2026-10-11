@@ -65,10 +65,17 @@ function windowsRules(home) {
       }); else walk(v);
     }
   }
-  for(const f of fs.readdirSync(path.join(home,'rules')).filter(f=>/^ovr-.*\.json$/.test(f))) {
-    const file=path.join(home,'rules',f), old=fs.readFileSync(file,'utf8'), j=JSON.parse(old);walk(j);
-    const body=JSON.stringify(j)+'\n';if(body!==old)fs.writeFileSync(file,body);
+  const rules=path.join(home,'rules'), writes=[];
+  let dirs=[];
+  try{dirs=fs.readdirSync(rules,{withFileTypes:true});}catch(e){if(e.code!=='ENOENT')throw e;}
+  for(const d of dirs.filter(e=>e.isDirectory())) {
+    for(const f of fs.readdirSync(path.join(rules,d.name)).filter(f=>/^ovr-.*\.json$/.test(f))) {
+      const file=path.join(rules,d.name,f), old=fs.readFileSync(file,'utf8'), j=JSON.parse(old);walk(j);
+      const body=JSON.stringify(j)+'\n';if(body!==old)writes.push([file,body]);
+    }
   }
+  // Every file is parsed before any is written, so one bad file cannot leave the others half-rewritten.
+  for(const [file,body] of writes)atomic(file,body);
 }
 function regexMap(home) {
   const names=new Map();

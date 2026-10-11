@@ -77,6 +77,13 @@ os_sysproxy_apply on </dev/null >/dev/null 2>&1; rc=$?
 eq "用户在密码框里点了取消 → 失败, 原因 user-canceled" "$rc:$SYSPROXY_ERR" "1:user-canceled"
 eq "取消后系统代理没有被改动" "$(os_sysproxy_ok && echo on || echo off)" "off"
 
+echo "== S4. 静默关闭 (升级失败时的回退): 绝不弹管理员密码框"
+reset; touch "$FAKE_STATE/sysproxy-on"; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0 FAKE_DIALOG=ok
+os_sysproxy_apply off quiet </dev/null >/dev/null 2>&1; rc=$?
+eq "需要管理员授权 → 直接失败 (needs-admin), 不弹密码框" "$rc:$SYSPROXY_ERR" "1:needs-admin"
+hasnt "没有调用 osascript (没有弹框)" '^osascript' "$CALLS"
+eq "失败后系统代理仍然指向 enana, 没有半途改动" "$(os_sysproxy_mine && echo mine || echo clean)" "mine"
+
 reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0 FAKE_DIALOG=denied
 os_sysproxy_apply on </dev/null >/dev/null 2>&1; rc=$?
 eq "macOS 不允许弹授权窗口 (-1743) → not-authorized" "$rc:$SYSPROXY_ERR" "1:not-authorized"

@@ -319,7 +319,7 @@ txn_reset_official() {
 }
 op_rules_reset() { # 重置; 成功后清掉已经没有登记的自定义规则集文件; 失败时连同刚建的备份一起撤掉 (不让人误以为可以撤销)
   local was now_b; was=$(reset_latest_backup)
-  if op_txn "恢复官方默认规则" txn_reset_official; then rm -f "$H"/rules/custom-*.srs "$H/.reset.sel"; return 0; fi
+  if op_txn "恢复官方默认规则" txn_reset_official; then rm -rf "$H"/rules/custom-* "$H/.reset.sel"; return 0; fi
   [ -s "$H/.reset.sel" ] && reset_selectors_restore "$H/.reset.sel"; rm -f "$H/.reset.sel"      # 失败回滚: 出口开关也切回原来的
   now_b=$(reset_latest_backup); [ -z "$now_b" ] || [ "$now_b" = "$was" ] || rm -f "$now_b"
   return 1
@@ -469,9 +469,17 @@ op_diag_send() { # [小时]
   return 1
 }
 
+# Windows 替换核心前会先停掉它: 替换失败后把还在的旧核心拉起来 (升级前在运行才拉)
+core_upgrade_revive() {
+  [ "$1" = 1 ] || return 0
+  wait_port "$PORT" 1 && return 0
+  os_service_restart >/dev/null 2>&1 || true
+  wait_port "$PORT" 15
+}
+
 # 升级核心: 先下载, 用新核心校验现有配置, 通过才替换, 否则回退
 op_core_upgrade() { # [版本|latest]  latest = 兼容清单里和当前 enana 兼容的最新核心 (没有清单就不升级); 写明版本号 = 照做 (有 SHA-256 才逐个校验)
-  local old new want=${1:-latest}; old=$(core_version)
+  local old new want=${1:-latest} was_up=0; old=$(core_version)
   job_step 0 10 "查询最新版本"
   if [ "$want" = latest ]; then
     core_manifest_refresh >/dev/null 2>&1 || true
@@ -482,25 +490,32 @@ op_core_upgrade() { # [版本|latest]  latest = 兼容清单里和当前 enana �
     fi
     if [ -n "$old" ] && ! version_gt "$want" "$old"; then _txn_end ok "已经是兼容的最新版本 sing-box $old"; return 0; fi
   fi
-  cp "$SB" "$SB.old" 2>/dev/null
+  wait_port "$PORT" 1 && was_up=1
+  if [ -f "$SB" ] && ! cp "$SB" "$SB.old" 2>/dev/null; then _txn_end fail "无法备份当前核心, 保持原版本 $old" 1; return 1; fi
   job_step 1 30 "下载并校验新核心"
   if ! SINGBOX_VERSION=$want core_install chain >/dev/null 2>&1; then
-    rm -f "$SB.old"; oplog "${OP_WHO:-terminal}" "升级核心" "$(kv reason download-failed from "$old" to "$want")" error; _txn_end fail "升级失败, 保持原版本 $old" 1; return 1
+    rm -f "$SB.old"; oplog "${OP_WHO:-terminal}" "升级核心" "$(kv reason download-failed from "$old" to "$want")" error
+    if core_upgrade_revive "$was_up"; then _txn_end fail "升级失败, 保持原版本 $old" 1; else _txn_end fail "升级失败, 原版本 $old 没能自动启动, 请在 enana 里手动启动" 1; fi; return 1
   fi
   job_step 2 70 "用新核心校验现有配置"
   if "$SB" check -c "$H/config.json" >/dev/null 2>&1; then
-    job_step 3 85 "重启服务"
+    job_step 3 75 "在临时端口试运行新核心"
+    if ! core_trial; then
+      mv "$SB.old" "$SB"; oplog "${OP_WHO:-terminal}" "升级核心" "新版本试运行失败, 已回退" error
+      _txn_end fail "新版本试运行失败, 保持原版本 $old" 3; return 1
+    fi
+    job_step 4 85 "重启服务"
     if ! os_service_restart || ! wait_port "$PORT" 15 || ! enhanced_ready; then
-      mv "$SB.old" "$SB"; os_service_restart >/dev/null 2>&1 || true
+      tun_residual_clean; mv "$SB.old" "$SB"; os_service_restart >/dev/null 2>&1 || true; wait_port "$PORT" 15 || true; tun_residual_clean; sysproxy_off_if_core_down
       oplog "${OP_WHO:-terminal}" "升级核心" "新版本未就绪, 已回退" error
-      _txn_end fail "新版本未能启动, 已回退到 $old" 3; return 1
+      _txn_end fail "新版本未能启动, 已回退到 $old" 4; return 1
     fi
     rm -f "$SB.old"; proxy_sync_mode
     new=$(core_version); rm -f "$H/.core-version"; update_check force >/dev/null 2>&1 || true
     oplog "${OP_WHO:-terminal}" "升级核心" "$old → $new" ok; _txn_end ok "已升级到 sing-box $new"
   else
     mv "$SB.old" "$SB"; oplog "${OP_WHO:-terminal}" "升级核心" "新版本无法加载当前配置, 已回退" error
-    _txn_end fail "新版本无法加载当前配置, 已回退到 $old" 2; return 1
+    if core_upgrade_revive "$was_up"; then _txn_end fail "新版本无法加载当前配置, 已回退到 $old" 2; else _txn_end fail "新版本无法加载当前配置, 原版本 $old 没能自动启动, 请在 enana 里手动启动" 2; fi; return 1
   fi
 }
 

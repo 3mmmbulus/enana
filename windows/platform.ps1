@@ -174,15 +174,21 @@ switch ($Action) {
         $archive="$HomeDir\runtime\cache\core.zip"
         if(!(Test-Path -LiteralPath $archive) -or (Get-FileHash -LiteralPath $archive).Hash.ToLowerInvariant() -ne $pin.sha256){Get-VerifiedDownload @($pin.urls) $archive $pin.sha256}
         $stage="$HomeDir\runtime\core-upgrade-$([Guid]::NewGuid().ToString('N'))"
+        $next="$HomeDir\sing-box.exe.new"
         try{
             Expand-SafeZip $archive $stage
             $exe=@(Get-ChildItem -LiteralPath $stage -Filter 'sing-box.exe' -Recurse);if($exe.Count -ne 1){throw 'Invalid official core archive'}
             & $exe[0].FullName check -c "$HomeDir\config.json";if($LASTEXITCODE -ne 0){throw 'New core did not accept the saved configuration'}
+            Copy-Item -LiteralPath $exe[0].FullName -Destination $next -Force
+            if((Get-FileHash -LiteralPath $next).Hash -ne (Get-FileHash -LiteralPath $exe[0].FullName).Hash){throw 'Staged core does not match the verified archive'}
             & "$HomeDir\runtime\node\node.exe" "$HomeDir\windows\helper.js" control $HomeDir stop
             if($LASTEXITCODE -ne 0){throw 'Could not stop the owned user core'}
-            Copy-Item -LiteralPath $exe[0].FullName -Destination "$HomeDir\sing-box.exe" -Force
+            Copy-Item -LiteralPath $next -Destination "$HomeDir\sing-box.exe" -Force
             Remove-Item -LiteralPath "$HomeDir\.core-version" -ErrorAction SilentlyContinue
-        }finally{Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue}
+        }finally{
+            Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $next -Force -ErrorAction SilentlyContinue
+        }
     }
     'worker-remove' { if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop } }
     'shortcut-install' {

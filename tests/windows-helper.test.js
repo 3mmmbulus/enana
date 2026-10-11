@@ -1,7 +1,7 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),dgram=require('node:dgram');
-const {applicationRegex,nativePaths,requestSize,regexMap,dnsProbe,control}=require('../windows/helper.js');
+const {applicationRegex,nativePaths,requestSize,regexMap,dnsProbe,control,windowsRules}=require('../windows/helper.js');
 const {spawn}=require('node:child_process');
 const {workerLog}=require('../windows/worker.js');
 function match(rx,file){return new RegExp(rx.slice(4),'i').test(file);}
@@ -55,6 +55,21 @@ test('regex map includes exact installed paths and safe old overrides',()=>tempo
  fs.writeFileSync(path.join(dir,'.apps.now'),'Google Chrome\tC:/Program Files/Google/Chrome/Application/chrome.exe\n');fs.writeFileSync(path.join(dir,'overrides.tsv'),'app|Gemini|pin|ack\nsite|google.com|auto|ack\n');
  const entries=new Map(regexMap(dir).trim().split('\n').map(line=>{const i=line.indexOf('\t');return [line.slice(0,i),JSON.parse(line.slice(i+1))];}));
  assert.ok(match(entries.get('Google Chrome'),'C:/Program Files/Google/Chrome/Application/helpers/chrome-helper.exe'));assert.ok(match(entries.get('Gemini'),'C:/Gemini/Gemini.exe'));assert.ok(!entries.has('google.com'));
+}));
+test('rule rewrite parses every file before writing, so one bad file leaves the others untouched',()=>temporary(dir=>{
+ const good=path.join(dir,'rules','ovr-a','ovr-a.json'),bad=path.join(dir,'rules','ovr-b','ovr-b.json');
+ fs.mkdirSync(path.dirname(good),{recursive:true});fs.mkdirSync(path.dirname(bad),{recursive:true});
+ const before=JSON.stringify({version:3,rules:[{process_path_regex:['(?i)/Gemini\\.app/']}]})+'\n';
+ fs.writeFileSync(good,before);fs.writeFileSync(bad,'{"version":');
+ assert.throws(()=>windowsRules(dir));
+ assert.equal(fs.readFileSync(good,'utf8'),before);
+}));
+test('rule rewrite converts old application regular expressions and tolerates a missing rules folder',()=>temporary(dir=>{
+ assert.doesNotThrow(()=>windowsRules(dir));
+ const file=path.join(dir,'rules','ovr-a','ovr-a.json');fs.mkdirSync(path.dirname(file),{recursive:true});
+ fs.writeFileSync(file,JSON.stringify({version:3,rules:[{process_path_regex:['(?i)/Gemini\\.app/']}]})+'\n');
+ windowsRules(dir);
+ assert.deepEqual(JSON.parse(fs.readFileSync(file,'utf8')).rules[0].process_path_regex,['(?i)[\\\\/]Gemini\\.exe$']);
 }));
 test('TCP bridge accepts fragmented headers and byte-sized Unicode bodies',()=>{
  assert.equal(requestSize(Buffer.from('GET / HTTP/1.1\r\nHost: local')),null);

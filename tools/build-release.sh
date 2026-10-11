@@ -12,7 +12,7 @@ mkdir -p "$out"; out=$(cd "$out" && pwd -P)
 [ "$out" != "$repo" ] || exit 2
 stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
 bundle="enana-$version"; mkdir "$stage/$bundle"
-for name in install.sh lib data ui VERSION CHANGELOG.md get.sh get.ps1 windows LICENSE THIRD_PARTY_NOTICES.md; do
+for name in install.sh lib data ui VERSION CHANGELOG.md get.sh get.ps1 windows THIRD_PARTY_NOTICES.md; do
   [ ! -e "$repo/$name" ] || cp -R "$repo/$name" "$stage/$bundle/$name"
 done
 COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -C "$stage" -czf "$out/$bundle.tar.gz" "$bundle"

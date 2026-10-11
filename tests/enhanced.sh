@@ -43,15 +43,15 @@ r=t['route']['rules']; idx=lambda k:next(n for n,a in enumerate(r) if k(a))
 assert idx(lambda a:a.get('action')=='hijack-dns') < idx(lambda a:a.get('ip_is_private'))
 assert idx(lambda a:a.get('ip_is_private')) < idx(lambda a:a.get('rule_set')==['ovr-pin'])
 assert idx(lambda a:a.get('rule_set')==['ovr-apppin']) < idx(lambda a:a.get('rule_set')==['ovr-pin-2'])
-assert 'Gemini' in open(h+'/rules/ovr-apppin.json').read()
+assert 'Gemini' in open(h+'/rules/ovr-apppin/ovr-apppin.json').read()
 for b in ['ovr-browserdirect','ovr-browserauto','ovr-browserpin','ovr-browserpinauto','ovr-browserpin-2']:
  assert idx(lambda a:a.get('outbound')=='svc-claude') < idx(lambda a:a.get('rule_set')==[b])
  assert idx(lambda a:a.get('rule_set')==['ovr-pin']) < idx(lambda a:a.get('rule_set')==[b])
-assert 'Google Chrome' in open(h+'/rules/ovr-browserdirect.json').read()
-assert 'Google Chrome' not in open(h+'/rules/ovr-appdirect.json').read()
-assert 'Terminal' in open(h+'/rules/ovr-appauto.json').read()   # 应用自动单独成集 (N1)
+assert 'Google Chrome' in open(h+'/rules/ovr-browserdirect/ovr-browserdirect.json').read()
+assert 'Google Chrome' not in open(h+'/rules/ovr-appdirect/ovr-appdirect.json').read()
+assert 'Terminal' in open(h+'/rules/ovr-appauto/ovr-appauto.json').read()   # 应用自动单独成集 (N1)
 for app in ['Gemini','Claude','ChatGPT']:
- assert app in open(h+'/rules/ovr-pin.json').read()
+ assert app in open(h+'/rules/ovr-pin/ovr-pin.json').read()
 assert s['route']['rules']==[a for a in r if 'tun-in' not in a.get('inbound',[])]
 print('PASS: defaults, migration, IPv4/IPv6 exclusions, shared PIN routes, browser fallback priority')
 PY
@@ -185,7 +185,7 @@ old=$(cat "$H/overrides.tsv")
 apply_config() { ovr_sync; return 3; }
 if op_txn fixture txn_override app Gemini direct ''; then echo 'FAIL: failed deployment reported success'; exit 1; fi
 [ "$(cat "$H/overrides.tsv")" = "$old" ]
-grep -q Gemini "$H/rules/ovr-pin.json"
+grep -q Gemini "$H/rules/ovr-pin/ovr-pin.json"
 echo 'PASS: rule-only fingerprint, PIN policy mutation and rejected privileged deployment rollback'
 # Snapshot evidence: captured TCP, bypassing UDP, private callbacks, core egress.
 cat > "$W/sockets" <<'DATA'

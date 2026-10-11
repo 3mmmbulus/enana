@@ -213,16 +213,80 @@ core_install() { # core_install chain|brew|local  -> 安装/替换 $H/sing-box
   mv "$H/sing-box.new" "$SB"
 }
 
+# 用临时端口试运行 $SB: 副本去掉 TUN 入站, 日志和缓存指向临时目录, 监听固定在 127.0.0.1, 所以不碰正在运行的服务、系统代理、TUN、原来的缓存和日志
+core_trial() {
+  [ "${ENANA_PLATFORM:-darwin}" = windows ] && return 0
+  local dir="$H/core-trial" pid i port secret ok=0
+  rm -rf "$dir"; (umask 077 && mkdir -p "$dir") || return 1
+  cat > "$dir/trial.pl" <<'PL'
+use strict; use warnings; use JSON::PP; use IO::Socket::INET;
+my ($src, $dir) = @ARGV;
+open my $fh, '<', $src or die "cannot read config\n";
+my $cfg = JSON::PP->new->utf8->decode(do { local $/; <$fh> }); close $fh;
+my $api = ref $cfg->{experimental} eq 'HASH' ? $cfg->{experimental}{clash_api} : undef;
+die "no clash_api\n" unless ref $api eq 'HASH';
+my (%tun, @in, @hold);
+for my $in (@{ $cfg->{inbounds} || [] }) {
+  if (ref $in eq 'HASH' && ($in->{type} // '') eq 'tun') { $tun{ $in->{tag} // '' } = 1; next }
+  delete $in->{set_system_proxy} if ref $in eq 'HASH';
+  push @in, $in;
+}
+sub free_port { my $s = IO::Socket::INET->new(LocalAddr => '127.0.0.1', LocalPort => 0, Listen => 1) or die "no free port\n"; push @hold, $s; return $s->sockport }
+for my $in (@in) {
+  next unless ref $in eq 'HASH' && exists $in->{listen_port};
+  $in->{listen} = '127.0.0.1'; $in->{listen_port} = free_port();
+}
+my $secret = defined $api->{secret} ? $api->{secret} : '';
+die "bad secret\n" if $secret =~ /[\t\n]/;
+$api->{external_controller} = '127.0.0.1:' . free_port();
+my ($port) = $api->{external_controller} =~ /:(\d+)$/;
+close $_ for @hold;
+sub keep_rule {
+  my $r = shift; return 1 unless ref $r eq 'HASH';
+  if (exists $r->{inbound}) {
+    my $v = $r->{inbound}; my @l = ref $v eq 'ARRAY' ? @$v : ($v); my @k = grep { !$tun{$_} } @l;
+    return 0 if @l && !@k;
+    $r->{inbound} = ref $v eq 'ARRAY' ? \@k : $k[0] if @k != @l;
+  }
+  if (ref $r->{rules} eq 'ARRAY') { $r->{rules} = [ grep { keep_rule($_) } @{ $r->{rules} } ]; return 0 unless @{ $r->{rules} } }
+  return 1;
+}
+for my $sec (qw(route dns)) {
+  next unless ref $cfg->{$sec} eq 'HASH' && ref $cfg->{$sec}{rules} eq 'ARRAY';
+  $cfg->{$sec}{rules} = [ grep { keep_rule($_) } @{ $cfg->{$sec}{rules} } ];
+}
+$cfg->{inbounds} = \@in;
+delete $cfg->{log}{output} if ref $cfg->{log} eq 'HASH';
+$cfg->{experimental}{cache_file}{path} = "$dir/cache.db" if ref $cfg->{experimental}{cache_file} eq 'HASH';
+open my $out, '>', "$dir/config.json" or die "cannot write trial config\n";
+print {$out} JSON::PP->new->utf8->canonical->encode($cfg); close $out or die "cannot write trial config\n";
+print "$port\t$secret\n";
+PL
+  if perl "$dir/trial.pl" "$H/config.json" "$dir" > "$dir/ports" 2> "$dir/build.log" && IFS=$'\t' read -r port secret < "$dir/ports"; then
+    "$SB" run -c "$dir/config.json" -D "$H" > "$dir/run.log" 2>&1 &
+    pid=$!
+    for i in $(seq 1 20); do
+      curl -fsS -m 2 --noproxy '*' -H "Authorization: Bearer $secret" "http://127.0.0.1:$port/version" >/dev/null 2>&1 && { ok=1; break; }
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+    done
+    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+  fi
+  if [ "$ok" = 1 ]; then rm -rf "$dir"; return 0; fi
+  mkdir -p "$LOGS"; { cat "$dir/build.log" "$dir/run.log" 2>/dev/null | tail -n 40; } > "$LOGS/core-trial.log"
+  rm -rf "$dir"; return 1
+}
+
 # ---------- 规则库 (社区规则集) ----------
 # rulesets.conf: tag|仓库|分支|远程文件名|名称|说明|essential|默认启用     $H/rules.state: tag=0|1 (用户的启停选择)
-# 自定义规则集: $H/custom-rulesets.tsv  tag|名称|策略|时间|链接  (文件 rules/custom-<tag>.srs)
+# 自定义规则集: $H/custom-rulesets.tsv  tag|名称|策略|时间|链接  (文件 rules/custom-<tag>/custom-<tag>.srs)
 rules_list() { local l; [ -f "$(content_file rulesets.conf)" ] || return 0; while IFS= read -r l; do case $l in ''|'#'*|[[:space:]]*) ;; *) printf '%s\n' "$l" ;; esac; done < "$(content_file rulesets.conf)"; }
 rules_wanted() { # 输出「启用」的规则集 (完整行). essential 恒启用; 其余按 rules.state, 没有就用默认
   awk -F'|' -v st="$H/rules.state" 'BEGIN { while ((getline l < st) > 0) { split(l, a, "="); s[a[1]] = a[2] } }
     /^[ \t]*(#|$)/ { next }
     { en = ($8 == "") ? 1 : $8; if ($1 in s) en = s[$1]; if ($7 == 1) en = 1; if (en == 1) print }' "$(content_file rulesets.conf)" 2>/dev/null
 }
-rules_missing() { local tag _r; while IFS='|' read -r tag _r; do [ -s "$H/rules/$tag.srs" ] || printf '%s\n' "$tag"; done < <(rules_wanted); }
+rules_missing() { local tag _r; rules_layout_migrate; while IFS='|' read -r tag _r; do [ -s "$(rule_file "$tag.srs")" ] || printf '%s\n' "$tag"; done < <(rules_wanted); }
 rules_updated_at() { local v; [ -f "$H/rules/.updated" ] && IFS= read -r v < "$H/rules/.updated"; echo "${v:-0}"; }
 rules_set_enabled() { # tag 0|1  (essential 不可停用)
   local tag=$1 v=$2 line
@@ -242,21 +306,23 @@ _rules_urls() { # repo branch file -> 每行一个 URL (来源模板见 rule-sou
   done < "$DATA/rule-sources.conf"
 }
 _rules_fetch_one() { # tag repo branch file outdir  (在后台子进程里运行)
-  local tag=$1 repo=$2 branch=$3 file=$4 od=$5 u
+  local tag=$1 repo=$2 branch=$3 file=$4 od=$5 u dst
   set --; while IFS= read -r u; do set -- "$@" "$u"; done < <(_rules_urls "$repo" "$branch" "$file")
-  if fetch_any "$H/rules/$tag.srs.new" valid_srs "$@" > "$od/$tag.log" 2>&1; then printf '%s' "$DL_VIA" > "$od/$tag.via"; echo 0 > "$od/$tag.rc"; else echo 1 > "$od/$tag.rc"; fi
+  dst=$(rule_file "$tag.srs"); mkdir -p "${dst%/*}"
+  if fetch_any "$dst.new" valid_srs "$@" > "$od/$tag.log" 2>&1; then printf '%s' "$DL_VIA" > "$od/$tag.via"; echo 0 > "$od/$tag.rc"; else echo 1 > "$od/$tag.rc"; fi
 }
 _rules_finish_batch() { # outdir tag…  逐个收尾: 校验已通过的文件原子替换, 统计结果, 打印一行
-  local od=$1 tag rc; shift
+  local od=$1 tag rc dst; shift
   for tag in "$@"; do
     IFS= read -r rc < "$od/$tag.rc" 2>/dev/null || rc=1
+    dst=$(rule_file "$tag.srs")
     if [ "$rc" = 0 ]; then
-      if [ -f "$H/rules/$tag.srs" ] && cmp -s "$H/rules/$tag.srs.new" "$H/rules/$tag.srs"; then rm -f "$H/rules/$tag.srs.new"; ok "$tag 已是最新"
-      else mv "$H/rules/$tag.srs.new" "$H/rules/$tag.srs"; RULES_CHANGED=$((RULES_CHANGED+1)); ok "$tag 已更新 (线路: $(cat "$od/$tag.via" 2>/dev/null))"; fi
+      if [ -f "$dst" ] && cmp -s "$dst.new" "$dst"; then rm -f "$dst.new"; ok "$tag 已是最新"
+      else mv "$dst.new" "$dst"; RULES_CHANGED=$((RULES_CHANGED+1)); ok "$tag 已更新 (线路: $(cat "$od/$tag.via" 2>/dev/null))"; fi
       RULES_OK=$((RULES_OK+1))
     else
-      RULES_FAILED=$((RULES_FAILED+1)); rm -f "$H/rules/$tag.srs.new"
-      if [ -s "$H/rules/$tag.srs" ]; then warn "$tag 下载失败, 继续使用旧版本"; else warn "$tag 下载失败 (暂时不使用该规则集)"; fi
+      RULES_FAILED=$((RULES_FAILED+1)); rm -f "$dst.new"
+      if [ -s "$dst" ]; then warn "$tag 下载失败, 继续使用旧版本"; else warn "$tag 下载失败 (暂时不使用该规则集)"; fi
     fi
   done
 }
@@ -265,7 +331,7 @@ _rules_finish_batch() { # outdir tag…  逐个收尾: 校验已通过的文件�
 # 设置 RULES_CHANGED / RULES_FAILED / RULES_OK; 返回 0 = 没有全部失败
 rules_update() {
   local only=" $* " tag repo branch file name desc ess en total=0 done_=0 n=0 batch='' od lines
-  mkdir -p "$H/rules"; RULES_CHANGED=0; RULES_FAILED=0; RULES_OK=0
+  mkdir -p "$H/rules"; rules_layout_migrate; RULES_CHANGED=0; RULES_FAILED=0; RULES_OK=0
   od=$(mktemp -d); lines=$(rules_wanted)
   while IFS='|' read -r tag _; do [ -n "$tag" ] || continue; case "$only" in "  ") total=$((total+1)) ;; *" $tag "*) total=$((total+1)) ;; esac; done <<EOF
 $lines
@@ -291,41 +357,44 @@ EOF
 
 custom_rs_valid_name() { printf '%s' "$1" | LC_ALL=C grep -Eq '^[A-Za-z0-9._-]{1,30}$'; }
 custom_rs_add() { # name url policy  -> 下载 (≤20MB) 校验为 .srs 后登记; 返回 0 成功, 2 名称/链接/策略不合法, 3 已存在, 4 下载失败
-  local name=$1 url=$2 pol=$3 tag
+  local name=$1 url=$2 pol=$3 tag dst
   custom_rs_valid_name "$name" || return 2
   sub_url_ok "$url" || return 2
   case $pol in pin|auto|direct) ;; *) return 2 ;; esac
   tag=$(printf '%s' "$name" | tr 'A-Z' 'a-z')
   grep -q "^$tag|" "$H/custom-rulesets.tsv" 2>/dev/null && return 3
   grep -q "^geosite-$tag|\|^geoip-$tag|" "$(content_file rulesets.conf)" 2>/dev/null && return 3
-  mkdir -p "$H/rules"
-  DL_MAXSIZE=20971520 fetch_any "$H/rules/custom-$tag.srs.new" valid_srs "$url" || return 4
-  mv "$H/rules/custom-$tag.srs.new" "$H/rules/custom-$tag.srs"
+  dst=$(rule_file "custom-$tag.srs"); mkdir -p "${dst%/*}"
+  DL_MAXSIZE=20971520 fetch_any "$dst.new" valid_srs "$url" || return 4
+  mv "$dst.new" "$dst"
   touch "$H/custom-rulesets.tsv"; chmod 600 "$H/custom-rulesets.tsv"
   printf '%s|%s|%s|%s|%s\n' "$tag" "$name" "$pol" "$(now)" "$url" >> "$H/custom-rulesets.tsv"
 }
 custom_rs_delete() { # tag
+  custom_rs_valid_name "$1" || return 1
   [ -f "$H/custom-rulesets.tsv" ] || return 1
   grep -q "^$1|" "$H/custom-rulesets.tsv" || return 1
   grep -v "^$1|" "$H/custom-rulesets.tsv" > "$H/custom-rulesets.tsv.new"; mv "$H/custom-rulesets.tsv.new" "$H/custom-rulesets.tsv"
-  rm -f "$H/rules/custom-$1.srs"
+  rm -rf "$H/rules/custom-$1"
 }
 custom_rs_refresh_all() {
-  local tag name pol ts url
+  local tag name pol ts url dst
   [ -s "$H/custom-rulesets.tsv" ] || return 0
   while IFS='|' read -r tag name pol ts url; do
     [ -n "$url" ] || continue
-    DL_MAXSIZE=20971520 fetch_any "$H/rules/custom-$tag.srs.new" valid_srs "$url" >/dev/null 2>&1 && mv "$H/rules/custom-$tag.srs.new" "$H/rules/custom-$tag.srs" || rm -f "$H/rules/custom-$tag.srs.new"
+    dst=$(rule_file "custom-$tag.srs"); mkdir -p "${dst%/*}"
+    DL_MAXSIZE=20971520 fetch_any "$dst.new" valid_srs "$url" >/dev/null 2>&1 && mv "$dst.new" "$dst" || rm -f "$dst.new"
   done < "$H/custom-rulesets.tsv"
 }
 
 rules_json() { # GET /api/rules 的 sets 数组
-  local st="$H/.rules.stat"
-  for f in "$H"/rules/*.srs; do [ -e "$f" ] && printf '%s|%s|%s\n' "$f" "$(file_size "$f")" "$(file_mtime "$f")"; done > "$st" 2>/dev/null || true
-  awk -F'|' -v st="$st" -v state="$H/rules.state" -v cust="$H/custom-rulesets.tsv" -v rd="$H/rules/" '
+  local st="$H/.rules.stat" f t
+  rules_layout_migrate
+  for f in "$H"/rules/*/*.srs; do t=${f##*/}; [ -e "$f" ] && printf '%s|%s|%s\n' "${t%.srs}" "$(file_size "$f")" "$(file_mtime "$f")"; done > "$st" 2>/dev/null || true
+  awk -F'|' -v st="$st" -v state="$H/rules.state" -v cust="$H/custom-rulesets.tsv" '
     function esc(x) { gsub(/["\\]/, "", x); return x }
     BEGIN {
-      while ((getline l < st) > 0) { split(l, a, "|"); f = a[1]; sub(rd, "", f); sub(/\.srs$/, "", f); sz[f] = a[2]; mt[f] = a[3] }
+      while ((getline l < st) > 0) { split(l, a, "|"); sz[a[1]] = a[2]; mt[a[1]] = a[3] }
       while ((getline l < state) > 0) { split(l, a, "="); s[a[1]] = a[2] }
       printf "["
     }

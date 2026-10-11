@@ -208,8 +208,8 @@ st_service() {
   local n
   os_write_plists; n=$?
   info "正在启动代理服务…"
-  if ! os_service_running || [ "$n" -gt 0 ]; then os_service_start || die "后台服务注册失败" "运行 enana doctor 查看原因"; fi
-  wait_port "$PORT" 15 || die "服务没有启动" "日志: $H/sing-box.log   $(tail -n 3 "$H/sing-box.log" 2>/dev/null | tr '\n' ' ')"
+  if ! os_service_running || [ "$n" -gt 0 ]; then os_service_start || { sysproxy_off_if_core_down; die "后台服务注册失败" "运行 enana doctor 查看原因"; }; fi
+  wait_port "$PORT" 15 || { sysproxy_off_if_core_down; die "服务没有启动" "日志: $H/sing-box.log   $(tail -n 3 "$H/sing-box.log" 2>/dev/null | tr '\n' ' ')"; }
   proxy_sync_mode
   [ "$n" -gt 0 ] && os_aux_load
   os_service_running && ok "代理服务运行中 (127.0.0.1:$PORT)$([ "${AUTOSTART:-1}" = 1 ] && echo ' · 开机自启')"

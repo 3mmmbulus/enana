@@ -59,7 +59,7 @@ customize() {
   printf 'app|Claude|direct|ack|\napp|Safari|direct|ack|\napp|Random Tool|pin|ack|PinNode\nsite|mine.example|pin|ack|PinNode\nsite|auto.example|pin|ack|PinNode\n' > "$H/overrides.tsv"
   printf 'auto.example|1700000000|timeout|2|Claude\n' > "$H/autosites.tsv"; printf 'dismissed.example\n' > "$H/autosites.dismissed"
   printf 'geosite-ai=0\ngeosite-ads=1\n' > "$H/rules.state"
-  printf 'mylist|MyList|pin|1700000000|https://example.invalid/mylist.srs\n' > "$H/custom-rulesets.tsv"; mkdir -p "$H/rules"; printf 'SRS' > "$H/rules/custom-mylist.srs"
+  printf 'mylist|MyList|pin|1700000000|https://example.invalid/mylist.srs\n' > "$H/custom-rulesets.tsv"; mkdir -p "$H/rules/custom-mylist"; printf 'SRS' > "$H/rules/custom-mylist/custom-mylist.srs"
   printf 'My Tool|bin|/usr/local/bin/mytool||1700000000\n' > "$H/custom-apps.tsv"
   printf 'claude|+|extra.example\n' > "$H/site-domains.tsv"
   printf 'router.home|192.168.1.1\n' > "$H/hosts.tsv"
@@ -111,7 +111,7 @@ eq "重置后重新生成并应用了配置, 并补下了默认启用的规则�
 has "任务结果: 内容来自云端" '"content":"cloud"' "$TXN_RESULT"
 kept "服务器没动" servers.jsonl; kept "订阅没动" subs.tsv; kept "测速自定义目标没动" speedtest-custom.tsv; kept "界面偏好没动" prefs.json
 eq "日志保留时长设置没动" "$(sed -n 's/^LOG_HOURS=//p' "$H/settings.env")" "48"
-eq "成功后清理自定义规则集的文件 (登记已经没了)" "$(ls "$H"/rules/custom-*.srs 2>/dev/null | wc -l | tr -d ' ')" "0"
+eq "成功后清理自定义规则集的文件 (登记已经没了)" "$(ls "$H"/rules/custom-*/custom-*.srs 2>/dev/null | wc -l | tr -d ' ')" "0"
 
 echo "== R4. 备份 + 撤销"
 b=$(reset_latest_backup)
@@ -153,13 +153,13 @@ has "任务结果: 基线" '"content":"baseline"' "$TXN_RESULT"
 eq "基线内容的路径" "$(content_file apps.conf)" "$DATA/apps.conf"
 
 echo "== R6. 失败时整体回滚: 配置没通过校验 → 所有自己的规则原样还在, 也没有留下假的备份"
-login; customize; rm -f "$H"/backups/reset-*.tgz; printf 'SRS' > "$H/rules/custom-mylist.srs"
+login; customize; rm -f "$H"/backups/reset-*.tgz; mkdir -p "$H/rules/custom-mylist"; printf 'SRS' > "$H/rules/custom-mylist/custom-mylist.srs"
 before=$(cat "$H/overrides.tsv" "$H/hosts.tsv" "$H/dns.conf" "$H/rules.state" "$H/custom-rulesets.tsv" "$H/apps.seen" "$SEL" | sort | shasum -a 256)
 APPLY_RC=1; op_rules_reset >/dev/null 2>&1; rc=$?; APPLY_RC=0
 eq "配置没通过校验: 重置失败" "$rc" "1"
 eq "自己的规则 (应用策略 / 网站 / DNS / 解析 / 规则集开关 / 自定义规则集 / 出口开关) 原样恢复" "$(cat "$H/overrides.tsv" "$H/hosts.tsv" "$H/dns.conf" "$H/rules.state" "$H/custom-rulesets.tsv" "$H/apps.seen" "$SEL" | sort | shasum -a 256)" "$before"
 eq "没有留下临时的开关记录" "$([ -e "$H/.reset.sel" ] && echo left)" ""
-eq "自定义规则集的文件还在 (没有因为失败被删掉)" "$(cat "$H/rules/custom-mylist.srs")" "SRS"
+eq "自定义规则集的文件还在 (没有因为失败被删掉)" "$(cat "$H/rules/custom-mylist/custom-mylist.srs")" "SRS"
 eq "失败的重置不留下备份 (不会让人误以为可以撤销)" "$(reset_latest_backup)" ""
 eq "自动识别开关恢复成原来的 (开)" "$(sed -n 's/^AUTO_SITES=//p' "$H/settings.env")" "1"
 
