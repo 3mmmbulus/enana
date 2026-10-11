@@ -1,5 +1,29 @@
 # Changelog / 更新日志
 
+## 2.3.22 (2026-10-11)
+
+### 中文
+- **换电脑登录更顺:** 在新电脑第一次登录某个账号时, 会先问一次「是否同步到这台电脑」; 确认后才取回服务器和规则, 取消则什么都不动。
+- **界面偏好独立同步:** 表格每页条数、侧栏、主题等界面习惯, 登录账号后自动同步到你的其它电脑, 不再依赖「云端同步」开关。
+- **退出账号不关代理:** 退出账号后代理开关、模式、你自己的服务器和规则都保留; 官方节点和登录令牌照常清除。切换账号, 或登录到另一个账号时, 会关闭代理。
+- **诊断摘要:** 默认关闭; 只上传错误的次数和分类, 不再包含原始错误文字; Windows 也会附带辅助服务的日志。
+- **Windows:** 「辅助服务未运行」只在真正连不上时出现; 导出日志按钮保持可用, 失败时给出原因, 不再一直「正在读取」; 增强模式切换的后台任务意外退出时会标记为失败。
+- **应用列表:** 最近 7 天识别到的应用排在最前面, 最新的在最上。
+- **云端配置快照:** 删除云端快照时只清空内容、保留版本号, 旧版本的推送会收到冲突, 不会静默覆盖新内容。
+- **日志导出:** 配置段里的 Windows 用户名已打码。
+- **登录页:** 诊断摘要的说明与默认设置一致 (默认关闭)。
+
+### English
+- **Easier on a new computer:** the first time you sign in to an account on a new computer, it asks once whether to sync to this computer. Confirming brings in your servers and rules; cancelling changes nothing.
+- **Preferences sync on their own:** interface preferences such as table page size, sidebar and theme sync to your other computers after sign-in, without the cloud sync switch.
+- **Signing out keeps the proxy on:** your proxy switch, mode, your own servers and rules stay as they are; official nodes and the sign-in token are still cleared. Switching accounts, or signing in as a different account, turns the proxy off.
+- **Diagnostics summary:** off by default; it sends only error counts and categories, no raw error text. Windows also includes the helper service logs.
+- **Windows:** "helper not running" appears only when the connection really fails; the export button stays enabled and explains a failure instead of reading forever; an enhanced-mode switch whose background task died is marked as failed.
+- **App list:** apps recognized in the last 7 days come first, newest first.
+- **Cloud configuration snapshot:** deleting the cloud copy clears its content but keeps the version, so an older push gets a conflict instead of silently overwriting.
+- **Log export:** the Windows username is masked in the configuration section.
+- **Sign-in page:** the diagnostics note matches the default (off).
+
 ## 2.3.21 (2026-10-10)
 
 ### 中文
