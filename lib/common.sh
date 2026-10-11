@@ -68,7 +68,7 @@ load_settings() { # 可调项: 环境变量 > $H/settings.env > 默认值
   ACCOUNT_URL=https://api.enana.cc; ACCOUNT_SITE=https://enana.cc     # 云端接口 / 官网 (官网只有一个首页: 账号的注册、登录、改密码都在仪表盘里)
   [ -f "$H/settings.env" ] && . "$H/settings.env"
   case $NETWORK_MODE in system|tun) ;; *) NETWORK_MODE=system ;; esac
-  case $DIAG_UPLOAD in 0|1) ;; *) DIAG_UPLOAD=1 ;; esac
+  case $DIAG_UPLOAD in 0|1) ;; *) DIAG_UPLOAD=0 ;; esac
   # 日志保留时长 (小时): 默认 3 天, 最短 12 小时, 最长 30 天; 旧版本的 LOG_DAYS (天) 自动换算
   [ -n "$LOG_HOURS" ] || { case $LOG_DAYS in ''|*[!0-9]*) LOG_HOURS=72 ;; *) LOG_HOURS=$((LOG_DAYS * 24)) ;; esac; }
   case $LOG_HOURS in ''|*[!0-9]*) LOG_HOURS=72 ;; esac; [ "$LOG_HOURS" -lt 12 ] && LOG_HOURS=12; [ "$LOG_HOURS" -gt 720 ] && LOG_HOURS=720

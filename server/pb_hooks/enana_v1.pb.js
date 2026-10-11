@@ -49,6 +49,14 @@ routerAdd("PUT", "/api/enana/v1/sync/snapshot",
 routerAdd("DELETE", "/api/enana/v1/sync/snapshot",
   (e) => { require(`${__hooks}/enana_lib.js`).syncDelete(e) })
 
+// 偏好设置 (独立于同步快照, 登录后自动同步; 见 lib/prefs.sh)
+routerAdd("GET", "/api/enana/v1/prefs",
+  (e) => { require(`${__hooks}/enana_lib.js`).prefsGet(e) })
+
+routerAdd("PUT", "/api/enana/v1/prefs",
+  (e) => { require(`${__hooks}/enana_lib.js`).prefsPut(e) },
+  $apis.bodyLimit(24576))
+
 // 注册成功: 记一条 register 审计 (这里能拿到客户端 IP) 并给新账号创建 free 订阅。
 // 出错只忽略, 不能让注册失败 (登录时 planFor 也会补订阅)。
 onRecordCreateRequest((e) => {

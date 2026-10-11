@@ -1,6 +1,7 @@
 # 诊断上传 (官方云端; 说明见 docs/DIAGNOSTICS.md)。依赖 common.sh auth.sh session.sh logs.sh。
 #
-#   摘要 (自动): 登录 / 注册成功后传一次, 之后只在「值得上报」的事件发生时传 (总开关被自动关闭 / 系统代理被关 / 核心反复重启 / 固定出口变空 …), 本机 10 分钟内最多一次。
+#   摘要 (自动): 登录 / 注册成功后传一次, 之后只在「值得上报」的事件发生时传 (总开关被自动关闭 / 系统代理被关 / 核心反复重启 / 固定出口变空 …), 本机 10 分钟内最多一次;
+#     10 分钟内发生的事件不丢: 记成待传 ($H/.diag.pending), 间隔过了由下一次 enana tick 补传 (trigger=event:pending)。
 #     内容只有结构化的状态 / 判定 / 操作记录 / 健康汇总, 由 lib/diag.pl 按白名单生成: 没有网站、应用名、IP、服务器地址、密码、令牌。
 #     设置里可以关 (DIAG_UPLOAD=0); 每一次上传都会写进「操作记录」(诊断上传), 随时能看到传了什么时候传的; `enana diag-preview` 打印下一份会传什么。
 #   完整诊断 (手动): 只在用户点「发送完整诊断给开发者」(或 `enana diag-send`) 时上传, 含访问过的域名和应用名, 用来排查摘要看不出来的问题; 返回一个报告编号发给开发者。
@@ -21,8 +22,10 @@ diag_upload() { # <触发原因: login | register | manual | event:<类型>>  �
   now_=$(now)
   case $trig in
     login|register|manual) ;;
-    *) last=$(cat "$H/.diag.last" 2>/dev/null || true); [ $(( now_ - ${last:-0} )) -ge "$DIAG_GAP" ] || return 0 ;;
+    *) last=$(cat "$H/.diag.last" 2>/dev/null || true)
+       [ $(( now_ - ${last:-0} )) -ge "$DIAG_GAP" ] || { : > "$H/.diag.pending"; return 0; } ;;      # 限频内: 不丢, 记成待传, 间隔过了由 diag_tick 补传
   esac
+  rm -f "$H/.diag.pending"
   body=$(diag_summary_json) && [ -n "$body" ] || { oplog auto "诊断上传" "$(kv trigger "$trig" err build-failed)" error; return 1; }
   payload=$(printf '{"trigger":"%s","payload":%s}' "$(jesc "$trig")" "$body")
   out=$(mktemp); code=$(session_call "$out" POST /api/enana/v1/diag "$payload"); rm -f "$out"
@@ -37,6 +40,7 @@ diag_kick() { # 登录 / 注册成功后在后台传一份摘要 (生成要跑�
 diag_tick() { # 每分钟 (cmd_tick): 只看操作记录里新增的行, 只有「值得上报」的事件才触发一次上传
   diag_enabled || return 0
   local day f pf="$H/.diag.pos" pday='' pn=0 tot want=''
+  [ -f "$H/.diag.pending" ] && { diag_upload "event:pending" || true; }      # 上一次事件被 10 分钟限频推迟了: 间隔过了就补传
   day=$(date +%F); f="$LOGS/ops-$day.log"
   [ -f "$f" ] || return 0
   tot=$(wc -l < "$f" | tr -d ' ')

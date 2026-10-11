@@ -2,7 +2,7 @@
  * · 每个应用的覆盖开关 (跟随规则 / 直连 / 固定出口 / 自动线路) + 新应用提示条; 所有状态变化都先经过 confirmDialog, 不可用的控件用 aria-disabled + 提示原因
  * · 真实应用图标: GET /api/apps 的 icon (相对路径 "appicons/X.png" 或 ""); 没有图标 / 加载失败时用字母头像; 后台提取图标期间轮询新图标
  * · 添加自定义软件: 两步弹窗 (输入路径或名称 -> POST /api/apps/inspect -> 确认结果并选路由方式 -> 最后确认 -> POST /api/apps/custom -> 任务); 自定义软件可删除
- * · 新应用: 打开「应用」页就算已知晓 —— 导航上的数字立刻消失 (后端的新标记同时确认掉), 但这一次访问里这些应用仍然高亮, 方便处理; 下次进来就不再是新的了
+ * · 新应用: 打开「应用」页就算已知晓 —— 导航上的数字立刻消失 (后端的新标记同时确认掉), 但这一次访问里这些应用仍然高亮, 方便处理; 下次进来就不再是新的了, 但识别时间在 7 天内的应用仍排在最前 (「新应用」分组, 按识别时间新的在前)
  * · 状态是「固定出口」的应用显示它实际走哪一个出口: 「默认 (当前是哪一个)」/ 在固定出口里自动选 / 指定的某一个 (POST /api/override 的 target; 有 2 个以上固定出口才能改, 只有 1 个时只读);
  *   指定的出口已经不是固定出口 = 孤儿, 在这一行醒目标出 (规则集里暂时退回默认), 总览和批量改派在服务器页「出口分配」(exits.js)
  * · 列表分页 (ui.pager) + 分组标题; 分类筛选 / 搜索记在 TP.prefs (apps.group / apps.q)
@@ -48,7 +48,9 @@
   function groupName(g) { var k = 'apps.group.' + g; return I.has(k) ? t(k) : g; }
   function groupOf(a) { return a.group || t('apps.groupOtherRaw'); }
   function groupRank(g) { if (g === t('apps.groupCustomRaw')) return -1; var o = t('apps.groupOrder').split(','), i = o.indexOf(g); return i < 0 ? o.length : i; }       // 后端给自定义软件的分组排在最前 (新应用之后)
-  function gkey(a) { return isNew(a) ? NEWG : groupOf(a); }
+  var RECENT = 7 * 86400;                                                  // 「最近」: 识别时间在 7 天内的应用 (首次扫描 / 扫描范围扩大时记的 def 不算, 和后端「不算新应用」一致), 和新应用一样排在最前
+  function isTop(a) { return isNew(a) || (a.flag !== 'def' && (+a.seen || 0) > Date.now() / 1000 - RECENT); }
+  function gkey(a) { return isTop(a) ? NEWG : groupOf(a); }
   function isWin() { var p = S.state && S.state.platform; return !!p && p.os === 'windows'; }
   function addFix() { return { label: t('why.addServer'), fn: function () { TP.goAdd('manual'); } }; }
   /* 固定出口 / 自动线路 要有对应的服务器才有意义 (核心没连上时不判断, 免得误报) */
@@ -302,13 +304,15 @@
     var want = names.indexOf(flt.g) >= 0 ? flt.g : '';
     if (el.g.value !== want) el.g.value = want;
 
-    // 默认: 新应用在最前, 然后按分类 (词典顺序) / 分类名 / 应用名; 同一个分类一定连在一起 (分组标题不会重复)。点了列头排序: 整张表按那一列排 (不分组), 先排序再分页
+    // 默认: 「新应用」分组 (新应用 + 最近 7 天识别的) 在最前, 按识别时间新的在前; 然后按分类 (词典顺序) / 分类名 / 应用名; 同一个分类一定连在一起 (分组标题不会重复)。点了列头排序: 整张表按那一列排 (不分组), 先排序再分页
     var sorted = !!(so && so.state());
     var shown = apps.filter(function (a) {
       return (!flt.g || groupOf(a) === flt.g) && (!qq || a.name.toLowerCase().indexOf(qq) >= 0);
     }).sort(function (a, b) {
-      var ga = groupOf(a), gb = groupOf(b);
-      return isNew(b) - isNew(a) || groupRank(ga) - groupRank(gb) || ga.localeCompare(gb) || a.name.localeCompare(b.name);
+      var ta = isTop(a), tb = isTop(b), ga = groupOf(a), gb = groupOf(b);
+      if (ta !== tb) return ta ? -1 : 1;
+      if (ta) return (+b.seen || 0) - (+a.seen || 0) || a.name.localeCompare(b.name);
+      return groupRank(ga) - groupRank(gb) || ga.localeCompare(gb) || a.name.localeCompare(b.name);
     });
     if (sorted) shown = so.apply(shown);
     // 分页: 总数没变时不要重画分页条 (重画会丢掉键盘焦点)
@@ -394,7 +398,7 @@
     Array.prototype.forEach.call(r.sel.options, function (o) { var s = optLabels[o.value]; if (o.textContent !== s) o.textContent = s; });
     setText(r.name, a.name); setAttr(row, 'aria-label', a.name);
     r.badge.hidden = !nw; r.ack.hidden = !nw;
-    r.grp.hidden = !nw; if (nw) setText(r.grp, groupName(groupOf(a)));
+    r.grp.hidden = !isTop(a); if (!r.grp.hidden) setText(r.grp, groupName(groupOf(a)));       // 「新应用」分组里的应用都显示分类
     r.cus.hidden = !cus; r.cusHelp.hidden = !cus; r.del.hidden = !cus; r.kind.hidden = a.kind !== 'bin';
     var wk = whenKind(a), wo = whenOf(a), tv = AT.map[a.name], ttl = trafficOf(a);
     setText(r.tmD, wo ? TP.fmt.date(wo) : '—'); setText(r.tmK, wk ? t('apps.tm.' + wk) : '');

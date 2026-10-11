@@ -861,6 +861,7 @@ AI · 固定出口	AI · Fixed exit
 修复浏览器的默认设置	Fixed the default setting of browsers
 新配置没能让代理核心启动, 已回滚到原来的配置	The new configuration could not start the proxy core, so the previous one was restored
 后台任务启动失败: enana 没有执行权限, 请重新安装	Could not start the background task: enana is not executable; please reinstall
+后台任务意外中止, 没有完成, 请重试	The background task stopped unexpectedly before it finished. Please try again.
 正在读取 SSH 主机指纹	Reading the SSH host key
 正在建立 SSH 连接并验证登录	Connecting and authenticating SSH
 SSH 已连接, 正在读取系统和网络信息	SSH connected; reading system and network information

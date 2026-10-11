@@ -47,9 +47,31 @@ job_step() {
 job_ok()   { [ -n "${JOB_ID:-}" ] || return 0; local r=${2:-}; [ -n "$r" ] || r='{}'; job_write "$JOB_ID" "$JOB_NAME" done 99 100 "${1:-完成}" "$r"; }
 job_fail() { [ -n "${JOB_ID:-}" ] || return 0; job_write "$JOB_ID" "$JOB_NAME" error "${2:-0}" 100 "$1" '{}'; }
 
+# 记录还写着「进行中」, 但干活的进程已经没了 (被结束、崩溃, 或 Windows 上整棵进程树被清掉: 这时任何 trap 都来不及写结果), 或者 JOB_STALL_MIN 分钟没有任何进度
+# → 改成失败 (E_JOB_LOST)。否则进度条和「正在应用配置」状态会一直转下去, 界面永远等不到结束。进程编号由 job_dispatch 写进 jobs/<id>.pid
+# ponytail: 15 分钟的静默上限对现有任务都够用 (最长的是 UAC 等待 + 服务重启); 真有更慢的任务时再按任务名放宽
+JOB_STALL_MIN=15
+job_reap() { # job_reap <id>
+  local f="$H/jobs/$1.json" pid lost='' name idx
+  grep -q '"state":"running"' "$f" 2>/dev/null || return 0
+  pid=$(cat "$H/jobs/$1.pid" 2>/dev/null)
+  case $pid in
+    ''|*[!0-9]*) [ -n "$(find "$f" -mmin +2 2>/dev/null)" ] && lost=1 ;;     # 进程还没写下编号 (或者根本没有启动成功): 2 分钟后仍然没有
+    *) kill -0 "$pid" 2>/dev/null || lost=1 ;;
+  esac
+  [ -n "$lost" ] || [ -z "$(find "$f" -mmin +$JOB_STALL_MIN 2>/dev/null)" ] || lost=1
+  [ -n "$lost" ] || return 0
+  # 先判断进程、再读记录: 正常结束的进程是先写完「完成」再退出的, 那时记录已经不是「进行中」了
+  grep -q '"state":"running"' "$f" 2>/dev/null || return 0
+  name=$(sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$f" | head -n 1)
+  idx=$(grep -o '"state":"[a-z]*"' "$f" | awk 'NR > 1 && /"run"/ { print NR - 2; exit }')      # 停在哪一步 (第一个「进行中」的步骤)
+  job_write "$1" "$name" error "${idx:-0}" 100 "后台任务意外中止, 没有完成, 请重试" '{"code":"E_JOB_LOST"}'
+}
+
 job_get() { # id -> JSON (找不到时返回错误 JSON)
   local id=$1
   case $id in *[!A-Za-z0-9_-]*|'') printf '{"ok":false,"code":"E_INVALID","error":"%s"}\n' "$(_t "任务编号无效")"; return ;; esac
+  job_reap "$id"
   if [ -f "$H/jobs/$id.json" ]; then cat "$H/jobs/$id.json"; else printf '{"ok":false,"code":"E_NOT_FOUND","error":"%s"}\n' "$(_t "找不到该任务")"; fi
 }
 

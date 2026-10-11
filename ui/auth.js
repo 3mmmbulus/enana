@@ -2,7 +2,7 @@
  * 流程: GET /api/auth/status (公开) -> 没有有效令牌就显示全屏登录框 (登录 | 注册 两个标签, 同一个弹窗)
  *   -> POST /api/login 或 /api/register (urlencoded user= password=, 辅助服务要向 enana.cc 校验, 超时 25 秒)
  *   -> 令牌只放 sessionStorage; 之后辅助服务请求带 X-Enana-Token, Clash API 请求带 Authorization: Bearer; 任何 401 -> 清除令牌并重新显示登录框 (界面状态保留)。
- * 本机不保存、不生成任何管理员密码; 暂不支持找回密码。「退出账号 / 切换账号」= POST /api/logout (会自动关闭代理、让所有浏览器退出)。
+ * 本机不保存、不生成任何管理员密码; 暂不支持找回密码。「退出账号」= POST /api/logout (代理设置保留); 「切换账号」= POST /api/logout?switch=1 (关闭代理); 两者都会让所有浏览器退出。
  * 最近输入的邮箱会记在 localStorage (只记邮箱, 绝不记密码)。无操作超过 TP.lockIdleMin() 分钟 (设置里可改, 默认 3 天) 自动锁定。 */
 (function () {
   'use strict';
@@ -366,7 +366,9 @@
     if (why) { ui.toast(why, 'warn'); return; }
     var ok = await ui.confirmDialog({
       title: t(sw ? 'auth.switch.title' : 'auth.logout.title'), message: t(sw ? 'auth.switch.msg' : 'auth.logout.msg', { who: who }),
-      detail: [t('auth.logout.d1'), t('auth.logout.d2'), t('auth.logout.d3'), t('auth.logout.d4')], confirmText: t(sw ? 'auth.switch.go' : 'auth.logout.go'), danger: true, confirmIcon: 'logout'
+      detail: sw ? [t('auth.logout.d1'), t('auth.logout.d2'), t('auth.logout.d3'), t('auth.logout.d4')]
+                 : [t('auth.logout.keep1'), t('auth.logout.keep2'), t('auth.logout.d2'), t('auth.logout.keep3')],
+      confirmText: t(sw ? 'auth.switch.go' : 'auth.logout.go'), danger: true, confirmIcon: 'logout'
     });
     if (!ok) return;
     var card = ui.taskCard(t(sw ? 'auth.switch.running' : 'auth.logout.running')), busy = true;
@@ -374,7 +376,7 @@
     m.setBusy(true); card.set({ pct: null, msg: t('job.submitting') });
     A.expectMsg = A.msg(sw ? 'auth.switched' : 'auth.signedOut'); A.expectOpt = sw ? { noPrefill: true } : null;
     try {
-      await TP.helper('POST', '/api/logout', { timeout: 20000 });
+      await TP.helper('POST', '/api/logout', { q: { switch: sw ? 1 : 0 }, timeout: 20000 });     // switch=1: 换账号, 后端会关闭代理; 普通退出保留代理设置
     } catch (e) {
       if (!(e && e.kind === 'auth')) {                              // 令牌已经失效 (401) 也算成功: 反正已经退出了
         A.expectMsg = ''; A.expectOpt = null; busy = false; m.setBusy(false);
@@ -385,8 +387,8 @@
     }
     busy = false; m.setBusy(false); m.close('done');
     A.account = ''; A.expectMsg = ''; A.expectOpt = null;
-    if (S.state) { S.state.account = null; if (S.state.proxy) S.state.proxy.enabled = false; }
-    TP.emit('proxy', false);
+    if (S.state) { S.state.account = null; if (sw && S.state.proxy) S.state.proxy.enabled = false; }
+    if (sw) TP.emit('proxy', false);
     A.lock(A.msg(sw ? 'auth.switched' : 'auth.signedOut'), { noPrefill: sw });
   };
 

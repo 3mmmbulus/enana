@@ -1,10 +1,10 @@
 /* enana · v-sync.js — 云端同步 (端到端加密): 设置页的「云端同步」卡片 + 新电脑登录后的「检测到云端配置」提示
  *
  *   TP.sync.settingsCard()    -> 自更新的 <section class="card"> (设置页嵌入一次; card._reload() 立即重新读取)
- *   TP.sync.offerAfterLogin() -> 每次登录成功且 S.state 已加载后调用: 本机没有服务器、云端有配置、同步还没开、用户没拒绝过 -> 弹一次窗问是否一键同步
+ *   TP.sync.offerAfterLogin() -> 每次登录成功且 S.state 已加载后调用: GET /api/sync 的 ask=true (这台电脑第一次登录这个账号、还没做过选择、云端有数据) -> 弹一次窗问是否同步到这台电脑
  *
  * 接口 (docs/API.md「云端同步」):
- *   GET  /api/sync            -> {enabled, auto, account, remote:{exists,version,updated,size,device}, local:{version,dirty}, last_pull, last_push, online}
+ *   GET  /api/sync            -> {enabled, auto, decided, ask, account, remote:{exists,version,updated,size,device}, local:{version,dirty}, last_pull, last_push, online}
  *   POST /api/sync/settings   表单 enabled=0|1 auto=0|1
  *   POST /api/sync/push       -> {job}; E_SYNC_CONFLICT = 云端比本机新。表单 force=1 = 用本机覆盖云端 (提议新增, API.md 里还没有)
  *   POST /api/sync/pull       表单 mode=replace|merge [old_password] -> {job}; E_SYNC_KEY = 要输入旧密码 (只放内存, 用完立刻清掉, 从不保存或写日志)
@@ -22,7 +22,7 @@
   var loading = false, loadedAt = 0, seq = 0, inflight = null;
   var busy = '';                    // 正在进行的动作: '' | 'save' | 'push' | 'pull' | 'clear' (同一时间只允许一个)
   var pend = null;                  // 开关请求进行中: 界面上先显示「想要的值」{enabled, auto}
-  var cards = [], modals = [], uid = 0, offerRun = false, offered = {};
+  var cards = [], modals = [], uid = 0, offerRun = false;
 
   /* 「这台电脑 vs 云端」的关系 -> 芯片 */
   var REL = {
@@ -56,7 +56,7 @@
     if (!r || typeof r !== 'object') return null;
     var rm = r.remote || {}, lc = r.local || {};
     return {
-      enabled: yes(r.enabled), auto: yes(r.auto), decided: yes(r.decided), account: str(r.account), online: !(r.online === false || r.online === 0 || r.online === '0'),
+      enabled: yes(r.enabled), auto: yes(r.auto), decided: yes(r.decided), ask: yes(r.ask), account: str(r.account), online: !(r.online === false || r.online === 0 || r.online === '0'),
       remote: { exists: yes(rm.exists), version: pos(rm.version), updated: pos(rm.updated), size: pos(rm.size), device: str(rm.device), servers: rm.servers == null || rm.servers === '' ? -1 : pos(rm.servers) },   // servers: 可选扩展, -1 = 不知道
       local: { version: pos(lc.version), dirty: yes(lc.dirty) },
       lastPull: pos(r.last_pull), lastPush: pos(r.last_push)
@@ -569,45 +569,41 @@
     if (await openClearWord()) { ui.toast(t('sync.clear.done'), 'ok'); await load(); }
   }
 
-  /* ================= 新电脑登录后: 检测到云端配置 ================= */
-  function noMap() { var m = TP.ls.get('syncNo', {}); return m && typeof m === 'object' && !Array.isArray(m) ? m : {}; }
-  function declined(who) { return !!who && !!noMap()[who]; }
-  function rememberNo(who) { if (!who) return; var m = noMap(); m[who] = Math.floor(Date.now() / 1000); TP.ls.set('syncNo', m); }
+  /* ================= 第一次登录这个账号: 「是否同步到这台电脑」 =================
+   * 这台电脑第一次登录这个账号、还没做过选择、云端有数据 → GET /api/sync 的 ask=true (lib/sync.sh 在登录时写下的标记)。
+   * 「同步」= 和手动同步一样: 开启同步 (不自动上传) + 合并拉取 (POST /api/sync/pull); 失败就把刚开的同步关回去。
+   * 「不同步」= 什么请求都不发, 这台电脑保持原样; 这个账号以后登录不再问 (标记在登录时已经写好)。 */
+  SY.shouldAskFirst = function (d) { return !!(d && d.online && d.remote.exists && d.ask && !d.decided); };
 
-  function openOffer(d, who) {
-    return new Promise(function (resolve) {
-      var st = newFlow(), rm = d.remote, enabledByUs = false, api;
-      var msg = rm.servers >= 0 ? t('sync.offer.msgN', { n: rm.servers, device: devName(rm), when: fmt.rel(rm.updated) }) : t('sync.offer.msg', { ver: ver(rm.version), device: devName(rm), when: fmt.rel(rm.updated) });
-      api = openModal({
-        title: t('sync.offer.title'), icon: 'cloud-download', iconKind: 'pri', size: 'md',
-        body: h('div', { class: 'syn-offer' }, h('p', { class: 'syn-offer-m' }, msg),
-          h('ul', { class: 'cfm-list' }, h('li', null, t('sync.offer.d1')), h('li', null, t('sync.never.short'))),
-          h('p', { class: 'muted sm' }, t('sync.offer.later'))),
-        actions: [
-          { label: t('sync.offer.no'), id: 'no', onClick: function () {
-            rememberNo(who);
-            ui.toast(t('sync.offer.declined'), '', 8000, { action: { label: t('sync.offer.openSettings'), fn: function () { TP.go('settings'); } } });
-          } },
-          { label: t('sync.offer.go'), kind: 'primary', icon: 'download-cloud', id: 'go', autofocus: true, onClick: async function (a) {
-            var why = TP.why.helper(), res;
-            if (why) { ui.toast(why, 'warn'); return false; }
-            res = await runPullIn(a, st, 'replace', {
-              title: t('sync.offer.job'),
-              before: async function () { await TP.helper('POST', '/api/sync/settings', { form: { enabled: 1, auto: 0 } }); enabledByUs = true; }
-            });
-            if (res.ok) { afterPull(); ui.toast(t('sync.offer.done'), 'ok', 5200); }
-            else if (enabledByUs && !res.auth) {                                  // 没同步成功: 把我们刚打开的同步关回去, 不留下半开的状态
-              try { await TP.helper('POST', '/api/sync/settings', { form: { enabled: 0, auto: 0 } }); } catch (e) { /* 忽略: 用户可以在设置里关 */ }
-              ui.toast(t('sync.offer.revert'), 'warn', 8000);
-              load();
-            }
-            if (!st.closed) { a.setBusy(false); a.close(res.ok ? 'done' : 'cancel'); }
-            return false;
-          } }
-        ],
-        onClose: function () { resolve(); }
-      }, st);
+  async function askFirst(d) {
+    var rm = d.remote, sm, lines = [], localN, pv, ok, card, r;
+    try { pv = await TP.helper('POST', '/api/sync/preview', { timeout: 25000 }); } catch (e) { return; }     // 读不了 (旧密码 / 连不上): 这次不问, 什么都不做
+    sm = (pv && pv.summary) || {};
+    [['servers', 'sync.first.n.servers'], ['subs', 'sync.first.n.subs'], ['custom_rulesets', 'sync.first.n.rules'], ['custom_apps', 'sync.first.n.apps'], ['site_domains', 'sync.first.n.sites'], ['vps', 'sync.first.n.vps']].forEach(function (x) {
+      var n = pos(sm[x[0]]); if (n) lines.push(t(x[1], { n: fmt.num(n) }));
     });
+    if (yes(sm.prefs)) lines.push(t('sync.first.prefs'));
+    localN = (S.state && Array.isArray(S.state.servers) ? S.state.servers : []).filter(function (s) { return !s.official; }).length;
+    if (localN) lines.push(t('sync.first.localNote', { n: fmt.num(localN) }));                             // 开启同步会把这台电脑现有的服务器也加入同步清单 (实话实说)
+    lines.push(t('sync.offer.later'));
+    ok = await ui.confirmDialog({
+      title: t('sync.offer.title'), message: t('sync.first.msg', { device: devName(rm), when: fmt.rel(rm.updated) }), detail: lines,
+      confirmText: t('sync.offer.go'), cancelText: t('sync.offer.no'), confirmIcon: 'download-cloud'
+    });
+    if (!ok) return;                                                                                       // 不同步: 什么都不做
+    busy = 'pull'; renderAll();
+    card = ui.taskCard(t('sync.offer.job')); ui.dock(card); card.set({ pct: null, msg: t('job.submitting') });
+    try {
+      await TP.helper('POST', '/api/sync/settings', { form: { enabled: 1, auto: 0 } });
+      r = await TP.helper('POST', '/api/sync/pull', { form: { mode: 'merge' }, timeout: 25000 });
+      if (r && r.job) await TP.jobs.follow(r.job, feed(card, 'sync.res.running'));
+      card.done(t('sync.pull.done')); setTimeout(card.close, 6000);
+      afterPull(); ui.toast(t('sync.offer.done'), 'ok', 5200);
+    } catch (e) {
+      if (e && e.kind === 'auth') card.close();
+      else { card.fail(errText(e)); ui.toast(t('sync.offer.revert'), 'warn', 8000); }
+      try { await TP.helper('POST', '/api/sync/settings', { form: { enabled: 0, auto: 0 } }); } catch (e2) { /* 忽略: 用户可以在设置里开启 */ }     // 没同步成功: 把刚开的同步关回去, 不留下半开的状态
+    } finally { busy = ''; renderAll(); load(); }
   }
 
   /* 添加服务器时的「保存到云端」: 默认勾选; 只有用户在设置里明确关闭过同步时默认不勾选 (勾选会重新开启) */
@@ -621,15 +617,9 @@
     if (offerRun) return;
     offerRun = true;
     try {
-      var sv = S.state && S.state.servers;                                      // 调用方保证 S.state 已加载; 还没有就不提示
-      if (S.locked || !Array.isArray(sv) || sv.length) return;                  // 本机已经有服务器: 不打扰
-      await TP.sleep(3000);                                                     // 登录时辅助服务会自动取回云端的服务器 (后台任务): 等它先做完, 已经同步了就不再提示
-      var d = await load(), who;
-      if (!d || S.locked || !d.online || !d.remote.exists || d.enabled) return;
-      who = (d.account || (TP.auth && TP.auth.email ? TP.auth.email() : '')).toLowerCase();
-      if (offered[who] || declined(who)) return;
-      offered[who] = true;                                                      // 同一个账号, 一次页面加载里最多提示一次
-      await openOffer(d, who);
+      var d = await load();
+      if (S.locked || !SY.shouldAskFirst(d)) return;                            // 不问: 不在线 / 云端没有数据 / 已经选择过 / 这次登录没有要问的
+      await askFirst(d);
     } catch (e) { console.error('[sync] offer', e); }                           // 提示只是锦上添花: 出错不要变成全局的「未处理错误」提示
     finally { offerRun = false; }
   };

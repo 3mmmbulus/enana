@@ -59,7 +59,7 @@
   function opsOn() { return flag('log_ops', true); }
   function accessOn() { var p = prefs(); return p && p.access_log != null ? boolOf(p.access_log) : null; }   // null = 还不知道
   function coreOn() { return flag('log_core', true); }
-  function diagOn() { return flag('diag_upload', true); }          // 诊断摘要自动上传 (官方云端, 不含网站 / 应用名 / IP / 服务器地址)
+  function diagOn() { return flag('diag_upload', false); }          // 诊断摘要自动上传 (官方云端, 不含网站 / 应用名 / IP / 服务器地址)
   function pad2(n) { return n < 10 ? '0' + n : String(n); }
   function ymd(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
   function stamp() { var d = new Date(); return ymd(d).replace(/-/g, '') + '-' + pad2(d.getHours()) + pad2(d.getMinutes()) + pad2(d.getSeconds()); }
@@ -432,7 +432,7 @@
     if (days.length && el.day.value !== day) el.day.value = day;
     ui.avail(el.day, days.length ? '' : t('logs.day.noneWhy'));
     if (el.q.placeholder !== ph) { el.q.placeholder = ph; el.q.setAttribute('aria-label', ph); }
-    ui.avail(el.exp, why);
+    // 导出按钮不因辅助服务没运行而灰掉: openExport 会立刻提示原因, 不会打开一个卡住的弹窗
     ui.avail(el.clr, why || (tb.loaded && !days.length ? t('logs.clear.nothing') : ''));
     el.liveWrap.hidden = k === 'ops';                                                           // 操作记录不会「实时」滚动, 不显示这个开关
   }

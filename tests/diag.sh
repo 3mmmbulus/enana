@@ -91,7 +91,7 @@ session_call() { # <out> <method> <path> [body]  -> 假云端: 记录调用, 返
   case ${FAKE_CODE:-200} in 200) printf '{"ok":true,"id":"rep123abc456xyz"}' > "$1" ;; *) printf '{"code":"x"}' > "$1" ;; esac
   printf '%s' "${FAKE_CODE:-200}"
 }
-reset() { : > "$CALLS"; rm -f "$H/.diag.last" "$H/.diag.pos" "$H"/logs/ops-*.log; DIAG_UPLOAD=1; STUB_LOGIN=1; unset FAKE_CODE ENANA_NO_DIAG; }
+reset() { : > "$CALLS"; rm -f "$H/.diag.last" "$H/.diag.pos" "$H/.diag.pending" "$H"/logs/ops-*.log; DIAG_UPLOAD=1; STUB_LOGIN=1; unset FAKE_CODE ENANA_NO_DIAG; }
 ops() { cat "$LOGS"/ops-*.log 2>/dev/null; }
 
 reset
@@ -139,6 +139,16 @@ hs "系统代理被关: 触发 event:sysproxy" "诊断上传	trigger=event:syspr
 reset; O=$LOGS/ops-$(date +%F).log
 printf '%s\tauto\t环境状态变化\titem=net_if from=en0 to=en1\tok\n' "$(date '+%F %T')" > "$O"; diag_tick
 eq "换网络接口这类普通变化: 不触发" "$(grep -c '^POST' "$CALLS")" "0"
+
+echo "-- D5c. 限频内的事件不丢: 记成待传, 间隔过了由下一次 tick 补传"
+reset
+diag_upload login                                             # 刚传过一次
+O=$LOGS/ops-$(date +%F).log
+printf '%s\tauto\t环境状态变化\titem=sysproxy from=1 to=0 capture=system\tok\n' "$(date '+%F %T')" > "$O"; diag_tick
+eq "10 分钟内的事件: 先不传 (本机限频), 记成待传" "$(grep -c '^POST' "$CALLS"):$([ -f "$H/.diag.pending" ] && echo pending)" "1:pending"
+printf '%s\n' "$(( $(now) - 601 ))" > "$H/.diag.last"; diag_tick
+eq "间隔过了: 下一次 tick 补传, 待传标记清掉" "$(grep -c '^POST' "$CALLS"):$([ -f "$H/.diag.pending" ] && echo pending || echo clear)" "2:clear"
+hs "补传记进操作记录: trigger=event:pending http=200" "trigger=event:pending http=200" "$(ops)"
 
 P=$(wc -l < "$W/.pass" | tr -d ' '); F=$(wc -l < "$W/.fail" | tr -d ' ')
 echo; echo "diag.sh: $P passed, $F failed"; [ "$F" = 0 ]

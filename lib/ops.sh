@@ -104,10 +104,10 @@ op_txn() {
     0) op_unlock; oplog "${OP_WHO:-terminal}" "$desc" "$detail" ok
        _txn_end ok "$([ "${APPLY_CHANGED:-1}" = 1 ] && echo "$desc 完成, 配置已应用" || echo "$desc 完成 (配置无变化, 未重启)")"; return 0 ;;
     1) line=$(grep -m1 -iE 'error|fatal|decode|unknown|invalid|missing' "$H/check.log" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-200 || true)
-       txn_restore; apply_config >/dev/null 2>&1 || true; op_unlock
+       txn_restore; APPLY_QUIET=1 apply_config >/dev/null 2>&1 || true; op_unlock      # 撤销时不再写进度 (否则进度条会跳回「生成配置 10%」)
        oplog "${OP_WHO:-terminal}" "$desc" "$detail" error
        _txn_end fail "配置未通过校验, 已撤销本次更改${line:+: $line}" 1; return 1 ;;
-    *) txn_restore; apply_config >/dev/null 2>&1 || true; op_unlock
+    *) txn_restore; APPLY_QUIET=1 apply_config >/dev/null 2>&1 || true; op_unlock
        oplog "${OP_WHO:-terminal}" "$desc" "$detail" error
        _txn_end fail "新配置无法启动, 已撤销本次更改并恢复原配置" 3; return 1 ;;
   esac
@@ -433,7 +433,7 @@ op_subs_refresh() {
   return 0
 }
 
-# 终端「退出账号」: 关闭代理 + 令牌轮换 (+ purge 时清除离线登录缓存) + 让核心换上新令牌 (所有浏览器立即退出登录)
+# 终端「退出账号」: 代理设置保留 + 令牌轮换 (+ purge 时清除离线登录缓存) + 让核心换上新令牌 (所有浏览器立即退出登录)
 op_logout() { # [purge]
   local rc
   job_step 0 20 "退出账号"
@@ -443,7 +443,7 @@ op_logout() { # [purge]
   apply_config >/dev/null 2>&1; rc=$?
   op_unlock
   oplog "${OP_WHO:-terminal}" "退出账号" "" "$([ "$rc" = 0 ] && echo ok || echo error)"
-  if [ "$rc" = 0 ]; then _txn_end ok "已退出账号并关闭代理, 所有浏览器需要重新登录"; else _txn_end fail "代理已关闭、令牌已更换, 但核心没有成功重启, 运行 enana doctor 查看原因" 3; return 1; fi
+  if [ "$rc" = 0 ]; then _txn_end ok "已退出账号 (代理设置保留), 所有浏览器需要重新登录"; else _txn_end fail "令牌已更换, 但核心没有成功重启, 运行 enana doctor 查看原因" 3; return 1; fi
 }
 # 仪表盘退出账号后的收尾: 令牌已经换了, 让核心也换上 (期间核心已是全部直连, 不会影响上网)
 op_sync_secret() {
@@ -553,6 +553,7 @@ op_maintain() {
 job_dispatch() {
   JOB_NAME=$1; JOB_ID=$2; shift 2
   JOB_BODY="$H/jobs/$JOB_ID.body"
+  mkdir -p "$H/jobs"; printf '%s\n' "$$" > "$H/jobs/$JOB_ID.pid"      # 进程编号: job_reap (lib/jobs.sh) 据此发现进程已经没了
   case $JOB_NAME in
     apply)          op_apply ;;
     override)       op_txn "修改应用/网站策略" txn_override "$@" ;;

@@ -157,7 +157,7 @@ ep_login() {
   case $k in ''|*[!A-Za-z0-9-]*) [ -z "$k" ] || fail "设备编号无效" ;; esac
   if auth_login "$u" "$p" "$k"; then
     oplog dashboard "登录" "$(kv user "$(auth_mask_email "$AUTH_EMAIL")" via "$AUTH_VIA")" ok
-    [ "$AUTH_VIA" = online ] && { job_spawn content-sync "$RULE_STEPS" >/dev/null; job_spawn sync-login "$RULE_STEPS" >/dev/null; ( plan_refresh >/dev/null 2>&1 & ); }       # 登录后顺带拉取云端内容和套餐 (后台, 失败不影响登录)
+    [ "$AUTH_VIA" = online ] && { job_spawn content-sync "$RULE_STEPS" >/dev/null; job_spawn sync-login "$RULE_STEPS" >/dev/null; ( plan_refresh >/dev/null 2>&1 & ); ( prefs_cloud_sync >/dev/null 2>&1 & ); }       # 登录后顺带拉取云端内容、套餐和偏好 (后台, 失败不影响登录)
     okj "\"token\":\"$(auth_secret)\",\"account\":\"$(jesc "$AUTH_EMAIL")\",\"via\":\"$AUTH_VIA\""
     return
   fi
@@ -174,8 +174,10 @@ ep_register() {
   fi
   auth_fail_reply
 }
-ep_logout() { # 退出账号: 自动关闭代理 + 令牌立刻失效 + 释放云端设备名额; 核心在后台重启一次换上新令牌 (期间已是全部直连)
-  oplog dashboard "退出账号" "$(kv user "$(auth_mask_email "$(auth_current_email)")")" ok
+ep_logout() { # 退出账号: 代理设置保留 (开关 / 系统代理 / 你自己的服务器与规则), 官方节点与令牌清掉, 释放云端设备名额; 切换账号 (switch=1) 才关闭代理
+  local sw; sw=$(fp switch)
+  oplog dashboard "退出账号" "$(kv user "$(auth_mask_email "$(auth_current_email)")" switch "${sw:-0}")" ok
+  [ "$sw" = 1 ] && proxy_set_enabled 0
   auth_logout
   job_spawn auth-sync '同步令牌' >/dev/null
   okj
@@ -406,6 +408,7 @@ ep_vps_forget() {
 }
 ep_prefs_set() { # 正文是 JSON 对象文本
   prefs_set "$BODY" || fail "$PREFS_ERR" E_INVALID
+  ( prefs_cloud_sync >/dev/null 2>&1 & ) >/dev/null 2>&1                  # 本机改动后推送到云端 (后台, 不让界面等网络; 未登录时什么都不做)
   okj "\"version\":$PREFS_VERSION"
 }
 ep_plan() {

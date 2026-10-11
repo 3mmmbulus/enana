@@ -7,6 +7,7 @@
 #
 #   $H/sync.conf   ENABLED AUTO ACCOUNT BASE_VERSION SYNCED_HASH LAST_PULL LAST_PUSH CHECKED CONFLICT   (KEY=VALUE, 600)
 #   $H/sync.key    第 1 行 加密口令 (hex), 第 2 行 校验密钥 (hex)   (600)
+#   $H/sync.asked  每行一个账号 id: 这台电脑已经处理过这个账号的「第一次登录」 (之后登录不再问)     $H/sync.ask  账号 id: 这次登录要问「是否同步到这台电脑」 (只在第一次登录、还没做过选择时写入)
 #   BASE_VERSION = 本机内容所基于的云端版本 (推送 / 拉取成功后更新); SYNCED_HASH = 那一刻本机可同步内容的哈希 (和现在比较就知道有没有没上传的改动)
 
 SYNC_ITER=200000
@@ -21,14 +22,24 @@ sync_have_key() { [ -s "$H/sync.key" ]; }
 snap_hash() { /usr/bin/perl "$LIB/snapshot.pl" hash "$H"; }
 sync_local_has_data() { [ -s "$H/servers.sync" ] || [ -s "$H/subs.sync" ] || [ -s "$H/overrides.tsv" ] || [ -s "$H/custom-rulesets.tsv" ]; }      # 本机有没有用户自己的配置 (自动同步在本机有数据时不会静默覆盖)
 
-# 登录 / 退出时调用: 换了账号就重置版本信息 (同一账号再登录保留, 不会多出「冲突」提示)
+# 登录 / 退出时调用。换了账号: 同步开关和版本信息属于上一个账号, 不带给这个账号 (它的第一次登录会重新问); 同一账号再登录保留。
+# 第一次在这台电脑上登录这个账号 (sync.asked 里没有它): 记下, 之后登录不再问; 还没做过选择 (ENABLED 没有值) 的, 写 sync.ask, 这次登录后由「是否同步到这台电脑」提示问一次 (ui/v-sync.js)。
 sync_on_login() { # <账号 id> <密码>   (best-effort: 失败只是不能同步, 不影响登录)
   local id=$1 pw=$2
   [ -n "$id" ] || return 0
-  [ "$(sync_get ACCOUNT)" = "$id" ] || { sync_set BASE_VERSION 0; sync_set SYNCED_HASH ''; sync_set CONFLICT 0; sync_set ACCOUNT "$id"; }
+  if [ "$(sync_get ACCOUNT)" != "$id" ]; then sync_set ENABLED ''; sync_set AUTO ''; sync_set BASE_VERSION 0; sync_set SYNCED_HASH ''; sync_set CONFLICT 0; sync_set ACCOUNT "$id"; fi
   sync_key_derive "$id" "$pw" || true
+  rm -f "$H/sync.ask"
+  if ! sync_asked "$id"; then
+    sync_mark_asked "$id"
+    [ -n "$(sync_get ENABLED)" ] || { printf '%s\n' "$id" > "$H/sync.ask"; chmod 600 "$H/sync.ask"; }
+  fi
 }
 sync_on_logout() { rm -f "$H/sync.key" "$H/sync.key.old" "$H/sync-incoming.json" "$H/sync-incoming.b64" "$H/sync.remote"; }
+# 「第一次登录」标记 (每台电脑各一份, 只保存账号 id, 不保存邮箱和密码)
+sync_asked() { case $1 in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac; grep -qx "$1" "$H/sync.asked" 2>/dev/null; }
+sync_mark_asked() { case $1 in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac; sync_asked "$1" && return 0; printf '%s\n' "$1" >> "$H/sync.asked"; chmod 600 "$H/sync.asked"; }
+sync_ask_pending() { local a; a=$(auth_acc_get id); case $a in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac; [ "$(sed -n 1p "$H/sync.ask" 2>/dev/null)" = "$a" ]; }
 
 # sync_key_derive <账号 id> <密码> [输出文件]  -> 0 成功
 sync_key_derive() {
@@ -131,9 +142,9 @@ sync_state_json() {
   lv=$(sync_get BASE_VERSION); lh=$(sync_get SYNCED_HASH); nowh=$(snap_hash)
   if [ -n "$lh" ]; then [ "$lh" != "$nowh" ] && dirty=true; else sync_local_has_data && dirty=true; fi       # 从没同步过: 本机有数据才算「有没上传的改动」
   lp=$(sync_get LAST_PULL); lq=$(sync_get LAST_PUSH)
-  printf '"enabled":%s,"auto":%s,"decided":%s,"has_key":%s,"account":"%s","remote":%s,"local":{"version":%s,"dirty":%s},"conflict":%s,"last_pull":%s,"last_push":%s,"online":%s' \
+  printf '"enabled":%s,"auto":%s,"decided":%s,"has_key":%s,"account":"%s","remote":%s,"local":{"version":%s,"dirty":%s},"conflict":%s,"last_pull":%s,"last_push":%s,"online":%s,"ask":%s' \
     "$en" "$au" "$([ -n "$(sync_get ENABLED)" ] && echo true || echo false)" "$(sync_have_key && echo true || echo false)" "$(jesc "$(auth_current_email)")" "$remote" "${lv:-0}" "$dirty" \
-    "$([ "$(sync_get CONFLICT)" = 1 ] && echo true || echo false)" "${lp:-0}" "${lq:-0}" "$online"
+    "$([ "$(sync_get CONFLICT)" = 1 ] && echo true || echo false)" "${lp:-0}" "${lq:-0}" "$online" "$(sync_ask_pending && echo true || echo false)"
 }
 
 # ---------- 推送 (后台任务 sync-push) ----------
@@ -184,10 +195,13 @@ sync_push_job() { # <force 0|1>
 
 # ---------- 拉取 (后台任务 sync-pull; 下载 + 解密在接口里已经做完, 这里只负责「应用」) ----------
 txn_sync_apply() { # <replace|merge>  内容来自 $H/sync-incoming.json
-  local res
+  local rc keep=0
   [ -s "$H/sync-incoming.json" ] || { TXN_ERR="没有可应用的云端配置"; return 1; }
-  res=$(snap_apply "$H/sync-incoming.json" "$1" 2>/dev/null) || { TXN_ERR="云端的配置格式不对, 已放弃"; return 1; }
-  case $res in *'"prefs.json"'*) prefs_touch || true ;; esac          # 偏好变了: 前端据 prefs_version 重新读取
+  # 偏好不走配置快照 (独立同步, 见 lib/prefs.sh): 应用前记下本机的 prefs.json, 应用后原样放回 (旧版本的快照里可能还带着它)
+  if [ -f "$H/prefs.json" ]; then cp -p "$H/prefs.json" "$H/prefs.keep" || { TXN_ERR="没能保存本机的偏好设置, 已放弃"; return 1; }; keep=1; fi
+  snap_apply "$H/sync-incoming.json" "$1" >/dev/null 2>&1; rc=$?
+  if [ "$keep" = 1 ]; then mv -f "$H/prefs.keep" "$H/prefs.json"; else rm -f "$H/prefs.json"; fi
+  [ "$rc" = 0 ] || { TXN_ERR="云端的配置格式不对, 已放弃"; return 1; }
   load_settings                                                       # 设置 (语言 / 日志) 可能变了
   return 0
 }
@@ -237,17 +251,17 @@ sync_after_save() {
   esac
   : > "$H/.sync-pending"
 }
-# sync_login_auto (登录之后的后台任务): 云端有这个账号保存的服务器就自动取回来 —— 合并进本机, 本机已有的保留, 不覆盖; 在设置里明确关闭过同步的不动。
+# sync_login_auto (登录之后的后台任务): 只有这台电脑已经开启过同步 (用户确认过, 或者以前就开着) 才自动取回云端的配置 —— 合并进本机, 本机已有的保留, 不覆盖。
+# 还没做过选择的电脑 (ENABLED 没有值) 什么都不取回, 由登录后的「是否同步到这台电脑」提示问用户 (ui/v-sync.js); 明确关闭过同步的也不动。这里不会自动开启同步。
 # 取回来的服务器记入同步清单, 之后和这台电脑的改动一起继续同步 (由 tick 上传)。解不开 (改过密码) / 连不上云端时静默放弃, 由设置里的同步卡片处理。
 sync_login_auto() {
   local id
   sync_have_key && auth_logged_in || return 0
-  [ "$(sync_get ENABLED)" = 0 ] && return 0
+  [ "$(sync_get ENABLED)" = 1 ] || return 0                                            # 没有开启: 不取回任何东西 (由登录后的提示问用户)
   id=$(auth_acc_get id)
   sync_remote_forget; sync_remote_meta || return 0
   [ "$R_EXISTS" = 1 ] || return 0                                                      # 云端还没有数据: 等第一次勾选「保存到云端」
   if [ "$(sync_get ACCOUNT)" = "$id" ] && [ "$R_VERSION" = "$(sync_get BASE_VERSION)" ] && [ -n "$(sync_get SYNCED_HASH)" ]; then return 0; fi     # 这台电脑已经是最新的
   sync_open_remote || return 0
-  case "$(sync_get ENABLED)" in 1) ;; *) sync_set ENABLED 1; [ -n "$(sync_get AUTO)" ] || sync_set AUTO 1 ;; esac
   OP_WHO=terminal sync_pull_job merge 0 "$SYNC_IN_VERSION" || true
 }
