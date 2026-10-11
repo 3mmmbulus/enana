@@ -844,7 +844,7 @@ ep_update_apply() {
   local what; what=$(qp what)
   case $what in
     app)  update_has_new || fail "已经是最新版本"; okj "\"job\":\"$(job_spawn self-update '检查新版本|下载并校验新版本|安装并重新生成配置|完成')\"" ;;
-    core) okj "\"job\":\"$(job_spawn core-upgrade '查询最新版本|下载并校验新核心|用新核心校验现有配置|重启服务')\"" ;;
+    core) okj "\"job\":\"$(job_spawn core-upgrade '查询最新版本|下载并校验新核心|用新核心校验现有配置|在临时端口试运行新核心|重启服务')\"" ;;
     *)    fail "参数无效" ;;
   esac
 }

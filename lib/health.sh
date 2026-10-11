@@ -32,7 +32,7 @@ pin_dependents() { # 有多少个选择器 / 规则会把流量交给「固定�
   local n=0 f
   [ -s "$H/config.json" ] && n=$(grep -o '"default":"PIN"' "$H/config.json" 2>/dev/null | wc -l | tr -d ' ')
   for f in ovr-apppin ovr-pin ovr-browserpin; do
-    if grep -qE '"(process_name|process_path|domain|domain_suffix)"' "$H/rules/$f.json" 2>/dev/null; then n=$((n + 1)); fi
+    if grep -qE '"(process_name|process_path|domain|domain_suffix)"' "$(rule_file "$f.json")" 2>/dev/null; then n=$((n + 1)); fi
   done
   printf '%s' "${n:-0}"
 }

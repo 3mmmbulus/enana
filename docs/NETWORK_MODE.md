@@ -20,7 +20,7 @@ Gemini 自身日志在 12:58:45 接受浏览器回调并开始交换 authorizati
 
 System Proxy 默认不变。Enhanced/TUN 是显式选择, 包含双栈捕获、DNS hijack、进程匹配、系统路由私网排除、默认接口出口绑定。root launchdaemon 使用 root 拥有的核心/规则快照; 用户授权后安装。启动检查实际 utun 地址与 IPv4/IPv6 路由。失败在 root helper 内恢复快照, 上层事务恢复设置。切换时通过控制 API 保存并恢复 Selector 选项, 避免丢失已选 PIN 出口。应用 PIN 使用独立进程规则集, 优先于网站指定的其他 PIN 出口; 浏览器 Direct/Auto/PIN 则作为网站策略之后的兜底。
 
-固定出口分配 (`POST /api/exits/move|freeze`) 在 TUN 下同 `/api/override` 一样是后台任务: 只改 `rules/ovr-*.json` (纯路由数据), 经免密规则同步助手 (`lib/tunrules-helper.pl`) 同步到 root 快照, 核心热加载, 不重启、不要管理员密码; 助手一次最多同步 160 个规则集文件 (32 个固定出口 = 107 个), 旧助手上限 60 (16 个固定出口), 超过时退回完整安装并把助手换成新版。默认固定出口的选择存在 `$H/pin-default`, 核心 (重新) 启动后由 `proxy_sync_mode` 校正, 不改 `config.json`, 所以换默认出口不会触发 TUN 的完整重装。
+固定出口分配 (`POST /api/exits/move|freeze`) 在 TUN 下同 `/api/override` 一样是后台任务: 只改 `rules/*/ovr-*.json` (纯路由数据), 经免密规则同步助手 (`lib/tunrules-helper.pl`) 同步到 root 快照, 核心热加载, 不重启、不要管理员密码; 助手一次最多同步 160 个规则集文件 (32 个固定出口 = 107 个), 旧助手上限 60 (16 个固定出口), 超过时退回完整安装并把助手换成新版。默认固定出口的选择存在 `$H/pin-default`, 核心 (重新) 启动后由 `proxy_sync_mode` 校正, 不改 `config.json`, 所以换默认出口不会触发 TUN 的完整重装。
 
 自动化测试不修改真实系统路由, 不触发管理员授权:
 
@@ -116,9 +116,9 @@ TUN 的核心是 root 守护进程: 改核心、配置、规则库 (`.srs`)、�
 
 **默认模式不会走错**: `default_mode` 只是核心「没有记住模式」时的起始模式。运行时的模式通过控制接口 (`PATCH /configs`) 推送, sing-box 把它存在 `cache.db` 里并在重启时恢复; enana 自己做的每一次重启 (应用配置、重启、升级核心、启动) 之后都会再 `proxy_sync_mode`。剩下的缺口是「推送时核心没在运行 + 缓存里也没有」, 所以完整安装会记下写进快照的模式 (`$H/.enhanced-mode`), 之后每次无变化的 `apply_config` 发现设置里的模式和它不一致就补同步一次, 核心确认之后才记下。
 
-**root 助手 (`/usr/local/libexec/enana/tunrules-<uid>`, 版本 2)** 现在有两个动作, 都只作用于这个用户自己的守护进程:
+**root 助手 (`/usr/local/libexec/enana/tunrules-<uid>`, 版本 3)** 现在有两个动作, 都只作用于这个用户自己的守护进程:
 
-- `sync`: 校验后写入 `rules/ovr-*.json` (应用 / 网站策略), 核心热加载。
+- `sync`: 校验后写入 `rules/*/ovr-*.json` (应用 / 网站策略), 核心热加载。
 - `restart`: 只执行 `launchctl kickstart -k system/com.enana.proxy.tun.<uid>`。标签和 `launchctl` 路径是安装时由 root 脚本写死进助手的 (不是调用者给的), 助手不读任何参数 / 输入 / 环境变量; 有多余参数、标签不合规都会拒绝。威胁模型: 同一用户下的任何进程最多能让自己的 root 守护进程重启一次 (流量中断几秒), 得不到 root 权限, 也改不了任何文件; 助手文件归 root、别人不可写、不是符号链接、sudoers 规则经 `visudo -cf` 校验, 这些检查一条没放松。
 - 从旧版本升级后, 已安装的版本 1 助手不认识 `restart`, `enhanced_helper_ok` 判为不可用, 下一次完整安装 (升级本身会改变 `enhanced.sh` / `enhanced-root.sh` 的指纹, 反正要装一次) 用一次管理员授权换上版本 2。
 

@@ -25,7 +25,7 @@ enhanced_admin() {
     osascript -e "do shell script \"$cmd\" with administrator privileges" >&2
   fi
 }
-# The fingerprint of everything the root core was installed from EXCEPT the app/site policy rule sets (rules/ovr-*.json): those are plain routing data
+# The fingerprint of everything the root core was installed from EXCEPT the app/site policy rule sets (rules/*/ovr-*.json): those are plain routing data
 # that enhanced_sync_ovr can push into the root snapshot without a restart (see enhanced_ovr_fingerprint). A change to anything else needs a full,
 # administrator-authorised install, so the fingerprint must only move when the root snapshot would really differ:
 #   - config.json is hashed with the clash_api "default_mode" value blanked. proxy_apply_mode rewrites that value in place on every master-switch / mode
@@ -34,8 +34,10 @@ enhanced_admin() {
 #     is a core that restarts on its own with a stale seed, which apply_config covers (enhanced_mode_resync).
 #   - hidden files (rules/.updated is rewritten by every `enana update` even when no rule changed, .DS_Store), *.new and *.tmp (downloads and writes in
 #     progress) are bookkeeping, not rule data.
+#   - rules/<name>.srs files left flat by 2.3.22: the core reads only rules/<name>/<name>.srs, and the upgrade removes the flat copies after a verified start.
+#     Counting them would change the fingerprint at that moment and ask for an administrator password on the next apply.
 enhanced_config_hash() { sed 's/"default_mode":"[A-Za-z]*"/"default_mode":"-"/' "$H/config.json" 2>/dev/null | shasum -a 256 | awk '{print $1}'; }
-enhanced_data_hashes() { find "$H/rules" "$H/certs" -type f ! -name 'ovr-*.json' ! -name '.*' ! -name '*.new' ! -name '*.tmp' -exec shasum -a 256 {} \; 2>/dev/null; }
+enhanced_data_hashes() { { find "$H/rules" -mindepth 2 -type f ! -name 'ovr-*.json' ! -name '.*' ! -name '*.new' ! -name '*.tmp' -exec shasum -a 256 {} \; ; find "$H/certs" -type f ! -name 'ovr-*.json' ! -name '.*' ! -name '*.new' ! -name '*.tmp' -exec shasum -a 256 {} \; ; } 2>/dev/null; }
 enhanced_fingerprint() {
   {
     printf 'autostart=%s\n' "${AUTOSTART:-1}"; shasum -a 256 "$SB"; printf 'config:%s\n' "$(enhanced_config_hash)"
@@ -59,19 +61,19 @@ enhanced_mode_resync() { # the mode baked into the root snapshot is only a seed 
   return 0
 }
 enhanced_ovr_fingerprint() { # the app/site policy rule sets (written by ovr_sync); empty directory => a fixed hash
-  { find "$H/rules" -maxdepth 1 -type f -name 'ovr-*.json' -exec shasum -a 256 {} \; 2>/dev/null; echo ovr; } | LC_ALL=C sort | shasum -a 256 | awk '{print $1}'
+  { find "$H/rules" -mindepth 2 -maxdepth 2 -type f -name 'ovr-*.json' -exec shasum -a 256 {} \; 2>/dev/null; echo ovr; } | LC_ALL=C sort | shasum -a 256 | awk '{print $1}'
 }
 
-# ---- root helper: change an app/site policy in TUN mode (`sync`) or bounce the root core (`restart`) without an administrator prompt ----
-# Version 2 added `restart`. A helper installed by an older enana reports version 1, so enhanced_helper_ok rejects it and the next full install (one
-# administrator authorisation, the same one that already follows any upgrade of enhanced.sh / enhanced-root.sh) replaces it. Nothing silently
-# calls a helper that lacks the action.
-TUNRULES_HELPER_VERSION=2
+# ---- root helper: change an app/site policy in TUN mode (`sync`), bounce the root core (`restart`) or remove leftover routes (`cleanup`) without an administrator prompt ----
+# Version 2 added `restart`; version 3 writes each rule set into its own directory (rules/<名字>/<名字>.json, see lib/tunrules-helper.pl); version 4 added `cleanup`.
+# A helper installed by an older enana reports 1, 2 or 3, so enhanced_helper_ok rejects it and the next full install (one administrator authorisation, the same one
+# that already follows any upgrade of enhanced.sh / enhanced-root.sh) replaces it. Nothing silently calls a helper that lacks the action or the layout.
+TUNRULES_HELPER_VERSION=4
 enhanced_helper_path() { enhanced_paths; printf '%s/usr/local/libexec/enana/tunrules-%s' "${ENANA_ROOT_PREFIX:-}" "$TUN_UID"; }
 enhanced_helper_ok() { os_helper_trusted "$(enhanced_helper_path)" "$TUNRULES_HELPER_VERSION"; }
-enhanced_ovr_bundle() { # {"ovr-pin.json": {...}, ...} from $H/rules/ovr-*.json (the helper validates it again, strictly)
+enhanced_ovr_bundle() { # {"ovr-pin.json": {...}, ...} from $H/rules/*/ovr-*.json (the helper validates it again, strictly)
   perl -MJSON::PP -MFile::Glob=:bsd_glob -e '
-    my %o; for my $f (bsd_glob("$ARGV[0]/rules/ovr-*.json")) { my ($n) = $f =~ m{([^/]+)$}; open my $fh, "<", $f or next; local $/; my $d = eval { JSON::PP->new->utf8->decode(scalar <$fh>) }; $o{$n} = $d if ref $d eq "HASH"; }
+    my %o; for my $f (bsd_glob("$ARGV[0]/rules/*/ovr-*.json")) { my ($n) = $f =~ m{([^/]+)$}; open my $fh, "<", $f or next; local $/; my $d = eval { JSON::PP->new->utf8->decode(scalar <$fh>) }; $o{$n} = $d if ref $d eq "HASH"; }
     print JSON::PP->new->utf8->canonical->encode(\%o);' "$H"
 }
 enhanced_sync_ovr() { # 0 = synced (the running root core hot-reloads the files); non-zero = no/untrusted helper or rejected data -> caller does the full install
@@ -95,6 +97,8 @@ enhanced_restart_fast() {
   if [ "$(enhanced_ovr_fingerprint)" != "$(cat "$H/.enhanced-ovr-fingerprint" 2>/dev/null)" ]; then enhanced_sync_ovr || { ENHANCED_FAST_WHY=sync-failed; return 1; }; fi
   sudo -n "$(enhanced_helper_path)" restart >/dev/null 2>"$H/enhanced-restart.log" || { ENHANCED_FAST_WHY=rejected; return 1; }
 }
+# 助手版本低于 4 (没有 cleanup) 时 enhanced_helper_ok 为假, 什么也不做
+tun_residual_clean() { enhanced_helper_ok || return 0; sudo -n "$(enhanced_helper_path)" cleanup >"$H/enhanced-cleanup.log" 2>&1 || true; }
 enhanced_stage_config() {
   # Explicitly open the config: decode(<>) evaluates the diamond in list
   # context and consumes the home/root arguments as additional filenames.

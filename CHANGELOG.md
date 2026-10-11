@@ -1,5 +1,27 @@
 # Changelog / 更新日志
 
+## 2.3.23 (2026-10-11)
+
+### 中文
+- **规则集分目录存放:** 每个规则集单独放在自己的子目录里, 不再几十上百个文件挤在同一个目录, 避免 Mac 上 sing-box 监视规则文件时报「too many open files」、核心起不来。升级时自动整理, 旧文件先保留, 确认新核心启动成功后才清理。
+- **升级核心前先试运行 (仅 Mac):** 新核心先在临时端口上试运行, 用的是临时的缓存和日志文件, 不影响正在运行的服务、系统代理和 TUN; 试运行通过后才重启服务。试运行失败时保留原来的核心, 不重启服务。
+- **升级核心更安全:** Windows 上新核心先复制到旁边并校验, 确认无误后才停掉当前核心并替换; 替换失败时把原来的核心重新拉起来。Mac 和 Windows 上备份旧核心失败都会直接中止升级, 不下载也不替换。
+- **升级失败时先关闭系统代理:** 升级 enana 或 sing-box 核心后, 核心没能起来、而系统代理还指向 enana 时, 会先静默关闭系统代理 (不弹出管理员密码框), 应用不再连接已停止的代理, 并提示运行 enana doctor 查看原因。系统代理模式和 TUN 模式都适用; TUN 模式下若仍无法上网, 也请运行 enana doctor。规则集目录整理失败时保留现有配置, 不写入新配置。
+- **升级失败时清理残留的 TUN 路由:** 只删除经 enana 的 TUN 地址转发、所在接口已没有 IPv4 地址的路由; 守护进程或核心还在运行时什么都不删。这项随下一次完整 TUN 安装生效, 需要一次管理员授权。
+- **指纹不计入旧文件:** 增强模式的指纹不再包含升级时清理掉的平铺规则文件, 清理它们不会让指纹变化。
+- **规则写入更安全:** Mac 与 Windows 都改为先检查全部规则文件、全部通过后才写入, 有一个不合格时其余文件一个都不改; Windows 遇到文件被占用会重试。
+- **自定义规则集删除:** 名称里含 `/` 的记录会被拒绝, 删除时不会删到规则目录之外。
+
+### English
+- **Rule sets in their own folders:** each rule set now has its own sub-folder instead of dozens or hundreds of files in one directory, which made sing-box report "too many open files" on macOS and the core would not start. Upgrading reorganises them automatically; the old files are kept until the new core has started, then removed.
+- **Trial run before upgrading the core (macOS only):** the new sing-box core first runs on temporary ports with temporary cache and log files, without touching the running service, the system proxy or TUN; the service restarts only after the trial passes. If the trial fails, the previous core is kept and the service is not restarted.
+- **Safer core upgrade:** on Windows the new core is copied beside the current one and verified first; only then is the running core stopped and replaced, and if the replacement fails the previous core is started again. On both systems, if the old core cannot be backed up, the upgrade stops before anything is downloaded or replaced.
+- **A failed upgrade turns the system proxy off first:** after upgrading enana or the sing-box core, if the core does not start while the system proxy still points at enana, the proxy is turned off quietly (no administrator prompt) so apps stop connecting to the stopped proxy, and enana doctor is suggested. This applies to both System Proxy and TUN mode; in TUN mode, if the network is still down, run enana doctor too. If reorganising the rule-set folder fails, the current configuration is kept.
+- **Leftover TUN routes cleaned up after a failed upgrade:** only routes that go through enana's TUN address on an interface with no IPv4 address are removed, and nothing is removed while the daemon or core is still running. This takes effect with the next full TUN install, which needs one administrator approval.
+- **Fingerprint ignores old files:** the enhanced-mode fingerprint no longer counts the flat rule files an upgrade removes, so removing them does not change it.
+- **Safer rule writes:** on macOS and Windows, every rule file is checked before any is written, so one bad file leaves all the others unchanged; on Windows a busy file is retried.
+- **Custom rule-set delete:** names containing `/` are rejected, so deletion cannot reach outside the rules folder.
+
 ## 2.3.22 (2026-10-11)
 
 ### 中文

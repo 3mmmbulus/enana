@@ -58,14 +58,14 @@ waitport() { local i; for i in $(seq 1 40); do nc -z 127.0.0.1 "$1" 2>/dev/null 
 
 echo "== 准备夹具 (占位数据 + 本机模拟服务)"
 cp "$SB" "$W/h/sing-box"; chmod +x "$W/h/sing-box"
-mk() { printf '%s' "$2" > "$W/h/rules/$1.json"; "$W/h/sing-box" rule-set compile --output "$W/h/rules/$1.srs" "$W/h/rules/$1.json" >/dev/null 2>&1; rm -f "$W/h/rules/$1.json"; }
+mk() { mkdir -p "$W/h/rules/$1"; printf '%s' "$2" > "$W/h/rules/$1/$1.json"; "$W/h/sing-box" rule-set compile --output "$W/h/rules/$1/$1.srs" "$W/h/rules/$1/$1.json" >/dev/null 2>&1; rm -f "$W/h/rules/$1/$1.json"; }
 mk geosite-cn '{"version":3,"rules":[{"domain_suffix":["cn.example"]}]}'; mk geosite-notcn '{"version":3,"rules":[{"domain_suffix":["example.org"]}]}'
 mk geoip-cn '{"version":3,"rules":[{"ip_cidr":["114.114.114.114/32"]}]}'; mk geosite-ai '{"version":3,"rules":[{"domain_suffix":["newai.example"]}]}'
 mk _default '{"version":3,"rules":[{"domain_suffix":["nothing.enana.invalid"]}]}'
 # 本机模拟的规则集下载源: 四个固定规则集用上面的夹具, 其它规则集都返回一个不会命中任何东西的占位规则集
-mkdir -p "$W/rules-src"; cp "$W/h/rules/_default.srs" "$W/rules-src/_default.srs"; rm -f "$W/h/rules/_default.srs"
-cp "$W/h/rules/geosite-cn.srs" "$W/rules-src/geosite-cn.srs"; cp "$W/h/rules/geosite-notcn.srs" "$W/rules-src/geosite-geolocation-!cn.srs"
-cp "$W/h/rules/geoip-cn.srs" "$W/rules-src/geoip-cn.srs"; cp "$W/h/rules/geosite-ai.srs" "$W/rules-src/geosite-category-ai-!cn.srs"
+mkdir -p "$W/rules-src"; cp "$W/h/rules/_default/_default.srs" "$W/rules-src/_default.srs"; rm -rf "$W/h/rules/_default"
+cp "$W/h/rules/geosite-cn/geosite-cn.srs" "$W/rules-src/geosite-cn.srs"; cp "$W/h/rules/geosite-notcn/geosite-notcn.srs" "$W/rules-src/geosite-geolocation-!cn.srs"
+cp "$W/h/rules/geoip-cn/geoip-cn.srs" "$W/rules-src/geoip-cn.srs"; cp "$W/h/rules/geosite-ai/geosite-ai.srs" "$W/rules-src/geosite-category-ai-!cn.srs"
 date +%s > "$W/h/rules/.updated"
 cat > "$W/h/servers.jsonl" <<EOF
 {"role":"pin","outbound":{"type":"socks","tag":"Fix-Pin","server":"127.0.0.1","server_port":1,"version":"5","username":"u","password":"p"}}
@@ -388,9 +388,9 @@ J=$(api -X POST "$A/api/apps/custom" --data-urlencode "path=$CA" -d 'state=pin' 
 api "$A/api/apps" | chk "应用列表里出现自定义软件: custom=true, state=pin, 带路径" 'a={x["name"]:x for x in d["apps"]}["Foo Tool"]; assert a["custom"] and a["state"]=="pin" and a["kind"]=="app" and a["path"].endswith("/Foo Tool.app")'
 insp "$W/Custom/Foo Tool.app" | chk "再次校验同一个软件: exists=true (前端据此提示, 不允许重复添加)" 'assert d["candidates"][0]["exists"]'
 api -X POST "$A/api/apps/custom" --data-urlencode "path=$CA" -d 'state=pin' | chk "重复添加 → 被拒" 'assert not d["ok"]'
-grep -q 'Foo Tool' "$W/h/rules/ovr-pin.json" && tpass "自定义 .app 写入了「固定出口」规则集 (按路径匹配)" || tfail "自定义 .app 写入了「固定出口」规则集"
+grep -q 'Foo Tool' "$W/h/rules/ovr-pin/ovr-pin.json" && tpass "自定义 .app 写入了「固定出口」规则集 (按路径匹配)" || tfail "自定义 .app 写入了「固定出口」规则集"
 J=$(api -X POST "$A/api/apps/custom" --data-urlencode "path=$W/bin/mytool" -d 'state=direct' | jp 'print(d["job"])'); [ "$(job_wait "$J")" = done ] && tpass "添加命令行工具 (任务完成)" || tfail "添加命令行工具 (任务完成)"
-grep -q '"process_name":\["mytool"\]' "$W/h/rules/ovr-appdirect.json" && tpass "命令行工具按可执行文件名匹配 (process_name)" || tfail "命令行工具按可执行文件名匹配 (process_name)"
+grep -q '"process_name":\["mytool"\]' "$W/h/rules/ovr-appdirect/ovr-appdirect.json" && tpass "命令行工具按可执行文件名匹配 (process_name)" || tfail "命令行工具按可执行文件名匹配 (process_name)"
 api -X POST "$A/api/apps/custom/delete" -d 'name=mytool' | chk "删除自定义软件 → 任务" 'assert d["ok"] and d["job"]'
 sleep 3; api "$A/api/apps" | chk "删除后不再出现, 规则集也清掉了" 'assert not any(x["name"]=="mytool" for x in d["apps"])'
 api -X POST "$A/api/apps/custom/delete" -d 'name=Nope' | chk "删除不存在的自定义软件 → E_NOT_FOUND" 'assert d["code"]=="E_NOT_FOUND"'
@@ -489,7 +489,7 @@ ENANA_LOG_LEVEL=debug bash "$REPO/install.sh" apply >/dev/null 2>&1; sleep 2
 cl -X PUT "$U/proxies/svc-claude" -d '{"name":"PIN"}' >/dev/null
 for policy in direct auto; do
   api -G -X POST --data-urlencode 'kind=app' --data-urlencode 'value=Fixture Browser' --data-urlencode "state=$policy" "$A/api/override" | chk "Browser $policy policy API accepts query parameters" 'assert d["ok"]'; sleep 1.5
-  expect "Browser $policy rule set contains the actual process" grep -q "Fixture Browser" "$W/h/rules/ovr-browser$policy.json"
+  expect "Browser $policy rule set contains the actual process" grep -q "Fixture Browser" "$W/h/rules/ovr-browser$policy/ovr-browser$policy.json"
   : > "$W/h/sing-box.log"
   "$FB/Contents/MacOS/Fixture-Browser" -s -m 3 -x "socks5h://127.0.0.1:$PORT" http://claude.com/ -o /dev/null 2>/dev/null; sleep 1
   expect "Browser $policy does not override website PIN (real process path)" grep -q 'route(svc-claude)' "$W/h/sing-box.log"
@@ -1091,7 +1091,34 @@ api "$A/api/logs?type=ops&q=%E5%AF%BC%E5%87%BA%E8%AF%8A%E6%96%AD" | chk "每次�
 python3 "$REPO/tools/diag-summary.py" "$W/bundle.txt" 2>&1 | grep -q '== 自动判断' && tpass "tools/diag-summary.py 能解读这份导出文件" || tfail "tools/diag-summary.py 解读导出文件"
 "$W/shortcut/enana" diag 6 2>/dev/null | head -1 | grep -q '^#ENANA-DIAGNOSTICS format=1$' && tpass "终端 enana diag (接管道): 直接输出诊断文件" || tfail "终端 enana diag (接管道)"
 "$W/shortcut/enana" diag abc >/dev/null 2>&1 && tfail "enana diag 时间范围无效 → 应报错退出" || tpass "enana diag 时间范围无效 → 报错退出"
-mkdir -p "$HOME/Downloads"; python3 -c 'import pty,sys; pty.spawn([sys.argv[1], "diag", "1"])' "$W/shortcut/enana" </dev/null >/dev/null 2>&1   # 需要真的终端: script 在没有终端的环境 (CI、后台任务) 里会失败
+mkdir -p "$HOME/Downloads"; python3 - "$W/shortcut/enana" >/dev/null 2>&1 <<'PY'   # 需要真的终端: 用 pty.fork 给它一个; 有期限, 子进程迟迟不退出 (例如留下的后台子进程占着终端) 时强制结束, 不卡住整个测试
+import os, pty, select, signal, sys, time
+pid, fd = pty.fork()
+if pid == 0:
+    try:
+        os.execv(sys.argv[1], [sys.argv[1], "diag", "1"])
+    finally:
+        os._exit(127)
+end = time.time() + 120
+reaped = False
+while time.time() < end:
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if r:
+        try:
+            os.read(fd, 65536)
+        except OSError:
+            time.sleep(0.2)
+    if os.waitpid(pid, os.WNOHANG)[0] == pid:
+        reaped = True
+        break
+if not reaped:
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    os.waitpid(pid, 0)
+os.close(fd)
+PY
 DG=$(ls "$HOME/Downloads"/enana-diagnostics-*.txt 2>/dev/null | head -1)
 [ -n "$DG" ] && head -1 "$DG" | grep -q '^#ENANA-DIAGNOSTICS format=1$' && grep -q '^@@SECTION access ' "$DG" && tpass "终端 enana diag (在终端里): 存成 ~/Downloads/enana-diagnostics-<时间>.txt" || tfail "终端 enana diag (在终端里) 保存文件"
 api "$A/api/logs?type=ops&f=terminal" | chk "终端导出也留下操作记录 (来源 terminal)" 'assert any(r["action"]=="导出诊断日志" and r["who"]=="terminal" for r in d["rows"])'

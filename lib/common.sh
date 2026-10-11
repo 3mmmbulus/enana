@@ -53,6 +53,29 @@ init_paths() {
   elif [ -d "$(dirname "$H")" ]; then H=$(resolve_path "$H"); fi
   VERSION=2.2.0; [ -s "$SRC/VERSION" ] && IFS= read -r VERSION < "$SRC/VERSION"
 }
+# 每个规则集单独一个目录 (rules/<名字>/<名字>.ext): sing-box 的文件监视器会打开同目录的全部文件, 同目录文件一多就超过单进程描述符上限
+rule_file() { printf '%s/rules/%s/%s' "$H" "${1%.*}" "$1"; }
+# 旧版把规则集平铺在 rules/ 下: 复制到 rules/<名字>/ (不搬走: 回滚到旧配置时还要用这些文件); 目标不比平铺的旧文件旧就不动, 所以重复执行没有副作用
+rules_layout_migrate() {
+  local f name dst
+  for f in "$H"/rules/*.srs "$H"/rules/ovr-*.json; do
+    [ -f "$f" ] || continue
+    name=${f##*/}; dst="$H/rules/${name%.*}/$name"
+    if [ ! -s "$dst" ] || [ "$f" -nt "$dst" ]; then
+      mkdir -p "${dst%/*}" && cp -p "$f" "$dst.$$.new" && mv -f "$dst.$$.new" "$dst" || { rm -f "$dst.$$.new"; return 1; }
+    fi
+  done
+}
+# 只在新配置确认启动成功之后调用: 删掉已经有等价副本的平铺旧文件
+rules_layout_prune() {
+  local f name dst
+  for f in "$H"/rules/*.srs "$H"/rules/ovr-*.json; do
+    [ -f "$f" ] || continue
+    name=${f##*/}; dst="$H/rules/${name%.*}/$name"
+    if [ -s "$dst" ] && [ ! "$f" -nt "$dst" ]; then rm -f "$f"; fi
+  done
+  return 0
+}
 
 set_ui_url() { UI_URL="http://127.0.0.1:$API_PORT$ADMIN_PATH/"; }     # 后台地址: 由本地辅助服务直接提供, 路径固定为 /enana/admin/ (端口变了要重新调用)
 

@@ -368,7 +368,7 @@ reset; printf '{"role":"auto","outbound":{"type":"socks","tag":"Auto-A","server"
 health_tick
 has "没有任何服务 / 应用 / 网站依赖固定出口: pin=ok (空也无所谓)" "pin=ok" "$(hf)"
 hasnt "…也不记事件" "item=pin" "$(ops)"
-mkdir -p "$H/rules"; printf '{"version":2,"rules":[{"process_name":["ChatGPT"]}]}' > "$H/rules/ovr-apppin.json"
+mkdir -p "$H/rules/ovr-apppin"; printf '{"version":2,"rules":[{"process_name":["ChatGPT"]}]}' > "$H/rules/ovr-apppin/ovr-apppin.json"
 eq "应用选了固定出口 (ovr-apppin 规则集有内容): 算一个依赖" "$(pin_dependents)" "1"
 printf '{"outbounds":[{"tag":"a","default":"PIN"},{"tag":"b","default":"PIN"}]}' > "$H/config.json"
 eq "再加 2 个默认走固定出口的服务: 共 3 个依赖" "$(pin_dependents)" "3"

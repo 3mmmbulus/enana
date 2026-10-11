@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 # enana TUN 规则同步助手 (版本 @VERSION@)。root 所有, 当前用户可以免密调用 (sudoers 里只开放了这一个文件), 只做一件事:
-#   sync   从标准输入读一个 JSON 数据包 {"ovr-pin.json": {"version":3,"rules":[…]}, …}, 逐项严格校验, 全部通过才写进 root 快照里的规则集目录 (原地覆盖,
+#   sync   从标准输入读一个 JSON 数据包 {"ovr-pin.json": {"version":3,"rules":[…]}, …}, 逐项严格校验, 全部通过才写进 root 快照里的 rules/<名字>/ 目录 (原地覆盖,
 #          核心监视这些文件、自己热加载), 所以 TUN 下改「应用 / 网站的代理策略」不用重启核心, 也就不用再输入管理员密码。
 #   restart  重启这个用户自己的 TUN 守护进程: 只执行 `launchctl kickstart -k system/@LABEL@`。标签和 launchctl 路径都是安装时由 root 脚本写死的, 不读任何参数 / 输入 /
 #          环境变量, 所以不能用它去重启别的服务, 更不能运行别的东西。(核心和配置没有变化时用它代替完整安装, 重启核心不再弹管理员密码框。)
@@ -8,7 +8,7 @@
 # 只认「应用 / 网站策略」那几个固定名字的规则集文件 (ovr-*.json) 和 4 种匹配键 (domain / domain_suffix / process_path_regex / process_name), 值只能是不含控制字符的字符串。
 # 不接受路径、命令、环境变量、可执行文件或核心配置 (这些仍然只能走需要管理员授权的完整安装)。它处理的只是「路由规则数据」: 最坏的结果是这个用户自己的流量路由被改, 得不到 root 权限。
 # restart 的最坏结果: 这个用户自己的 root 守护进程被重启一次 (流量中断几秒), 同样得不到 root 权限, 也改不了任何文件。
-# 由 enana 在一次管理员授权里安装 (lib/enhanced-root.sh), 卸载时一并删除。版本 2 增加了 restart; 旧版本 (版本 1) 的助手会被 enana 判为「不可用」, 下一次完整安装 (一次管理员授权) 时替换。
+# 由 enana 在一次管理员授权里安装 (lib/enhanced-root.sh), 卸载时一并删除。版本 2 增加了 restart, 版本 3 改为每个规则集文件一个目录, 版本 4 增加了 cleanup; 旧版本 (版本 1–3) 的助手会被 enana 判为「不可用」, 下一次完整安装 (一次管理员授权) 时替换。
 use strict;
 use warnings;
 use JSON::PP;
@@ -26,7 +26,7 @@ my $MAX_BYTES = 2_000_000;
 my $MAX_FILES = 160;          # 一次最多同步多少个规则集文件 (必须 >= 12 + 3 * lib/apps.sh 的 OVR_PIN_MAX; 升级前安装的旧助手上限是 60, 固定出口超过 16 个时它会拒绝, 退回完整安装)
 
 my $cmd = shift(@ARGV) // '';
-die "usage: tunrules sync|restart|version\n" if @ARGV || $cmd !~ /^(?:sync|restart|version)$/;
+die "usage: tunrules sync|restart|cleanup|version\n" if @ARGV || $cmd !~ /^(?:sync|restart|cleanup|version)$/;
 if ($cmd eq 'version') { print "$VERSION\n"; exit 0; }
 die "root required\n" if $> != $ROOT_UID && $ROOT_UID == 0;
 
@@ -37,6 +37,52 @@ if ($cmd eq 'restart') {
   my $rc = system { $LAUNCHCTL } 'launchctl', 'kickstart', '-k', "system/$LABEL";
   die "launchctl kickstart failed\n" if $rc != 0;
   print "restarted\n"; exit 0;
+}
+
+sub run_out { my @cmd = @_; open(my $p, '-|', @cmd) or return ''; local $/; my $o = <$p>; close $p; return defined $o ? $o : ''; }
+sub route_args {
+  my ($fam, $dst) = @_;
+  my ($addr, $len) = split m{/}, $dst, 2;
+  if ($fam eq 'inet') {
+    my @o = split /\./, $addr;
+    return unless $addr =~ /^[0-9]{1,3}(?:\.[0-9]{1,3}){0,3}$/ && !grep { $_ > 255 } @o;
+    return ('-net', join('.', @o, (0) x (4 - @o)) . "/$len") if defined $len && $len =~ /^[0-9]{1,2}$/ && $len <= 32;
+    return ('-host', $addr) if !defined $len && @o == 4;
+    return;
+  }
+  return unless $addr =~ /^[0-9a-fA-F]*:[0-9a-fA-F:]*$/;
+  return ('-inet6', "$addr/$len") if defined $len && $len =~ /^[0-9]{1,3}$/ && $len <= 128;
+  return ('-inet6', '-host', $addr) if !defined $len;
+  return;
+}
+if ($cmd eq 'cleanup') {
+  # 只删 TUN 留下的残留路由: 网关必须是 enana 的 TUN 地址, 接口必须是 utunN 且没有 IPv4 地址 (还在用的 utun 一定有 172.19.0.x),
+  # 并且这个用户的守护进程和它的核心都不在运行。任何一项不满足就什么都不删。
+  die "bad label\n" unless $LABEL =~ /^com\.enana\.proxy\.tun\.[0-9]+$/;
+  die "bad launchctl\n" unless $LAUNCHCTL =~ m{^/[A-Za-z0-9._/-]+$};
+  die "daemon running\n" if run_out($LAUNCHCTL, 'print', "system/$LABEL") =~ /\bpid = [0-9]+/;
+  die "core running\n" if run_out('/bin/ps', '-axww', '-o', 'command=') =~ m{^\s*\Q$ROOT\E/sing-box(?:\s|$)}m;
+  my %gw = map { $_ => 1 } qw(172.19.0.1 172.19.0.2 fdfe:dcba:9876::1 fdfe:dcba:9876::2);
+  my (%seen, %v4, @routes);
+  for my $fam (qw(inet inet6)) {
+    for my $line (split /\n/, run_out('/usr/sbin/netstat', '-rn', '-f', $fam)) {
+      my @f = split ' ', $line;
+      next unless @f >= 4 && $gw{$f[1]} && $f[3] =~ /^utun[0-9]+$/;
+      next if $seen{join "\0", $fam, @f[0, 1, 3]}++;
+      push @routes, [$fam, @f[0, 1, 3]];
+    }
+  }
+  my ($done, $fail, $kept) = (0, 0, 0);
+  for my $r (@routes) {
+    my ($fam, $dst, $via, $if) = @$r;
+    $v4{$if} //= run_out('/sbin/ifconfig', $if) =~ /^\s+inet\s/m ? 1 : 0;
+    if ($v4{$if}) { $kept++; next }
+    my @a = route_args($fam, $dst) or do { $fail++; next };
+    my $rc = system { '/sbin/route' } 'route', '-n', 'delete', @a, $via;
+    $rc == 0 ? $done++ : $fail++;
+  }
+  print "removed $done, kept $kept, failed $fail\n";
+  exit($fail ? 1 : 0);
 }
 
 my $NAME_RE = qr/^ovr-(?:direct|appdirect|browserdirect|browserauto|browserpin|browserpinauto|pin|pinauto|apppin|apppinauto|appauto|auto)(?:-[0-9]{1,2})?\.json$/;
@@ -78,13 +124,22 @@ for my $name (sort keys %$doc) {
   $out{$name} = JSON::PP->new->utf8->canonical->encode($rs) . "\n";
 }
 
-# 校验全部通过之后才开始写 (任何一项不合格, 一个文件都不会动)。目标目录必须是 root 自己的真实目录, 目标文件不能是符号链接。
+# 先检查全部目标 (子目录和文件都不能是符号链接, 子目录必须归 root), 全部通过才开始写: 任何一项不合格, 一个文件都不会动。rules 必须是 root 自己的真实目录。
 my $dir = "$ROOT/rules";
 my @st = lstat($dir);
 die "no rules directory\n" unless @st && -d _ && !-l $dir && $st[4] == $ROOT_UID;
+my %target;
 for my $name (sort keys %out) {
-  my $path = "$dir/$name";
+  (my $stem = $name) =~ s/\.json\z//;
+  my $sub = "$dir/$stem";
+  if (my @s = lstat($sub)) { die "refusing $stem (not a directory)\n" if -l _ || !-d _ || $s[4] != $ROOT_UID; }
+  my $path = "$sub/$name";
   if (lstat($path)) { die "refusing $name (not a regular file)\n" if -l _ || !-f _; }
+  $target{$name} = [$sub, $path];
+}
+for my $name (sort keys %out) {
+  my ($sub, $path) = @{$target{$name}};
+  unless (lstat($sub)) { mkdir($sub, 0755) or die "cannot create a directory for $name: $!\n"; }
   sysopen(my $fh, $path, O_WRONLY | O_CREAT | O_NOFOLLOW, 0600) or die "cannot open $name: $!\n";
   seek($fh, 0, 0);
   print {$fh} $out{$name} or die "cannot write $name\n";

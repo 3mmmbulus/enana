@@ -5,7 +5,7 @@
 #   出口 只对 pin 有意义: 空 = 跟随默认固定出口 · PINAUTO = 在固定出口里自动选一个 · 其它 = 指定走这一个固定出口 (固定出口有 2 个以上时才能选)
 #        「跟随默认」的应用 / 网站会随默认固定出口一起换出口 IP; 要钉住就指定一个 (批量移动 / 冻结 / 删除服务器前的影响检查见 lib/exits.sh)。指定的出口已不是固定出口 (被删除 / 改了角色 / 超过上限) =「孤儿」,
 #        规则集里暂时退回默认固定出口 (见下面 ovr_sync 的 key()), 同时会在界面和健康记录里标出来。
-# 设置分别写成 sing-box 本地规则集 (rules/ovr-<名字>.json): direct(网站直连) appdirect(应用直连) pin(默认固定出口) pinauto(固定出口里自动选) pin-<序号>(指定的固定出口) auto(自动线路),
+# 设置分别写成 sing-box 本地规则集 (rules/ovr-<名字>/ovr-<名字>.json): direct(网站直连) appdirect(应用直连) pin(默认固定出口) pinauto(固定出口里自动选) pin-<序号>(指定的固定出口) auto(自动线路),
 # sing-box 监视文件变化, 因此切换应用/网站无需重启、不会断开现有连接。
 #
 # 应用规则: 新装应用默认「关」(direct, 标记 new), 但浏览器例外 (默认跟随规则: 否则新装的浏览器会让所有网站都打不开)。首次识别时, 已知应用 (data/apps.conf) 采用推荐设置。
@@ -61,7 +61,7 @@ app_regex_json() { # 应用名 -> JSON 字符串内容: (?i)/名称\\.app/  (点
 # 由 overrides.tsv 生成各个规则集文件 (原地覆盖写, 让 sing-box 的文件监视生效; 内容没变就不写)
 ovr_sync() {
   local T bset f body name path
-  mkdir -p "$H/rules"; T=$(mktemp -d); touch "$H/overrides.tsv"
+  mkdir -p "$H/rules"; rules_layout_migrate; T=$(mktemp -d); touch "$H/overrides.tsv"
   bset="|$(awk -F'|' '$2=="bin" {printf "%s|", $1}' "$H/custom-apps.tsv" 2>/dev/null)"        # 自定义的命令行工具 (按可执行文件名匹配, 不是 .app 路径)
   [ "${ENANA_PLATFORM:-darwin}" != windows ] || bset='|'
   if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then windows_node regex-map "$H" > "$T/regexes" || { rm -rf "$T"; return 1; }; fi
@@ -123,8 +123,9 @@ ovr_sync() {
   # 没有 overrides.tsv 时 awk 不会产出文件: 补齐占位, 保证每个规则集文件都存在
   for name in direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto appauto auto; do [ -f "$T/$name.json" ] || printf '%s\n' '{"version":3,"rules":[{"domain":["enana-placeholder.invalid"]}]}' > "$T/$name.json"; done
   for f in "$T"/*.json; do
-    name=$(basename "$f"); body=$(cat "$f")
-    if [ ! -f "$H/rules/ovr-$name" ] || [ "$(cat "$H/rules/ovr-$name")" != "$body" ]; then printf '%s\n' "$body" > "$H/rules/ovr-$name.tmp" && cat "$H/rules/ovr-$name.tmp" > "$H/rules/ovr-$name" && rm -f "$H/rules/ovr-$name.tmp"; fi
+    name=$(basename "$f"); body=$(cat "$f"); path=$(rule_file "ovr-$name")
+    mkdir -p "${path%/*}"
+    if [ ! -f "$path" ] || [ "$(cat "$path")" != "$body" ]; then printf '%s\n' "$body" > "$path.tmp" && cat "$path.tmp" > "$path" && rm -f "$path.tmp"; fi
   done
   rm -rf "$T" "$T.pins" "$T.browsers"
 }

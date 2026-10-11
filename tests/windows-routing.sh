@@ -39,7 +39,7 @@ assert(!s.inbounds.some(b=>b.type==='tun'));const tun=j.inbounds.find(b=>b.type=
 for(const p of ['127.0.0.0/8','10.0.0.0/8','192.168.0.0/16','::1/128','fc00::/7'])assert(tun.route_exclude_address.includes(p));assert(j.route.auto_detect_interface&&j.route.find_process);
 assert(j.route.rule_set.every(r=>r.path.startsWith('C:/Users/Test User/enana/')));
 const rules=j.route.rules,idx=rs=>rules.findIndex(r=>(r.rule_set||[]).includes(rs));assert(idx('ovr-apppin')<idx('ovr-pin'));assert(idx('ovr-pin')<idx('ovr-browserauto'));
-const app=JSON.parse(fs.readFileSync(home+'/rules/ovr-apppin.json')).rules.flatMap(r=>r.process_path_regex||[]);
+const app=JSON.parse(fs.readFileSync(home+'/rules/ovr-apppin/ovr-apppin.json')).rules.flatMap(r=>r.process_path_regex||[]);
 for(const exe of ['C:/Program Files/Gemini/helper.exe','C:/Program Files/WindowsApps/OpenAI.ChatGPT_1.0/ChatGPT.exe','C:/Users/Test User/AppData/Local/AnthropicClaude/app-2.0/helper.exe'])assert(app.some(rx=>new RegExp(rx.slice(4),'i').test(exe)));
 assert(!app.some(rx=>new RegExp(rx.slice(4),'i').test('C:/Program Files/Unrelated/Other.exe')));
 console.log('Windows shared routing, PIN helpers, browser precedence, dual-stack exclusions and native paths passed.');

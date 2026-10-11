@@ -382,6 +382,7 @@ DNS 设置无效	Invalid DNS settings
 查询最新版本	Look up the latest version
 下载并校验新核心	Download and verify the new core
 用新核心校验现有配置	Validate your configuration with the new core
+在临时端口试运行新核心	Trial-run the new core on temporary ports
 查询本机与各线路的出口 IP	Look up exit IPs for this computer and each route
 任务编号无效	Invalid task ID
 找不到该任务	Couldn’t find that task
@@ -881,6 +882,8 @@ Enhanced/TUN 需要 sing-box 1.12 或更新版本	Enhanced/TUN requires sing-box
 核心令牌尚未更新; Enhanced/TUN 需要管理员授权, 运行 enana doctor 查看原因	The core token has not been updated; Enhanced/TUN requires administrator authorization. Run enana doctor for details
 新版本未就绪, 已回退	New version not ready; rolled back
 新版本未能启动, 已回退到 *	New version failed to start; rolled back to *
+新版本试运行失败, 已回退	New version failed its trial run; rolled back
+新版本试运行失败, 保持原版本 *	New version failed its trial run; keeping the previous version *
 Enhanced/TUN: 保留现有系统代理设置	Enhanced/TUN: preserving existing System Proxy settings
 修改系统代理	Change the system proxy
 确认结果	Verify the result
@@ -987,3 +990,6 @@ DeepSeek (国内可直连)	DeepSeek (reachable directly from mainland China)
 笔记与文档	Notes and documents
 查询本机的出口 IP 地址; 设为直连, 查到的是你的真实网络出口 (与代理无关)	Looks up this computer's exit IP. Set to direct, so it shows your real network exit rather than the proxy's.
 IP 查询 (本机出口 IP)	IP lookup (this computer's exit IP)
+规则集目录整理失败 (磁盘满或没有写权限?), 已保留现有配置	The rule-set folder could not be reorganised (disk full or no write permission?); the current configuration was kept
+核心没有起来, 已先关闭系统代理 (应用不再连接已停止的代理); 若仍无法上网, 运行 enana doctor 查看原因	The core did not start, so the system proxy was turned off first (apps no longer connect to the stopped proxy); if the network is still down, run enana doctor to see why
+核心没有起来, 系统代理也没能自动关闭 (需要管理员授权), 请在仪表盘概览里关闭系统代理; 运行 enana doctor 查看原因	The core did not start and the system proxy could not be turned off automatically (administrator permission is needed); turn off the system proxy from the dashboard Overview; run enana doctor to see why

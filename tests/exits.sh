@@ -38,7 +38,7 @@ pins() { : > "$H/servers.jsonl"; local t; for t in "$@"; do pin "$t"; done; }
 subpin() { printf '{"role":"pin","sub":"%s","outbound":{"type":"socks","tag":"%s","server":"127.0.0.1","server_port":1}}\n' "$2" "$1" >> "$H/servers.jsonl"; }
 ovr()  { printf '%s\n' "$@" > "$H/overrides.tsv"; }
 tag_of() { awk -F'|' -v k="$1" -v v="$2" '$1==k && $2==v {print $5}' "$H/overrides.tsv"; }
-rs()   { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps(d["rules"], ensure_ascii=False, sort_keys=True))' "$H/rules/ovr-$1.json"; }
+rs()   { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps(d["rules"], ensure_ascii=False, sort_keys=True))' "$H/rules/ovr-$1/ovr-$1.json"; }
 mkcore() { # mkcore <PIN 当前选择> [服务=当前选择 …]   固定出口取自 servers.jsonl 里 role=pin 的; 服务选择器的选项和真实配置一样 (固定出口 ≥ 2 个才有 PINAUTO 和各固定出口)
   python3 - "$W/core.json" "$H/servers.jsonl" "$@" <<'PY'
 import json, sys
@@ -197,11 +197,11 @@ echo "== E7. 固定出口上限 OVR_PIN_MAX (32): 超出的不能单独指定, �
 eq "ovr_pins 只列前 32 个" "$(ovr_pins | wc -l | tr -d ' '):$(ovr_pins | tail -1)" "32:Node-32"
 ovr 'site|x.io|pin|ack|Node-32' 'site|y.io|pin|ack|Node-33' 'app|Z|pin|ack|Node-34'
 ovr_sync
-eq "第 32 个出口有自己的规则集; 第 33 个没有 (超出上限的退回默认 ovr-pin)" "$([ -f "$H/rules/ovr-pin-32.json" ] && echo y):$([ -f "$H/rules/ovr-pin-33.json" ] && echo y || echo n):$(rs pin-32 | grep -c x.io):$(rs pin | grep -c y.io)" "y:n:1:1"
-eq "三类规则集 (网站 / 应用 / 浏览器) 都按序号生成: 32 个出口 = 96 + 12 个文件" "$(ls "$H"/rules/ovr-*.json | wc -l | tr -d ' ')" "108"
+eq "第 32 个出口有自己的规则集; 第 33 个没有 (超出上限的退回默认 ovr-pin)" "$([ -f "$H/rules/ovr-pin-32/ovr-pin-32.json" ] && echo y):$([ -f "$H/rules/ovr-pin-33/ovr-pin-33.json" ] && echo y || echo n):$(rs pin-32 | grep -c x.io):$(rs pin | grep -c y.io)" "y:n:1:1"
+eq "三类规则集 (网站 / 应用 / 浏览器) 都按序号生成: 32 个出口 = 96 + 12 个文件" "$(ls "$H"/rules/ovr-*/ovr-*.json | wc -l | tr -d ' ')" "108"
 exits_json | sed 's/^/{/; s/$/}/' | chk "总览: 第 33 / 34 个 targetable=false; 指定了它们的是孤儿, 原因 cap" 'p=d["pins"]; assert len(p)==34 and p[31]["targetable"] and not p[32]["targetable"] and not p[33]["targetable"]; o={x["name"]:x["reason"] for x in d["orphans"]}; assert o=={"y.io":"cap","Z":"cap"}'
 ovr_target_valid Node-33; eq "ovr_target_valid 也拒绝超出上限的出口" "$?" "1"
-rm -f "$H"/rules/ovr-*-3[2-9].json "$H"/rules/ovr-*-[4-9][0-9].json
+rm -rf "$H"/rules/ovr-*-3[2-9] "$H"/rules/ovr-*-[4-9][0-9]
 
 echo "== E8. 健康记录: 孤儿数量变化写一条「环境状态变化 item=exit_orphans」(升级后第一次 / 没有孤儿不记)"
 os_service_info() { SVC_RUNNING=0; SVC_PID=''; }; health_sysproxy_eff() { echo 0; }; route() { :; }; ifconfig() { :; }; auth_logged_in() { return 1; }
