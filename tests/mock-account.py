@@ -25,7 +25,8 @@ USERS = {  # email -> [id, password]
 DEVICES = {}   # user_id -> {uid: {...}}
 SESSIONS = {}  # session_id -> {...}
 STATE = {'mode': 'ok', 'hits': 0, 'limit': 2, 'plan': 'free', 'nodes': 'none'}
-SNAPS = {}     # user_id -> {version, payload, size, updated, device}
+SNAPS = {}     # user_id -> {version, payload, size, updated, device}   (清除 = 清空 payload, 版本号保留; 与服务器一致)
+PREFS = {}     # user_id -> {version, stamp, prefs}   (偏好: 改动时间 stamp 新的获胜, 旧的 PUT 得 409)
 V1_DIR = sys.argv[2] if len(sys.argv) > 2 else ''
 LOCK = threading.Lock()
 ONLINE_TTL = 600
@@ -163,12 +164,23 @@ class H(BaseHTTPRequestHandler):
                 if s is None or why:
                     return self._send(401, {'code': 'session_revoked', 'reason': why or 'invalid'})
                 sn = SNAPS.get(s['user'])
-                if not sn:
+                if not sn or not sn.get('payload'):
                     return self._send(200, {'exists': False})
                 out = {'exists': True, 'version': sn['version'], 'updated': int(sn['updated']), 'size': sn['size'], 'device': sn['device']}
                 if parse_qs(u.query).get('payload', [''])[0] == '1':
                     out['payload'] = sn['payload']
                 return self._send(200, out)
+        if u.path == '/api/enana/v1/prefs':
+            if STATE['mode'] == 'down':
+                return self._send(502, {'message': 'bad gateway'})
+            with LOCK:
+                s, why = self._session()
+                if s is None or why:
+                    return self._send(401, {'code': 'session_revoked', 'reason': why or 'invalid'})
+                pr = PREFS.get(s['user'])
+                if not pr:
+                    return self._send(200, {'exists': False})
+                return self._send(200, {'exists': True, 'version': pr['version'], 'stamp': pr['stamp'], 'prefs': pr['prefs']})
         self._send(404, {'message': 'not found'})
 
     def _body(self):
@@ -184,6 +196,19 @@ class H(BaseHTTPRequestHandler):
         body = self._body()
         if STATE['mode'] == 'down':
             return self._send(502, {'message': 'bad gateway'})
+        if u.path == '/api/enana/v1/prefs':
+            with LOCK:
+                s, why = self._session()
+                if s is None or why:
+                    return self._send(401, {'code': 'session_revoked', 'reason': why or 'invalid'})
+                if not isinstance(body, dict) or not isinstance(body.get('prefs'), dict) or not isinstance(body.get('stamp'), int):
+                    return self._send(400, {'code': 'bad_request'})
+                cur = PREFS.get(s['user'])
+                if cur and cur['stamp'] > body['stamp']:
+                    return self._send(409, {'code': 'stale', 'version': cur['version'], 'stamp': cur['stamp']})
+                ver = (cur['version'] if cur else 0) + 1
+                PREFS[s['user']] = {'version': ver, 'stamp': body['stamp'], 'prefs': body['prefs']}
+                return self._send(200, {'version': ver, 'stamp': body['stamp']})
         if u.path != '/api/enana/v1/sync/snapshot':
             return self._send(404, {'message': 'not found'})
         with LOCK:
@@ -192,11 +217,13 @@ class H(BaseHTTPRequestHandler):
                 return self._send(401, {'code': 'session_revoked', 'reason': why or 'invalid'})
             if not isinstance(body, dict) or not isinstance(body.get('payload'), str) or not body['payload']:
                 return self._send(400, {'code': 'bad_payload'})
-            cur = SNAPS.get(s['user'], {'version': 0})['version']
-            if int(body.get('base_version', -1)) != cur:
-                return self._send(409, {'code': 'conflict', 'version': cur})
-            SNAPS[s['user']] = {'version': cur + 1, 'payload': body['payload'], 'size': int(body.get('size', 0)), 'updated': time.time(), 'device': DEVICES[s['user']][s['uid']]['name']}
-            return self._send(200, {'version': cur + 1})
+            sn = SNAPS.get(s['user'])
+            raw = sn['version'] if sn else 0                       # 行的版本号只增不减 (清除也保留它)
+            eff = raw if sn and sn.get('payload') else 0           # 没有内容的快照 = 云端还没有数据
+            if int(body.get('base_version', -1)) != eff:
+                return self._send(409, {'code': 'conflict', 'version': eff})
+            SNAPS[s['user']] = {'version': raw + 1, 'payload': body['payload'], 'size': int(body.get('size', 0)), 'updated': time.time(), 'device': DEVICES[s['user']][s['uid']]['name']}
+            return self._send(200, {'version': raw + 1})
 
     def do_DELETE(self):
         u = urlparse(self.path)
@@ -208,7 +235,9 @@ class H(BaseHTTPRequestHandler):
             s, why = self._session()
             if s is None or why:
                 return self._send(401, {'code': 'session_revoked', 'reason': why or 'invalid'})
-            SNAPS.pop(s['user'], None)
+            sn = SNAPS.get(s['user'])
+            if sn:
+                sn['payload'] = ''; sn['size'] = 0                 # 清空内容, 保留版本号 (与服务器一致)
             return self._send(200, {'ok': True})
 
     def do_POST(self):

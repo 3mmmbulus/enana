@@ -21,6 +21,8 @@ const FAIL_LIMIT_EMAIL = 8         // 窗口内同一邮箱失败多少次后 42
 const FAIL_LIMIT_IP = 20           // 窗口内同一 IP 失败多少次后 429
 const PLATFORMS = ['macos', 'windows', 'linux']
 const MAX_PAYLOAD = 1048576        // 同步密文最多多少个字符 (与 sync_snapshots.payload 的 max 一致)
+const PREFS_MAX = 16384            // 偏好设置 JSON 最多多少个字符 (与 user_prefs.prefs 的 max 一致)
+const PREFS_BODY_MAX = 24576       // PUT /prefs 的请求体上限 (偏好 + 外层 JSON)
 const SYNC_BODY_MAX = 1572864      // 同步请求体上限 (字节)
 const SMALL_BODY_MAX = 16384       // 其它接口请求体上限
 const SID_RE = /^[a-z0-9]{15}$/    // PocketBase 记录 id
@@ -749,6 +751,59 @@ function syncDelete(e) {
   return reply(e, 200, { ok: true })
 }
 
+// ---------------------------------------------------------------- 偏好设置 (明文 JSON, 独立于同步快照)
+
+// 偏好只是界面习惯 (表格每页条数、侧栏、主题 …), 不含密码 / 令牌 / 网站 / 服务器地址, 所以不加密。每个账号一份; stamp (改动时间) 新的一方获胜。
+function prefsRow(app, userId) {
+  try { return app.findFirstRecordByFilter('user_prefs', 'user = {:u}', { u: userId }) } catch (_) { return null }
+}
+
+// 写入判断 (纯函数, 测试见 tests/prefs-cloud-version.test.js): 云端的改动时间比这次的新 → 拒绝 (409), 设备先拉取; 否则版本号 +1。
+function prefsPutDecision(row, stamp) {
+  if (row && row.getInt('stamp') > stamp) return { stale: true, version: row.getInt('version'), stamp: row.getInt('stamp') }
+  return { next: (row ? row.getInt('version') : 0) + 1 }
+}
+
+function prefsGet(e) {
+  const g = needSession(e)
+  if (g.res) return g.res
+  const row = prefsRow($app, g.user.id)
+  if (!row) return reply(e, 200, { exists: false })
+  return reply(e, 200, { exists: true, version: row.getInt('version'), stamp: row.getInt('stamp'), prefs: JSON.parse(row.getString('prefs') || '{}') })
+}
+
+function prefsPut(e) {
+  const g = needSession(e)
+  if (g.res) return g.res
+  const body = readJSON(e, PREFS_BODY_MAX)
+  if (!body) return fail(e, 400, 'bad_request', 'The body must be a JSON object.')
+  const stamp = body.stamp
+  const prefs = body.prefs
+  if (!Number.isInteger(stamp) || stamp < 0) return fail(e, 400, 'bad_request', 'stamp must be an integer >= 0.')
+  if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs)) return fail(e, 400, 'bad_request', 'prefs must be a JSON object.')
+  const text = JSON.stringify(prefs)
+  if (text.length > PREFS_MAX) return fail(e, 400, 'too_large', 'prefs must be at most ' + PREFS_MAX + ' characters.')
+  const dev = $app.findRecordById('devices', g.session.getString('device'))
+  let out
+  $app.runInTransaction((tx) => {
+    const c = checkSession(tx, g.user, g.session.id, nowSec())
+    if (c.revoked) { out = { revoked: c.revoked }; return }
+    let row = prefsRow(tx, g.user.id)
+    const d = prefsPutDecision(row, stamp)
+    if (d.stale) { out = { stale: d }; return }
+    if (!row) { row = new Record(tx.findCachedCollectionByNameOrId('user_prefs')); row.set('user', g.user.id) }
+    row.set('version', d.next)
+    row.set('stamp', stamp)
+    row.set('prefs', text)
+    row.set('device', dev.getString('name') || dev.getString('device_uid'))
+    tx.save(row)
+    out = { version: d.next, stamp: stamp }
+  })
+  if (out.revoked) return revokedReply(e, out.revoked)
+  if (out.stale) return reply(e, 409, { code: 'stale', version: out.stale.version, stamp: out.stale.stamp })
+  return reply(e, 200, out)
+}
+
 // ---------------------------------------------------------------- 注册钩子 / 定时清理
 
 // users 创建成功后: 给新账号建 free 订阅 (已存在就跳过); 登录时 planFor 也会补, 这里是主路径
@@ -776,6 +831,7 @@ module.exports = {
   login: login, heartbeat: heartbeat, logout: logout, check: check,
   devices: devices, kick: kick, plan: plan, nodes: nodes, changePassword: changePassword,
   syncGet: syncGet, syncPut: syncPut, syncDelete: syncDelete, snapshotExists: snapshotExists, snapshotPushDecision: snapshotPushDecision,
+  prefsGet: prefsGet, prefsPut: prefsPut, prefsPutDecision: prefsPutDecision,
   onUserCreated: onUserCreated, onUserCreateRequest: onUserCreateRequest, gc: gc,
   needSession: needSession, planFor: planFor, readJSON: readJSON, entitlements: entitlements, officialAccess: officialAccess,
   reply: reply, fail: fail, clean: clean, nowSec: nowSec, iso: iso,       // 给 enana_diag.js 用

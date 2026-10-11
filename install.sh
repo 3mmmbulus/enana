@@ -405,6 +405,7 @@ cmd_tick() { # 每分钟一次 (launchd): 流量统计采样; 每 ~2 分钟一�
   autosite_tick || true                        # 自动识别无法访问的网站 (设置里打开了才工作); 必须排在日志切分之前
   logs_tick || true                            # 日志: 每小时切分 / 压缩 / 按保留期 (最短 12 小时) 清理
   diag_tick || true                            # 诊断摘要: 操作记录里有「值得上报」的新事件才上传一次 (见 lib/diag.sh; 设置里可关)
+  prefs_tick || true                           # 偏好设置: 每 5 分钟和云端对一次 (别的电脑的改动在这里拉取, 没上传的改动离线后在这里补传; 见 lib/prefs.sh)
   return 0
 }
 

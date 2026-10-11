@@ -195,10 +195,13 @@ sync_push_job() { # <force 0|1>
 
 # ---------- 拉取 (后台任务 sync-pull; 下载 + 解密在接口里已经做完, 这里只负责「应用」) ----------
 txn_sync_apply() { # <replace|merge>  内容来自 $H/sync-incoming.json
-  local res
+  local rc keep=0
   [ -s "$H/sync-incoming.json" ] || { TXN_ERR="没有可应用的云端配置"; return 1; }
-  res=$(snap_apply "$H/sync-incoming.json" "$1" 2>/dev/null) || { TXN_ERR="云端的配置格式不对, 已放弃"; return 1; }
-  case $res in *'"prefs.json"'*) prefs_touch || true ;; esac          # 偏好变了: 前端据 prefs_version 重新读取
+  # 偏好不走配置快照 (独立同步, 见 lib/prefs.sh): 应用前记下本机的 prefs.json, 应用后原样放回 (旧版本的快照里可能还带着它)
+  if [ -f "$H/prefs.json" ]; then cp -p "$H/prefs.json" "$H/prefs.keep" || { TXN_ERR="没能保存本机的偏好设置, 已放弃"; return 1; }; keep=1; fi
+  snap_apply "$H/sync-incoming.json" "$1" >/dev/null 2>&1; rc=$?
+  if [ "$keep" = 1 ]; then mv -f "$H/prefs.keep" "$H/prefs.json"; else rm -f "$H/prefs.json"; fi
+  [ "$rc" = 0 ] || { TXN_ERR="云端的配置格式不对, 已放弃"; return 1; }
   load_settings                                                       # 设置 (语言 / 日志) 可能变了
   return 0
 }

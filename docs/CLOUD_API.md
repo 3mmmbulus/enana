@@ -15,6 +15,7 @@
 | `devices` | 登录过的设备: `user` · `device_uid`(客户端生成的随机 UUID) · `name` · `platform` · `os_version` · `arch` · `app_version` · `last_seen_at` · `last_ip_masked` |
 | `device_sessions` | 登录会话: `user` · `device` · `last_heartbeat_at` · `expires_at` · `revoked_at` · `revoked_reason`(logout/kicked/limit/expired/admin) · `revoked_by_device` |
 | `sync_snapshots` | 端到端加密的配置快照: `user` · `version` · `payload`(密文, 云端看不到明文) · `size` · `source_device` |
+| `user_prefs` | 偏好设置 (明文 JSON, 界面习惯, 不含密码 / 令牌 / 网站 / 服务器地址): `user` · `version` · `stamp`(最近一次改动的时间, 秒) · `prefs`(JSON 文本, ≤ 16 KB) · `device` |
 | `official_nodes` | 官方线路节点 (会员): `node_key`(来源编号 + 节点名哈希) · `label`(节点名) · `outbound`(json, 含凭据) · `origin`(official/shared) · `approved` · `enabled` · `fresh_until` · `capability`。没有任何 API 规则 = 只有超级用户和服务端代码能读; 由定时任务从私有配置的订阅源写入 (见 `server/README.md`) |
 | `audit_events` | 安全审计: `user` · `device` · `type`(register/login/login_failed/logout/kick/limit_blocked/sync_push/sync_pull …) · `detail` · `ip_masked` |
 所有集合只允许通过上面的接口访问 (规则: 只能访问自己的记录), 管理员通过 SSH 隧道进入后台。
@@ -58,6 +59,8 @@ Pro 订单、余额、到账记录与验证接口见 [BILLING_API.md](BILLING_AP
 - `GET /api/enana/v1/sync/snapshot[?payload=1]` → `{"exists":true,"version":7,"updated":1760000000,"size":2048,"device":"MacBook","payload":"<base64, 仅 payload=1>"}`
 - `PUT /api/enana/v1/sync/snapshot` `{"base_version":6,"payload":"<base64>","size":2048}` → `{"version":7}` 或 409 `{"code":"conflict","version":8}`
 - `DELETE /api/enana/v1/sync/snapshot` → `{"ok":true}`。清空内容但保留这一行、版本号不回退: 之后 GET 返回 `exists:false`, 推送从 `base_version:0` 开始; 清除前拿着旧版本号的设备推送会收到 409 (版本号是有效版本, 清除后为 0)。
+- `GET /api/enana/v1/prefs` → `{"exists":true,"version":4,"stamp":1760000000,"prefs":{…}}` (没有时 `{"exists":false}`)
+- `PUT /api/enana/v1/prefs` `{"stamp":1760000000,"prefs":{…}}` → `{"version":5,"stamp":1760000000}`; 云端的改动时间 (`stamp`) 比这次的新时返回 409 `{"code":"stale","version":5,"stamp":1760000100}`, 设备先拉取再写。请求体 ≤ 24 KB, `prefs` ≤ 16 KB。
 ### 诊断上传 (2.3.9, 需要令牌 + 会话; 说明见 `DIAGNOSTICS.md`)
 - `POST /api/enana/v1/diag` `{"trigger":"login|register|manual|event:<类型>","payload":{"v":1,"meta":{…},"verdict":{…},"env":{…},"ops":[…],"health":[…],"outages":[…]}}` → `{"ok":true,"id":"<15 位>"}`。`payload` 只认这些顶层键, 限制深度 5 / 每个字符串 2000 字符 / 数组 600 项, 序列化后 ≤ 98304 字符 (400 / 413)。同一设备两次摘要至少隔 5 分钟 (`login` `register` `manual` 不受限), 每台设备每天最多 60 份 → 429 `{"code":"rate_limited","retry_after":…}`。
 - `POST /api/enana/v1/diag/full` (multipart: `bundle` = gzip 文件 ≤ 8 MiB, `app` = 版本) → `{"ok":true,"id":"<报告编号>"}`。每台设备每天最多 3 份。

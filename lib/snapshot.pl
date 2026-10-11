@@ -99,6 +99,7 @@ sub collect {    # 读取家目录里可同步的内容 -> (文件 hash 引用, 
     my %st = read_set("$home/servers.sync");
     my %sb = read_set("$home/subs.sync");
     for my $f (@FILES) {
+        next if $f eq 'prefs.json' && !$all;                 # 偏好不进云端快照 (独立同步, 见 lib/prefs.sh); 导出备份仍然带上
         my $c = slurp("$home/$f");
         next unless defined $c && length $c;
         unless ($all) {
@@ -167,7 +168,8 @@ if ($cmd eq 'info' || $cmd eq 'hashfile' || $cmd eq 'apply') {
     my %set = ref $d->{settings} eq 'HASH' ? map { $_ => "$d->{settings}{$_}" } grep { $SETTING_OK{$_} && defined $d->{settings}{$_} && !ref $d->{settings}{$_} && $SETTING_OK{$_}->($d->{settings}{$_}) } keys %{ $d->{settings} } : ();
     if ($cmd eq 'hashfile') {
         require Digest::SHA;
-        print Digest::SHA::sha256_hex($JSON->encode({ files => \%files, certs => \%certs, settings => \%set }));
+        my %hf = %files; delete $hf{'prefs.json'};          # 和 hash 同一算法: 偏好不计入「有没有没上传的改动」
+        print Digest::SHA::sha256_hex($JSON->encode({ files => \%hf, certs => \%certs, settings => \%set }));
         exit 0;
     }
     my %meta = (created => ($d->{created} // 0) + 0, device => (!ref $d->{device} ? ($d->{device} // '') : ''), version => (!ref $d->{version} ? ($d->{version} // '') : ''));

@@ -157,7 +157,7 @@ ep_login() {
   case $k in ''|*[!A-Za-z0-9-]*) [ -z "$k" ] || fail "设备编号无效" ;; esac
   if auth_login "$u" "$p" "$k"; then
     oplog dashboard "登录" "$(kv user "$(auth_mask_email "$AUTH_EMAIL")" via "$AUTH_VIA")" ok
-    [ "$AUTH_VIA" = online ] && { job_spawn content-sync "$RULE_STEPS" >/dev/null; job_spawn sync-login "$RULE_STEPS" >/dev/null; ( plan_refresh >/dev/null 2>&1 & ); }       # 登录后顺带拉取云端内容和套餐 (后台, 失败不影响登录)
+    [ "$AUTH_VIA" = online ] && { job_spawn content-sync "$RULE_STEPS" >/dev/null; job_spawn sync-login "$RULE_STEPS" >/dev/null; ( plan_refresh >/dev/null 2>&1 & ); ( prefs_cloud_sync >/dev/null 2>&1 & ); }       # 登录后顺带拉取云端内容、套餐和偏好 (后台, 失败不影响登录)
     okj "\"token\":\"$(auth_secret)\",\"account\":\"$(jesc "$AUTH_EMAIL")\",\"via\":\"$AUTH_VIA\""
     return
   fi
@@ -408,6 +408,7 @@ ep_vps_forget() {
 }
 ep_prefs_set() { # 正文是 JSON 对象文本
   prefs_set "$BODY" || fail "$PREFS_ERR" E_INVALID
+  ( prefs_cloud_sync >/dev/null 2>&1 & ) >/dev/null 2>&1                  # 本机改动后推送到云端 (后台, 不让界面等网络; 未登录时什么都不做)
   okj "\"version\":$PREFS_VERSION"
 }
 ep_plan() {

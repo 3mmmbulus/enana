@@ -636,13 +636,28 @@ api "$A/api/prefs" | chk "初始: 空对象, version=0" 'assert d["ok"] and d["p
 pp() { api -X POST --data-binary "$1" "$A/api/prefs"; }
 pp 'not json' | chk "不是 JSON → 被拒" 'assert not d["ok"] and d["code"]=="E_INVALID"'
 pp '[1,2,3]' | chk "JSON 数组 (不是对象) → 被拒" 'assert not d["ok"]'
-python3 -c 'print("{\"a\":\"" + "x"*33000 + "\"}")' > "$W/big.json"; api -X POST --data-binary @"$W/big.json" "$A/api/prefs" | chk "超过 32 KB → 被拒" 'assert not d["ok"] and "32" in d["error"]'
+python3 -c 'print("{\"a\":\"" + "x"*17000 + "\"}")' > "$W/big.json"; api -X POST --data-binary @"$W/big.json" "$A/api/prefs" | chk "超过 16 KB → 被拒" 'assert not d["ok"] and "16" in d["error"]'
 pp '{"ui.sidebar.collapsed":true,"table.sites.pageSize":20,"名称":"中文值"}' | chk "保存偏好设置 → version=1" 'assert d["ok"] and d["version"]==1'
 api "$A/api/prefs" | chk "读回: 内容一致 (含中文), 有更新时间" 'assert d["prefs"]["table.sites.pageSize"]==20 and d["prefs"]["ui.sidebar.collapsed"] is True and d["prefs"]["名称"]=="中文值" and d["version"]==1 and d["updated"]>0'
 api "$A/api/state" | chk "state.prefs_version 随之变化" 'assert d["prefs_version"]==1'
 pp '{"table.sites.pageSize":50}' | chk "再次保存 → version=2 (整体替换)" 'assert d["version"]==2'
 api "$A/api/prefs" | chk "整体替换: 旧键没有了" 'assert d["prefs"]=={"table.sites.pageSize":50}'
 expect "prefs.json 权限 600" test "$(stat -f %Lp "$W/h/prefs.json")" = 600
+
+echo "-- 偏好设置: 独立同步到云端 (登录后自动, 不需要开启云端同步; 不进入配置快照)"
+CP_TOK=$(cat "$W/h/cloud.token"); CP_SID=$(cat "$W/h/session")
+cloud_prefs() { curl -s --noproxy '*' -H "Authorization: Bearer $CP_TOK" -H "X-Enana-Session: $CP_SID" "http://127.0.0.1:$A_PORT/api/enana/v1/prefs"; }
+h0=$(perl "$REPO/lib/snapshot.pl" hash "$W/h")
+pp '{"sync.test.key":1}' | chk "本机改动 → 保存成功" 'assert d["ok"]'
+sleep 3
+cloud_prefs | chk "本机改动后自动推送到云端 (没有开启云端同步)" 'assert d["exists"] and d["prefs"]=={"sync.test.key":1}'
+expect "改偏好不改变配置快照的哈希 (不会触发配置同步)" test "$h0" = "$(perl "$REPO/lib/snapshot.pl" hash "$W/h")"
+expect "云端配置快照里没有偏好 (偏好独立同步)" sh -c "! perl '$REPO/lib/snapshot.pl' build '$W/h' 2.3.22 device | grep -q 'prefs.json'"
+FUT=$(( $(date +%s) + 100 ))
+PUT_CODE=$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -X PUT -H "Authorization: Bearer $CP_TOK" -H "X-Enana-Session: $CP_SID" -H 'Content-Type: application/json' -d "{\"stamp\":$FUT,\"prefs\":{\"sync.test.key\":2,\"other.device\":true}}" "http://127.0.0.1:$A_PORT/api/enana/v1/prefs")
+expect "另一台电脑 (改动时间更新) 的偏好写入云端成功" test "$PUT_CODE" = 200
+pp '{"sync.test.key":1}' >/dev/null; sleep 4
+api "$A/api/prefs" | chk "本机没有更新的改动时, 拉取云端较新的偏好 (覆盖本机较旧的)" 'assert d["prefs"]=={"sync.test.key":2,"other.device":True}'
 
 echo "-- 套餐 / 权益 (会员预留; 云端是唯一真相, 本机只缓存)"
 rm -f "$W/h/plan.json" "$W/h/plan.checked"
@@ -816,7 +831,7 @@ echo "-- 清除云端数据 (需要再次验证密码) / 恢复测试前的状�
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -X POST -H "$X" -H "X-Enana-Token: $TOKEN" "$A/api/sync/clear"); [ "$CODE" = 403 ] && tpass "清除云端数据需要 sudo 令牌 (403)" || tfail "清除云端数据需要 sudo 令牌 (得到 $CODE)"
 api -X POST "$A/api/sync/clear" | chk "清除云端数据" 'assert d["ok"]'
 api "$A/api/sync" | chk "清除后: 云端没有数据, 本机版本归零" 'assert d["remote"]=={"exists":False} and d["local"]["version"]==0'
-$SP_ "$SYNCPL" seal "$W/h/sync.key" "$SD/backup.json" "$SD/cloud-bk.b64"; put_remote "$SD/cloud-bk.b64" 0 | chk "(把测试前的完整备份放回云端)" 'assert d["version"]==1'
+$SP_ "$SYNCPL" seal "$W/h/sync.key" "$SD/backup.json" "$SD/cloud-bk.b64"; put_remote "$SD/cloud-bk.b64" 0 | chk "(把测试前的完整备份放回云端: 清除后版本号接着往上走, 不回到 1)" 'assert d["version"]>1'
 J=$(sy pull -d 'mode=replace' | jp 'print(d["job"])'); [ "$(job_wait "$J")" = done ] && tpass "从备份恢复 (替换) 完成" || tfail "从备份恢复 (替换) 完成"
 J=$(api -X POST "$A/api/dns/hosts/reset" | jp 'print(d["job"])'); job_wait "$J" >/dev/null
 api "$A/api/state" | chk "恢复之后: 原来的服务器都回来了" 'ts={s["tag"] for s in d["servers"]}; assert {"Local-Hop","Fix-Pin","Good-Node"} <= ts and "Snap-A" not in ts'
@@ -1437,6 +1452,7 @@ if command -v node >/dev/null; then
   if node "$HERE/auto-lock.test.js" > "$W/auto-lock.out" 2>&1; then tpass "Idle lock: default 3 days, clamped between 1 minute and 30 days"; else tfail "Idle lock regression"; cat "$W/auto-lock.out"; fi
   if node "$HERE/sync-first-login.test.js" > "$W/sync-first-login.out" 2>&1; then tpass "First-login sync question: asked once, cancel sends nothing, confirm = enable + merge pull"; else tfail "First-login sync question regression"; cat "$W/sync-first-login.out"; fi
   if node "$HERE/sync-snapshot-version.test.js" > "$W/sync-snapshot-version.out" 2>&1; then tpass "Cloud snapshot: clear keeps the version (no rollback), a stale base conflicts"; else tfail "Cloud snapshot version regression"; cat "$W/sync-snapshot-version.out"; fi
+  if node "$HERE/prefs-cloud-version.test.js" > "$W/prefs-cloud-version.out" 2>&1; then tpass "Preferences in the cloud: newer change wins, a stale write conflicts"; else tfail "Preferences cloud version regression"; cat "$W/prefs-cloud-version.out"; fi
   if bash "$HERE/resign-release.sh" > "$W/resign-release.out" 2>&1; then tpass "Manifest re-sign: content unchanged, seq increases, tampered package refused, expiry capped at 90 days"; else tfail "Manifest re-sign regression"; cat "$W/resign-release.out"; fi
   if bash "$HERE/sites-reset.sh" > "$W/sites-reset.out" 2>&1; then tpass "Restore site defaults: keeps app settings, backs up, keeps 3 backups"; else tfail "Site reset regression"; cat "$W/sites-reset.out"; fi
 fi

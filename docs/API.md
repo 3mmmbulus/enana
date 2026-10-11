@@ -432,10 +432,10 @@
 
 ## 偏好设置 (界面习惯, 可跨设备同步) ★
 
-仪表盘把用户的界面习惯 (表格每页条数、侧栏是否收起、主题、上次打开的设置标签页、测速选择、是否收起欢迎卡片、IP 是否隐藏 …) 存在本机的 `prefs.json`, 而不只是浏览器 localStorage: 这样换浏览器不丢, 并且在用户打开「云端同步」后, 会和其它配置一起 (端到端加密) 同步到其它电脑 (没有打开同步的话, 偏好永远不会上传)。新电脑第一次登录这个账号时会先问一次「是否同步到这台电脑」, 确认后才沿用。
+仪表盘把用户的界面习惯 (表格每页条数、侧栏是否收起、主题、上次打开的设置标签页、测速选择、是否收起欢迎卡片、IP 是否隐藏 …) 存在本机的 `prefs.json`, 而不只是浏览器 localStorage: 这样换浏览器不丢。**登录账号后会独立同步到官方云端** (明文 JSON, 见 `docs/CLOUD_API.md` 的 `user_prefs`): 不需要开启「云端同步」, 也不进入配置快照。本机每次改动后在后台推送; 登录时、以及每 5 分钟对一次云端: 云端的改动时间比本机新就拉下来应用。两台电脑都改过时, 以改动时间新的为准。离线时没上传的改动会在下一次联网时补传。
 - `GET /api/prefs` → `{"ok":true,"prefs":{…任意 JSON 对象…},"version":7,"updated":1760000000}` (没有时 `prefs:{}`, `version:0`)
-- `POST /api/prefs` 正文是 JSON 对象文本 (≤ 32 KB; 键名建议分命名空间如 `table.sites.pageSize`、`ui.sidebar.collapsed`) → `{"ok":true,"version":8}`。整体替换 (前端自己合并); 本机每次写入 `version` +1。
-- 校验: 必须是 JSON 对象 (数组 / 标量 → `E_INVALID`), ≤ 32 KB (超过 → `E_INVALID`), 最多 12 层嵌套; 保存时按键排序规范化。
+- `POST /api/prefs` 正文是 JSON 对象文本 (≤ 16 KB; 键名建议分命名空间如 `table.sites.pageSize`、`ui.sidebar.collapsed`) → `{"ok":true,"version":8}`。整体替换 (前端自己合并); 本机每次写入 `version` +1。
+- 校验: 必须是 JSON 对象 (数组 / 标量 → `E_INVALID`), ≤ 16 KB (超过 → `E_INVALID`), 最多 12 层嵌套; 保存时按键排序规范化。
 - `GET /api/state` 里带 `prefs_version`: 前端发现它变了 (同步拉取了别的设备的偏好) 就重新 `GET /api/prefs` 并应用。前端本地做缓存 (localStorage) 以便首屏不闪, 但以 `GET /api/prefs` 为准; 写入要做 500 ms 防抖。
 
 ## 网站规则: 查看 / 添加 / 修改域名, 一键重置 ★
