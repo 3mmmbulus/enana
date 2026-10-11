@@ -212,10 +212,11 @@
   }
   TP.qs = qs;
   TP.sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+  /* 超时一直计到正文读完 (调用方读完后调 r.done()): 只管到响应头为止的话, 正文卡住时请求会永远挂着 (弹窗一直「正在读取…」) */
   function fetchT(url, o, ms) {
     var ctl = new AbortController(), timer = setTimeout(function () { ctl.abort(); }, ms);
     o = Object.assign({ cache: 'no-store', signal: ctl.signal }, o);
-    return fetch(url, o).then(function (r) { clearTimeout(timer); return r; }, function (e) { clearTimeout(timer); throw e; });
+    return fetch(url, o).then(function (r) { r.done = function () { clearTimeout(timer); }; return r; }, function (e) { clearTimeout(timer); throw e; });
   }
   TP.fetchT = fetchT;
 
@@ -243,12 +244,15 @@
     try {
       res = await fetchT(TP.cfg.apiBase + path + qs(o.q), { method: method, headers: headers, body: body }, o.timeout || 15000);
     } catch (e) {
-      setHelper(false);
+      // 超时 (AbortError) 只说明这一次慢, 辅助服务并没有停 (Windows 上 /api/state、/api/job 偶尔会超过时限): 只有连不上才标记为未运行, 否则横幅会一闪一闪
+      if (!e || e.name !== 'AbortError') setHelper(false);
       throw mkErr('unreachable', t(e && e.name === 'AbortError' ? 'error.helperTimeout' : 'error.helperUnreachable'));
     }
     setHelper(true);
     if (res.status === 401 && !o.noAuth) { TP.emit('unauth'); throw mkErr('auth', t('error.sessionExpired')); }
-    try { text = await res.text(); } catch (e) { throw mkErr('http', t('error.readFailed')); }
+    try { text = await res.text(); }
+    catch (e) { if (e && e.name === 'AbortError') throw mkErr('unreachable', t('error.helperTimeout')); throw mkErr('http', t('error.readFailed')); }   // 响应头已经收到, 辅助服务是在线的: 不再标记为未运行
+    finally { res.done(); }
     if (/^\s*\{/.test(text)) { try { j = JSON.parse(text); } catch (e) { j = null; } }
     if (j && j.code === 'E_SUDO_REQUIRED' && !o.noSudo && !o._retried && TP.sudo) {         // 需要再次输入登录密码: 弹出密码框, 通过后带着 X-Enana-Sudo 重试同一个请求
       TP.sudo.clear();
@@ -281,7 +285,7 @@
     clashFails = 0; setClash('ok');
     if (res.status === 401) { TP.emit('unauth'); throw mkErr('auth', t('error.sessionExpired')); }
     if (res.status === 204) return null;
-    try { data = await res.json(); } catch (e) { data = null; }
+    try { data = await res.json(); } catch (e) { data = null; } finally { res.done(); }
     if (!res.ok) throw mkErr('http', (data && data.message) || t('error.coreStatus', { status: res.status }), data);
     return data;
   };

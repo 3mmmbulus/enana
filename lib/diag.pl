@@ -14,8 +14,9 @@ use POSIX qw(strftime);
 binmode STDIN, ':encoding(UTF-8)';
 
 # 动作的详情只保留这些键 (都是数字 / 状态码 / 函数调用链 / 开关名之类, 没有用户起的名字); 其余全部丢弃 (必须在调用 summary 之前初始化)
+# 不含 raw_reason / err: 它们是原始错误文字 (云端的拒绝原因、系统命令的报错), 上传只给次数和分类, 不给文字
 my %DETAIL_OK = map { $_ => 1 } qw(
-  reason http proxy_was since_ok_s session via raw_reason resp_code key from to pid item old_pid new_pid method helper err port mode
+  reason http proxy_was since_ok_s session via resp_code key from to pid item old_pid new_pid method helper port mode
   enabled was_enabled was_mode count scan_v browsers down_s current setting trigger bytes hours sections id pin_servers dependents
   note proxy sysproxy capture seq_before src
 );

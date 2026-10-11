@@ -169,7 +169,7 @@ python3 tools/diag-summary.py <文件> --app "Google Chrome" --host google.com
 | `state` | 状态变化时 + 约每 9 分钟 | `capture` | `ok` | `core=1 pid=… api=1 proxy=1 mode=auto capture=system sysproxy=1 login=1 tun=- if=en0 gw=…`; `sysproxy` 取的是 `scutil --proxy` 里**当前生效**的系统代理 (应用实际用的那个) |
 | `tick` | 相隔 > 3 分钟 | `gap` | `gap` | `ms` = 秒数: 电脑休眠 / 后台被暂停 |
 
-状态变化 (`state` 行变了) 同时写一条操作记录 (见上面 `环境状态变化`), 所以「系统代理是什么时候被关掉的」「核心是不是崩溃重启过」可以直接在 `ops` 里读到。金丝雀的几条连接会出现在「网站访问」里 (应用 `curl`, 域名 `gstatic.com` / `chatgpt.com` / `api.openai.com` / `captive.apple.com`), 对照 `health` 里的同一时刻即可识别。仅 macOS; Windows 之后跟进 (导出里这几个分区为空)。
+状态变化 (`state` 行变了) 同时写一条操作记录 (见上面 `环境状态变化`), 所以「系统代理是什么时候被关掉的」「核心是不是崩溃重启过」可以直接在 `ops` 里读到。金丝雀的几条连接会出现在「网站访问」里 (应用 `curl`, 域名 `gstatic.com` / `chatgpt.com` / `api.openai.com` / `captive.apple.com`), 对照 `health` 里的同一时刻即可识别。仅 macOS; Windows 之后跟进 (导出里这几个分区为空)。**没有记录的**: 仪表盘辅助服务 (`com.enana.proxy.api`, 端口 `API_PORT`) 停止 —— 健康记录里的 `api=` 探测的是核心控制端口 (`UI_PORT`), 不是辅助服务; `enana tick` 恢复后才会留下 `tick gap` 行。
 
 ### 自动判定 (`verdict`) 怎么得出结论
 
@@ -220,13 +220,13 @@ python3 tools/diag-summary.py <文件> --app "Google Chrome" --host google.com
 **自动上传的是「摘要」, 不是日志**: `lib/diag.pl` 把一份导出 (`logs_bundle 24 snapshot,ops`) 按**白名单**缩成一份 JSON (`enana diag-preview` 随时可以看到下一份会传什么):
 
 - 有: 版本 / 系统 / 核心 / 接管方式 · `meta` 里的状态和开关 · `env` 里的接管 / 会话 / 固定出口数量等事实 · `verdict` 的原因代码和数字证据 · 健康汇总和故障时段 · 操作记录里的**动作头部** (纯汉字, 例如「总开关变更」) 和白名单里的详情键 (`reason` `http` `via` `since_ok_s` `from` `to` …)。
-- 没有: 访问记录、代理核心原始日志、配置规则、已安装应用、网站域名、应用名、IP 地址 (一律 `<ip>`)、服务器地址 / 端口 / 凭据、订阅名、用户名 / 邮箱、密码、令牌。服务器标签换成别名 (`node1` …); 动作名里拼进去的用户内容 (订阅名 / 域名 / 测速目标) 一律丢弃; 白名单之外的详情键 (`sub=` `user=` `tag=` `host=` …) 一律丢弃。服务端再做一道形状检查 (只认 `v` `generated` `meta` `verdict` `env` `ops` `health` `outages` 这几个顶层键, 限制深度 / 长度 / 数量)。
+- 没有: 访问记录、代理核心原始日志、配置规则、已安装应用、网站域名、应用名、IP 地址 (一律 `<ip>`)、服务器地址 / 端口 / 凭据、订阅名、用户名 / 邮箱、密码、令牌。服务器标签换成别名 (`node1` …); 动作名里拼进去的用户内容 (订阅名 / 域名 / 测速目标) 一律丢弃; 白名单之外的详情键 (`sub=` `user=` `tag=` `host=` …) 一律丢弃。服务端再做一道形状检查 (只认 `v` `generated` `meta` `verdict` `env` `ops` `health` `outages` 这几个顶层键, 限制深度 / 长度 / 数量)。会话尾号 (4 位) 和设备 UUID 前 8 位 (`env` 的 `session.id_tail` / `session.device_tail`) 也带上: 它们是标识符, 不是令牌或密码, 服务器本来就有对应的设备和会话记录。
 
-**什么时候上传**: 登录 / 注册成功后一次; 之后只在 `ops` 里出现「值得上报」的新事件时一次 (`enana tick` 每分钟看新增的行): 总开关被**自动**关闭 (`总开关变更` 来源 `auto`, 用户自己在仪表盘 / 终端关的不算) · `环境状态变化` 的系统代理 / 核心 / TUN 变成 0 · 固定出口变空 · 核心进程被重启。本机 10 分钟内最多一次, 云端每台设备每 5 分钟 / 每天 60 份的限制。**仅 macOS** (Windows 的健康判定之后跟进)。每一次上传都会写进操作记录 (`诊断上传 trigger=… http=200 bytes=…`)。
+**什么时候上传**: 登录 / 注册成功后一次; 之后只在 `ops` 里出现「值得上报」的新事件时一次 (`enana tick` 每分钟看新增的行): 总开关被**自动**关闭 (`总开关变更` 来源 `auto`, 用户自己在仪表盘 / 终端关的不算) · `环境状态变化` 的系统代理 / 核心 / TUN 变成 0 · 固定出口变空 · 核心进程被重启。本机 10 分钟内最多一次; 限频内发生的事件记成待传, 间隔过了由下一次 `enana tick` 补传 (`trigger=event:pending`), 不会丢。云端每台设备每 5 分钟 / 每天 60 份的限制。**仅 macOS** (Windows 的健康判定之后跟进)。每一次上传都会写进操作记录 (`诊断上传 trigger=… http=200 bytes=…`)。摘要里的错误只有次数和分类; 原始错误文字 (`err` · `raw_reason`, 可能带着域名) 不上传。**不会**触发上传的: 心跳失败 / 连不上云端 · 被云端踢下线或离线超过 7 天 (本机已经退出登录, 没有会话可用; 这条要等下一次登录时随摘要带上, 且只带 24 小时之内的记录) · 仪表盘辅助服务停止 · 健康探测失败 (只出现在 `verdict`) · 其它 `result=error` 的操作 (只在下一次上传时才出现)。
 
 **完整诊断 (手动)**: 设置 → 日志 → 「发送完整诊断」(或 `enana diag-send [小时数]`) 才会上传最近 N 小时的完整导出 (含访问过的域名和应用名, 压缩后 ≤ 8 MiB, 太大自动缩短时间范围), 点确认之前会写明内容; 成功后得到一个**报告编号**, 把编号告诉开发者。每台设备每天最多 3 份。
 
-**控制权在用户**: 设置 → 日志里有「上传诊断摘要」开关 (默认开; 开关变化一定记进操作记录), 「删除已上传的诊断」(或 `enana diag-delete`) 删除自己在云端上传过的全部内容; 账号删除时一并级联删除。
+**控制权在用户**: 设置 → 日志里有「上传诊断摘要」开关 (**默认关**, `lib/common.sh` 里 `DIAG_UPLOAD=0`; 只在 macOS 并且已登录时生效; 开关变化一定记进操作记录), 「删除已上传的诊断」(或 `enana diag-delete`) 删除自己在云端上传过的全部内容; 账号删除时一并级联删除。
 
 **云端**: PocketBase 集合 `diag_reports` (`server/pb_migrations/1790000004_enana_diag.js`, 接口 `POST /api/enana/v1/diag` · `POST .../diag/full` · `DELETE .../diag`, 见 `docs/CLOUD_API.md`); API 规则全是 `null` (只有管理员能读); 保留 **7 天** (每天 03:27 `enana_diag_gc`, 完整诊断的文件逐条删除), 每台设备最多留 200 份摘要 / 5 份完整诊断。读取方式 (管理员): 后台 `diag_reports` 集合按 `cause` / `device` / `created` 筛选, 或 `GET /api/collections/diag_reports/records?filter=cause='pin-empty'` (超级用户令牌)。
 
@@ -262,3 +262,5 @@ localhost 回调、局域网 socket 和核心自身出口不计入绕过系统�
 ## Windows 预览版
 
 诊断与 Mac 使用同一导出入口与格式, 增加 Windows 版本/架构、用户任务和 TUN 任务、双栈与 localhost 接口归属、WinINet 代理状态和 PIN 主/辅助 EXE 的 TCP 连接快照。`possible_system_proxy_bypass` 仅为候选; `tun_os_socket_observed` 表示 TUN 模式下观察到 OS socket, 不单独证明出口。UDP 远端不可见时明确标记 `unavailable-on-Windows`。详见 [Windows 验收](WINDOWS.md)。
+
+辅助服务的日志 (`worker.log` `api.log` `launcher.log` `tick.log` `check.log`) 里的错误行, 以及 `worker.start` / `core.ready` 事件, 现在也进入导出的 `env` 分区 (`helperlog.<文件>: …` 行)。Windows 目前**不**自动上传摘要, 也不记录健康 (`health_on` / `diag_enabled` 只认 macOS); 辅助服务的启动 / 核心就绪 / 核心失败只写在它自己的 `worker.log` 里, 不进操作记录。

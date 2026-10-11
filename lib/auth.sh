@@ -190,6 +190,9 @@ auth_login() {
        session_save "$CLOUD_TOKEN" "$SESS_ID"
        rm -f "$H/notice" "$H/hb.fail"
        auth_mark_in "$(auth_lower "$ACC_EMAIL")"; auth_unlock
+       local prev; prev=$(sed -n 1p "$H/last-account" 2>/dev/null)                    # 这台电脑上次登录的账号 (退出账号不清它)
+       if [ -n "$prev" ] && [ "$prev" != "$ACC_ID" ] && [ "${PROXY_ENABLED:-0}" = 1 ]; then proxy_set_enabled 0; fi   # 换了另一个账号: 关代理; 同一账号退出再登录则保留
+       printf '%s\n' "$ACC_ID" > "$H/last-account"
        AUTH_VIA=online; AUTH_EMAIL=$ACC_EMAIL; auth_fail_clear
        sync_on_login "$ACC_ID" "$pw"                                     # 端到端同步的密钥由登录密码派生 (只在本机, 退出账号即删除)
        ! type diag_kick >/dev/null 2>&1 || diag_kick login                # 诊断摘要: 登录成功后在后台传一份 (设置里可关; 不含网站 / 应用名 / IP / 服务器地址)
@@ -225,9 +228,8 @@ auth_register() {
   esac
 }
 
-# 本机退出登录 (不通知云端; 云端已经撤销了会话时用): 关闭代理 + 令牌轮换 + 清除登录状态 / 会话 / 离线缓存 / 提示
+# 本机退出登录 (不通知云端; 云端已经撤销了会话时用): 令牌轮换 + 清除登录状态 / 会话 / 离线缓存 / 提示。代理设置保留 (退出账号不关代理; 换账号 / 被下线时由调用方关)
 auth_logout_local() {
-  proxy_set_enabled 0
   rm -f "$H/loggedin" "$H/auth.fail" "$H/account.conf" "$H/notice" "$H/sudo.tokens" "$H/official.jsonl" "$H/official.jsonl.prev" "$H/official.state"      # 官方节点属于账号: 退出就清掉 (随后的 apply_config 把它们从核心配置里去掉)
   sync_on_logout
   session_clear

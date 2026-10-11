@@ -57,7 +57,7 @@ Pro 订单、余额、到账记录与验证接口见 [BILLING_API.md](BILLING_AP
 ### 同步 (端到端加密; 云端只存密文)
 - `GET /api/enana/v1/sync/snapshot[?payload=1]` → `{"exists":true,"version":7,"updated":1760000000,"size":2048,"device":"MacBook","payload":"<base64, 仅 payload=1>"}`
 - `PUT /api/enana/v1/sync/snapshot` `{"base_version":6,"payload":"<base64>","size":2048}` → `{"version":7}` 或 409 `{"code":"conflict","version":8}`
-- `DELETE /api/enana/v1/sync/snapshot` → `{"ok":true}`
+- `DELETE /api/enana/v1/sync/snapshot` → `{"ok":true}`。清空内容但保留这一行、版本号不回退: 之后 GET 返回 `exists:false`, 推送从 `base_version:0` 开始; 清除前拿着旧版本号的设备推送会收到 409 (版本号是有效版本, 清除后为 0)。
 ### 诊断上传 (2.3.9, 需要令牌 + 会话; 说明见 `DIAGNOSTICS.md`)
 - `POST /api/enana/v1/diag` `{"trigger":"login|register|manual|event:<类型>","payload":{"v":1,"meta":{…},"verdict":{…},"env":{…},"ops":[…],"health":[…],"outages":[…]}}` → `{"ok":true,"id":"<15 位>"}`。`payload` 只认这些顶层键, 限制深度 5 / 每个字符串 2000 字符 / 数组 600 项, 序列化后 ≤ 98304 字符 (400 / 413)。同一设备两次摘要至少隔 5 分钟 (`login` `register` `manual` 不受限), 每台设备每天最多 60 份 → 429 `{"code":"rate_limited","retry_after":…}`。
 - `POST /api/enana/v1/diag/full` (multipart: `bundle` = gzip 文件 ≤ 8 MiB, `app` = 版本) → `{"ok":true,"id":"<报告编号>"}`。每台设备每天最多 3 份。

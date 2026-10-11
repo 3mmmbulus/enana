@@ -255,7 +255,7 @@ settings_json() { # GET /api/settings 的 settings 与 usage
 # ======================================================================================================================
 BUNDLE_FORMAT=1
 
-_b_mask_user() { sed -E 's#/Users/[^/ ,"]+#/Users/<user>#g; s#user: (root|_[A-Za-z0-9_]+)#user:@@K@@\1#g; s#user: [A-Za-z0-9._-]+#user: <user>#g; s#user:@@K@@#user: #g'; }
+_b_mask_user() { sed -E 's#/Users/[^/ ,"]+#/Users/<user>#g; s#[A-Za-z]:\\*Users\\*[^\\"]+#C:\\Users\\<user>#g; s#user: (root|_[A-Za-z0-9_]+)#user:@@K@@\1#g; s#user: [A-Za-z0-9._-]+#user: <user>#g; s#user:@@K@@#user: #g'; }   # Windows: C:\Users\<name> (JSON 行里是 \\ 也一样)
 
 _b_mask_host() { # stdin 每行一个地址 -> 打码: 1.2.3.4 -> 1.2.*.*   a.b.example.com -> a***.example.com   IPv6 -> 前两段:*
   awk '{ h = $0
@@ -290,7 +290,7 @@ _b_meta() {
 }
 
 _b_env() {
-  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then network_diagnostics | _b_mask_user; return; fi
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then network_diagnostics | _b_mask_user; _b_helperlogs; return; fi
   local p pid out
   network_diagnostics | _b_mask_user
   scutil --proxy 2>/dev/null | awk '/^[[:space:]]+(HTTP|HTTPS|SOCKS|ProxyAutoConfig|ProxyAutoDiscovery|Exclude|FTP|RTSP|Gopher)[A-Za-z]* :/ { k = $1; $1 = ""; $2 = ""; sub(/^  */, ""); print "sysproxy." k "=" $0 }'
@@ -317,8 +317,14 @@ _b_env() {
   if [ -x "$SB" ] && [ -s "$H/config.json" ]; then
     if out=$("$SB" check -c "$H/config.json" 2>&1); then printf 'config.check=ok\n'; else printf 'config.check=error: %s\n' "$(printf '%s' "$out" | head -1 | cut -c1-200)"; fi
   fi
+  _b_helperlogs
+  return 0
+}
+
+_b_helperlogs() { # 辅助服务日志里最近的错误 (macOS 和 Windows 都导出; Windows 的 worker.log 是 JSON 行, 启动 / 核心就绪 / 失败事件也在里面)
+  local p
   for p in api.log tick.log check.log worker.log launcher.log; do
-    [ -s "$H/$p" ] && tail -n 40 "$H/$p" 2>/dev/null | grep -iE 'error|fail|fatal|warn|denied' | tail -n 8 | _b_mask_user | sed "s/^/helperlog.$p: /"
+    [ -s "$H/$p" ] && tail -n 40 "$H/$p" 2>/dev/null | grep -iE 'error|fail|fatal|warn|denied|worker\.start|core\.ready' | tail -n 8 | _b_mask_user | sed "s/^/helperlog.$p: /"
   done
   return 0
 }
@@ -372,7 +378,7 @@ _b_config() { # 脱敏后的运行配置: 日志 / 入站 / 路由规则 (按顺
         print "server tag=$o->{tag} type=$t host=", mh($o->{server}), " port=", ($o->{server_port} // ""), " tls=", ($tls->{enabled} ? 1 : 0), " sni=", mh($tls->{server_name}), " transport=", ($tr->{type} // ""), " network=", ($o->{network} // ""), "\n" }
     }
     if (my $d = $j->{dns}) { for my $s (@{ $d->{servers} || [] }) { my %c = %$s; print "dns.server ", $E->encode(\%c), "\n" } for my $i (0 .. $#{ $d->{rules} || [] }) { print "dns.rule[$i] ", $E->encode($d->{rules}[$i]), "\n" } print "dns.final=", ($d->{final} // ""), "\n" }
-  ' "$H/config.json"
+  ' "$H/config.json" | _b_mask_user      # 配置里的日志 / 入站路径含系统用户名 (C:/Users/<名字>/…), 必须打码
 }
 
 _b_policy() { # 当前生效的策略: 代理模式 / 每个选择器当前选了谁 / 你对应用和网站的覆盖 / 自动识别添加的网站 / 自定义项

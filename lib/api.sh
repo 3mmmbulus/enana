@@ -174,8 +174,10 @@ ep_register() {
   fi
   auth_fail_reply
 }
-ep_logout() { # 退出账号: 自动关闭代理 + 令牌立刻失效 + 释放云端设备名额; 核心在后台重启一次换上新令牌 (期间已是全部直连)
-  oplog dashboard "退出账号" "$(kv user "$(auth_mask_email "$(auth_current_email)")")" ok
+ep_logout() { # 退出账号: 代理设置保留 (开关 / 系统代理 / 你自己的服务器与规则), 官方节点与令牌清掉, 释放云端设备名额; 切换账号 (switch=1) 才关闭代理
+  local sw; sw=$(fp switch)
+  oplog dashboard "退出账号" "$(kv user "$(auth_mask_email "$(auth_current_email)")" switch "${sw:-0}")" ok
+  [ "$sw" = 1 ] && proxy_set_enabled 0
   auth_logout
   job_spawn auth-sync '同步令牌' >/dev/null
   okj

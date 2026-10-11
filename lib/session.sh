@@ -64,6 +64,7 @@ session_hb_get() { sed -n "s/^$1=//p" "$H/hb.state" 2>/dev/null | head -1; }
 session_local_end() { # <原因> [云端返回的 HTTP 状态码] [补充信息 (k=v …)]
   local reason=$1 http=${2:-} okts sid; okts=$(session_hb_get ok); sid=$(session_id)
   oplog auto "已被退出登录" "$(kv reason "$reason" http "$http" proxy_was "${PROXY_ENABLED:-0}" since_ok_s "${okts:+$(( $(date +%s) - okts ))}" session "${sid: -4}" via "$(call_chain 2 5)")${3:+ $3}" ok      # 只有心跳会走到这里 (来源是 auto); since_ok_s = 距上次心跳成功多少秒
+  proxy_set_enabled 0                                 # 被下线 / 离线过久: 关闭代理 (用户主动退出账号不关, 见 ep_logout)
   auth_logout_local
   mkdir -p "$H"; printf '%s\n' "$reason" > "$H/notice"
   op_sync_secret

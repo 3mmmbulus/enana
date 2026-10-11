@@ -841,7 +841,7 @@ SG="$SD/m2"; mkdir -p "$SG"; printf '%s\n' '{"role":"auto","outbound":{"type":"t
 $SP_ "$SNAPPL" apply "$SG" "$SD/a.json" merge >/dev/null
 expect "合并 (merge): 本机原有的 G-Local 保留 (仍然只在本机), 云端的 Snap-A / Snap-B 加进来并记入同步清单" sh -c "grep -q G-Local '$SG/servers.jsonl' && grep -q Snap-A '$SG/servers.jsonl' && ! grep -qx G-Local '$SG/servers.sync' && grep -qx Snap-A '$SG/servers.sync'"
 
-echo "-- 接口: save=1 / save=0 · 第一次勾选自动打开同步 · 老服务器不会被连带上传 · 登录后自动取回"
+echo "-- 接口: save=1 / save=0 · 第一次勾选自动打开同步 · 老服务器不会被连带上传 · 登录后先问再取回"
 sy settings -d 'enabled=0' >/dev/null; rm -f "$W/h/servers.sync" "$W/h/subs.sync" "$W/h/.sync-pending"; sed -i '' -e '/^ENABLED=/d' -e '/^AUTO=/d' "$W/h/sync.conf"
 api "$A/api/sync" | chk "还没做过选择: decided=false, enabled=false" 'assert d["decided"] is False and d["enabled"] is False'
 LY='{"role":"auto","outbound":{"type":"socks","tag":"Save-Yes","server":"127.0.0.1","server_port":'$HOP_PORT',"version":"5"}}'
@@ -857,7 +857,7 @@ cat "$SD/export-all.json" | jp 'import json; f=d["files"]["servers.jsonl"]; asse
 J=$(api -X POST "$A/api/servers/delete?tag=Save-Yes" | jp 'print(d.get("job",""))'); [ -z "$J" ] || job_wait "$J" >/dev/null
 expect "删除服务器时从同步清单里去掉" sh -c "! grep -qx 'Save-Yes' '$W/h/servers.sync'"
 J=$(api -X POST "$A/api/servers/delete?tag=Save-No" | jp 'print(d.get("job",""))'); [ -z "$J" ] || job_wait "$J" >/dev/null
-# 登录后自动取回: 云端有「另一台电脑」保存的服务器 Cloud-New → 退出再登录, 它自动出现 (合并, 本机已有的都在)
+# 第一次登录 (还没做过选择) 不会自动取回: 云端有「另一台电脑」保存的服务器 Cloud-New → 退出再登录也不出现; 确认「同步到这台电脑」(开启同步 + 合并拉取) 之后才出现
 python3 - "$SD" <<'PY2'
 import json, sys
 sd = sys.argv[1]
@@ -870,9 +870,14 @@ sed -i '' -e '/^ENABLED=/d' -e '/^AUTO=/d' -e '/^BASE_VERSION=/d' -e '/^SYNCED_H
 ACC_=$(cut -d' ' -f1 "$W/h/loggedin"); PW_=$(sudo_pw)
 api -X POST "$A/api/logout" >/dev/null; wait_clash_401 "$TOKEN"
 R=$(login "$ACC_" "$PW_"); TOKEN=$(echo "$R" | jp 'print(d["token"])')
-for i in $(seq 1 40); do api "$A/api/state" | jp 'import sys; sys.exit(0 if "Cloud-New" in {s["tag"] for s in d["servers"]} else 1)' >/dev/null 2>&1 && break; sleep 0.5; done
-api "$A/api/state" | chk "登录后自动取回云端保存的服务器: Cloud-New 出现, 本机原有的服务器都在 (合并, 不覆盖)" 'ts={s["tag"] for s in d["servers"]}; assert "Cloud-New" in ts and {"Fix-Pin","Local-Hop"} <= ts'
-expect "取回来的服务器记入同步清单, 同步自动打开 (之前没做过选择)" sh -c "grep -qx 'Cloud-New' '$W/h/servers.sync' && grep -qx 'ENABLED=1' '$W/h/sync.conf'"
+sleep 4
+api "$A/api/state" | chk "还没有确认过: 登录后不会自动取回云端的服务器 (Cloud-New 没有出现), 本机原有的都在" 'ts={s["tag"] for s in d["servers"]}; assert "Cloud-New" not in ts and {"Fix-Pin","Local-Hop"} <= ts'
+expect "还没有确认过: 同步没有被打开 (ENABLED 不是 1)" sh -c "! grep -q '^ENABLED=1' '$W/h/sync.conf'"
+api "$A/api/sync" | chk "同一账号再次登录: 这台电脑已经处理过, 不再问 (ask=false)" 'assert d["ask"] is False and d["decided"] is False'
+sy settings -d 'enabled=1&auto=0' | chk "确认「同步到这台电脑」: 开启同步 (不自动上传)" 'assert d["ok"]'
+J=$(sy pull -d 'mode=merge' | jp 'print(d["job"])'); [ "$(job_wait "$J")" = done ] && tpass "确认之后的合并拉取完成" || tfail "确认之后的合并拉取完成"
+api "$A/api/state" | chk "确认之后: Cloud-New 出现, 本机原有的服务器都在 (合并, 不覆盖)" 'ts={s["tag"] for s in d["servers"]}; assert "Cloud-New" in ts and {"Fix-Pin","Local-Hop"} <= ts'
+expect "确认之后: 取回来的服务器记入同步清单, 同步已开启 (ENABLED=1)" sh -c "grep -qx 'Cloud-New' '$W/h/servers.sync' && grep -qx 'ENABLED=1' '$W/h/sync.conf'"
 expect "云端快照里带来的全部服务器 (包括 Fix-Pin) 都记入同步清单, 之后继续同步" sh -c "grep -qx 'Fix-Pin' '$W/h/servers.sync' && grep -qx 'Local-Hop' '$W/h/servers.sync'"
 # 在设置里明确关闭过同步 → 登录后不自动取回
 J=$(api -X POST "$A/api/servers/delete?tag=Cloud-New" | jp 'print(d.get("job",""))'); [ -z "$J" ] || job_wait "$J" >/dev/null
@@ -1307,7 +1312,7 @@ api "$A/api/job?id=$J" | chk "任务进度按语言头翻译 (英文步骤名)" 
 api -X POST "$A/api/settings" -d 'lang=en' >/dev/null; grep -q '^LANG_UI=en' "$W/h/settings.env" && tpass "语言选择已保存到 settings.env (终端与仪表盘共用)" || tfail "语言选择已保存"
 api -X POST "$A/api/settings" -d 'lang=zh' >/dev/null
 
-echo "== 13. 退出账号 = 关闭代理 (仪表盘 + 终端) · 终端没登录时不能开启代理"
+echo "== 13. 退出账号 = 代理设置保留 (仪表盘 + 终端) · 切换账号 / 登录另一个账号 = 关闭代理 · 终端没登录时不能开启代理"
 OLD=$TOKEN
 api "$A/api/state" | chk "退出前: 代理已开启 (按规则分流)" 'assert d["proxy"]["enabled"] is True'
 sudo_tok >/dev/null; expect "退出前有 sudo 令牌文件" test -s "$W/h/sudo.tokens"
@@ -1316,23 +1321,30 @@ wait_clash_401 "$OLD"
 expect "退出后: sudo 令牌全部清除" test ! -e "$W/h/sudo.tokens"
 expect "退出后: 旧令牌失效 (辅助服务 401)" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H "$X" -H "X-Enana-Token: $OLD" $A/api/state)" = 401
 expect "退出后: 旧令牌失效 (Clash API 401)" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H "Authorization: Bearer $OLD" $U/proxies)" = 401
-expect "退出后: 设置里代理总开关 = 0, 磁盘配置 default_mode = Direct" sh -c "grep -q '^PROXY_ENABLED=0' '$W/h/settings.env' && grep -q '\"default_mode\":\"Direct\"' '$W/h/config.json'"
+expect "退出后: 代理总开关保留为 1 (代理设置保留), 配置没有被改成直连" sh -c "grep -q '^PROXY_ENABLED=1' '$W/h/settings.env' && ! grep -q '\"default_mode\":\"Direct\"' '$W/h/config.json'"
 expect "退出后: 核心仍在监听 (系统代理指向它也不会断网)" nc -z 127.0.0.1 "$PORT"
 R=$(login user1@example.test 'New-Passw0rd2'); TOKEN=$(echo "$R" | jp 'print(d["token"])'); [ "$TOKEN" != "$OLD" ] && tpass "重新登录拿到新令牌" || tfail "重新登录拿到新令牌"
-cl "$U/configs" | chk "重新登录后代理仍是关闭的 (必须手动在仪表盘里开启)" 'assert d["mode"]=="Direct"'
-api "$A/api/state" | chk "state.proxy.enabled 仍为 false" 'assert d["proxy"]["enabled"] is False'
+cl "$U/configs" | chk "重新登录 (同一账号) 后代理仍是开启的" 'assert d["mode"]!="Direct"'
+api "$A/api/state" | chk "state.proxy.enabled 仍为 true" 'assert d["proxy"]["enabled"] is True'
 if "$W/shortcut/enana" status 2>&1 | grep -q '已登录'; then tpass "终端 status 显示已登录"; else tfail "终端 status 显示已登录"; fi
 api -X POST "$A/api/proxy" -d 'on=1' >/dev/null
 echo y | "$W/shortcut/enana" logout >/dev/null 2>&1; sleep 3
 expect "终端 enana logout: 登录状态与离线缓存都被清除" test ! -e "$W/h/loggedin" -a ! -e "$W/h/account.conf"
-expect "终端 enana logout: 代理被关闭" grep -q '^PROXY_ENABLED=0' "$W/h/settings.env"
+expect "终端 enana logout: 代理设置保留 (总开关仍为 1)" grep -q '^PROXY_ENABLED=1' "$W/h/settings.env"
 "$W/shortcut/enana" on >"$W/on.out" 2>&1; expect "没登录时终端 enana on 被拒绝并提示先登录" grep -q '还没有登录' "$W/on.out"
-expect "被拒绝的 enana on 没有改变代理状态" grep -q '^PROXY_ENABLED=0' "$W/h/settings.env"
+expect "被拒绝的 enana on 没有改变代理状态" grep -q '^PROXY_ENABLED=1' "$W/h/settings.env"
 curl -s -X POST "http://127.0.0.1:$A_PORT/_test/mode?m=down" >/dev/null
 login user1@example.test 'New-Passw0rd2' | chk "清除缓存后又连不上 enana.cc: 不能登录 (E_ACCOUNT_UNREACHABLE)" 'assert d["code"]=="E_ACCOUNT_UNREACHABLE"'
 curl -s -X POST "http://127.0.0.1:$A_PORT/_test/mode?m=ok" >/dev/null
 TOKEN=$(login user1@example.test 'New-Passw0rd2' | jp 'print(d["token"])'); [ -n "$TOKEN" ] && tpass "在线后可再次登录" || tfail "在线后可再次登录"
 "$W/shortcut/enana" on >"$W/on.out" 2>&1; expect "登录之后终端 enana on 可以开启代理" grep -q '^PROXY_ENABLED=1' "$W/h/settings.env"
+api -X POST "$A/api/logout?switch=1" | chk "切换账号 (switch=1) 退出 → ok" 'assert d["ok"]'
+expect "切换账号: 代理总开关被关闭 (换账号不继承代理)" grep -q '^PROXY_ENABLED=0' "$W/h/settings.env"
+R=$(login user1@example.test 'New-Passw0rd2'); TOKEN=$(echo "$R" | jp 'print(d["token"])'); api -X POST "$A/api/proxy" -d 'on=1' >/dev/null
+api -X POST "$A/api/logout" | chk "普通退出 → ok" 'assert d["ok"]'
+R=$(login user2@example.test 'Another-Pass1'); TOKEN=$(echo "$R" | jp 'print(d["token"])')
+expect "登录另一个账号: 代理被关闭 (真正换了账号)" grep -q '^PROXY_ENABLED=0' "$W/h/settings.env"
+R=$(login user1@example.test 'New-Passw0rd2'); TOKEN=$(echo "$R" | jp 'print(d["token"])')
 api -X POST "$A/api/proxy" -d 'on=0' >/dev/null
 
 echo "== 14. 重复运行安装器 / 升级模式: 不重装 / 不重启 / 不要密码 / 不动系统代理"
@@ -1423,6 +1435,8 @@ if command -v node >/dev/null; then
   if node "$HERE/exits-ui.test.js" > "$W/exits-ui.out" 2>&1; then tpass "Exit assignment UI: overview model, default-switch and remove pre-flight, pickers"; else tfail "Exit assignment UI regression"; cat "$W/exits-ui.out"; fi
   if node "$HERE/billing-qr.test.js" > "$W/billing-qr.out" 2>&1; then tpass "Payment invoice QR code encodes the TRON address (version 3, 29 modules)"; else tfail "Payment QR code regression"; cat "$W/billing-qr.out"; fi
   if node "$HERE/auto-lock.test.js" > "$W/auto-lock.out" 2>&1; then tpass "Idle lock: default 3 days, clamped between 1 minute and 30 days"; else tfail "Idle lock regression"; cat "$W/auto-lock.out"; fi
+  if node "$HERE/sync-first-login.test.js" > "$W/sync-first-login.out" 2>&1; then tpass "First-login sync question: asked once, cancel sends nothing, confirm = enable + merge pull"; else tfail "First-login sync question regression"; cat "$W/sync-first-login.out"; fi
+  if node "$HERE/sync-snapshot-version.test.js" > "$W/sync-snapshot-version.out" 2>&1; then tpass "Cloud snapshot: clear keeps the version (no rollback), a stale base conflicts"; else tfail "Cloud snapshot version regression"; cat "$W/sync-snapshot-version.out"; fi
   if bash "$HERE/resign-release.sh" > "$W/resign-release.out" 2>&1; then tpass "Manifest re-sign: content unchanged, seq increases, tampered package refused, expiry capped at 90 days"; else tfail "Manifest re-sign regression"; cat "$W/resign-release.out"; fi
   if bash "$HERE/sites-reset.sh" > "$W/sites-reset.out" 2>&1; then tpass "Restore site defaults: keeps app settings, backs up, keeps 3 backups"; else tfail "Site reset regression"; cat "$W/sites-reset.out"; fi
 fi

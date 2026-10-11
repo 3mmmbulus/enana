@@ -676,12 +676,22 @@ function snapshotRow(app, userId) {
   try { return app.findFirstRecordByFilter('sync_snapshots', 'user = {:u}', { u: userId }) } catch (_) { return null }
 }
 
+// 快照的有效版本规则 (纯函数, 测试见 tests/sync-snapshot-version.test.js)。
+// 清除 = 清空内容, 但保留这一行, 版本号只增不减: 没有内容的快照对设备来说就是「云端还没有数据」 (有效版本 0),
+// 所以清除后任何设备都能从头推送; 而清除前拿着旧版本号的设备推送时会收到冲突, 不会静默覆盖新的内容。
+function snapshotExists(row) { return !!row && row.getString('payload') !== '' }
+function snapshotPushDecision(row, base) {
+  const raw = row ? row.getInt('version') : 0
+  const eff = snapshotExists(row) ? raw : 0
+  return eff === base ? { next: raw + 1 } : { conflict: eff }
+}
+
 function syncGet(e) {
   const wantPayload = e.request.url.query().get('payload') === '1'
   const g = needSession(e)
   if (g.res) return g.res
   const row = snapshotRow($app, g.user.id)
-  if (!row) return reply(e, 200, { exists: false })
+  if (!snapshotExists(row)) return reply(e, 200, { exists: false })
   const out = { exists: true, version: row.getInt('version'), updated: unixOf(row, 'updated'), size: row.getInt('size'), device: row.getString('source_device') }
   if (wantPayload) {
     out.payload = row.getString('payload')
@@ -711,16 +721,16 @@ function syncPut(e) {
     const c = checkSession(tx, g.user, g.session.id, nowSec())
     if (c.revoked) { out = { revoked: c.revoked }; return }
     let row = snapshotRow(tx, g.user.id)
-    const cur = row ? row.getInt('version') : 0
-    if (cur !== base) { out = { conflict: cur }; return }
+    const d = snapshotPushDecision(row, base)
+    if (d.conflict !== undefined) { out = { conflict: d.conflict }; return }
     if (!row) { row = new Record(tx.findCachedCollectionByNameOrId('sync_snapshots')); row.set('user', g.user.id) }
-    row.set('version', cur + 1)
+    row.set('version', d.next)
     row.set('payload', payload)
     row.set('size', size)
     row.set('source_device', dev.getString('name') || dev.getString('device_uid'))
     tx.save(row)
-    audit(tx, 'sync_push', { user: g.user.id, device: dev.id, ip: ipMasked, detail: { version: cur + 1, size: size } })
-    out = { version: cur + 1 }
+    audit(tx, 'sync_push', { user: g.user.id, device: dev.id, ip: ipMasked, detail: { version: d.next, size: size } })
+    out = { version: d.next }
   })
   if (out.revoked) return revokedReply(e, out.revoked)
   if (out.conflict !== undefined) return reply(e, 409, { code: 'conflict', version: out.conflict })
@@ -731,8 +741,9 @@ function syncDelete(e) {
   const g = needSession(e)
   if (g.res) return g.res
   const row = snapshotRow($app, g.user.id)
-  if (row) {
-    $app.delete(row)
+  if (snapshotExists(row)) {
+    row.set('payload', ''); row.set('size', 0)                    // 清空内容, 保留这一行: 版本号不回退 (见 snapshotPushDecision)
+    $app.save(row)
     audit($app, 'sync_clear', { user: g.user.id, device: g.session.getString('device'), ip: maskIP(e.realIP()), detail: {} })
   }
   return reply(e, 200, { ok: true })
@@ -764,7 +775,7 @@ function gc() {
 module.exports = {
   login: login, heartbeat: heartbeat, logout: logout, check: check,
   devices: devices, kick: kick, plan: plan, nodes: nodes, changePassword: changePassword,
-  syncGet: syncGet, syncPut: syncPut, syncDelete: syncDelete,
+  syncGet: syncGet, syncPut: syncPut, syncDelete: syncDelete, snapshotExists: snapshotExists, snapshotPushDecision: snapshotPushDecision,
   onUserCreated: onUserCreated, onUserCreateRequest: onUserCreateRequest, gc: gc,
   needSession: needSession, planFor: planFor, readJSON: readJSON, entitlements: entitlements, officialAccess: officialAccess,
   reply: reply, fail: fail, clean: clean, nowSec: nowSec, iso: iso,       // 给 enana_diag.js 用
