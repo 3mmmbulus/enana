@@ -174,18 +174,21 @@ has "是 sudo -n 调用助手的 (写死的 root 路径, 不在终端里等密�
 eq "回读确认: 最终系统代理确实指向 enana" "$(os_sysproxy_ok && echo on || echo off)" "on"
 
 echo "-- S6c. 不信任的情况: 版本不对 / 别人可写 / 符号链接 → 重新授权, 不盲目使用"
-sed -i '' "s/^NS=\(.*\); PORT=\([0-9]*\); VERSION=.*/NS=\1; PORT=\2; VERSION=0/" "$HELPER"
+# 每个「不信任」用例前都先确认「可信」: 否则助手文件不在也会得到 untrusted, 用例就空跑了
+prep_trusted() { eq "(准备) 助手可信 (下面的 untrusted 不是因为文件本来就不在)" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" trusted; }
+sed -i ''"s/^NS=\(.*\); PORT=\([0-9]*\); VERSION=.*/NS=\1; PORT=\2; VERSION=0/" "$HELPER"
 eq "版本号不对: 视为没装好" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
 os_sysproxy_apply off </dev/null >/dev/null 2>&1
 eq "版本不对 → 弹一次框重装 (升级), 装好后版本恢复" "$(grep -c '^osascript -e do shell script' "$CALLS"):$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "2:trusted"
 chmod 775 "$HELPER"
 eq "组可写: 不信任" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
-chmod 755 "$HELPER"; chmod 757 "$HELPER"
+chmod 755 "$HELPER"; prep_trusted; chmod 757 "$HELPER"
 eq "其他人可写: 不信任" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
-chmod 755 "$HELPER"
+chmod 755 "$HELPER"; prep_trusted
 mv "$HELPER" "$HELPER.real"; ln -s "$HELPER.real" "$HELPER"
 eq "助手是符号链接: 不信任" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
 rm -f "$HELPER"; mv "$HELPER.real" "$HELPER"
+prep_trusted
 rm -f "$SUDOERS"
 eq "sudoers 规则不在了 (用户或系统删了): 不信任 (sudo -n 要密码)" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
 
@@ -221,9 +224,11 @@ eq "用户取消授权: 失败 (user-canceled), 没有装助手, 也没有留下
 echo "-- S6e. 助手装了半截 (visudo 校验失败) 不会留下规则, 也不会挡住系统代理设置"
 reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
 mkdir -p "$W/badbin"; printf '#!/bin/sh\nexit 1\n' > "$W/badbin/visudo"; chmod +x "$W/badbin/visudo"
-PATH="$W/badbin:$PATH" os_sysproxy_apply on </dev/null >/dev/null 2>&1; rc=$?
+export FAKE_VISUDO="$W/badbin/visudo"      # 安装助手的 root 命令里写死的 /usr/sbin/visudo, 测试里换成这个假的 (见 tests/fakebin/rootpaths.sh)
+os_sysproxy_apply on </dev/null >/dev/null 2>&1; rc=$?; unset FAKE_VISUDO
 eq "visudo 校验失败: 系统代理仍然设置成功" "$rc:$SYSPROXY_METHOD" "0:dialog"
 eq "…且没有写入 sudoers 规则" "$([ -e "$SUDOERS" ] && echo sudoers || echo none)" "none"
+t_ok "(准备) 助手文件已经装上了 (只是没有规则, 不是文件不在)" test -f "$HELPER"
 eq "…助手即使装上了也不可用 (没有规则 → 不信任), 下次照常授权" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
 
 echo "-- S6f. 卸载: 助手和免密规则一并删除"
@@ -235,6 +240,12 @@ eq "卸载后助手和 sudoers 规则都被删除" "$([ -e "$HELPER" ] && echo h
 t_ok "没有残留的空目录 (助手目录)" test ! -d "$(dirname "$HELPER")"
 os_sysproxy_helper_remove; eq "没装过 / 已删除时再调用是空操作" "$?" "0"
 fi
+
+echo "== S7. 端口不是数字: 直接拒绝, 不运行任何命令 (端口会被拼进以 root 运行的命令串)"
+reset; OLD_PORT_S7=$PORT; PORT='37890;y'
+os_sysproxy_apply on </dev/null >/dev/null 2>&1; rc=$?
+PORT=$OLD_PORT_S7
+eq "端口含非数字: 失败 (bad-port), 没有调用任何命令" "$rc:$SYSPROXY_ERR:$(grep -c . "$CALLS")" "1:bad-port:0"
 
 P=$(grep -c . "$W/.pass"); F=$(grep -c . "$W/.fail")
 echo; echo "系统代理测试: $P 通过, $F 失败"

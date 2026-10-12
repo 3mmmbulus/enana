@@ -246,6 +246,10 @@ os_sysproxy_helper_port() { sed -n 's/^NS=.*; PORT=\([0-9][0-9]*\); VERSION=.*/\
 # 版本对还不够: 端口是装助手时写死的, 如果后来端口被重新分配了, 旧助手会把系统代理指向旧端口、还报告成功 —— 所以写死的端口也要和现在的一致, 不一致就当作没装好 (重新授权并重装)。
 os_sysproxy_helper_sha() { os_sysproxy_helper_text | shasum -a 256 | awk '{print $1}'; }      # 期望的字节 = 此刻渲染出来的助手 (端口 / 路径 / 版本都在里面, 所以字节一致就包含了端口检查)
 os_sysproxy_helper_ok() { os_helper_trusted "$(os_sysproxy_helper_path)" "$(os_sysproxy_helper_sha)"; }
+os_sysproxy_helper_files_ok() { # 装完之后核对文件本身: 助手是普通文件、模式 755; 免密规则是普通文件、模式 440 (属主 / 字节 / sudo 规则由 os_helper_trusted 核对)
+  local h s; h=$(os_sysproxy_helper_path); s=$(os_sysproxy_sudoers_path)
+  [ -f "$h" ] && [ ! -L "$h" ] && [ "$(stat -f %Lp "$h" 2>/dev/null)" = 755 ] && [ -f "$s" ] && [ ! -L "$s" ] && [ "$(stat -f %Lp "$s" 2>/dev/null)" = 440 ]
+}
 os_sysproxy_helper_install_cmds() { # 以 root 身份执行的命令串 (末尾带分号, 整条一行): 安装助手 + 免密规则 (目录检查同 lib/enhanced-root.sh 的 libexec_ok); 任何一步失败都不影响后面的系统代理设置, 也不会留下半成品规则
   # 路径和 install / visudo 都是写死的 (这串以 root 运行, 环境变量不能决定它写到哪里); 测试由假 sudo 改写 (tests/fakebin/sudo)
   local h s u d sd text b64 sha body own=0
@@ -282,6 +286,7 @@ os_sysproxy_apply() { # on|off [force|quiet]  -> 0 = 已是想要的状态 · 1 
   local want=$1 c errf msg rc inst quiet=''
   [ "${2:-}" = quiet ] && quiet=1
   SYSPROXY_METHOD=''; SYSPROXY_ERR=''; SYSPROXY_HELPER=''
+  [[ $PORT =~ ^[0-9]+$ ]] || { SYSPROXY_ERR=bad-port; return 1; }      # 端口会被拼进以 root 运行的命令串 (os_sysproxy_chain / 安装助手), 只接受数字
   rm -f "$H/.cache-sysproxy"
   if [ "${2:-}" != force ] && os_sysproxy_verify "$want"; then SYSPROXY_METHOD=already; return 0; fi
   if [ "$want" = on ]; then os_sysproxy_backup >/dev/null 2>&1 || { SYSPROXY_ERR=backup-failed; return 1; }; fi
@@ -303,7 +308,10 @@ os_sysproxy_apply() { # on|off [force|quiet]  -> 0 = 已是想要的状态 · 1 
   elif [ -n "$quiet" ]; then rm -f "$errf" "$H/.cache-sysproxy"; SYSPROXY_ERR=needs-admin; return 1
   else SYSPROXY_METHOD=dialog; os_admin_dialog "$inst$c" >/dev/null 2>"$errf"; rc=$?; fi                      # ④
   rm -f "$H/.cache-sysproxy"
-  if [ -n "$inst" ] && [ "$SYSPROXY_METHOD" != sudo-nopass ] && os_sysproxy_helper_ok; then SYSPROXY_HELPER=installed; fi
+  if [ -n "$inst" ] && [ "$SYSPROXY_METHOD" != sudo-nopass ]; then
+    if os_sysproxy_helper_ok && os_sysproxy_helper_files_ok; then SYSPROXY_HELPER=installed
+    elif [ "$rc" = 0 ]; then SYSPROXY_HELPER=failed; fi      # 授权步骤说成功了, 但助手 / 免密规则没有装上 (文件或模式不对): 记下来 (以后每次还是要输入密码)
+  fi
   if [ "$rc" = 0 ] || os_sysproxy_verify "$want"; then rm -f "$errf"; return 0; fi
   msg=$(head -c 300 "$errf" 2>/dev/null | tr '\n\t' '  '); rm -f "$errf"
   case $msg in
@@ -322,6 +330,7 @@ os_sysproxy_set() { # on|off  终端里使用: 逐项打印结果; 同样会记�
   os_sysproxy_apply "$1" force; rc=$?
   sysproxy_record "${OP_WHO:-terminal}" "$1" "$rc"
   if [ "$rc" != 0 ]; then warn "系统代理没有${v}成功 (原因: ${SYSPROXY_ERR:-unknown}); 可以在仪表盘概览里再试一次"; return 1; fi
+  [ "$SYSPROXY_HELPER" != failed ] || warn "系统代理助手没有装好: 以后打开 / 关闭系统代理还要输入密码 (重新执行一次可以再试)"
   while IFS= read -r s; do ok "$s: 系统代理已$v"; done < <(os_sysproxy_services)
 }
 os_sysproxy_restore_root() { # 以 root 恢复系统代理: proxy-state.js 与收据各读一次, 摘要按同一份字节算; root 把它们解码到自己的临时目录再核对摘要, 不一致就不运行 (返回非 0)
