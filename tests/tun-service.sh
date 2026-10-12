@@ -110,6 +110,20 @@ check "plist 那一步失败之后: 助手仍然恢复为安装之前的字节" 
 check "…免密规则恢复" test "$(cat "$SUDOERS" 2>/dev/null)" = "$sudo_before"
 check "…临时目录照样清掉 (没有残留的回滚 / 准备目录)" test -z "$(find "$ROOT" -name '.prepare.*' -o -name '.rollback.*')"
 
+echo "== 10. 安装时目录链不合格 (libexec 组可写): 助手和免密规则删掉; 之后安装失败回滚, 也不把它们装回不安全的目录"
+rf_reset; rf_enana_start
+cfg_before=$(shasum -a 256 < "$ROOT/config.json")
+set_level debug
+chmod g+w "$W/usr/local/libexec/enana"
+: > "$W/fail-bootstrap"
+rf_enana_start; rc=$?
+chmod g-w "$W/usr/local/libexec/enana"
+check "失败返回 1 (已回滚)" test "$rc" = 1
+check "配置恢复为安装之前的字节" test "$(shasum -a 256 < "$ROOT/config.json")" = "$cfg_before"
+check "助手没有被装回不安全的目录" test ! -e "$HELPER"
+check "…免密规则也没有恢复" test ! -e "$SUDOERS"
+check "没有残留的回滚 / 准备目录" test -z "$(find "$ROOT" -name '.prepare.*' -o -name '.rollback.*')"
+
 echo
-if [ "$fails" = 0 ]; then echo 'PASS: root snapshot install, bootstrap / route rollback, staged symlink refusal, stop and remove from the root copy, rollback without a helper backup and past a failed step'
+if [ "$fails" = 0 ]; then echo 'PASS: root snapshot install, bootstrap / route rollback, staged symlink refusal, stop and remove from the root copy, rollback without a helper backup, past a failed step and without restoring a helper into an unsafe directory'
 else echo "FAIL: $fails check(s) failed"; exit 1; fi

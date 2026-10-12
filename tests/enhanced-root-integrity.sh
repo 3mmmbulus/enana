@@ -38,6 +38,19 @@ check "…U+017F (长 s, 当成 s) 拼的 tls: 证书照样必须在 certs/ 里"
 check "…Type / Path 大写的 local 规则集: 路径照样只能是 rules/目录/文件" cc_fail '{"route":{"rule_set":[{"Type":"local","Path":"ROOT/rules/geo/x/geo.srs"}]}}' /route/rule_set/0/path
 check "…同一个对象里 output 和 Output (折叠后重复; 两个值都在 ROOT 之下也不行) → 拒绝" cc_fail '{"log":{"output":"ROOT/a.log","Output":"ROOT/b.log"}}' /log/output
 check "请求头这类自由的键名 (Host) 不受影响: 放行" cc_pass '{"outbounds":[{"type":"vless","transport":{"type":"ws","path":"/ws","headers":{"Host":"a.example"}}}]}'
+# 文件类的键写成字符串列表 (sing-box 同样接受): 每一项都要检查
+check "hosts 的 path 写成列表, 指向 ROOT 之外 → 拒绝, 指出是哪一项" cc_fail '{"dns":{"servers":[{"type":"hosts","path":["/etc/hosts"]}]}}' /dns/servers/0/path/0
+check "…client_certificate_path 列表里第二项在 ROOT 之外 → 拒绝" cc_fail '{"outbounds":[{"type":"trojan","tls":{"client_certificate_path":["ROOT/certs/a.crt","/etc/x"]}}]}' /outbounds/0/tls/client_certificate_path/1
+check "…证书库的 certificate_directory_path 列表 → 拒绝" cc_fail '{"certificate":{"certificate_directory_path":["/etc"]}}' /certificate/certificate_directory_path/0
+check "…列表的每一项都在 ROOT 之下: 放行" cc_pass '{"dns":{"servers":[{"type":"hosts","path":["ROOT/hosts","ROOT/hosts2"]}]}}'
+# 以前按名字认文件类的键是区分大小写的: 后缀大写 (_PATH)、hosts 的 Path 都认不出来
+check "后缀大写的 client_key_PATH 指向 ROOT 之外 → 拒绝" cc_fail '{"outbounds":[{"type":"trojan","tls":{"client_key_PATH":"/etc/x"}}]}' /outbounds/0/tls/client_key_path
+check "…hosts 的 Path 指向 ROOT 之外 → 拒绝" cc_fail '{"dns":{"servers":[{"type":"hosts","Path":"/etc/hosts"}]}}' /dns/servers/0/path
+check "名字就叫 directory 的键 (文件服务的目录) 指向 ROOT 之外 → 拒绝" cc_fail '{"outbounds":[{"type":"direct","x":{"directory":"/etc"}}]}' /outbounds/0/x/directory
+# 入站只能是 tun 和 127.0.0.1 上的 mixed (enana 只生成这两种)
+check "入站是 hysteria2 (masquerade 能把目录当文件服务器) → 拒绝" cc_fail '{"inbounds":[{"type":"hysteria2","listen":"127.0.0.1","masquerade":"file:///etc"}]}' /inbounds/0/type
+check "…mixed 监听 0.0.0.0 → 拒绝" cc_fail '{"inbounds":[{"type":"mixed","listen":"0.0.0.0","listen_port":1080}]}' /inbounds/0/listen
+check "…tun 加上 127.0.0.1 上的 mixed: 放行" cc_pass '{"inbounds":[{"type":"tun","tag":"tun-in"},{"type":"mixed","tag":"in","listen":"127.0.0.1","listen_port":1080}]}'
 
 echo "== B. 快照文件的筛选 (3.4): 规则集 rules/目录/文件, 证书 certs/名字.crt"
 mkdir -p "$H/rules/app/deep" "$H/certs"

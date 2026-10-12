@@ -39,11 +39,12 @@ helper_render() {
   R=$1 RU=$2 L=$3 C=$4 V=$5 /usr/bin/perl -pe 's/\@ROOT\@/$ENV{R}/g; s/\@ROOTUID\@/$ENV{RU}/g; s/\@LABEL\@/$ENV{L}/g; s/\@LAUNCHCTL\@/$ENV{C}/g; s/\@VERSION\@/$ENV{V}/g'
 }
 # 配置里的路径检查 (安装和 enana 预检共用): 文件类的键 (名字以 _path / _file / _dir / _directory 结尾, 以及 output、data_directory,
-# 还有 local / hosts 类型对象里的 path) 的值必须在 $root 之下 (每一段都是安全的文件名); 证书 (certificate_path) 还要在 certs/ 里并列出引用;
+# 还有 local / hosts 类型对象里的 path) 的值必须在 $root 之下 (每一段都是安全的文件名; 值是字符串列表时每一项都一样); 证书 (certificate_path) 还要在 certs/ 里并列出引用;
 # 禁止 experimental.clash_api.external_ui 和 shadowsocks 的 plugin (那是要运行的程序); 任何字符串值不能以 / 开头又含 ..
 # 不靠列出的键名: 新的文件类键会被默认拒绝。键名和 sing-box 一样不分大小写比较 (fold_key), 换个大小写不能绕过检查。
 # 输出配置引用到的快照文件 (rules/X/Y、certs/NAME), 每行一个; 不通过: 退出 4
 CONFIG_PL='use strict; use warnings; use JSON::PP;
+binmode STDERR, ":utf8";      # 拒绝原因里可能有非 ASCII 的键名: 不让 "Wide character" 警告挤到原因那一行前面 (enana 取第一行)
 my ($file,$root)=@ARGV;
 sub bad { print STDERR "enana-root: refused: config-path: $_[0]\n"; exit 4 }
 bad("root") unless defined $root && $root =~ m{^/[^\0]+$} && $root !~ m{(?:^|/)\.\.?(?:/|$)};
@@ -109,7 +110,7 @@ sub tls_check {
 # 文件类的键 (见上面的注释): 本身的值在 $root 之下; local / hosts 类型对象里的 path 同样是文件 (transport、dns 的 path 是 URL 路径, 不查)
 sub file_key {
   my ($k,$parent)=@_;
-  return 1 if $k =~ /_(?:path|file|dir|directory)\z/ || $k eq "output" || $k eq "data_directory";
+  return 1 if $k =~ /_(?:path|file|dir|directory)\z/ || $k eq "output" || $k eq "data_directory" || $k eq "directory";
   return 1 if $k eq "path" && defined $parent->{type} && !ref $parent->{type} && $parent->{type} =~ /\A(?:local|hosts)\z/;
   return 0;
 }
@@ -122,12 +123,26 @@ sub walk {
       bad($q) if $k eq "external_ui";
       bad($q) if $k eq "plugin" && (ref($v) || (defined $v && $v ne ""));
       bad($q) if !ref($v) && file_key($k,$n) && !under_root($v);
+      # sing-box 的不少文件类选项也接受字符串列表 (hosts 的 path、client_certificate_path、certificate_directory_path…): 每一项都要在 $root 之下
+      if (ref $v eq "ARRAY" && file_key($k,$n)) { for my $i (0 .. $#$v) { bad("$q/$i") unless under_root($v->[$i]) } }
       walk($v,$q);
     }
   } elsif (ref $n eq "ARRAY") {
     for my $i (0 .. $#$n) { walk($n->[$i], "$p/$i") }
   } elsif (defined $n && !ref $n) {
     bad($p) if substr($n,0,1) eq "/" && grep { $_ eq ".." } split m{/}, $n;
+  }
+}
+# 入站: enana 只生成 tun 和 127.0.0.1 上的 mixed。别的类型一律拒绝 (例如 hysteria2 的 masquerade 能让 root 的核心把任意目录当文件服务器),
+# mixed 也只能监听 127.0.0.1 (和 Windows 一样)
+if (exists $doc->{inbounds}) {
+  bad("/inbounds") unless ref $doc->{inbounds} eq "ARRAY";
+  for my $i (0 .. $#{ $doc->{inbounds} }) {
+    my $in = $doc->{inbounds}[$i]; my $p = "/inbounds/$i";
+    bad($p) unless ref $in eq "HASH";
+    my $t = $in->{type};
+    bad("$p/type") unless defined $t && !ref $t && ($t eq "tun" || $t eq "mixed");
+    bad("$p/listen") if $t eq "mixed" && !(defined $in->{listen} && !ref $in->{listen} && $in->{listen} eq "127.0.0.1");
   }
 }
 walk($doc,"");
@@ -171,7 +186,9 @@ cleanup() {
     "$launchctl_bin" bootout "system/$label" 2>/dev/null || true
     for name in sing-box config.json rules certs bin; do
       /bin/rm -rf "$root/$name"
-      [ ! -e "$backup/$name" ] || /bin/mv "$backup/$name" "$root/$name"
+      [ -e "$backup/$name" ] || continue
+      # 没删干净时不能 mv (会把备份放进旧目录里面, 成了 rules/rules): 记一行, 接着恢复其余的
+      if [ -e "$root/$name" ] || [ -L "$root/$name" ]; then echo "enana-root: rollback: could not replace $name" >&2; else /bin/mv "$backup/$name" "$root/$name"; fi
     done
     /bin/rm -f "$plist"
     if [ -e "$backup/daemon.plist" ]; then
@@ -341,7 +358,8 @@ if [ -n "$username" ]; then
   [ ! -e "$libexec/tunrules-$uid" ] || /bin/cp -p "$libexec/tunrules-$uid" "$backup/helper"
   [ ! -e "$sudoers_dir/enana-tunrules-$uid" ] || /bin/cp -p "$sudoers_dir/enana-tunrules-$uid" "$backup/sudoers"
   helper_state=1                                     # 两份备份都做好了才算: 备份失败时回滚不碰现有的助手和免密规则 (否则会删掉它们又恢复不了)
-  if [ -f "$work/tunrules-helper" ] && libexec_ok && /bin/mkdir -p "$sudoers_dir" \
+  # 目录链不合格时 helper_state=2: 两个文件删掉, 回滚时也不装回去 (装回去就是让免密规则指向别人能换掉的文件)
+  if [ -f "$work/tunrules-helper" ] && { libexec_ok || { helper_state=2; false; }; } && /bin/mkdir -p "$sudoers_dir" \
      && printf '%s ALL=(root) NOPASSWD: %s\n' "$username" "$libexec/tunrules-$uid" > "$work/sudoers" \
      && /usr/bin/install -m 755 -o root -g wheel "$work/tunrules-helper" "$libexec/tunrules-$uid" \
      && /usr/sbin/visudo -cf "$work/sudoers" >/dev/null 2>&1 \
