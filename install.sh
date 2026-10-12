@@ -464,7 +464,8 @@ cmd_content() { # 拉取并应用云端内容 (登录后下发的服务目录 / 
   info "内容来源: $(cloud_status_json | sed -n 's/.*"source":"\([a-z]*\)".*/\1/p') · 序号 $(cloud_seq) $(cloud_version)"
 }
 cmd_tick() { # 每分钟一次 (launchd): 流量统计采样; 每 ~2 分钟一次登录会话心跳; 自动识别打不开的网站; 每小时一次日志切分 + 清理
-  local last=0
+  # 全部是后台: 绝不弹管理员框 (APPS_BG_JOB=1, 见 lib/config.sh 的 apply_config) —— 心跳换令牌、云端自动同步、官方线路、自动识别网站在 TUN 下要授权的变化都先撤销 / 推迟
+  local last=0 APPS_BG_JOB=1
   stats_collect
   health_tick || true                          # 连接健康记录: 每分钟探测服务器端口 + 记录状态变化, 每 ~5 分钟经代理访问关键站点 (见 lib/health.sh); 排在心跳之前, 状态时间点才准
   [ -f "$H/.hb.last" ] && IFS= read -r last < "$H/.hb.last"

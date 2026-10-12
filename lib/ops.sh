@@ -593,8 +593,9 @@ op_self_update() {
 }
 
 # 每天一次的维护 (launchd 触发): 日志按天切分/压缩/按保留期清理 · 检查更新 · 每 3 天更新规则集与订阅
+# 凌晨在后台运行, 没有人等着输密码: 绝不弹管理员框 (APPS_BG_JOB=1)。TUN 下要授权的变化 (云端内容 / 订阅 / 规则集) 先撤销, 用户下次操作或 enana update 时再授权应用
 op_maintain() {
-  local last=0
+  local last=0 APPS_BG_JOB=1
   logs_maintain; stats_purge
   update_check force >/dev/null 2>&1 || true
   auth_logged_in && op_txn "更新云端内容" txn_content >/dev/null 2>&1 || true            # 每天顺带检查一次云端内容更新 (没登录就跳过)

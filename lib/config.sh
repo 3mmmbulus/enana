@@ -261,9 +261,12 @@ apply_config() {
       oplog "${OP_WHO:-auto}" "同步策略规则" "$(kv mode tun via helper restart yes err "$(enhanced_helper_ok >/dev/null 2>&1 && echo rejected || echo no-helper)")" ok
     fi
   fi
-  # 后台应用任务 (APPS_BG_JOB=1, 界面自动扫描触发): 不弹管理员框、不改模式。走到这里要重启根核心或者同步失败了, 都需要授权:
-  # 撤销 (返回 5, 见 ops.sh 的 op_txn), 之后的扫描会把这组变化记成「待应用」, 由用户在「应用」里点击授权
-  if [ "${APPS_BG_JOB:-0}" = 1 ]; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; TXN_ERR='需要管理员授权才能应用 (后台不弹框), 已撤销, 请在「应用」里手动应用'; return 5; fi
+  # 后台任务 (APPS_BG_JOB=1: 界面的自动扫描、每分钟的 tick —— 自动识别网站 / 云端自动同步 / 心跳 —— 和每日维护): 从不弹管理员框、不改模式。
+  # 走到这里就要重启核心了: 只是重启用户自己的核心 (系统代理模式, 根守护进程没加载) 照常做; 要动根守护进程 (TUN, 或者系统代理模式下它还加载着) 就要授权:
+  # 撤销 (返回 5, 见 ops.sh 的 op_txn), 等用户自己操作时再授权 (应用的扫描把这组变化记成「待应用」, 由用户在「应用」里点击授权)
+  if [ "${APPS_BG_JOB:-0}" = 1 ] && { [ "${NETWORK_MODE:-system}" = tun ] || enhanced_loaded; }; then
+    rm -f "$H/config.json.new"; APPLY_CHANGED=0; TXN_ERR='需要管理员授权才能应用 (后台任务不弹授权框), 已撤销本次更改'; return 5
+  fi
   [ -f "$H/config.json" ] && cp -p "$H/config.json" "$H/config.json.bak"
   local previous_pid; previous_pid=$(os_service_pid)
   mv "$H/config.json.new" "$H/config.json"; APPLY_CHANGED=1

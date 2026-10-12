@@ -94,7 +94,7 @@ official_apply() { # <候选文件|-> 内容和现有的逐字节相同 = 什么
     # 上次就是这一份被配置校验拒绝的: 一天之内不再重试 (否则每个周期都会重新生成配置、重启核心)
     if [ -n "$bad" ] && [ "$bad" = "$sum" ] && [ $(( now_ - ${badat:-0} )) -lt 86400 ]; then return 1; fi
   fi
-  if [ "${NETWORK_MODE:-system}" = tun ] && [ "${OP_WHO:-auto}" = auto ]; then
+  if [ "${NETWORK_MODE:-system}" = tun ] && { [ "${OP_WHO:-auto}" = auto ] || [ "${APPS_BG_JOB:-0}" = 1 ]; }; then      # 后台 (tick / 每日维护开的任务) 不弹授权框
     official_state_set deferred=1; oplog auto "官方线路更新待应用" "$(kv mode tun note "applies when the dashboard is open; TUN changes need administrator authorization")" ok
     return 0
   fi

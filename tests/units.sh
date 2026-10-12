@@ -508,6 +508,16 @@ eq "…除了角色, 每一行都原样 (订阅名 / 出站内容不变)" "$(pri
   FAKE_APPLIED=0; op_maintain
   eq "3 天内刚做过: 什么都不做" "$AC" "1"
 )
+# 每日维护在凌晨的后台运行, 没有人输密码: 里面的每一次应用 (云端内容 / 规则集) 都是后台任务 (APPS_BG_JOB=1), TUN 下要授权就撤销, 不弹框
+(
+  logs_maintain() { :; }; stats_purge() { :; }; update_check() { :; }; auth_logged_in() { return 0; }; plan_refresh() { :; }
+  AUTO_UPDATE=1; rules_update() { :; }; op_subs_refresh() { SUBS_APPLIED=0; }
+  op_txn() { printf 'txn=%s\n' "${APPS_BG_JOB:-}" >> "$UW/maintain-bg"; return 0; }
+  apply_config() { printf 'apply=%s\n' "${APPS_BG_JOB:-}" >> "$UW/maintain-bg"; return 0; }
+  : > "$UW/maintain-bg"; rm -f "$H/.maintain-rules"; unset APPS_BG_JOB
+  op_maintain
+  eq "每日维护: 云端内容的事务和规则集的应用都以后台任务运行 (不弹管理员框); 维护结束后不留在进程里" "$(paste -sd, - < "$UW/maintain-bg"):${APPS_BG_JOB:-unset}" "txn=1,apply=1:unset"
+)
 t "install.sh 的 enana update 同样: 订阅刷新应用过配置就不再 op_apply" grep -q 'SUBS_APPLIED' "$REPO/install.sh"
 echo
 
@@ -633,6 +643,8 @@ eq "TUN + 后台: 节点有变化 → 不应用、不改文件、记下 deferred
 NETWORK_MODE=tun OP_WHO=dashboard FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync
 eq "TUN + 仪表盘: 用户在场 → 正常应用, deferred 清零" "$?:$(napply):$(official_state_get deferred)" "0:$((n3 + 1)):0"
 NETWORK_MODE=tun OP_WHO=auto FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync; eq "TUN + 后台: 内容没变 → 什么都不做 (也不记 deferred)" "$(napply):$(official_state_get deferred)" "$((n3 + 1)):0"
+NETWORK_MODE=tun OP_WHO=terminal APPS_BG_JOB=1 FAKE_BODY=$OFFD/ok.json FAKE_CODE=200 official_sync
+eq "TUN + 后台任务 (APPS_BG_JOB=1; OP_WHO 不是 auto 也一样, 比如 tick 里前面一步留下的 terminal): 不应用, 记下 deferred=1" "$?:$(napply):$(official_state_get deferred)" "0:$((n3 + 1)):1"
 NETWORK_MODE=system; unset OP_WHO
 
 # 套餐刷新后判断是否需要同步 / 退出账号清除
@@ -669,6 +681,7 @@ apply_mocks() {
   wait_port() { echo "wait $2" >> "$LOG"; return "${WAIT_RC:-0}"; }
   enhanced_ready() { return 0; }
   enhanced_configured() { return 1; }
+  enhanced_loaded() { return "${TUN_LOADED_RC:-1}"; }                # 根守护进程加载着吗 (默认没有)
   tun_residual_clean() { echo cleanup >> "$LOG"; }
   os_sysproxy_mine() { return "${MINE_RC:-1}"; }
   os_sysproxy_apply() { echo "apply $*" >> "$LOG"; return "${APPLY_RC:-0}"; }
@@ -701,6 +714,10 @@ eq "核心没起来 + 系统代理不是 enana 的: 不碰系统代理" "$(apply
 eq "TUN 模式核心没起来 + 系统代理指向 enana: 同样先静默关闭系统代理 (指向死端口的代理会断网)" "$(apply_run tun NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=1 RUNNING_RC=1 MINE_RC=0)" '3|restart;cleanup;restart;wait 15;cleanup;proxy_sync;wait 1;apply off quiet;record auto off 0|{"old":1}|kept|已先关闭'
 eq "TUN 模式核心没起来 + 系统代理关不掉: 记入操作记录 (off 1), 提示去仪表盘关闭" "$(apply_run tunstuck NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=1 RUNNING_RC=1 MINE_RC=0 APPLY_RC=1)" '3|restart;cleanup;restart;wait 15;cleanup;proxy_sync;wait 1;apply off quiet;record auto off 1|{"old":1}|kept|没能自动关闭'
 eq "服务没有加载 (还没启动核心): 只写配置, 不重启, 不清理旧文件" "$(apply_run noload LOADED_RC=1)" '0||{"new":1}|kept|'
+# 后台任务 (APPS_BG_JOB=1: tick / 每日维护 / 界面的自动扫描) 绝不弹管理员框: 只有要动根守护进程时才撤销 (返回 5), 用户自己的核心照常重启
+eq "后台任务 + 系统代理模式 (没有根守护进程): 照常应用并重启用户核心 (不需要授权)" "$(apply_run bgsys APPS_BG_JOB=1)" '0|restart;wait 15;proxy_sync|{"new":1}|pruned|'
+eq "后台任务 + TUN: 要管理员授权 → 撤销 (返回 5), 不重启, 配置和规则集文件都不动" "$(apply_run bgtun APPS_BG_JOB=1 NETWORK_MODE=tun)" '5||{"old":1}|kept|'
+eq "后台任务 + 系统代理模式但根守护进程还加载着 (重启要先停它, 要授权): 同样撤销" "$(apply_run bgloaded APPS_BG_JOB=1 TUN_LOADED_RC=0)" '5||{"old":1}|kept|'
 gcf=$(H=$UW/gcfail; rm -rf "$H"; mkdir -p "$H/rules"; printf 'file' > "$H/rules/geosite-cn"; printf 'OLD' > "$H/rules/geosite-cn.srs"; printf '{"old":1}' > "$H/config.json"; . "$LIB/config.sh"; sb_ver() { :; }; dns_load() { :; }; srv_emit() { :; }; official_emit() { :; }; NETWORK_MODE=system; rc=0; out=$(gen_config 2>&1) || rc=$?; echo "rc=$rc|$(test -e "$H/config.json.new" && echo new-written || echo no-new)|$(cat "$H/config.json")|$(printf '%s' "$out" | grep -c '规则集目录整理失败')")
 eq "规则集迁移失败 (新位置被占用): gen_config 返回 1, 不写新配置, 原配置不动, 给出提示" "$gcf" 'rc=1|no-new|{"old":1}|1'
 echo
@@ -1118,6 +1135,61 @@ PY
   osascript() { return 0; }
   enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
   eq "弹框通过: 返回 0, 结果 ok" "$rc:$(enhanced_result "$rc")" "0:ok"
+)
+echo
+
+echo "== U16. 后台流程绝不弹管理员框: 自动识别网站 (失败也冷却 24 小时) · 云端自动拉取 (同一版本不再每 10 分钟重试) · 心跳换令牌 · 每分钟的 tick"
+(
+  H=$UW/h16a; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"; NETWORK_MODE=tun
+  srv_list() { printf 'Auto-1\ttrojan\t198.51.100.4\t443\tauto\t\n'; }
+  sleep() { :; }; curl() { printf 'ENANA:000:0'; }                       # 验证访问: 没有任何响应 (不联网, 也不真的等)
+  N=0; op_txn() { N=$((N + 1)); printf '%s|%s|%s\n' "${APPS_BG_JOB:-}" "${OP_WHO:-}" "$1" >> "$H/txn"; [ "$N" -le "${TXN_OK:-0}" ]; }
+  rc=0; autosite_add stuck.example 4 4 timeout Safari stuck.example direct || rc=$?
+  eq "TUN: 自动识别加网站的事务是后台任务 (APPS_BG_JOB=1, 来源 auto): 要授权时撤销, 不弹管理员框" "$(cat "$H/txn")" "1|auto|自动识别: 添加网站到代理"
+  eq "…没加上: 返回 2, 记进冷却 (24 小时内不再试, 以前下一分钟又试一次)" "$rc:$(awk '{print $1}' "$H/.autosite.cool")" "2:stuck.example"
+  : > "$H/txn"; rm -f "$H/.autosite.cool"; N=0; TXN_OK=1; rc=0
+  autosite_add stuck.example 4 4 timeout Safari stuck.example direct || rc=$?
+  eq "…加上了但验证没通过, 撤销的事务也是后台任务; 撤销没成功同样冷却" "$rc:$(paste -sd';' - < "$H/txn"):$(awk '{print $1}' "$H/.autosite.cool")" "2:1|auto|自动识别: 添加网站到代理;1|auto|自动识别: 撤销网站:stuck.example"
+)
+(
+  H=$UW/h16b; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"
+  sync_enabled() { return 0; }; sync_auto() { return 0; }; sync_have_key() { return 0; }; auth_logged_in() { return 0; }; session_id() { printf sid; }
+  RV=5; sync_remote_meta() { R_EXISTS=1; R_VERSION=$RV; return 0; }; snap_hash() { printf H1; }
+  sync_open_remote() { SYNC_IN_VERSION=$RV; return 0; }
+  sync_pull_job() { printf '%s|%s|%s\n' "${APPS_BG_JOB:-}" "${OP_WHO:-}" "$3" >> "$H/pulls"; return "${PULL_RC:-1}"; }
+  sync_push_core() { printf 'push|%s\n' "${OP_WHO:-}" >> "$H/pulls"; return 0; }
+  sync_set BASE_VERSION 3; sync_set SYNCED_HASH H1
+  tick() { sync_set CHECKED 0; sync_auto_tick; }
+  unset OP_WHO APPS_BG_JOB; : > "$H/pulls"; tick
+  eq "云端有新版本 (5), 本机没改动: 自动拉取是后台任务 (APPS_BG_JOB=1), TUN 下要授权就撤销, 不弹管理员框" "$(cat "$H/pulls")" "1|terminal|5"
+  eq "…没应用成功: 记下这个版本 (PULL_FAILED)" "$(sync_get PULL_FAILED | cut -d' ' -f1)" "5"
+  : > "$H/pulls"; tick
+  eq "…10 分钟后同一个云端版本: 不再下载 / 拉取 (24 小时内)" "$(cat "$H/pulls")" ""
+  RV=6; tick
+  eq "…云端出了新版本 (6): 照常再试" "$(cat "$H/pulls")" "1|terminal|6"
+  : > "$H/pulls"; sync_set PULL_FAILED "6 $(( $(now) - 86401 ))"; tick
+  eq "…超过 24 小时: 同一个版本再试一次" "$(cat "$H/pulls")" "1|terminal|6"
+  eval "$(sed -n '/^sync_pull_job() {/,/^}/p' "$LIB/sync.sh")"; op_txn() { return 0; }      # 真实的 sync_pull_job, 应用 (op_txn) 成功
+  sync_pull_job replace 0 6 >/dev/null 2>&1
+  eq "…拉取成功 (自动的, 或者在仪表盘里手动拉取): 记录清掉, BASE_VERSION 跟上" "[$(sync_get PULL_FAILED)]:$(sync_get BASE_VERSION)" "[]:6"
+  snap_hash() { printf H2; }; RV=3; : > "$H/pulls"; tick
+  eq "本机有改动、云端没变: 上传 (来源 terminal), 而且 OP_WHO 不留给 tick 后面的步骤 (以前留下的 terminal 让官方线路在 TUN 下不再推迟)" "$(cat "$H/pulls"):${OP_WHO:-unset}:${APPS_BG_JOB:-unset}" "push|terminal:unset:unset"
+)
+(
+  H=$UW/h16c; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"
+  proxy_set_enabled() { :; }; auth_logout_local() { :; }
+  op_sync_secret() { printf '%s' "${APPS_BG_JOB:-}" > "$H/bg"; return 1; }
+  unset APPS_BG_JOB; session_local_end kicked 401
+  eq "被下线 (心跳里): 让核心换上新令牌的应用是后台任务 (APPS_BG_JOB=1): TUN 下不弹管理员框, 下一次授权的应用再换" "$(cat "$H/bg"):$(cat "$H/notice"):${APPS_BG_JOB:-unset}" "1:kicked:unset"
+)
+(
+  H=$UW/h16d; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"
+  eval "$(sed -n '/^cmd_tick() {/,/^}/p' "$REPO/install.sh")"
+  seen() { printf '%s=%s\n' "$1" "${APPS_BG_JOB:-}" >> "$H/tick"; }
+  stats_collect() { :; }; health_tick() { :; }; logs_tick() { :; }; diag_tick() { :; }; prefs_tick() { :; }
+  session_heartbeat() { seen heartbeat; }; sync_auto_tick() { seen sync; }; official_tick() { seen official; }; autosite_tick() { seen autosite; }
+  unset APPS_BG_JOB; rm -f "$H/.hb.last"; cmd_tick
+  eq "每分钟的 tick (install.sh 的 cmd_tick): 心跳 / 云端同步 / 官方线路 / 自动识别都以后台任务运行 (不弹管理员框); 结束后不留在进程里" "$(paste -sd, - < "$H/tick"):${APPS_BG_JOB:-unset}" "heartbeat=1,sync=1,official=1,autosite=1:unset"
 )
 echo
 PASS=$(wc -l < "$UW/.pass" 2>/dev/null | tr -d ' '); FAIL=$(wc -l < "$UW/.fail" 2>/dev/null | tr -d ' ')

@@ -422,6 +422,7 @@ DNS 设置无效	Invalid DNS settings
 配置未通过校验, 已撤销本次更改*	The configuration didn’t pass validation, so the change was rolled back*
 新配置无法启动, 已撤销本次更改并恢复原配置	The new configuration couldn’t start, so the change was rolled back and your previous configuration restored
 已取消管理员授权, 已撤销本次更改	Administrator authorization was cancelled, so the change was rolled back
+需要管理员授权才能应用 (后台任务不弹授权框), 已撤销本次更改	Applying this needs administrator authorization, and background tasks never show the authorization dialog, so the change was rolled back
 名称、链接或策略不合法 (链接必须是 http/https 的 .srs 规则集)	The name, link or policy isn’t valid (the link must point to an http/https .srs rule set)
 已经有同名的规则集	A rule set with that name already exists
 规则集下载失败或不是有效的 .srs 文件	The rule set couldn’t be downloaded or isn’t a valid .srs file
