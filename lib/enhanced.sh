@@ -200,7 +200,7 @@ enhanced_start() {
   clash GET /proxies > "$stage/selectors.json" 2>/dev/null || true
   enhanced_stage_payloads "$stage" || { rm -rf "$stage"; return 1; }
   # 配置里的路径 (只检查配置, 不读文件) 和它引用的快照文件
-  if ! /bin/bash "$LIB/enhanced-root.sh" check-config "$stage/config.json" "$TUN_ROOT" > "$stage/refs" 2>/dev/null; then rm -rf "$stage"; enhanced_preflight_refuse preflight-config-path; return 6; fi
+  if ! /bin/bash "$LIB/enhanced-root.sh" check-config "$stage/config.json" "$TUN_ROOT" > "$stage/refs" 2> "$stage/check.err"; then why=$(sed 's/^enana-root: refused: //' "$stage/check.err" | head -1); rm -rf "$stage"; enhanced_preflight_refuse "preflight-config-path ${why:-unknown}"; return 6; fi
   enhanced_snapshot_files > "$stage/list"
   while IFS= read -r ref; do
     [ -n "$ref" ] || continue
@@ -208,7 +208,7 @@ enhanced_start() {
     grep -qxF "$ref" "$stage/list" || { rm -rf "$stage"; enhanced_preflight_refuse preflight-ref-missing; return 6; }
   done < "$stage/refs"
   # refs / list 是 enana 自己用的清单: 留在暂存目录里就会被 root 当成多余文件拒绝 (stage-extra), 所以 root 看到的暂存目录只有它认的文件
-  rm -f "$stage/refs" "$stage/list"
+  rm -f "$stage/refs" "$stage/list" "$stage/check.err"
   # 一条命令 (每个参数都做了引用); 超过 64 KB 或含换行 → enhanced_admin 在弹框前返回 6
   line=$(enhanced_inband_line "$ENH_SHA_SCRIPT" "$ENH_B64_SCRIPT" install "$TUN_UID" "$stage" "$LABEL" "${AUTOSTART:-1}" "$(id -un)" "$TUNRULES_HELPER_VERSION" "$ENH_SHA_SB" "$ENH_SHA_CFG" "$ENH_SHA_MAN" "$ENH_SHA_TPL" "$ENH_SHA_OUT" "$ENH_B64_TPL")
   enhanced_admin "$line" > "$H/enhanced-check.log" 2>&1; rc=$?
