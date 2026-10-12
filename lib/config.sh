@@ -219,46 +219,25 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
 
 _apply_step() { [ "${APPLY_QUIET:-0}" = 1 ] || job_step $(( ${APPLY_BASE:-0} + $1 )) "$2" "$3"; }   # 任务里的步骤序号可整体后移 (前面还有别的步骤时); 静默模式不写进度
 
-config_tun_refused() { # TUN 安装被拒绝 (root 没有动任何东西; 这里不弹管理员框、不停根守护进程, 也不改 TUN 的设置)。
-  # 留在 TUN 并返回 5 (调用方撤销本次更改、报告原因): 预检拒绝 (要先处理核心), 或者根守护进程还在跑 / 停它要管理员授权。
-  # 否则 (根守护进程没有在跑、没有可以停的东西) 切换到系统代理: 先生成并校验新配置, 通过了才改设置和启动用户核心; 返回 0
-  local why=${ENHANCED_REFUSED_WHY:-refused} cur=${NETWORK_MODE:-system} detail keep=0
+config_tun_refused() { # TUN 安装被拒绝 (root 没有动任何东西; 这里不弹管理员框、不停根守护进程, 也从不自己改流量接管方式): 一律返回 5 (S2)。
+  # 原来的配置放回去, 原因写进 TXN_ERR; 调用方 (op_txn) 撤销本次更改并报告原因: 从系统代理切到 TUN 时撤销之后仍是系统代理, 本来就是 TUN 的操作
+  # (规则开关 / DNS / 策略 / 退出账号 / 更新规则 …) 保持 TUN。以前根守护进程没在跑时会悄悄改成系统代理还报告成功, 用户根本不知道 TUN 被拒绝了
+  local why=${ENHANCED_REFUSED_WHY:-refused} detail
   case $why in
     preflight-core-unpinned) detail='请运行 enana upgrade, 或改用系统代理模式' ;;
     preflight-core-changed)  detail='请运行 enana upgrade' ;;
     *)                       detail="原因: $why" ;;
   esac
-  enhanced_paths
-  case $why in preflight-*) keep=1 ;; esac
-  if [ -e "$TUN_PLIST" ] && ! enhanced_idle; then keep=1; fi                  # 停根守护进程要授权: 不在这里再弹一次框
-  if [ "$keep" = 1 ]; then
-    rm -f "$H/config.json.new"
-    [ ! -f "$H/config.json.bak" ] || cp -p "$H/config.json.bak" "$H/config.json"
-    enhanced_loaded && detail="$detail; 旧的 TUN 仍在运行"
-    sysproxy_off_if_core_down
-    TXN_ERR="TUN 没有启动 ($why): $detail"; warn "$TXN_ERR"; return 5
-  fi
-  NETWORK_MODE=system
-  if ! gen_config >/dev/null 2>&1 || ! "$SB" check -c "$H/config.json.new" >/dev/null 2>&1; then
-    NETWORK_MODE=$cur; rm -f "$H/config.json.new"
-    [ ! -f "$H/config.json.bak" ] || cp -p "$H/config.json.bak" "$H/config.json"
-    sysproxy_off_if_core_down
-    TXN_ERR="TUN 没有启动 ($why), 系统代理配置没能生成"; warn "$TXN_ERR"; return 5
-  fi
-  mv "$H/config.json.new" "$H/config.json"; APPLY_CHANGED=1
-  if type txn_settings >/dev/null 2>&1; then txn_settings NETWORK_MODE=system >/dev/null 2>&1 || settings_set NETWORK_MODE system
-  else settings_set NETWORK_MODE system; fi
-  # 用户核心的启动不会再去停根守护进程 (上面已确认不需要授权), 启动后必须真的通: 不通就关掉指向它的系统代理, 不让用户断网
-  if os_service_start >/dev/null 2>&1 && wait_port "$PORT" 15; then
-    proxy_sync_mode
-    warn "TUN 没有启动 ($why), 已切换为系统代理模式"; return 0
-  fi
+  rm -f "$H/config.json.new"
+  [ ! -f "$H/config.json.bak" ] || cp -p "$H/config.json.bak" "$H/config.json"
+  enhanced_loaded && detail="$detail; 旧的 TUN 仍在运行"
   sysproxy_off_if_core_down
-  TXN_ERR="TUN 没有启动 ($why), 切换到系统代理后核心也没能启动, 请在概览里检查"; warn "$TXN_ERR"; return 5
+  TXN_ERR="TUN 没有启动 ($why): $detail"; warn "$TXN_ERR"; return 5
 }
 
 # apply_config: 生成 -> sing-box check -> 与现行配置比较 -> 仅在有变化时替换并重启; 失败自动回滚
 # 返回: 0 成功/无变化  1 配置无效(详情 $H/check.log)  3 新配置启动失败(已回滚)
+#       5 TUN 被拒绝 (什么都没改, 原来的配置放回去了; 不会自己改成系统代理模式) 或者要管理员授权但这是后台任务 (APPS_BG_JOB): 原因在 TXN_ERR, 调用方撤销本次更改
 apply_config() {
   _apply_step 0 10 "生成配置"
   load_settings        # 生成配置前读最新的设置 (本进程启动之后别的进程可能改过, 例如代理总开关)
@@ -293,7 +272,7 @@ apply_config() {
     _apply_step 3 80 "等待服务就绪"
     ENHANCED_REFUSED=0
     if ! os_service_restart || ! wait_port "$PORT" 15 || ! enhanced_ready; then
-      # TUN 安装被 root 拒绝 (什么都没改动): 不再重试 TUN, 直接改回系统代理模式 (S2)
+      # TUN 安装被拒绝 (root 什么都没改动): 不再重试, 也不自己改成系统代理模式 —— 放回原来的配置, 返回 5, 由调用方撤销本次更改并报告原因 (S2, 见 config_tun_refused)
       if [ "${ENHANCED_REFUSED:-0}" = 1 ]; then config_tun_refused; return $?; fi
       if [ -f "$H/config.json.bak" ]; then
         cp -p "$H/config.json.bak" "$H/config.json"

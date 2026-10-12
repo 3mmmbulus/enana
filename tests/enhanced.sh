@@ -129,7 +129,7 @@ echo 'PASS: installer preserves ports owned by the root TUN service'
   [ "$got" = brew ] || { echo "FAIL: without an installed core the recommendation must stay as it was: [$got]"; exit 1; }
 ) || exit 1
 echo 'PASS: an upgrade re-pins the core only for TUN users whose core is unpinned or changed'
-# st_config (install.sh) when apply_config returns 5: TUN was refused before any administrator prompt, or the old root daemon still runs (config_tun_refused).
+# st_config (install.sh) when apply_config returns 5: TUN was refused (config_tun_refused keeps the capture mode, puts the old configuration back and gives the reason).
 # The installer must print that reason (TXN_ERR) and say the current version was kept, not "the generated configuration did not pass sing-box validation"
 # (which sent users looking for a configuration problem), and the upgrade rollback (EXIT trap -> restore_on_fail) must still run.
 (
@@ -233,6 +233,35 @@ cmp "$W/system.json" "$H/config.json"
 settings_set NETWORK_MODE system
 load_settings || true
 echo 'PASS: administrator cancellation restores config without a second restart/prompt'
+# S2: a TUN refusal (root refused before changing anything) never switches the capture mode by itself. apply_config puts the previous configuration
+# back and returns 5 with the reason; op_txn rolls the change back and reports why: a System -> TUN switch ends on System Proxy again, a change made
+# in TUN mode stays on TUN. (With no root daemon running it used to switch to System Proxy and report success, so nobody learned TUN was refused.)
+(
+  job_step() { :; }; oplog() { :; }; sysproxy_off_if_core_down() { :; }
+  _txn_end() { printf '%s|%s|%s\n' "$1" "$2" "${3:-}" > "$W/s2-end"; }
+  STARTS=0; os_service_start() { STARTS=$((STARTS + 1)); return 0; }
+  os_service_restart() { if enhanced_configured; then ENHANCED_REFUSED=1; ENHANCED_REFUSED_WHY=stage-extra; return 3; fi; return 0; }   # root refuses the TUN snapshot
+  enhanced_loaded() { return 1; }                                   # no root daemon at all: exactly the case that used to switch modes
+  cp "$W/system.json" "$H/config.json"; rm -f "$H/config.json.bak"; settings_set NETWORK_MODE system; load_settings || true
+  if op_txn '切换流量接管模式' txn_settings NETWORK_MODE=tun >/dev/null 2>&1; then echo 'FAIL: S2: a refused System -> TUN switch reported success'; exit 1; fi
+  load_settings || true
+  [ "$NETWORK_MODE" = system ] || { echo "FAIL: S2: a refused System -> TUN switch did not end on System Proxy ($NETWORK_MODE)"; exit 1; }
+  if enhanced_configured; then echo 'FAIL: S2: the refused TUN configuration was left in place'; exit 1; fi
+  [ "$(cat "$W/s2-end")" = 'fail|TUN 没有启动 (stage-extra): 原因: stage-extra|5' ] || { echo "FAIL: S2: the refusal was not reported with its reason: $(cat "$W/s2-end")"; exit 1; }
+  [ "$STARTS" = 0 ] || { echo "FAIL: S2: the refusal started a core by itself ($STARTS)"; exit 1; }
+  # already on TUN: a TUN-mode change (an app policy) that root refuses keeps TUN and the running configuration, and rolls the policy back
+  cp "$W/tun.json" "$H/config.json"; rm -f "$H/config.json.bak"; settings_set NETWORK_MODE tun; load_settings || true
+  ovr_set app Gemini pin ack ''; ovr_sync || exit 1; before=$(cat "$H/overrides.tsv"); : > "$W/s2-end"
+  if op_txn '修改应用/网站策略' txn_override app Gemini direct '' >/dev/null 2>&1; then echo 'FAIL: S2: a refused TUN-mode change reported success'; exit 1; fi
+  load_settings || true
+  [ "$NETWORK_MODE" = tun ] || { echo "FAIL: S2: a refused TUN-mode change switched the capture mode to $NETWORK_MODE"; exit 1; }
+  cmp -s "$W/tun.json" "$H/config.json" || { echo 'FAIL: S2: the TUN configuration was not put back'; exit 1; }
+  [ "$(cat "$H/overrides.tsv")" = "$before" ] || { echo 'FAIL: S2: the refused change was not rolled back'; exit 1; }
+  [ "$(cat "$W/s2-end")" = 'fail|TUN 没有启动 (stage-extra): 原因: stage-extra|5' ] || { echo "FAIL: S2: the refusal was not reported with its reason: $(cat "$W/s2-end")"; exit 1; }
+  [ "$STARTS" = 0 ] || { echo "FAIL: S2: the refusal started a core by itself ($STARTS)"; exit 1; }
+) || exit 1
+settings_set NETWORK_MODE system; load_settings || true; cp "$W/system.json" "$H/config.json"; ovr_sync >/dev/null 2>&1 || true
+echo 'PASS: a TUN refusal keeps the capture mode and the running configuration, rolls the change back and reports why (S2)'
 # Core-affecting implementation changes change the snapshot fingerprint; policy-rule-only edits change only the rule-data fingerprint.
 SB=${SINGBOX:-$(type -P true)}
 before=$(enhanced_fingerprint)

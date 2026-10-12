@@ -262,7 +262,7 @@ st_config() {
   case $rc in
     0) ;;
     3) die "新配置没能让代理核心启动, 已回滚到原来的配置" "日志: $H/sing-box.log   $(tail -n 3 "$H/sing-box.log" 2>/dev/null | tr '\n' ' ')" ;;
-    # 5 = TUN 被拒绝 (弹框之前的预检, 或者旧的根守护进程还在运行; 见 lib/config.sh 的 config_tun_refused): 原因在 TXN_ERR 里, 和配置校验无关。EXIT 陷阱照常还原程序文件
+    # 5 = TUN 被拒绝 (root 什么都没改动, 原来的配置放回去了, 流量接管方式不变; 见 lib/config.sh 的 config_tun_refused): 原因在 TXN_ERR 里, 和配置校验无关。EXIT 陷阱照常还原程序文件
     5) die "${TXN_ERR:-TUN 没有启动, 新配置没有应用}" "已保留当前版本, 没有升级" ;;
     *) die "生成的配置没有通过 sing-box 校验" "$(head -c 400 "$H/check.log" 2>/dev/null | tr '\n' ' ') — 请把这段信息反馈出来" ;;
   esac
