@@ -1,8 +1,19 @@
 # Changelog / 更新日志
 
-## 未发布 / Unreleased
+## 2.3.24 (2026-10-13)
 
 ### 中文
+- **升级 (TUN 用户):** 2.3.23 及更早版本没有记录核心的来源, 而 TUN 现在只把官方钉死版本的核心交给 root 运行: 升级时会自动重新下载并校验同一版本的官方核心 (只接受钉死的下载, 不改用 Homebrew), 之后第一次应用要输入一次管理员密码。升级时 TUN 被拒绝, 会说明真正的原因并保留当前版本, 不再误报「配置没有通过 sing-box 校验」。
+- **安全: TUN 只运行 root 校验过的快照:** 管理员授权之后, root 按摘要逐个核对暂存的核心、配置、规则集和脚本, 拒绝符号链接和清单之外的文件, 失败时整体回滚; 停止 / 删除只运行 root 自己保存的副本; 核心来源不明、配置路径不合规等问题在弹出密码框之前就拒绝。
+- **安全: 配置检查不能再被绕过:** root 检查配置时按 sing-box 的方式比较键名 (换大小写、用特殊字符都绕不过去), 写成列表的文件路径逐项检查, 只允许 tun 和 127.0.0.1 上的 mixed 入站。Windows 的提权检查做了同样的修复。
+- **安全: 免密助手搬到 /Library/PrivilegedHelperTools:** 系统代理助手和 TUN 规则助手不再放在 /usr/local (老的 Homebrew 会把它改成用户可写); 目录带 ACL 也算不安全。旧位置的助手在下一次授权时自动搬过去; 旧位置已经不安全时, 指向它的免密规则会被撤销。
+- **安全: 卸载时不再以 root 运行用户目录里的脚本:** 恢复系统代理改为运行和助手一起安装的 root 副本; 以 root 运行的删除 / 创建命令都写绝对路径。恢复记录无效时不再中断卸载 (只清除 enana 自己的设置)。
+- **Windows: 默认 DNS 下也能开启 TUN:** 以前 DNS-over-HTTPS 和 WebSocket 的路径被当成文件路径, TUN 一律装不上。
+- **TUN 被拒绝时不再悄悄改成系统代理:** 保留原来的接管方式, 撤销本次更改并说明原因。
+- **少弹密码框:** 一次操作最多弹一次管理员密码框, 取消之后不再追问, 并如实记成「已取消」; 后台任务 (自动识别网站、云端自动同步、心跳、定时维护、官方线路) 从不弹框, TUN 下需要授权的变化推迟到你下次操作时; 取消之后留下的规则文件不再让以后每次应用都要密码。应用的后台扫描遇到需要授权的变化, 显示为待确认的卡片, 由你在「应用」里确认。
+- **TUN 下打开总开关:** 需要授权时改在后台任务里进行, 仪表盘跟着任务走, 不再等 25 秒后误报失败。
+- **更可靠的回滚:** 系统代理模式下残留的 TUN 守护进程会被停掉; 回滚中某一步失败也会恢复其余部分; 从 TUN 切回系统代理时, 开机自启不再被写错; 「已停止」只在守护进程真的停了之后才记下。
+- **其它修复:** 更新失败时记下失败的步骤和原因; 粘贴导入服务器失败时也删掉临时数据; 安装时整体替换程序文件, 正在运行的服务不会读到写了一半的文件。
 - **行为变化: `--yes` 与 `--upgrade` 不再覆盖别人设置的系统代理:** 发现网络服务已有其它代理设置时, 这一步会被跳过 (原设置已备份到 proxy-backup.txt), 需要时运行 `enana on` 替换。
 - **行为变化: 交互安装时回车 = 取消:** 外部代理的提醒与系统代理的询问默认都是「否」, 直接回车会取消安装 (原来系统代理的询问默认是「是」)。
 - **安装前的外部代理提醒更准确:** 只有正在运行的外部 sing-box 进程、已加载的 launchd 任务, 以及增强模式下经过别的 TUN 网卡的默认路由才会提醒并询问; 只装了程序、只有 plist 或配置目录、系统代理模式下的 VPN 路由只写进清单, 不再询问。Homebrew 装的 sing-box 不算外部。
@@ -12,6 +23,17 @@
 - **测试用的路径覆盖:** ENANA_TUN_ROOT、ENANA_TUN_PLIST_DIR、ENANA_ROOT_PREFIX、ENANA_SINGBOX_DIRS、ENANA_NETWORKSETUP 只在设置了 ENANA_TEST 时才生效, 普通安装不再读取它们。
 
 ### English
+- **Upgrade (TUN users):** 2.3.23 and earlier never recorded where the core came from, and TUN now hands only an official pinned core to root: the upgrade re-downloads and verifies the same official core version (pinned downloads only, never Homebrew), and the first apply afterwards asks for the administrator password once. When TUN refuses during an upgrade, the real reason is shown and the current version is kept, instead of "the generated configuration did not pass sing-box validation".
+- **Security: TUN runs only a root-verified snapshot:** after authorisation, root checks every staged file (core, configuration, rule sets, script) by digest, refuses symlinks and files not on the list, and rolls everything back on failure; stop and remove run only root's own copy; an unknown core source or a configuration path outside the snapshot is refused before the password dialog.
+- **Security: the configuration check can no longer be bypassed:** root compares key names the way sing-box reads them (other letter cases and look-alike characters no longer slip through), checks every entry of file paths given as lists, and allows only the tun inbound and mixed inbounds on 127.0.0.1. The elevated Windows check got the same fixes.
+- **Security: passwordless helpers moved to /Library/PrivilegedHelperTools:** the system proxy helper and the TUN rule helper no longer live under /usr/local (old Homebrew installs make it user-writable); a directory with ACL entries also counts as unsafe. Helpers in the old place move at the next authorisation, and a passwordless rule that points at an old place that is no longer safe is revoked.
+- **Security: uninstall no longer runs a script from your home folder as root:** restoring the system proxy runs the root-owned copy installed with the helper; root-run delete and create commands use absolute paths. An invalid restore record no longer stops uninstall (only enana's own settings are cleared).
+- **Windows: TUN works with the default DNS:** DNS-over-HTTPS and WebSocket paths were treated as file paths, so TUN could never be installed.
+- **A refused TUN install no longer switches to System Proxy behind your back:** the capture mode stays as it was, the change is undone and the reason is shown.
+- **Fewer password dialogs:** at most one administrator dialog per operation, no repeat after you cancel, and a cancel is recorded as cancelled; background work (automatic site detection, cloud auto-sync, heartbeat, daily maintenance, official nodes) never shows a dialog, and in TUN mode changes that need authorisation wait until you next act; rule files left behind by a cancelled change no longer make every later apply ask again. Background app scans show such changes as a card for you to confirm in Apps.
+- **Turning the proxy on in TUN mode:** when that needs authorisation it runs as a background job the dashboard follows, instead of failing after 25 seconds.
+- **More reliable rollback:** a TUN daemon left running in System Proxy mode is stopped; a failed rollback step no longer skips the rest; switching from TUN back to System Proxy no longer writes the autostart setting wrongly; "stopped" is recorded only once the daemon is really gone.
+- **Other fixes:** failed updates record the step that failed and why; pasted server data is removed after a failed import as well; the installer replaces program files in one step, so a running service never reads half-written files.
 - **Behaviour change: `--yes` and `--upgrade` no longer overwrite a system proxy set by another program:** when a network service already has other proxy settings, that step is skipped (the originals are backed up to proxy-backup.txt); run `enana on` to replace them when needed.
 - **Behaviour change: in interactive installs, Enter cancels:** the external-proxy warning and the system-proxy question now default to no, so pressing Enter cancels the install (the system-proxy question used to default to yes).
 - **More accurate external-proxy warning before installing:** only a running external sing-box process, a loaded launchd job, and a default route through another TUN interface in Enhanced mode prompt for confirmation; a program that is only installed, a plist alone, a config folder, or a VPN route in System Proxy mode is listed in the inventory only. A sing-box installed by Homebrew is not counted as external.
