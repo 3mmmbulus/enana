@@ -18,9 +18,10 @@ hasnt() { if ! grep -q -- "$2" "$3" 2>/dev/null; then tpass "$1"; else tfail "$1
 export FAKE_STATE=$W/state HOME=$W/home ENANA_HOME=$W/h LC_ALL=C ENANA_LANG=zh PORT=37890 UI_PORT=37891 API_PORT=37892 SPEED_PORT=37893 FAKE_PORT=37890
 mkdir -p "$FAKE_STATE" "$HOME" "$ENANA_HOME"
 export PATH="$HERE/fakebin:$PATH"
-# 系统代理助手会写 /usr/local/libexec 和 /etc/sudoers.d: 测试里全部重定向到沙箱 (假 install 也会拒绝沙箱之外的任何目标)
+# 系统代理助手会写 /Library/PrivilegedHelperTools/com.enana.proxy (2.3.23 及更早版本是 /usr/local/libexec/enana) 和 /etc/sudoers.d: 测试里全部重定向到沙箱
+# (假 install 也会拒绝沙箱之外的任何目标)。沙箱里的 /Library 由测试建好 (755, 没有 ACL): root 的命令从来不建 /Library
 export ENANA_TEST=1 ENANA_ROOT_PREFIX="$W/root" ENANA_NETWORKSETUP="$HERE/fakebin/networksetup" FAKE_SUDOERS_DIR="$W/root/etc/sudoers.d"
-mkdir -p "$W/root"
+mkdir -p "$W/root"; mkdir -m 755 "$W/root/Library"
 for c in networksetup sudo osascript; do
   case "$(command -v $c)" in "$HERE"/fakebin/*) ;; *) echo "REFUSING: 真实的 $c 出现在 PATH 中, 为防止改动系统已中止"; exit 1 ;; esac
 done
@@ -30,7 +31,7 @@ for _f in i18n os-darwin enhanced logs jobs ops; do . "$LIB/$_f.sh"; done
 load_settings; QUIET=1
 [ "$H" = "$W/h" ] || { echo "REFUSING: 数据目录不是临时目录 ($H)"; exit 1; }
 CALLS=$FAKE_STATE/calls.log
-reset() { rm -rf "$W/root"; mkdir -p "$W/root"; rm -f "$FAKE_STATE/sysproxy-on"; : > "$CALLS"; unset FAKE_NS_NEEDS_ADMIN FAKE_DIALOG FAKE_SUDO_NOPASS FAKE_SERVICES FAKE_ADMIN; rm -rf "$H/logs"; }
+reset() { rm -rf "$W/root"; mkdir -p "$W/root"; mkdir -m 755 "$W/root/Library"; rm -f "$FAKE_STATE/sysproxy-on"; : > "$CALLS"; unset FAKE_NS_NEEDS_ADMIN FAKE_DIALOG FAKE_SUDO_NOPASS FAKE_SERVICES FAKE_ADMIN; rm -rf "$H/logs"; }
 sets() { grep -c 'networksetup -set' "$CALLS"; }
 oplines() { cat "$H"/logs/ops-*.log 2>/dev/null; }
 
@@ -162,6 +163,7 @@ os_sysproxy_apply on </dev/null >/dev/null 2>&1; rc=$?
 eq "第一次打开: 弹密码框成功 (dialog), 助手同时装好 (installed)" "$rc:$SYSPROXY_METHOD:$SYSPROXY_HELPER" "0:dialog:installed"
 eq "只弹了一次密码框" "$(grep -c '^osascript -e do shell script' "$CALLS")" "1"
 t_ok "助手文件已安装" test -x "$HELPER"
+eq "…装在 /Library/PrivilegedHelperTools/com.enana.proxy (沙箱里)" "$HELPER" "$W/root/Library/PrivilegedHelperTools/com.enana.proxy/sysproxy-$(id -u)"
 hs "sudoers 片段: 只给当前用户开放这一个文件的免密" "^$ME ALL=\(root\) NOPASSWD: $HELPER\$" "$(cat "$SUDOERS")"
 eq "sudoers 片段只有这一条规则 (没有通配符 / 别的命令)" "$(grep -c . "$SUDOERS")" "1"
 eq "sudoers 片段权限 440" "$(stat -f %Lp "$SUDOERS")" "440"
@@ -230,9 +232,20 @@ chmod -N "$DIR"
 reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
 os_sysproxy_apply on </dev/null >/dev/null 2>&1; prep_trusted
 chmod 775 "$(dirname "$DIR")"
-eq "上一级目录 (libexec) 组可写: 不信任" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
-revoked "目录链不合格 (libexec 组可写)"
+eq "上一级目录 (PrivilegedHelperTools) 组可写: 不信任" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
+revoked "目录链不合格 (PrivilegedHelperTools 组可写)"
 chmod 755 "$(dirname "$DIR")"
+reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
+os_sysproxy_apply on </dev/null >/dev/null 2>&1; prep_trusted
+chmod 775 "$W/root/Library"
+eq "最上一级 (/Library) 组可写: 不信任" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
+revoked "目录链不合格 (/Library 组可写)"
+chmod 755 "$W/root/Library"
+reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
+rmdir "$W/root/Library"
+os_sysproxy_apply on </dev/null >/dev/null 2>&1; rc=$?
+eq "/Library 不在: 系统代理照样设置 (dialog), 助手没装上 (failed), root 也没有建 /Library" "$rc:$SYSPROXY_METHOD:$SYSPROXY_HELPER:$(sp_files):$([ -e "$W/root/Library" ] && echo library || echo none)" "0:dialog:failed:none:none:none:none"
+mkdir -m 755 "$W/root/Library"
 reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
 os_sysproxy_apply on </dev/null >/dev/null 2>&1; prep_trusted
 printf 'if then\n' >> "$LIB/sysproxy-helper.tpl"                                 # 渲染出来的助手语法不对: root 的 bash -n 不通过
@@ -311,6 +324,55 @@ eq "…关闭 / 打开都走助手, 没有弹框" "$m1:$SYSPROXY_METHOD:$(grep -
 eq "…卸载恢复: 直接用 inband 形式 (lib 此刻的字节), 只用一次 root" "$rc:$(roots):$(grep -c "^proxy-state restore js=$LIB_SHA receipt=yes\$" "$CALLS")" "0:1:1"
 hasnt "…命令里没有副本路径 (C=)" "bash -p -c C=" "$CALLS"
 
+echo "-- S6i. 2.3.23 及更早版本装在 /usr/local/libexec/enana 的助手和副本 (升级上来、还没重装): 通过同样严格的检查就照常免密开关, 不多弹框; 下一次授权的安装把它们搬到新位置"
+LDIR=$W/root/usr/local/libexec/enana; LHELPER=$LDIR/sysproxy-$(id -u); LCOPY=$LDIR/proxy-state-$(id -u).js
+legacy_files() { printf '%s:%s:%s' "$([ -e "$LHELPER" ] && echo lhelper || echo none)" "$([ -e "$LCOPY" ] && echo lcopy || echo none)" "$([ -d "$LDIR" ] && echo ldir || echo nodir)"; }
+legacy_install() { # 2.3.23 及更早版本的安装 (沙箱里, 测试自己建): 助手和副本在旧位置, 免密规则指向旧位置的助手; 副本的字节和 lib 里的不同 (认得出运行的是哪一份)
+  mkdir -p "$LDIR" "$(dirname "$SUDOERS")"; chmod 755 "$W/root/usr" "$W/root/usr/local" "$W/root/usr/local/libexec" "$LDIR"
+  os_sysproxy_helper_text > "$LHELPER"; chmod 755 "$LHELPER"
+  { cat "$LIB/proxy-state.js"; printf '// 2.3.23 root copy\n'; } > "$LCOPY"; chmod 644 "$LCOPY"
+  printf '%s ALL=(root) NOPASSWD: %s\n' "$ME" "$LHELPER" > "$SUDOERS"; chmod 440 "$SUDOERS"
+}
+reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
+legacy_install; LCOPY_SHA=$(sp_sha "$LCOPY")
+eq "(准备) 只有旧位置有助手和副本, 免密规则指向旧位置" "$(sp_files):$(legacy_files)" "sudoers:none:none:lhelper:lcopy:ldir"
+eq "旧位置的助手通过同样严格的检查: 可信, 用的是旧位置的写死路径" "$(os_sysproxy_helper_trusted)" "/usr/local/libexec/enana/sysproxy-$(id -u)"
+eq "…状态接口 (助手装没装) 看的是旧位置的文件" "$(os_sysproxy_helper_path)" "$LHELPER"
+: > "$CALLS"; os_sysproxy_apply on </dev/null >/dev/null 2>&1; rc=$?
+eq "打开: 走旧位置的助手, 没有弹框" "$rc:$SYSPROXY_METHOD:$SYSPROXY_HELPER:$(grep -c '^osascript -e do shell script' "$CALLS")" "0:helper:used:0"
+has "…sudo -n 调用的是判为可信的那一份 (免密规则写的就是它)" "^sudo -n /usr/local/libexec/enana/sysproxy-$(id -u) on" "$CALLS"
+os_sysproxy_apply off quiet </dev/null >/dev/null 2>&1; rc=$?
+eq "静默关闭 (核心起不来时的回退): 照样走旧位置的助手, 不需要授权" "$rc:$SYSPROXY_METHOD:$SYSPROXY_ERR" "0:helper:"
+eq "…还没有授权安装过: 旧位置的文件都还在" "$(legacy_files)" "lhelper:lcopy:ldir"
+printf '%s\n' "$RECEIPT" > "$H/proxy-state.json"; touch "$FAKE_STATE/sysproxy-on"; : > "$CALLS"; os_sysproxy_restore_root >/dev/null 2>&1; rc=$?
+eq "卸载恢复: 只有旧位置有副本 → 运行旧位置的那一份 (一次 root, 不是 inband)" "$rc:$(roots):$(grep -c "^proxy-state restore js=$LCOPY_SHA receipt=yes\$" "$CALLS"):$(grep -c 'bash -p -c JB=' "$CALLS")" "0:1:1:0"
+has "…命令里是旧位置的写死路径 (root 核对的是旧位置的目录链)" "bash -p -c C='/usr/local/libexec/enana/proxy-state-$(id -u).js' " "$CALLS"
+chmod 775 "$W/root/usr/local"                                    # 老的 Homebrew 把 /usr/local 改成组可写 (沙箱里)
+eq "/usr/local 组可写之后: 旧位置的助手不再可信" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
+: > "$CALLS"; os_sysproxy_apply on </dev/null >/dev/null 2>&1; rc=$?
+eq "下一次打开: 弹一次框, 同一次授权把助手和副本装到新位置 (installed; 以前在这样的 Mac 上根本装不上)" "$rc:$SYSPROXY_METHOD:$SYSPROXY_HELPER" "0:dialog:installed"
+eq "…新位置有助手、副本和免密规则" "$(sp_files)" "sudoers:helper:copy"
+hs "…免密规则改写成新路径 (旧路径作废)" "^$ME ALL=\(root\) NOPASSWD: $HELPER\$" "$(cat "$SUDOERS")"
+eq "…旧位置的助手和副本删掉了, 空了的旧目录也删了" "$(legacy_files)" "none:none:nodir"
+os_sysproxy_apply off </dev/null >/dev/null 2>&1; rc=$?
+eq "之后关闭: 走新位置的助手, 不再弹框" "$rc:$SYSPROXY_METHOD:$(grep -c '^osascript -e do shell script' "$CALLS")" "0:helper:1"
+has "…sudo -n 调用新位置的写死路径" "^sudo -n $(os_sysproxy_helper_root) off" "$CALLS"
+chmod 755 "$W/root/usr/local"
+
+echo "-- S6j. 卸载恢复选哪一份副本: 两个位置都有时用新位置的; 旧位置的目录链不合格时 root 不信任它, 退回 inband 形式"
+mkdir -p "$LDIR"; chmod 755 "$LDIR"; { cat "$LIB/proxy-state.js"; printf '// 2.3.23 root copy\n'; } > "$LCOPY"; chmod 644 "$LCOPY"
+NEW_SHA=$(sp_sha "$COPY")
+touch "$FAKE_STATE/sysproxy-on"; : > "$CALLS"; os_sysproxy_restore_root >/dev/null 2>&1; rc=$?
+eq "两个位置都有副本: 运行新位置的那一份 (一次 root, 不是 inband, 没有碰旧的)" "$rc:$(roots):$(grep -c "^proxy-state restore js=$NEW_SHA " "$CALLS"):$(grep -c 'bash -p -c JB=' "$CALLS"):$(grep -c "js=$LCOPY_SHA" "$CALLS")" "0:1:1:0:0"
+has "…命令里是新位置的写死路径" "bash -p -c C='$(os_sysproxy_js_root)' " "$CALLS"
+rm -f "$COPY"
+touch "$FAKE_STATE/sysproxy-on"; : > "$CALLS"; os_sysproxy_restore_root >/dev/null 2>&1; rc=$?
+eq "新位置的副本没了、旧位置还有: 运行旧位置的那一份" "$rc:$(roots):$(grep -c "^proxy-state restore js=$LCOPY_SHA " "$CALLS")" "0:1:1"
+chmod 775 "$W/root/usr/local"
+touch "$FAKE_STATE/sysproxy-on"; : > "$CALLS"; os_sysproxy_restore_root >/dev/null 2>&1; rc=$?
+eq "旧位置的目录链不合格 (/usr/local 组可写): root 不信任旧副本 (root-copy-untrusted), 改用 inband 形式, 恢复成功" "$rc:$(roots):$(grep -c "js=$LCOPY_SHA" "$CALLS"):$(grep -c "^proxy-state restore js=$LIB_SHA receipt=yes\$" "$CALLS")" "0:2:0:1"
+chmod 755 "$W/root/usr/local"
+
 echo "-- S6f. 卸载: 助手、免密规则和 proxy-state.js 副本一并删除"
 reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
 os_sysproxy_apply on </dev/null >/dev/null 2>&1
@@ -322,7 +384,19 @@ eq "卸载后助手和 sudoers 规则都被删除" "$([ -e "$HELPER" ] && echo h
 eq "…副本也删掉了" "$([ -e "$COPY" ] && echo copy || echo none)" "none"
 has "以 root 删除用的是 /bin/rm (sudo 不按用户的 PATH 去找 rm)" "^sudo /bin/rm -f -- " "$CALLS"
 t_ok "没有残留的空目录 (助手目录)" test ! -d "$(dirname "$HELPER")"
+t_ok "…/Library/PrivilegedHelperTools 本身留着" test -d "$W/root/Library/PrivilegedHelperTools"
 os_sysproxy_helper_remove; eq "没装过 / 已删除时再调用是空操作" "$?" "0"
+reset; legacy_install
+os_sysproxy_helper_remove
+eq "只有旧位置的安装 (2.3.23 及更早版本): 卸载同样删掉免密规则、助手和副本, 空了的旧目录也删了" "$(sp_files):$(legacy_files)" "none:none:none:none:none:nodir"
+reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
+os_sysproxy_apply on </dev/null >/dev/null 2>&1; mkdir -p "$LDIR"; : > "$LHELPER"; : > "$LCOPY"
+os_sysproxy_helper_remove
+eq "两个位置都有文件: 全部删掉, 两个目录都不在了" "$(sp_files):$(legacy_files):$([ -d "$DIR" ] && echo dir || echo nodir)" "none:none:none:none:none:nodir:nodir"
+reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
+legacy_install; printf '%s\n' "$RECEIPT" > "$H/proxy-state.json"; touch "$FAKE_STATE/sysproxy-on"
+: > "$CALLS"; os_sysproxy_uninstall >/dev/null 2>&1; rc=$?
+eq "完整卸载, 只有旧位置的安装: 用旧位置的副本恢复 (没有 inband), 然后规则、助手、副本和旧目录都删掉" "$rc:$(os_sysproxy_mine && echo mine || echo clean):$(grep -c "^proxy-state restore js=$LCOPY_SHA " "$CALLS"):$(grep -c 'bash -p -c JB=' "$CALLS"):$(sp_files):$(legacy_files)" "0:clean:1:0:none:none:none:none:none:nodir"
 reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
 os_sysproxy_apply on </dev/null >/dev/null 2>&1; printf '%s\n' "$RECEIPT" > "$H/proxy-state.json"
 : > "$CALLS"; os_sysproxy_uninstall >/dev/null 2>&1; rc=$?

@@ -195,7 +195,7 @@ ovr_sync() { :; }; _apply_step() { :; }
 os_service_restart() { RESTARTS=$((RESTARTS + 1)); return 0; }
 os_service_loaded() { return 0; }; os_service_pid() { echo 1; }; wait_port() { return 0; }; proxy_sync_mode() { :; }
 enhanced_ready() { return 0; }; enhanced_loaded() { return 0; }
-# 助手: 用测试副本安装到沙箱的「/usr/local/libexec」, sudoers 规则写进沙箱的「/etc/sudoers.d」
+# 助手: 用测试副本安装到沙箱的「/Library/PrivilegedHelperTools/com.enana.proxy」, sudoers 规则写进沙箱的「/etc/sudoers.d」
 # 助手 = enana 自己渲染出来的字节 (enhanced_helper_render, 和 root 安装时用的是同一段函数); 测试不是 root, 所以只把 uid 换成当前用户
 helper_bytes() { enhanced_helper_render "$W/snap" "$LBL" "$W/bin/mock-launchctl" < "$REPO/lib/tunrules-helper.pl" | sed "s/^my \$ROOT_UID = 0;/my \$ROOT_UID = $ME;/"; }
 install_helper() {
@@ -354,7 +354,7 @@ echo "== T6. 重启核心 (os_service_restart): 指纹没变 + 助手可信 → 
   eq "TUN 已安装 + 配置 / 规则没变 + 助手可信: 返回 0, 完整安装一次都没走" "$rc:$FULL" "0:0"
   eq "…助手只做了一件事: kickstart -k 这个用户自己的守护进程" "$(lc)" "kickstart -k system/$LBL"
   hs "…操作记录写明是助手重启" "重启核心方式	mode=tun via=helper	ok" "$(ops)"
-  hs "…sudo 调用的是助手本身 (写死的 root 路径), 带 restart 参数, 而且是 -n (不等密码)" "^sudo -n $(enhanced_helper_root) restart" "$(cat "$FAKE_STATE/calls.log" 2>/dev/null)"
+  hs "…sudo 调用的是助手本身 (写死的 root 路径, 新位置), 带 restart 参数, 而且是 -n (不等密码)" "^sudo -n /Library/PrivilegedHelperTools/com\.enana\.proxy/tunrules-$ME restart" "$(cat "$FAKE_STATE/calls.log" 2>/dev/null)"
   fresh; ovr changed.example
   os_service_restart
   eq "还有没同步的应用 / 网站策略: 先同步进 root 快照, 再用助手重启 (仍然不走完整安装)" "$FULL:$(grep -c changed.example "$W/snap/rules/ovr-pin/ovr-pin.json"):$(lc)" "0:1:kickstart -k system/$LBL"
@@ -393,6 +393,23 @@ echo "== T6. 重启核心 (os_service_restart): 指纹没变 + 助手可信 → 
   fresh; enhanced_loaded() { return 1; }; enhanced_configured() { return 1; }
   os_service_restart
   eq "System Proxy (既没配 TUN 也没加载): 重启用户自己的核心, 完全不涉及助手 / 完整安装" "$FULL:$SYS:$(lc)" "0:1:"
+  enhanced_loaded() { return 0; }; eval "$(sed -n '/^enhanced_configured()/p' "$LIB/enhanced.sh")"      # 换回 TUN 已安装、正在运行 (上面最后一个用例把它们换掉了)
+  gen_config() { printf '{"fixed":"config","inbounds":[{"type":"tun"}]}' > "$H/config.json.new"; }
+  # 2.3.23 及更早版本装在 /usr/local/libexec/enana 的助手 (升级上来、还没完整安装过): 通过同样严格的检查就照常用, sudo -n 调用旧位置的路径 (免密规则写的就是它)
+  LEGACY=$W/root/usr/local/libexec/enana/tunrules-$ME
+  install_legacy() { mkdir -p "${LEGACY%/*}" "$FAKE_SUDOERS_DIR"; chmod 755 "$W/root/usr" "$W/root/usr/local" "$W/root/usr/local/libexec" "${LEGACY%/*}"; helper_bytes > "$LEGACY"; chmod 755 "$LEGACY"; printf '%s ALL=(root) NOPASSWD: %s\n' "$(id -un)" "$LEGACY" > "$FAKE_SUDOERS_DIR/enana-tunrules-$ME"; }
+  reset; install_legacy; : > "$W/lc.calls"; rm -f "$W/lc-fail"; FULL=0; SYS=0; : > "$FAKE_STATE/calls.log"
+  eq "(准备) 只有旧位置有助手, 它可信: enhanced_helper_root 给出旧位置的写死路径" "$(enhanced_helper_root)" "/usr/local/libexec/enana/tunrules-$ME"
+  os_service_restart; rc=$?
+  eq "只有旧位置的助手: 照样用它重启, 不走完整安装 (不弹管理员密码框)" "$rc:$FULL:$(lc)" "0:0:kickstart -k system/$LBL"
+  hs "…sudo -n 调用的是旧位置的写死路径" "^sudo -n /usr/local/libexec/enana/tunrules-$ME restart" "$(cat "$FAKE_STATE/calls.log" 2>/dev/null)"
+  reset; install_legacy; ovr legacy.example; : > "$W/lc.calls"; FULL=0
+  os_service_restart
+  eq "…还有没同步的策略: 也用旧位置的助手先同步, 再重启" "$FULL:$(grep -c legacy.example "$W/snap/rules/ovr-pin/ovr-pin.json"):$(lc)" "0:1:kickstart -k system/$LBL"
+  reset; install_legacy; chmod 775 "$W/root/usr/local"; : > "$W/lc.calls"; FULL=0
+  os_service_restart
+  eq "旧位置的目录链不合格 (/usr/local 组可写, 老的 Homebrew 会这样): 不用它, 走完整安装 (那次授权把助手装到新位置)" "$FULL:$(lc)" "1:"
+  chmod 755 "$W/root/usr/local"
 )
 
 echo "== T7. 停止已经停掉的守护进程不要管理员授权 (stop 之后 plist 还在; 更完整的覆盖在 tests/enhanced.sh)"

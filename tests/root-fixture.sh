@@ -1,6 +1,7 @@
 #!/bin/bash
 # 测试夹具 (由 tests/tun-service.sh 与 tests/enhanced-root-integrity.sh 引用, 不单独运行):
-#   · lib/enhanced-root.sh 复制一份到临时目录, 固定路径 / 命令换成临时目录里的替身 (ROOT、plist、sudoers、libexec、launchctl、install、chown、route、ifconfig、sleep)
+#   · lib/enhanced-root.sh 复制一份到临时目录, 固定路径 / 命令换成临时目录里的替身 (ROOT、plist、sudoers、助手目录 $W/Library/PrivilegedHelperTools/com.enana.proxy
+#     和旧位置 $W/usr/local/libexec/enana、launchctl、install、chown、route、ifconfig、sleep); $W/Library 是沙箱里的 /Library (755, 没有 ACL; root 脚本从来不建它)
 #   · enana 一侧的函数直接用 lib/enhanced.sh 的原文 (LIB 指向夹具里的副本), 所以两边的摘要、渲染、暂存都是真实代码
 #   · 假 sudo 只做两件事: `sudo -n true` 成功; `sudo -n /bin/sh -c CMD` 在本机以当前用户运行 CMD (root 脚本自己的 id 检查已替换成 printf 0)
 #   · 绝不运行真实的 launchctl / sudo / osascript / networksetup; 解析到真实命令的 PATH 由调用方检查
@@ -10,11 +11,13 @@ RF_REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 rf_setup() {
   W=$1; ME=$(id -u); LIBT=$W/lib; H=$W/home/.enana; ROOTB=$W/support; ROOT=$ROOTB/enana-$ME
   mkdir -p "$W/bin" "$W/fakebin" "$W/daemons" "$W/sudoers.d" "$W/usr/local" "$LIBT" "$H/rules/geo" "$ROOTB"
+  mkdir -m 755 "$W/Library"
   cp "$RF_REPO/lib/tunrules-helper.pl" "$LIBT/"
   cp "$RF_REPO/lib/enhanced.sh" "$LIBT/"
   cat > "$W/root.sed" <<SED
 s|^root_base=.*|root_base="$ROOTB"|
-s|^usr_local=.*|usr_local="$W/usr/local"; libexec="\$usr_local/libexec/enana"; sudoers_dir="$W/sudoers.d"|
+s|^library=.*|library="$W/Library"; helper_tools="\$library/PrivilegedHelperTools"; helper_dir="\$helper_tools/com.enana.proxy"|
+s|^usr_local=.*|usr_local="$W/usr/local"; legacy_dir="\$usr_local/libexec/enana"; sudoers_dir="$W/sudoers.d"|
 s|^launchctl_bin=.*|launchctl_bin="$W/bin/launchctl"|
 s|^root_owner=0|root_owner=$ME|
 s|/usr/bin/id -u|printf 0|
@@ -58,8 +61,8 @@ MOCK
 [ "$1" = -l ] && exit 0                  # sudo -n -l PATH: 只查规则 (测试里总是有免密规则), 不运行 PATH
 echo "$*" >> "$RF_W/sudo.log"
 [ -z "${RF_HOOK:-}" ] || eval "$RF_HOOK" # 用例可以在管理员命令运行之前改动暂存目录 (见 tests/enhanced-root-integrity.sh)
-# 以 root 运行的固定路径改写成夹具里的路径: TUN 副本的目录 (/Library/Application Support/enana-UID) 和 libexec (/usr/local)
-args=(); for a in "$@"; do args+=("$(printf '%s' "$a" | sed -e "s|/Library/Application Support/enana-$(id -u)|$RF_ROOT|g" -e "s|/usr/local|$RF_W/usr/local|g" -e "s|/usr/bin/env -i PATH=|/usr/bin/env -i RF_W=$RF_W RF_ROOT=$RF_ROOT ENANA_TEST=1 ENANA_TUN_ROOT=$RF_ROOT ENANA_ROOT_PREFIX=$RF_W ENANA_TUN_LAUNCHCTL=$RF_W/bin/launchctl ENANA_TUN_PLIST_DIR=$RF_W/daemons PATH=|g")"); done
+# 以 root 运行的固定路径改写成夹具里的路径: TUN 副本的目录 (/Library/Application Support/enana-UID)、助手目录 (/Library/PrivilegedHelperTools) 和旧位置 (/usr/local)
+args=(); for a in "$@"; do args+=("$(printf '%s' "$a" | sed -e "s|/Library/Application Support/enana-$(id -u)|$RF_ROOT|g" -e "s|/Library/PrivilegedHelperTools|$RF_W/Library/PrivilegedHelperTools|g" -e "s|/usr/local|$RF_W/usr/local|g" -e "s|/usr/bin/env -i PATH=|/usr/bin/env -i RF_W=$RF_W RF_ROOT=$RF_ROOT ENANA_TEST=1 ENANA_TUN_ROOT=$RF_ROOT ENANA_ROOT_PREFIX=$RF_W ENANA_TUN_LAUNCHCTL=$RF_W/bin/launchctl ENANA_TUN_PLIST_DIR=$RF_W/daemons PATH=|g")"); done
 set -- "${args[@]}"
 exec "$@"
 MOCK
@@ -87,9 +90,9 @@ rf_load_enana() { # 只加载 enana 这一侧的函数 (不跑 install.sh / comm
   sb_ver() { SB_MAJOR=1; SB_MINOR=14; }         # 核心版本检查在 lib/config.sh; 这里假定核心够新
   . "$RF_REPO/lib/os-darwin.sh"                 # os_helper_trusted: 只定义函数, 没有副作用
 }
-rf_reset() { # 每个用例前: 回到"已经装过"之前的干净状态
-  rm -rf "$ROOTB"/* "$W/daemons"/* "$W/sudoers.d"/* "$W/usr" "$W/calls" "$W/sudo.log" "$W/loaded" "$W/fail-bootstrap" "$W/stage.path" "$W/last.cmd" 2>/dev/null
-  mkdir -p "$W/usr/local" "$ROOT"; : > "$W/calls"; : > "$W/sudo.log"
+rf_reset() { # 每个用例前: 回到"已经装过"之前的干净状态 (沙箱里的 /Library 重新建成 755、没有 ACL, 里面什么都没有)
+  rm -rf "$ROOTB"/* "$W/daemons"/* "$W/sudoers.d"/* "$W/usr" "$W/Library" "$W/calls" "$W/sudo.log" "$W/loaded" "$W/fail-bootstrap" "$W/stage.path" "$W/last.cmd" 2>/dev/null
+  mkdir -p "$W/usr/local" "$ROOT"; mkdir -m 755 "$W/Library"; : > "$W/calls"; : > "$W/sudo.log"
   unset RF_HOOK
 }
 # enana 的 TUN 启动 (和 os_service_start 调的是同一个函数); stage 路径记在 $W/stage.path, 用例可以在管理员调用之前改动它 (HOOK)

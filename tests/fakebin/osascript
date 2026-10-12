@@ -19,7 +19,7 @@ if [ "${1:-}" = -e ]; then
 fi
 case ${3:-} in
   */appicon.js) exec /usr/bin/osascript "$@" ;; # Read/render fixture icons only.
-  */proxy-state.js|*/proxy-state-[0-9]*.js)      # lib 里的 / root 临时目录里 inband 的那份 / libexec 里的 root 副本 (proxy-state-<uid>.js)
+  */proxy-state.js|*/proxy-state-[0-9]*.js)      # lib 里的 / root 临时目录里 inband 的那份 / 助手目录里的 root 副本 (proxy-state-<uid>.js, 新位置或旧位置)
     case ${4:-} in
       snapshot) printf '{"schema":1,"services":{}}\n' ;;
       check)

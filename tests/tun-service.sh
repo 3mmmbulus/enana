@@ -6,7 +6,8 @@ HERE=$(cd "$(dirname "$0")" && pwd -P)
 W=$(mktemp -d /tmp/enana-tun-service.XXXXXX); W=$(cd "$W" && pwd -P); trap 'rm -rf "$W"' EXIT
 . "$HERE/root-fixture.sh"
 rf_setup "$W"
-ME=$(id -u); HELPER=$W/usr/local/libexec/enana/tunrules-$ME; SUDOERS=$W/sudoers.d/enana-tunrules-$ME; PLIST=$W/daemons/com.enana.proxy.tun.$ME.plist
+ME=$(id -u); HDIR=$W/Library/PrivilegedHelperTools/com.enana.proxy; HELPER=$HDIR/tunrules-$ME; SUDOERS=$W/sudoers.d/enana-tunrules-$ME; PLIST=$W/daemons/com.enana.proxy.tun.$ME.plist
+LDIR=$W/usr/local/libexec/enana; LEGACY=$LDIR/tunrules-$ME                  # 2.3.23 及更早版本的位置 (沙箱里)
 fails=0
 check() { local n=$1; shift; if "$@" >/dev/null 2>&1; then echo "  ✓ $n"; else echo "  ✗ $n"; fails=$((fails + 1)); fi; }
 root_sig() { find "$ROOT" -print0 2>/dev/null | xargs -0 shasum -a 256 2>/dev/null | LC_ALL=C sort; }
@@ -23,8 +24,10 @@ check "配置与暂存时的字节一致" cfg_matches
 check "sing-box 与当前核心一致" cmp -s "$ROOT/sing-box" "$H/sing-box"
 check "规则集逐字节一致" cmp -s "$ROOT/rules/geo/geo.srs" "$H/rules/geo/geo.srs"
 check "root 脚本副本 = lib 原文" cmp -s "$ROOT/bin/enhanced-root.sh" "$LIBT/enhanced-root.sh"
-check "规则助手 = 渲染结果" test "$(shasum -a 256 < "$HELPER" | awk '{print $1}')" = "$(enhanced_helper_expected)"
+check "规则助手 = 渲染结果 (装在 /Library/PrivilegedHelperTools/com.enana.proxy)" test "$(shasum -a 256 < "$HELPER" | awk '{print $1}')" = "$(enhanced_helper_expected)"
 check "免密规则只有这一条, 权限 440" test "$(cat "$SUDOERS")" = "$(id -un) ALL=(root) NOPASSWD: $HELPER"
+check "enana 一侧认这个助手 (可信, sudo -n 调用的是新位置的写死路径)" test "$(enhanced_helper_root)" = "/Library/PrivilegedHelperTools/com.enana.proxy/tunrules-$ME"
+check "旧位置什么都没建" test ! -e "$LDIR"
 check "只调用了一次管理员命令" test "$(rf_admin_calls)" = 1
 check "launchctl 顺序正确" in_order "$(line_no 'bootout system')" "$(line_no 'bootstrap system')"
 check "kickstart 在 bootstrap 之后" in_order "$(line_no 'bootstrap system')" "$(line_no 'kickstart system')"
@@ -70,6 +73,7 @@ check "根目录没了" test ! -e "$ROOT"
 check "助手没了" test ! -e "$HELPER"
 check "免密规则没了" test ! -e "$SUDOERS"
 check "plist 没了" test ! -e "$PLIST"
+check "空了的 com.enana.proxy 目录也删了, PrivilegedHelperTools 本身留着" test "$(test -e "$HDIR" && echo y || echo n):$(test -d "$W/Library/PrivilegedHelperTools" && echo y || echo n)" = "n:y"
 
 echo "== 6. 旧版本没有 root 副本: 停止 / 删除走一次性的 inband 形式, 仍然只要一次授权"
 rf_reset; rf_enana_start; rm -rf "$ROOT/bin"
@@ -110,20 +114,48 @@ check "plist 那一步失败之后: 助手仍然恢复为安装之前的字节" 
 check "…免密规则恢复" test "$(cat "$SUDOERS" 2>/dev/null)" = "$sudo_before"
 check "…临时目录照样清掉 (没有残留的回滚 / 准备目录)" test -z "$(find "$ROOT" -name '.prepare.*' -o -name '.rollback.*')"
 
-echo "== 10. 安装时目录链不合格 (libexec 组可写): 助手和免密规则删掉; 之后安装失败回滚, 也不把它们装回不安全的目录"
+echo "== 10. 安装时目录链不合格 (com.enana.proxy 组可写): 助手和免密规则删掉; 之后安装失败回滚, 也不把它们装回不安全的目录"
 rf_reset; rf_enana_start
 cfg_before=$(shasum -a 256 < "$ROOT/config.json")
 set_level debug
-chmod g+w "$W/usr/local/libexec/enana"
+chmod g+w "$HDIR"
 : > "$W/fail-bootstrap"
 rf_enana_start; rc=$?
-chmod g-w "$W/usr/local/libexec/enana"
+chmod g-w "$HDIR"
 check "失败返回 1 (已回滚)" test "$rc" = 1
 check "配置恢复为安装之前的字节" test "$(shasum -a 256 < "$ROOT/config.json")" = "$cfg_before"
 check "助手没有被装回不安全的目录" test ! -e "$HELPER"
 check "…免密规则也没有恢复" test ! -e "$SUDOERS"
 check "没有残留的回滚 / 准备目录" test -z "$(find "$ROOT" -name '.prepare.*' -o -name '.rollback.*')"
 
+# 2.3.23 及更早版本的安装: 规则助手在 /usr/local/libexec/enana, 免密规则指向那里 (老的 Homebrew 会把 /usr/local 改成用户可写)
+legacy_setup() { mkdir -p "$LDIR"; printf '# 2.3.23 helper\n' > "$LEGACY"; chmod 755 "$LEGACY"; printf '%s ALL=(root) NOPASSWD: %s\n' "$(id -un)" "$LEGACY" > "$SUDOERS"; chmod 440 "$SUDOERS"; }
+echo "== 11. 升级迁移: 旧位置的助手 + 指向旧位置的免密规则 → 安装之后助手在新位置、规则指向新路径, 旧文件删掉, 空了的旧目录也删掉"
+rf_reset; legacy_setup
+rf_enana_start; rc=$?
+check "安装成功" test "$rc" = 0
+check "助手装在新位置 (字节 = 渲染结果)" test "$(shasum -a 256 < "$HELPER" 2>/dev/null | awk '{print $1}')" = "$(enhanced_helper_expected)"
+check "免密规则改写成新路径 (旧路径作废)" test "$(cat "$SUDOERS")" = "$(id -un) ALL=(root) NOPASSWD: $HELPER"
+check "旧位置的助手删掉了" test ! -e "$LEGACY"
+check "…空了的旧目录也删掉了 (/usr/local/libexec 不动)" test "$(test -e "$LDIR" && echo y || echo n):$(test -d "$W/usr/local/libexec" && echo y || echo n)" = "n:y"
+rf_reset; legacy_setup; printf 'sysproxy helper\n' > "$LDIR/sysproxy-$ME"
+rf_enana_start; rc=$?
+check "旧目录里还有系统代理助手: 只删规则助手, 目录和系统代理助手都留着 (它由自己的安装来迁移)" test "$rc:$(test -e "$LEGACY" && echo y || echo n):$(cat "$LDIR/sysproxy-$ME" 2>/dev/null)" = "0:n:sysproxy helper"
+rf_reset; rm -rf "$W/usr"; mkdir -p "$W/usr/local" "$W/elsewhere/enana"; printf 'keep\n' > "$W/elsewhere/enana/tunrules-$ME"; ln -s "$W/elsewhere" "$W/usr/local/libexec"
+rf_enana_start; rc=$?
+check "旧位置在符号链接后面 (/usr/local/libexec 是链接): 安装照常, 助手在新位置; 链接另一端的同名文件不删" test "$rc:$(test -f "$HELPER" && echo y || echo n):$(cat "$W/elsewhere/enana/tunrules-$ME" 2>/dev/null)" = "0:y:keep"
+rm -f "$W/usr/local/libexec"; rm -rf "$W/elsewhere"
+
+echo "== 12. 迁移的那次安装失败 (回滚): 指向旧位置的免密规则不放回去 (旧位置的助手已经删了, 规则不能指向一个别人可能建得出来的文件)"
+rf_reset; legacy_setup
+: > "$W/fail-bootstrap"
+rf_enana_start; rc=$?
+check "失败返回 1 (已回滚)" test "$rc" = 1
+check "指向旧位置的免密规则没有放回去" test ! -e "$SUDOERS"
+check "…新位置的助手也不在 (回到「没有助手」)" test ! -e "$HELPER"
+check "…旧位置的助手也不在" test ! -e "$LEGACY"
+check "没有残留的回滚 / 准备目录" test -z "$(find "$ROOT" -name '.prepare.*' -o -name '.rollback.*')"
+
 echo
-if [ "$fails" = 0 ]; then echo 'PASS: root snapshot install, bootstrap / route rollback, staged symlink refusal, stop and remove from the root copy, rollback without a helper backup, past a failed step and without restoring a helper into an unsafe directory'
+if [ "$fails" = 0 ]; then echo 'PASS: root snapshot install, bootstrap / route rollback, staged symlink refusal, stop and remove from the root copy, rollback without a helper backup, past a failed step and without restoring a helper into an unsafe directory, migration from /usr/local/libexec'
 else echo "FAIL: $fails check(s) failed"; exit 1; fi

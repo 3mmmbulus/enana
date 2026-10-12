@@ -15,7 +15,9 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin
 umask 077
 unset ENV BASH_ENV PERL5OPT PERL5LIB PERLLIB PERL5DB
 root_base="/Library/Application Support"
-usr_local="/usr/local"; libexec="$usr_local/libexec/enana"; sudoers_dir="/etc/sudoers.d"
+# 规则助手装在 $helper_dir (/Library/PrivilegedHelperTools 只有 root 能写, 包管理器从来不碰它); $legacy_dir 是 2.3.23 及更早版本的位置, 只删不装
+library="/Library"; helper_tools="$library/PrivilegedHelperTools"; helper_dir="$helper_tools/com.enana.proxy"
+usr_local="/usr/local"; legacy_dir="$usr_local/libexec/enana"; sudoers_dir="/etc/sudoers.d"
 launchctl_bin="/bin/launchctl"        # 助手 restart 动作里写死的 launchctl
 root_owner=0
 
@@ -164,19 +166,28 @@ exit 0'
 # 把配置里的 ROOT 换成临时目录, 只用来让 sing-box check 读到校验过的文件 (和旧版一样)
 REPLACE_PL='local $/; open(my $fh,"<",$ARGV[0]) or exit 4; my $s=<$fh>; my ($r,$w)=@ARGV[1,2]; $s =~ s/\Q$r\E/$w/g; print $s'
 
-# 目录链 /usr/local、/usr/local/libexec、$libexec 都必须是真目录、不是链接、归 root、组 / 其他人不可写; 缺的 libexec 和 enana 在这里建 (755), 已有的不改属主
-libexec_ok() {
+# 目录链 /Library、/Library/PrivilegedHelperTools、$helper_dir 都必须是真目录、不是链接、归 root、组 / 其他人不可写、没有 ACL。
+# 缺的 PrivilegedHelperTools 和 com.enana.proxy 在这里建 (755, root:wheel; 上一级必须已经是真目录), /Library 从来不建; 已有的不改属主和权限
+# (Apple 建的 PrivilegedHelperTools 是 root:wheel 1755: 粘滞位不影响检查)
+helper_dir_ok() {
   local d p
-  for d in "$usr_local/libexec" "$libexec"; do
-    if [ ! -e "$d" ] && [ ! -L "$d" ]; then /bin/mkdir -m 755 "$d" && /usr/sbin/chown root:wheel "$d" || return 1; fi
+  for d in "$helper_tools" "$helper_dir"; do
+    if [ ! -e "$d" ] && [ ! -L "$d" ]; then [ -d "${d%/*}" ] && [ ! -L "${d%/*}" ] && /bin/mkdir -m 755 "$d" && /usr/sbin/chown root:wheel "$d" || return 1; fi
   done
-  for d in "$usr_local" "$usr_local/libexec" "$libexec"; do
+  for d in "$library" "$helper_tools" "$helper_dir"; do
     [ -d "$d" ] && [ ! -L "$d" ] && [ "$(/usr/bin/stat -f %u "$d")" = "$root_owner" ] || return 1
     p=$(/usr/bin/stat -f %Sp "$d") && [ "${p:5:1}" != w ] && [ "${p:8:1}" != w ] || return 1
     /bin/ls -lde "$d" | /usr/bin/awk 'END {exit NR != 1}' || return 1        # 权限位看不到 ACL: 有任何 ACL 条目 (ls -e 多出的行, 可能让别人能往里写) 也不合格
   done
 }
-helper_remove() { /bin/rm -f "$libexec/tunrules-$uid" "$sudoers_dir/enana-tunrules-$uid"; }
+# 旧位置 ($legacy_dir) 的规则助手: 删掉, 目录空了也删 (系统代理助手还在就留着)。三级都是真目录才动它, 不顺着符号链接删到别处;
+# 删不掉也不算失败 (免密规则已经改写或删掉了, 留下的旧文件没有用)
+legacy_remove() {
+  [ -d "$legacy_dir" ] && [ ! -L "$legacy_dir" ] && [ ! -L "${legacy_dir%/*}" ] && [ ! -L "$usr_local" ] || return 0
+  /bin/rm -f "$legacy_dir/tunrules-$uid" || true
+  /bin/rmdir "$legacy_dir" 2>/dev/null || true
+}
+helper_remove() { /bin/rm -f "$helper_dir/tunrules-$uid" "$sudoers_dir/enana-tunrules-$uid"; legacy_remove; }
 
 root=''; plist=''; label=''; uid=''; agent=''; work=''; backup=''; self_dir=''; self_sha=''
 changed=0; committed=0; helper_state=0; had_root=0; had_gui=0; gui_plist=''
@@ -202,8 +213,11 @@ cleanup() {
     fi
     if [ "$helper_state" = 1 ]; then
       helper_remove
-      [ ! -e "$backup/helper" ] || /bin/mv "$backup/helper" "$libexec/tunrules-$uid"
-      [ ! -e "$backup/sudoers" ] || /bin/mv "$backup/sudoers" "$sudoers_dir/enana-tunrules-$uid"
+      [ ! -e "$backup/helper" ] || /bin/mv "$backup/helper" "$helper_dir/tunrules-$uid"
+      # 免密规则只在指向新位置时放回去: 指向旧位置的规则 (旧位置的助手已经删了) 放回去, 就是让它指向一个别人可能建得出来的文件
+      if [ -e "$backup/sudoers" ] && /usr/bin/grep -qxF "$username ALL=(root) NOPASSWD: $helper_dir/tunrules-$uid" "$backup/sudoers"; then
+        /bin/mv "$backup/sudoers" "$sudoers_dir/enana-tunrules-$uid"
+      fi
     fi
     if [ "$had_gui" = 1 ]; then
       "$launchctl_bin" asuser "$uid" "$launchctl_bin" enable "gui/$uid/$agent" || true
@@ -258,8 +272,8 @@ case $act in
     "$launchctl_bin" bootout "system/$label" 2>/dev/null || true
     "$launchctl_bin" enable "system/$label" 2>/dev/null || true
     /bin/rm -f "$plist"
-    helper_remove
-    /bin/rmdir "$libexec" 2>/dev/null || true
+    helper_remove                                             # 新位置和旧位置的规则助手, 以及免密规则
+    /bin/rmdir "$helper_dir" 2>/dev/null || true              # 空了才删 (系统代理助手、别的用户的助手还在就留着); PrivilegedHelperTools 本身不删
     if [ -d "$root" ]; then
       /usr/bin/find "$root" -mindepth 1 -maxdepth 1 ! -name bin -exec /bin/rm -rf {} +
       /bin/rm -rf "$root/bin"                                 # 正在运行的就是这个文件: 最后才删
@@ -355,16 +369,17 @@ done
 /usr/sbin/chown "$uid" "$root/sing-box.log"; /bin/chmod 600 "$root/sing-box.log"
 
 # d. 规则助手和免密规则 (提交之后, 不影响 TUN 本身): 目录链不合格或助手不能用时, 两个文件都删掉 (旧的也不留)
+#    助手装在 $helper_dir, 免密规则在同一步改写成这个路径; 装好之后删掉旧位置 ($legacy_dir) 的那一份 (旧路径就此作废)
 if [ -n "$username" ]; then
-  [ ! -e "$libexec/tunrules-$uid" ] || /bin/cp -p "$libexec/tunrules-$uid" "$backup/helper"
+  [ ! -e "$helper_dir/tunrules-$uid" ] || /bin/cp -p "$helper_dir/tunrules-$uid" "$backup/helper"
   [ ! -e "$sudoers_dir/enana-tunrules-$uid" ] || /bin/cp -p "$sudoers_dir/enana-tunrules-$uid" "$backup/sudoers"
   helper_state=1                                     # 两份备份都做好了才算: 备份失败时回滚不碰现有的助手和免密规则 (否则会删掉它们又恢复不了)
   # 目录链不合格时 helper_state=2: 两个文件删掉, 回滚时也不装回去 (装回去就是让免密规则指向别人能换掉的文件)
-  if [ -f "$work/tunrules-helper" ] && { libexec_ok || { helper_state=2; false; }; } && /bin/mkdir -p "$sudoers_dir" \
-     && printf '%s ALL=(root) NOPASSWD: %s\n' "$username" "$libexec/tunrules-$uid" > "$work/sudoers" \
-     && /usr/bin/install -m 755 -o root -g wheel "$work/tunrules-helper" "$libexec/tunrules-$uid" \
+  if [ -f "$work/tunrules-helper" ] && { helper_dir_ok || { helper_state=2; false; }; } && /bin/mkdir -p "$sudoers_dir" \
+     && printf '%s ALL=(root) NOPASSWD: %s\n' "$username" "$helper_dir/tunrules-$uid" > "$work/sudoers" \
+     && /usr/bin/install -m 755 -o root -g wheel "$work/tunrules-helper" "$helper_dir/tunrules-$uid" \
      && /usr/sbin/visudo -cf "$work/sudoers" >/dev/null 2>&1 \
-     && /usr/bin/install -m 440 -o root -g wheel "$work/sudoers" "$sudoers_dir/enana-tunrules-$uid"; then :
+     && /usr/bin/install -m 440 -o root -g wheel "$work/sudoers" "$sudoers_dir/enana-tunrules-$uid"; then legacy_remove
   else helper_remove; echo 'enana-root: note: rule helper not installed' >&2; fi
 fi
 

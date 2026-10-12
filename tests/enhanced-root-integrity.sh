@@ -8,7 +8,7 @@ HERE=$(cd "$(dirname "$0")" && pwd -P)
 W=$(mktemp -d /tmp/enana-integrity.XXXXXX); W=$(cd "$W" && pwd -P); trap 'rm -rf "$W"' EXIT
 . "$HERE/root-fixture.sh"
 rf_setup "$W"
-ME=$(id -u); fails=0; HELPER=$W/usr/local/libexec/enana/tunrules-$ME
+ME=$(id -u); fails=0; HDIR=$W/Library/PrivilegedHelperTools/com.enana.proxy; HELPER=$HDIR/tunrules-$ME
 check() { local n=$1; shift; if "$@" >/dev/null 2>&1; then echo "  ✓ $n"; else echo "  ✗ $n"; fails=$((fails + 1)); fi; }
 root_sig() { find "$ROOT" -print0 2>/dev/null | xargs -0 shasum -a 256 2>/dev/null | LC_ALL=C sort; }
 calls_of() { grep -c "^$1" "$W/calls" 2>/dev/null; }
@@ -119,16 +119,27 @@ rf_reset; rf_enana_start
 check "字节一致 (且 sudo -n -l 通过): 可信" trust_ok
 echo '# 同版本号但字节不同' >> "$HELPER"
 check "字节不同: 不可信 (而且不运行它)" trust_bad
-rf_reset; rm -rf "$W/usr"; mkdir -p "$W/usr/local" "$W/elsewhere"; ln -s "$W/elsewhere" "$W/usr/local/libexec"
+rf_reset; mkdir -p "$W/elsewhere"; ln -s "$W/elsewhere" "$W/Library/PrivilegedHelperTools"
 rf_enana_start; rc=$?
-check "libexec 是符号链接: 安装照常成功, 助手和免密规则都没有" test "$rc:$(test -e "$HELPER" && echo y || echo n):$(test -e "$W/sudoers.d/enana-tunrules-$ME" && echo y || echo n)" = "0:n:n"
+check "PrivilegedHelperTools 是符号链接: 安装照常成功, 助手和免密规则都没有, 链接另一端也没有建任何东西" test "$rc:$(test -e "$HELPER" && echo y || echo n):$(test -e "$W/sudoers.d/enana-tunrules-$ME" && echo y || echo n):$(ls -A "$W/elsewhere" | wc -l | tr -d ' ')" = "0:n:n:0"
+rf_reset; mkdir -m 755 "$W/Library/PrivilegedHelperTools"; mkdir -p "$W/elsewhere/com.enana.proxy"; ln -s "$W/elsewhere/com.enana.proxy" "$HDIR"
+rf_enana_start; rc=$?
+check "…com.enana.proxy 是符号链接: 同样不装 (不写进链接另一端)" test "$rc:$(ls -A "$W/elsewhere/com.enana.proxy" | wc -l | tr -d ' '):$(test -e "$W/sudoers.d/enana-tunrules-$ME" && echo y || echo n)" = "0:0:n"
+rm -rf "$W/elsewhere"
 rf_reset; rf_enana_start                                       # 先装好: 助手和免密规则都在
-chmod +a "group:staff allow add_file,add_subdirectory,delete_child" "$W/usr/local/libexec/enana"     # 权限位还是 755, ACL 却让 staff 组能往里写
+chmod +a "group:staff allow add_file,add_subdirectory,delete_child" "$HDIR"     # 权限位还是 755, ACL 却让 staff 组能往里写
 rf_enana_start; rc=$?
-chmod -N "$W/usr/local/libexec/enana"
-check "libexec 带 ACL (权限位看不出来): 安装照常成功, 已有的助手和免密规则都删掉" test "$rc:$(test -e "$HELPER" && echo y || echo n):$(test -e "$W/sudoers.d/enana-tunrules-$ME" && echo y || echo n)" = "0:n:n"
+chmod -N "$HDIR"
+check "com.enana.proxy 带 ACL (权限位看不出来): 安装照常成功, 已有的助手和免密规则都删掉" test "$rc:$(test -e "$HELPER" && echo y || echo n):$(test -e "$W/sudoers.d/enana-tunrules-$ME" && echo y || echo n)" = "0:n:n"
 rf_reset; rf_enana_start
-check "root 建的目录是 755 (umask 077 之下)" test "$(stat -f %Lp "$W/usr/local/libexec/enana")" = 755
+check "root 建的目录是 755 (umask 077 之下)" test "$(stat -f %Lp "$HDIR"):$(stat -f %Lp "$W/Library/PrivilegedHelperTools")" = "755:755"
+rf_reset; chmod g+w "$W/Library"; rf_enana_start; rc=$?; chmod g-w "$W/Library"
+check "最上一级 (/Library) 组可写: 安装照常成功, 助手和免密规则都没有" test "$rc:$(test -e "$HELPER" && echo y || echo n):$(test -e "$W/sudoers.d/enana-tunrules-$ME" && echo y || echo n)" = "0:n:n"
+rf_reset; rmdir "$W/Library"; rf_enana_start; rc=$?
+check "/Library 不在: root 不建它 (也不建下面两级), 安装照常成功, 没有助手" test "$rc:$(test -e "$W/Library" && echo y || echo n):$(test -e "$W/sudoers.d/enana-tunrules-$ME" && echo y || echo n)" = "0:n:n"
+rf_reset; mkdir -m 1755 "$W/Library/PrivilegedHelperTools"; rf_enana_start; rc=$?
+check "Apple 建的 PrivilegedHelperTools (root:wheel 1755, 带粘滞位): 照常装上助手, 不改它的权限" test "$rc:$(test -f "$HELPER" && echo y || echo n):$(stat -f %Lp "$W/Library/PrivilegedHelperTools")" = "0:y:1755"
+check "…enana 一侧也信任这个助手" trust_ok
 printf 'package Canary; open my $f, ">>", "$ENV{RF_W}/canary.txt"; print $f "ran\\n"; close $f; 1;\n' > "$W/Canary.pm"
 rf_reset
 export RF_HOOK='export PERL5OPT="-I$RF_W -MCanary"'         # 只在管理员命令里设置 (假 sudo 的环境); root 的 perl 必须看不到它

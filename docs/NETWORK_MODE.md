@@ -116,11 +116,12 @@ TUN 的核心是 root 守护进程: 改核心、配置、规则库 (`.srs`)、�
 
 **默认模式不会走错**: `default_mode` 只是核心「没有记住模式」时的起始模式。运行时的模式通过控制接口 (`PATCH /configs`) 推送, sing-box 把它存在 `cache.db` 里并在重启时恢复; enana 自己做的每一次重启 (应用配置、重启、升级核心、启动) 之后都会再 `proxy_sync_mode`。剩下的缺口是「推送时核心没在运行 + 缓存里也没有」, 所以完整安装会记下写进快照的模式 (`$H/.enhanced-mode`), 之后每次无变化的 `apply_config` 发现设置里的模式和它不一致就补同步一次, 核心确认之后才记下。
 
-**root 助手 (`/usr/local/libexec/enana/tunrules-<uid>`, 版本 3)** 现在有两个动作, 都只作用于这个用户自己的守护进程:
+**root 助手 (`/Library/PrivilegedHelperTools/com.enana.proxy/tunrules-<uid>`, 版本 3; 2.3.23 及更早版本在 `/usr/local/libexec/enana/`)** 现在有两个动作, 都只作用于这个用户自己的守护进程:
 
 - `sync`: 校验后写入 `rules/*/ovr-*.json` (应用 / 网站策略), 核心热加载。
 - `restart`: 只执行 `launchctl kickstart -k system/com.enana.proxy.tun.<uid>`。标签和 `launchctl` 路径是安装时由 root 脚本写死进助手的 (不是调用者给的), 助手不读任何参数 / 输入 / 环境变量; 有多余参数、标签不合规都会拒绝。威胁模型: 同一用户下的任何进程最多能让自己的 root 守护进程重启一次 (流量中断几秒), 得不到 root 权限, 也改不了任何文件; 助手文件归 root、别人不可写、不是符号链接、sudoers 规则经 `visudo -cf` 校验, 这些检查一条没放松。
-- 助手的可信判断只看字节 (`os_helper_trusted`): 安装到 root 目录的助手必须和 enana 此刻渲染出来的一模一样 (`enhanced_helper_render`, 与 root 脚本里的 `helper_render` 是同一段函数), 不再为了查版本而运行它。字节对不上、目录链 (`/usr/local` 到助手) 有组 / 其他人可写, 或者 sudoers 规则不在, 都判为不可用; 下一次完整安装 (一次管理员授权) 换上新的。
+- 助手的可信判断只看字节 (`os_helper_trusted`): 安装到 root 目录的助手必须和 enana 此刻渲染出来的一模一样 (`enhanced_helper_render`, 与 root 脚本里的 `helper_render` 是同一段函数), 不再为了查版本而运行它。字节对不上、目录链 (助手所在的目录和上面两级: `…/com.enana.proxy`、`/Library/PrivilegedHelperTools`、`/Library`) 有组 / 其他人可写或者有 ACL, 或者 sudoers 规则不在, 都判为不可用; 下一次完整安装 (一次管理员授权) 换上新的。
+- 位置 (2.3.23 之后): 助手从 `/usr/local/libexec/enana/` 搬到 `/Library/PrivilegedHelperTools/com.enana.proxy/` (只有 root 能写, 包管理器从来不碰它; 老的 Homebrew 会把 `/usr/local` 改成用户可写, 那样的 Mac 上以前根本装不上助手, 早先装好的免密规则还指向一个用户能写的目录)。完整安装 (root 脚本的 d 步) 把助手装到新位置, 免密规则 `/etc/sudoers.d/enana-tunrules-<uid>` (文件名不变) 在同一步改写成新路径, 然后删掉旧位置的那一份 (旧目录是真目录才删; 空了连目录一起删)。缺的 `PrivilegedHelperTools` 和 `com.enana.proxy` 由 root 建成 `755` root:wheel, `/Library` 从来不建。还没完整安装过的 Mac 上, 旧位置的助手只要通过同样严格的检查 (旧位置的目录链 `/usr/local`、`/usr/local/libexec`、`/usr/local/libexec/enana`) 就照常用, `sync` / `restart` / `cleanup` 的 `sudo -n` 调用的都是判为可信的那一份 (先看新位置)。迁移的那次安装如果失败回滚, 指向旧位置的规则不放回去 (旧位置的助手已经删了)。删除 TUN 时两个位置的助手都删, 空了的 `com.enana.proxy` 也删, `PrivilegedHelperTools` 本身不删。
 - 停止 / 删除 TUN 只运行安装后留在 root 目录里的副本 `ROOT/bin/enhanced-root.sh` (root 所有、0700); 旧版本没有这个副本时, 才用一次性的 inband 形式 (脚本随命令带进去)。
 - 管理员命令全部是一行、以 `/usr/bin/env -i` 清空环境运行, 所有命令都用绝对路径; 每个传给 root 的数据文件 (脚本、配置、快照、助手模板) 都由 enana 只读一次、算摘要, root 按摘要核对后才写入。
 

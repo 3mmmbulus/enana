@@ -949,7 +949,7 @@ macOS 没有允许 enana 弹出授权窗口。请在「系统设置 → 隐私�
 没有经过验证的兼容版本可升级, 保持 sing-box *	No verified compatible version is available to upgrade to; keeping sing-box *
 已经是兼容的最新版本 sing-box *	Already on the latest compatible version, sing-box *
 Windows 更新失败, 已保留当前版本 (详情见 api.log)	The Windows update failed; the current version was kept (see api.log for details)
-没能删除系统代理助手, 可以手动删除: sudo /bin/rm -f * * *	Could not remove the system proxy helper; you can delete it manually: sudo /bin/rm -f * * *
+没能删除系统代理助手, 可以手动删除: sudo /bin/rm -f *	Could not remove the system proxy helper; you can delete it manually: sudo /bin/rm -f *
 系统代理的恢复记录无效 (已挪到 proxy-state.json.invalid): 只清除 enana 自己的系统代理设置, 原来的设置无法还原	The system proxy restore record is invalid (moved to proxy-state.json.invalid): only enana's own system proxy settings are cleared; the previous settings cannot be restored
 没有登录, 或者不是 macOS	Not signed in, or not macOS
 先登录账号 (enana 里按 1 打开仪表盘)	Sign in first (press 1 in enana to open the dashboard)

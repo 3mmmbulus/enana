@@ -88,9 +88,12 @@ enhanced_ovr_fingerprint() { # the app/site policy rule sets (written by ovr_syn
 # A helper installed by an older enana reports 1, 2 or 3, so enhanced_helper_ok rejects it and the next full install (one administrator authorisation, the same one
 # that already follows any upgrade of enhanced.sh / enhanced-root.sh) replaces it. Nothing silently calls a helper that lacks the action or the layout.
 TUNRULES_HELPER_VERSION=4
-# 读 (可信判断) 用的路径可以被测试换成沙箱; 以 root 运行的一律用 enhanced_helper_root 的写死路径 (不经过 test_env: 环境变量不能决定 root 运行什么)
-enhanced_helper_path() { enhanced_paths; printf '%s/usr/local/libexec/enana/tunrules-%s' "$(test_env ENANA_ROOT_PREFIX)" "$TUN_UID"; }
-enhanced_helper_root() { enhanced_paths; printf '/usr/local/libexec/enana/tunrules-%s' "$TUN_UID"; }
+# 读 (可信判断) 用的路径可以被测试换成沙箱; 以 root 运行的一律用 enhanced_helper_root 给出的写死路径 (不经过 test_env: 环境变量不能决定 root 运行什么)
+# 助手装在 /Library/PrivilegedHelperTools/com.enana.proxy (root 安装脚本的 d 步)。2.3.23 及更早版本装在 /usr/local/libexec/enana: 那一份通过同样严格的检查就照常用,
+# 下一次完整安装把它换到新位置 (见 os_helper_pick)
+enhanced_helper_path() { enhanced_paths; printf '%s/Library/PrivilegedHelperTools/com.enana.proxy/tunrules-%s' "$(test_env ENANA_ROOT_PREFIX)" "$TUN_UID"; }
+# 可信的那一份助手的 root 路径 (先看新位置, 再看旧位置): sudo -n 只调用它 (免密规则写的就是它); 两处都不可信: 不输出, 返回非 0
+enhanced_helper_root() { enhanced_paths; os_helper_pick "tunrules-$TUN_UID" "$(enhanced_helper_expected)"; }
 # 助手的可信判断只看字节 (不再运行它查版本): 安装到 root 目录的助手必须和 enana 此刻渲染出来的一模一样 (见 os_helper_trusted)
 enhanced_helper_render() { # <根目录> <标签> <launchctl 路径> < 模板 -> 渲染结果: 取用 lib/enhanced-root.sh 里 helper_render 的原文 (同一段函数, 两边字节一致)
   local f; f=$(sed -n '/^helper_render() {/,/^}/p' "$LIB/enhanced-root.sh")
@@ -98,15 +101,14 @@ enhanced_helper_render() { # <根目录> <标签> <launchctl 路径> < 模板 ->
   helper_render "$1" 0 "$2" "$3" "$TUNRULES_HELPER_VERSION"
 }
 enhanced_helper_expected() { enhanced_paths; enhanced_helper_render "$TUN_ROOT" "$TUN_LABEL" "$(test_env ENANA_TUN_LAUNCHCTL /bin/launchctl)" < "$LIB/tunrules-helper.pl" | shasum -a 256 | awk '{print $1}'; }
-enhanced_helper_ok() { os_helper_trusted "$(enhanced_helper_path)" "$(enhanced_helper_expected)"; }
+enhanced_helper_ok() { enhanced_helper_root >/dev/null; }
 enhanced_ovr_bundle() { # {"ovr-pin.json": {...}, ...} from $H/rules/*/ovr-*.json (the helper validates it again, strictly)
   perl -MJSON::PP -MFile::Glob=:bsd_glob -e '
     my %o; for my $f (bsd_glob("$ARGV[0]/rules/*/ovr-*.json")) { my ($n) = $f =~ m{([^/]+)$}; open my $fh, "<", $f or next; local $/; my $d = eval { JSON::PP->new->utf8->decode(scalar <$fh>) }; $o{$n} = $d if ref $d eq "HASH"; }
     print JSON::PP->new->utf8->canonical->encode(\%o);' "$H"
 }
 enhanced_sync_ovr() { # 0 = synced (the running root core hot-reloads the files); non-zero = no/untrusted helper or rejected data -> caller does the full install
-  local h; h=$(enhanced_helper_root)
-  enhanced_helper_ok || return 1
+  local h; h=$(enhanced_helper_root) || return 1
   enhanced_ovr_bundle | sudo -n "$h" sync >/dev/null 2>"$H/enhanced-sync.log" || return 1
   enhanced_ovr_fingerprint > "$H/.enhanced-ovr-fingerprint"
 }
@@ -115,18 +117,19 @@ enhanced_sync_ovr() { # 0 = synced (the running root core hot-reloads the files)
 # would copy the very same files again and ask for a password for nothing. Returns non-zero when it cannot be used or failed; the caller then does
 # the full, authorised install. ENHANCED_FAST_WHY says why (for the operation log).
 enhanced_restart_fast() {
+  local h
   ENHANCED_FAST_WHY=''
   enhanced_paths
   enhanced_configured || { ENHANCED_FAST_WHY=not-tun; return 1; }
   enhanced_loaded || { ENHANCED_FAST_WHY=not-loaded; return 1; }
   [ "$(enhanced_fingerprint)" = "$(cat "$H/.enhanced-fingerprint" 2>/dev/null)" ] || { ENHANCED_FAST_WHY=changed; return 1; }
-  enhanced_helper_ok || { ENHANCED_FAST_WHY=no-helper; return 1; }
+  h=$(enhanced_helper_root) || { ENHANCED_FAST_WHY=no-helper; return 1; }
   # A policy edit that is still pending must reach the root snapshot before the restart loads it.
   if [ "$(enhanced_ovr_fingerprint)" != "$(cat "$H/.enhanced-ovr-fingerprint" 2>/dev/null)" ]; then enhanced_sync_ovr || { ENHANCED_FAST_WHY=sync-failed; return 1; }; fi
-  sudo -n "$(enhanced_helper_root)" restart >/dev/null 2>"$H/enhanced-restart.log" || { ENHANCED_FAST_WHY=rejected; return 1; }
+  sudo -n "$h" restart >/dev/null 2>"$H/enhanced-restart.log" || { ENHANCED_FAST_WHY=rejected; return 1; }
 }
-# 助手版本低于 4 (没有 cleanup) 时 enhanced_helper_ok 为假, 什么也不做
-tun_residual_clean() { enhanced_helper_ok || return 0; sudo -n "$(enhanced_helper_root)" cleanup >"$H/enhanced-cleanup.log" 2>&1 || true; }
+# 助手版本低于 4 (没有 cleanup) 时没有可信的助手, 什么也不做
+tun_residual_clean() { local h; h=$(enhanced_helper_root) || return 0; sudo -n "$h" cleanup >"$H/enhanced-cleanup.log" 2>&1 || true; }
 enhanced_stage_config() {
   # Explicitly open the config: decode(<>) evaluates the diamond in list
   # context and consumes the home/root arguments as additional filenames.
