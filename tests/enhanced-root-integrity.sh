@@ -110,7 +110,9 @@ check "PERL5OPT 的替身没有被 root 的 perl 运行 (root 命令清空环境
 check "管理员命令以 /usr/bin/env -i 开头 (清空环境)" grep -q "/bin/sh -c /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin " "$W/sudo.log"
 no_lib_argv() { ! grep -q "$LIBT/[^ ']*[.]sh" "$W/sudo.log"; }
 check "管理员命令的 argv 里没有 lib 目录里的 .sh 路径 (sudo -n 不会收到它们)" no_lib_argv
-bare_names() { grep -nE '(^|[;&|(]) *(chown|install|mkdir|rm|cp|mv|chmod|stat|find|awk|sed|grep|head|tr|dirname|id|touch|base64|shasum|perl|route|ifconfig|sleep|cat|sort|mktemp|visudo|tee|launchctl|env|osascript) ' "$RF_REPO/lib/enhanced-root.sh" | grep -v '\$_' | grep -qv '^[0-9]*:[[:space:]]*#'; }
+# 只查 shell 代码: 内嵌的 Perl 程序 (*_PL='…', 交给 /usr/bin/perl -e 运行) 换成空行 (行号不变), 里面的 sort / grep 是 Perl 的内建函数, 不是命令
+root_shell() { awk '/^[A-Z_]+_PL=\047/ {p=1} {print (p ? "" : $0)} p && /\047$/ {p=0}' "$RF_REPO/lib/enhanced-root.sh"; }
+bare_names() { root_shell | grep -nE '(^|[;&|(]) *(chown|install|mkdir|rm|cp|mv|chmod|stat|find|awk|sed|grep|head|tr|dirname|id|touch|base64|shasum|perl|route|ifconfig|sleep|cat|sort|mktemp|visudo|tee|launchctl|env|osascript) ' | grep -qv '^[0-9]*:[[:space:]]*#'; }
 bare_free() { ! bare_names; }
 check "root 脚本里没有裸的命令名 (每个命令都是绝对路径)" bare_free
 

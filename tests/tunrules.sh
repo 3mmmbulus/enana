@@ -196,13 +196,14 @@ os_service_restart() { RESTARTS=$((RESTARTS + 1)); return 0; }
 os_service_loaded() { return 0; }; os_service_pid() { echo 1; }; wait_port() { return 0; }; proxy_sync_mode() { :; }
 enhanced_ready() { return 0; }; enhanced_loaded() { return 0; }
 # 助手: 用测试副本安装到沙箱的「/usr/local/libexec」, sudoers 规则写进沙箱的「/etc/sudoers.d」
+# 助手 = enana 自己渲染出来的字节 (enhanced_helper_render, 和 root 安装时用的是同一段函数); 测试不是 root, 所以只把 uid 换成当前用户
+helper_bytes() { enhanced_helper_render "$W/snap" "$LBL" "$W/bin/mock-launchctl" < "$REPO/lib/tunrules-helper.pl" | sed "s/^my \$ROOT_UID = 0;/my \$ROOT_UID = $ME;/"; }
 install_helper() {
   local h; h=$(enhanced_helper_path); mkdir -p "$(dirname "$h")" "$FAKE_SUDOERS_DIR"
-  # 助手 = enana 自己渲染出来的字节 (enhanced_helper_render, 和 root 安装时用的是同一段函数); 测试不是 root, 所以只把 uid 换成当前用户
-  enhanced_helper_render "$W/snap" "$LBL" "$W/bin/mock-launchctl" < "$REPO/lib/tunrules-helper.pl" | sed "s/^my \$ROOT_UID = 0;/my \$ROOT_UID = $ME;/" > "$h"
+  helper_bytes > "$h"
   chmod 755 "$h"
   printf '%s ALL=(root) NOPASSWD: %s\n' "$(id -un)" "$h" > "$FAKE_SUDOERS_DIR/enana-tunrules-$ME"
-  enhanced_helper_expected() { shasum -a 256 < "$(enhanced_helper_path)" | awk '{print $1}'; }      # 测试的期望值 = 刚装上的这一份字节 (信任判断只看字节)
+  enhanced_helper_expected() { helper_bytes | shasum -a 256 | awk '{print $1}'; }      # 测试的期望值 = 此刻渲染出来的字节 (和生产一样不看装上的文件: 换成旧版本的助手就对不上)
 }
 state() { # 把「现状」记成基线: 配置, 再让真实的 enhanced_record_install 记下完整安装之后留下的东西 (核心指纹 / 策略指纹 / 模式)
   cp "$H/config.json.new" "$H/config.json" 2>/dev/null || printf '{"fixed":"config"}' > "$H/config.json"
@@ -398,7 +399,7 @@ echo "== T7. 停止已经停掉的守护进程不要管理员授权 (stop 之后
 (
   eval "$(sed -n -e '/^enhanced_idle()/,/^}/p' -e '/^enhanced_stop()/,/^}/p' "$LIB/enhanced.sh")"        # 真实的函数 (前面没有换成假的, 这里只换掉特权调用和 launchd)
   ADMIN=0; enhanced_admin() { ADMIN=$((ADMIN + 1)); return 0; }
-  enhanced_paths() { TUN_UID=501; TUN_LABEL=com.enana.proxy.tun.501; TUN_PLIST="$W/stop.plist"; }; : > "$W/stop.plist"
+  enhanced_paths() { TUN_UID=501; TUN_LABEL=com.enana.proxy.tun.501; TUN_ROOT="$W/stop-root"; TUN_PLIST="$W/stop.plist"; }; : > "$W/stop.plist"
   LOADED=1; enhanced_loaded() { [ "$LOADED" = 1 ]; }
   launchctl() { return 1; }                                   # launchd 查不到 print-disabled: 只能靠本机记录
   rm -f "$H/.enhanced-stopped"
@@ -409,7 +410,7 @@ echo "== T7. 停止已经停掉的守护进程不要管理员授权 (stop 之后
   enhanced_stop; eq "launchd 说这个任务已禁用 (stop 做的就是这个): 没有任何记录也不要授权" "$ADMIN" "0"
   launchctl() { [ "$1" = print-disabled ] && printf '\t"com.enana.proxy.tun.501" => enabled\n'; }
   enhanced_stop; eq "没加载但仍是启用状态 (被手动 bootout 过): 下次开机会回来, 所以仍要 stop (顺带禁用)" "$ADMIN" "1"
-)
+) || tfail "T7 没有跑完 (子 shell 中途退出: 后面的断言都没有运行)"
 
 echo "== T8. 内容没变的订阅刷新不改动 servers.jsonl (否则文件顺序变 → 配置变 → 核心重启, TUN 下还要管理员授权)"
 (

@@ -95,7 +95,7 @@ echo 'PASS: installer preserves ports owned by the root TUN service'
 (
   SB=${SINGBOX:-$(type -P true)}
   cp "$W/tun.json" "$H/config.json"
-  enhanced_paths() { TUN_UID=501; TUN_ROOT="$W/staged-root"; mkdir -p "$TUN_ROOT"; }
+  enhanced_paths() { TUN_UID=501; TUN_LABEL=com.enana.proxy.tun.501; TUN_ROOT="$W/staged-root"; TUN_PLIST="$W/staged.plist"; mkdir -p "$TUN_ROOT"; }
   enhanced_supported() { return 0; }
   clash() { printf '{"proxies":{}}'; }
   logs_rotate() { :; }
