@@ -173,6 +173,7 @@ libexec_ok() {
   for d in "$usr_local" "$usr_local/libexec" "$libexec"; do
     [ -d "$d" ] && [ ! -L "$d" ] && [ "$(/usr/bin/stat -f %u "$d")" = "$root_owner" ] || return 1
     p=$(/usr/bin/stat -f %Sp "$d") && [ "${p:5:1}" != w ] && [ "${p:8:1}" != w ] || return 1
+    /bin/ls -lde "$d" | /usr/bin/awk 'END {exit NR != 1}' || return 1        # 权限位看不到 ACL: 有任何 ACL 条目 (ls -e 多出的行, 可能让别人能往里写) 也不合格
   done
 }
 helper_remove() { /bin/rm -f "$libexec/tunrules-$uid" "$sudoers_dir/enana-tunrules-$uid"; }

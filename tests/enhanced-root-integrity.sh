@@ -122,6 +122,11 @@ check "字节不同: 不可信 (而且不运行它)" trust_bad
 rf_reset; rm -rf "$W/usr"; mkdir -p "$W/usr/local" "$W/elsewhere"; ln -s "$W/elsewhere" "$W/usr/local/libexec"
 rf_enana_start; rc=$?
 check "libexec 是符号链接: 安装照常成功, 助手和免密规则都没有" test "$rc:$(test -e "$HELPER" && echo y || echo n):$(test -e "$W/sudoers.d/enana-tunrules-$ME" && echo y || echo n)" = "0:n:n"
+rf_reset; rf_enana_start                                       # 先装好: 助手和免密规则都在
+chmod +a "group:staff allow add_file,add_subdirectory,delete_child" "$W/usr/local/libexec/enana"     # 权限位还是 755, ACL 却让 staff 组能往里写
+rf_enana_start; rc=$?
+chmod -N "$W/usr/local/libexec/enana"
+check "libexec 带 ACL (权限位看不出来): 安装照常成功, 已有的助手和免密规则都删掉" test "$rc:$(test -e "$HELPER" && echo y || echo n):$(test -e "$W/sudoers.d/enana-tunrules-$ME" && echo y || echo n)" = "0:n:n"
 rf_reset; rf_enana_start
 check "root 建的目录是 755 (umask 077 之下)" test "$(stat -f %Lp "$W/usr/local/libexec/enana")" = 755
 printf 'package Canary; open my $f, ">>", "$ENV{RF_W}/canary.txt"; print $f "ran\\n"; close $f; 1;\n' > "$W/Canary.pm"
