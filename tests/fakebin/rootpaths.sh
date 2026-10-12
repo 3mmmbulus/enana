@@ -3,7 +3,7 @@
 #   /usr/bin/install、/usr/bin/osascript、/usr/sbin/networksetup、/bin/launchctl -> tests/fakebin 里的假命令
 #   /usr/sbin/visudo -> $FAKE_VISUDO (没设就是真的; S6e 用它模拟校验失败)
 #   /usr/local、/etc/sudoers.d -> $ENANA_ROOT_PREFIX 之下 (沙箱)
-#   OWN='0' (根目录的属主检查) -> 当前用户 (沙箱里的目录是当前用户建的)
+#   OWN=0; (根目录的属主检查, 生产里是不加引号的数字) -> 当前用户 (沙箱里的目录是当前用户建的)
 #   /usr/bin/env -i PATH=... (清空环境的 root 命令) -> 同时带上沙箱需要的变量 (否则假命令看不到 FAKE_STATE / 沙箱前缀 / 管理员状态)
 # 已经在沙箱里的路径 (例如 os_helper_trusted 传给 sudo -n -l 的) 原样保留, 不再加一层前缀。
 # 沙箱里的普通文件 (以 root 运行的助手) 执行前由 rootpaths_copy_exec 复制一份、改写内容再运行, 这样助手里写死的 networksetup 也是假的。
@@ -12,12 +12,12 @@ rootpaths_rewrite() { # 标准输入 -> 标准输出: 文本改写
   fb=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
   if [ -n "$pfx" ]; then
     sed -e "s|/usr/bin/install|$fb/install|g" -e "s|/usr/bin/osascript|$fb/osascript|g" -e "s|/usr/sbin/networksetup|$fb/networksetup|g" \
-      -e "s|/bin/launchctl|$fb/launchctl|g" -e "s|OWN='0'|OWN='$(id -u)'|g" -e "s|/usr/local|$pfx/usr/local|g" -e "s|/etc/sudoers.d|$pfx/etc/sudoers.d|g" \
+      -e "s|/bin/launchctl|$fb/launchctl|g" -e "s|OWN=0;|OWN=$(id -u);|g" -e "s|/usr/local|$pfx/usr/local|g" -e "s|/etc/sudoers.d|$pfx/etc/sudoers.d|g" \
       -e "s|/usr/sbin/visudo|${FAKE_VISUDO:-/usr/sbin/visudo}|g" \
       -e "s|/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin|& ENANA_ROOT_PREFIX=$pfx FAKE_STATE=${FAKE_STATE:-} FAKE_ADMIN=1|g"
   else
     sed -e "s|/usr/bin/install|$fb/install|g" -e "s|/usr/bin/osascript|$fb/osascript|g" -e "s|/usr/sbin/networksetup|$fb/networksetup|g" \
-      -e "s|/bin/launchctl|$fb/launchctl|g" -e "s|OWN='0'|OWN='$(id -u)'|g"
+      -e "s|/bin/launchctl|$fb/launchctl|g" -e "s|OWN=0;|OWN=$(id -u);|g"
   fi
 }
 rootpaths_arg() { # 一个参数 -> 改写后的参数 (已经在沙箱里的路径原样保留, 否则会变成 沙箱/沙箱/...)

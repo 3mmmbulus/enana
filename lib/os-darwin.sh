@@ -264,8 +264,9 @@ os_sysproxy_helper_install_cmds() { # 以 root 身份执行的命令串 (末尾�
 t=$(/usr/bin/mktemp -d) && printf %s "$B64" > "$t/b64" && /usr/bin/base64 -D < "$t/b64" > "$t/h" && [ "$(/usr/bin/shasum -a 256 "$t/h" | /usr/bin/awk '{print $1}')" = "$SHA" ] && /bin/bash -n "$t/h" && { ( for x in /usr/local/libexec "$D"; do [ -e "$x" ] || [ -L "$x" ] || /usr/bin/install -d -m 755 -o root -g wheel "$x" || exit 1; done; for x in /usr/local /usr/local/libexec "$D"; do [ -d "$x" ] && [ ! -L "$x" ] && [ "$(/usr/bin/stat -f %u "$x")" = "$OWN" ] && p=$(/usr/bin/stat -f %Sp "$x") && [ "${p:5:1}" != w ] && [ "${p:8:1}" != w ] || exit 1; done ) && /bin/rm -f "$H" "$S" && /usr/bin/install -m 755 -o root -g wheel "$t/h" "$H" && /usr/bin/install -d -m 755 -o root -g wheel "$SD" && printf '%s ALL=(root) NOPASSWD: %s\n' "$U" "$H" > "$t/s" && /usr/sbin/visudo -cf "$t/s" >/dev/null && /usr/bin/install -m 440 -o root -g wheel "$t/s" "$S"; } >/dev/null 2>&1; /bin/rm -rf "$t"
 BODY
   )
+  # OWN 是数字 0, 故意不加引号: 对话框那层还会再套一层 enhanced_quote, 带引号的形式在那里对不上测试的属主改写 (tests/fakebin/rootpaths.sh)
   printf 'H=%s S=%s SD=%s D=%s U=%s SHA=%s B64=%s OWN=%s; %s; ' "$(enhanced_quote "$h")" "$(enhanced_quote "$s")" "$(enhanced_quote "$sd")" "$(enhanced_quote "$d")" \
-    "$(enhanced_quote "$u")" "$(enhanced_quote "$sha")" "$(enhanced_quote "$b64")" "$(enhanced_quote "$own")" "$body"
+    "$(enhanced_quote "$u")" "$(enhanced_quote "$sha")" "$(enhanced_quote "$b64")" "$own" "$body"
 }
 os_sysproxy_helper_remove() { # 卸载: 删掉助手和免密规则 (需要管理员授权; 调用前已经 sudo -v 过)。拒绝授权不阻止卸载, 只是提示手动删除
   local h s hr sr; h=$(os_sysproxy_helper_path); s=$(os_sysproxy_sudoers_path); hr=$(os_sysproxy_helper_root); sr=$(os_sysproxy_sudoers_root)
