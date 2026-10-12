@@ -22,7 +22,12 @@ case ${3:-} in
   */proxy-state.js|*/proxy-state-[0-9]*.js)      # lib 里的 / root 临时目录里 inband 的那份 / libexec 里的 root 副本 (proxy-state-<uid>.js)
     case ${4:-} in
       snapshot) printf '{"schema":1,"services":{}}\n' ;;
-      check) [ ! -f "$FAKE_STATE/sysproxy-on" ] && echo clean || echo changed ;;
+      check)
+        # 和真的一样: 收据文件存在但不是 snapshot 那种 JSON 时失败 (卸载要能把它挪开, 不带收据接着做)
+        if [ "$#" -ge 6 ] && [ -f "$6" ] && ! /usr/bin/perl -MJSON::PP -e 'open(my $f, "<", $ARGV[0]) or exit 1; local $/; my $d = eval { JSON::PP->new->decode(scalar <$f>) }; exit((ref $d eq "HASH" && defined $d->{schema} && $d->{schema} eq "1" && ref $d->{services} eq "HASH") ? 0 : 1)' "$6"; then
+          echo "$3: execution error: Error: Invalid proxy receipt (-2700)" >&2; exit 1
+        fi
+        [ ! -f "$FAKE_STATE/sysproxy-on" ] && echo clean || echo changed ;;
       restore)
         # 记下运行的是哪一份脚本 (字节的 SHA-256) 和有没有收据参数, 然后照旧; 收据不是 snapshot 那种 JSON 时像真的一样失败, 什么都不改
         printf 'proxy-state restore js=%s receipt=%s\n' "$(/usr/bin/shasum -a 256 < "$3" | /usr/bin/awk '{print $1}')" "$([ "$#" -ge 6 ] && echo yes || echo no)" >> "$FAKE_STATE/calls.log"

@@ -384,7 +384,17 @@ BODY
 os_sysproxy_uninstall() {
   # Restore proxy fields/bypass lists, not just Enable=off with localhost still
   # configured. Never erase foreign endpoints installed after enana.
-  local status; status=$(osascript -l JavaScript "$LIB/proxy-state.js" check "$PORT" "$H/proxy-state.json") || return 1
+  local status err
+  err=$(mktemp) || return 1
+  if ! status=$(osascript -l JavaScript "$LIB/proxy-state.js" check "$PORT" "$H/proxy-state.json" 2>"$err"); then
+    # 恢复记录 (收据) 不合格 (写坏了 / 被改过 / 别的工具存了奇怪的值): 不让卸载停在这里。挪到一边, 只清除 enana 自己写的那几项 (原来的设置还原不了)
+    if grep -q 'Invalid proxy receipt' "$err" && [ -f "$H/proxy-state.json" ]; then
+      mv -f "$H/proxy-state.json" "$H/proxy-state.json.invalid"
+      warn "系统代理的恢复记录无效 (已挪到 proxy-state.json.invalid): 只清除 enana 自己的系统代理设置, 原来的设置无法还原"
+      status=$(osascript -l JavaScript "$LIB/proxy-state.js" check "$PORT" 2>"$err") || { cat "$err" >&2; rm -f "$err"; return 1; }
+    else cat "$err" >&2; rm -f "$err"; return 1; fi
+  fi
+  rm -f "$err"
   if [ "$status" = changed ]; then
     sudo -v || return 1
     os_sysproxy_restore_root || return 1

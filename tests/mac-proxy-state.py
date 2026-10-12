@@ -122,7 +122,7 @@ class ProxyReceipt(unittest.TestCase):
         good = {'HTTPProxy': 'proxy.example.test', 'HTTPPort': 8080, 'HTTPEnable': 1, 'ExceptionsList': ['*.example.test']}
         self.receipt.write_text(json.dumps({'schema': 1, 'services': {'wifi': good}}))
         self.assertEqual(self.run_bridge('check'), 'changed')       # the base receipt is accepted: each rejection below is the one bad field
-        for bad in ({'HTTPProxy': {'nested': 'object'}}, {'HTTPPort': 70000}, {'HTTPPort': '8080'}, {'SOCKSPort': -1},
+        for bad in ({'HTTPProxy': {'nested': 'object'}}, {'HTTPProxy': ['a', 'list']}, {'HTTPPort': 70000}, {'HTTPPort': '70000'}, {'HTTPPort': '80a'}, {'SOCKSPort': -1},
                     {'HTTPEnable': 2}, {'HTTPSProxyAuthenticated': 'yes'}, {'SOCKSProxy': 'x' * 256}, {'HTTPUser': 'line\nbreak'},
                     {'ExceptionsList': [1]}, {'ExceptionsList': '*.example.test'}, {'ExceptionsList': ['*.example.test'] * 1025}):
             with self.subTest(bad=bad):
@@ -130,6 +130,16 @@ class ProxyReceipt(unittest.TestCase):
         for document in ([], {'schema': 1, 'services': []}, {'schema': 1, 'services': {'wifi': []}}, {'schema': 1, 'services': {'wifi': None}}):
             with self.subTest(document=document):
                 self.assert_rejected(json.dumps(document).encode())
+
+    def test_digit_strings_from_other_tools_are_restored_as_they_were(self):
+        # Some tools store a port or a flag as a digit string. Refusing such a receipt would stop uninstall, so it is accepted and written back unchanged.
+        self.write(self.installed())
+        original = {'HTTPProxy': 'proxy.example.test', 'HTTPPort': '8080', 'HTTPEnable': '1'}
+        self.receipt.write_text(json.dumps({'schema': 1, 'services': {'wifi': original}}))
+        self.assertEqual(self.run_bridge('check'), 'changed')
+        self.run_bridge('restore')
+        got = self.restored()
+        self.assertEqual({key: got.get(key) for key in original}, original)
 
     def test_snapshot_restore_round_trip_with_realistic_values(self):
         # Everything enana's own snapshot captures must still be accepted by the validator.

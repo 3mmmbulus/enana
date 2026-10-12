@@ -329,6 +329,12 @@ os_sysproxy_apply on </dev/null >/dev/null 2>&1; printf '%s\n' "$RECEIPT" > "$H/
 eq "完整卸载 (os_sysproxy_uninstall): 成功, 系统代理已恢复" "$rc:$(os_sysproxy_mine && echo mine || echo clean)" "0:clean"
 eq "…恢复用的是 root 副本 (一次, 没有 inband)" "$(grep -c "^sudo /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash -p -c C='" "$CALLS"):$(grep -c 'bash -p -c JB=' "$CALLS"):$(restores)" "1:0:1"
 eq "…助手、免密规则、副本都删掉了, 目录也不在了" "$(sp_files):$([ -d "$DIR" ] && echo dir || echo nodir)" "none:none:none:nodir"
+reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
+os_sysproxy_apply on </dev/null >/dev/null 2>&1; rm -f "$H/proxy-state.json.invalid"; printf '{broken' > "$H/proxy-state.json"
+: > "$CALLS"; os_sysproxy_uninstall >/dev/null 2>&1; rc=$?
+eq "恢复记录坏了: 卸载不停下, 不带收据恢复 (只清除 enana 自己的设置), 坏的记录挪到 proxy-state.json.invalid" "$rc:$(os_sysproxy_mine && echo mine || echo clean):$(grep -c 'receipt=no$' "$CALLS"):$([ -f "$H/proxy-state.json.invalid" ] && echo moved || echo kept):$([ -e "$H/proxy-state.json" ] && echo left || echo gone)" "0:clean:1:moved:gone"
+eq "…助手、免密规则、副本照样删掉" "$(sp_files)" "none:none:none"
+rm -f "$H/proxy-state.json.invalid"
 LIB=$REPO_LIB
 fi
 
