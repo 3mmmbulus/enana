@@ -138,7 +138,7 @@ check "最上一级 (/Library) 组可写: 安装照常成功, 助手和免密规
 rf_reset; rmdir "$W/Library"; rf_enana_start; rc=$?
 check "/Library 不在: root 不建它 (也不建下面两级), 安装照常成功, 没有助手" test "$rc:$(test -e "$W/Library" && echo y || echo n):$(test -e "$W/sudoers.d/enana-tunrules-$ME" && echo y || echo n)" = "0:n:n"
 rf_reset; mkdir -m 1755 "$W/Library/PrivilegedHelperTools"; rf_enana_start; rc=$?
-check "Apple 建的 PrivilegedHelperTools (root:wheel 1755, 带粘滞位): 照常装上助手, 不改它的权限" test "$rc:$(test -f "$HELPER" && echo y || echo n):$(stat -f %Lp "$W/Library/PrivilegedHelperTools")" = "0:y:1755"
+check "Apple 建的 PrivilegedHelperTools (root:wheel 1755, 带粘滞位): 照常装上助手, 不改它的权限" test "$rc:$(test -f "$HELPER" && echo y || echo n):$(stat -f '%Mp%Lp' "$W/Library/PrivilegedHelperTools")" = "0:y:1755"     # %Lp 只有 rwx 三位, 粘滞位在 %Mp
 check "…enana 一侧也信任这个助手" trust_ok
 printf 'package Canary; open my $f, ">>", "$ENV{RF_W}/canary.txt"; print $f "ran\\n"; close $f; 1;\n' > "$W/Canary.pm"
 rf_reset
