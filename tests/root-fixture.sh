@@ -95,7 +95,10 @@ rf_reset() { # 每个用例前: 回到"已经装过"之前的干净状态
 mktemp() { if [ "${1:-}" = -d ]; then local d; d=$(command mktemp -d "$W/stg.XXXXXX") && printf '%s\n' "$d" > "$W/stage.path" && printf '%s\n' "$d"; else command mktemp "$@"; fi; }
 rf_enana_start() {
   ( enhanced_start ) >"$W/start.out" 2>&1; local rc=$?
-  if [ "$rc" -ne 0 ]; then echo "  (enhanced_start 退出码 $rc, 输出:)"; sed 's/^/    | /' "$W/start.out" | tail -60; fi
+  if [ "$rc" -ne 0 ]; then
+    echo "  (enhanced_start 退出码 $rc, 输出:)"; sed 's/^/    | /' "$W/start.out" | tail -60
+    for f in "$H/enhanced-check.log" "$H/check.log"; do [ -f "$f" ] && { echo "  ($f:)"; sed 's/^/    | /' "$f" | tail -20; }; done
+  fi
   return "$rc"
 }
 rf_admin_calls() { wc -l < "$W/sudo.log" 2>/dev/null | tr -d ' '; }
