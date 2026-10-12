@@ -184,13 +184,16 @@ _core_try() { # <临时目录> <版本> <名称> <SHA-256|空> <fast|all>  -> 0 
 }
 
 core_from_chain() { # -> $H/sing-box.new
-  local ver=${SINGBOX_VERSION:-$CORE_PIN} nm expect tmp
+  local ver=${SINGBOX_VERSION:-$CORE_PIN} nm expect tmp tried=0
   if [ "$ver" = latest ]; then
     ver=$(core_latest_version); [ -n "$ver" ] || { warn "查不到最新版本, 使用已测试版本 $CORE_PIN"; ver=$CORE_PIN; }
   fi
   tmp=$(mktemp -d)
   for nm in $(core_names); do
     expect=$(core_pin_sha "$ver" "$nm")
+    # 只要钉死的 (CORE_PINNED_ONLY=1, 见 core_install): 没有 SHA-256 的构建不下载 —— 下载了也只能记成 unpinned, TUN 用不了
+    if [ -z "$expect" ] && [ "${CORE_PINNED_ONLY:-0}" = 1 ]; then continue; fi
+    tried=1
     info "下载 sing-box $ver ($nm)${expect:+, 将校验 SHA-256}"
     # 有 SHA-256 钉死才有备用源可换。第一轮只试「官方 + 项目自己的目录」, 速度太低 (GitHub 在国内常常只有十几 KB/s) 就立刻换下一个源;
     # 都不行再放宽速度要求, 把全部源 (含第三方镜像) 按慢速也试一遍。
@@ -198,6 +201,7 @@ core_from_chain() { # -> $H/sing-box.new
       rm -rf "$tmp"; return 0
     fi
   done
+  [ "$tried" = 1 ] || warn "sing-box $ver 没有钉死的 SHA-256, 没有下载 (只接受钉死的官方包)"
   rm -rf "$tmp"; return 1
 }
 
@@ -220,14 +224,17 @@ core_from_local() { # SINGBOX_TGZ 指定, 或在源码目录/下载目录里找
 
 core_install() { # core_install chain|brew|local  -> 安装/替换 $H/sing-box
   if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then win_bridge core-upgrade "${SINGBOX_VERSION:-$CORE_PIN}"; return; fi
-  local src=${1:-chain}
+  local src=${1:-chain} pinned_only=${CORE_PINNED_ONLY:-0}
   CORE_PROV=''; CORE_BINSHA=''                     # 来源 (pinned VERSION SHA | unpinned SOURCE) 与二进制摘要, 写进 core-provenance / core-binary.sha256 (TUN 只用官方钉死的核心)
   rm -f "$H/sing-box.new"
+  # CORE_PINNED_ONLY=1 (升级时为 TUN 重新钉死核心, 见 install.sh 的 upgrade_core_plan): 只装按钉死的 SHA-256 下载的官方包 —— 不回落到 Homebrew, 也不用本地安装包,
+  # 所以绝不会记下 unpinned。下载不到就返回 1, 原来的核心和它的来源 / 摘要记录都不动
   case $src in
-    chain) core_from_chain || { CORE_PROV=''; CORE_BINSHA=''; warn "GitHub 下载链全部失败"; command -v brew >/dev/null 2>&1 && core_from_brew; } ;;
-    brew)  core_from_brew ;;
-    local) core_from_local ;;
+    chain) core_from_chain || { CORE_PROV=''; CORE_BINSHA=''; warn "GitHub 下载链全部失败"; [ "$pinned_only" = 1 ] || { command -v brew >/dev/null 2>&1 && core_from_brew; }; } ;;
+    brew)  [ "$pinned_only" = 1 ] || core_from_brew ;;
+    local) [ "$pinned_only" = 1 ] || core_from_local ;;
   esac || true
+  if [ "$pinned_only" = 1 ] && [ "${CORE_PROV%% *}" != pinned ]; then rm -f "$H/sing-box.new"; return 1; fi
   [ -x "$H/sing-box.new" ] || return 1
   xattr -d com.apple.quarantine "$H/sing-box.new" 2>/dev/null || true
   "$H/sing-box.new" version >/dev/null 2>&1 || { rm -f "$H/sing-box.new"; return 2; }

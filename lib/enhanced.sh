@@ -178,22 +178,39 @@ EOF
   ENH_B64_SCRIPT=$(printf '%s' "$v" | base64 | tr -d '\n') || { set +o pipefail; return 1; }
   set +o pipefail
 }
-enhanced_start() {
-  local stage rc name choice prov got line ref why refused
-  enhanced_paths
-  enhanced_supported || { printf '%s\n' 'Enhanced/TUN requires sing-box >= 1.12 (enana upgrade).' > "$H/check.log"; return 1; }
-  ENHANCED_REFUSED=0; ENHANCED_REFUSED_WHY=''
+# 6.1 + 6.2: 这个核心能不能交给 root 运行。0 = 可以; 否则返回 1, 原因代码放进 CORE_TUN_WHY (和预检拒绝的代码一样, 按这个顺序检查):
+#   preflight-core-unpinned 来源没有记成官方钉死的 · preflight-sb-missing 核心文件不在 · preflight-core-changed 校验之后被改动过
+# 除了 enhanced_start 的预检, 升级也用它判断要不要重新下载核心 (install.sh 的 upgrade_core_plan, lib/ops.sh 的 op_core_upgrade): 两边的标准必须一样
+core_tun_ok() {
+  local prov got
+  CORE_TUN_WHY=''
   # 6.1 核心必须是官方的、钉死版本号下载的 (core_install 记下的来源); 没有记录 = 来源不明, 同样不行
   prov=$(sed -n 1p "$H/core-provenance" 2>/dev/null || true)
   case $prov in
     'pinned '*) ;;
-    *) enhanced_preflight_refuse preflight-core-unpinned "$(_t 'TUN 需要官方的、钉死版本号的核心: 请运行 enana upgrade, 或改用系统代理模式')"; return 6 ;;
+    *) CORE_TUN_WHY=preflight-core-unpinned; return 1 ;;
   esac
   # 6.2 核心和上一次校验过的不一样: 不让 root 运行没有校验过的文件 (没有记录 = 状态未知, 允许; 安装成功之后再写)
-  [ -f "$SB" ] || { enhanced_preflight_refuse preflight-sb-missing; return 6; }
+  [ -f "$SB" ] || { CORE_TUN_WHY=preflight-sb-missing; return 1; }
   if [ -f "$H/core-binary.sha256" ]; then
     got=$(shasum -a 256 "$SB" | awk '{print $1}')
-    [ "$got" = "$(cat "$H/core-binary.sha256")" ] || { enhanced_preflight_refuse preflight-core-changed "$(_t '核心在校验之后被改动过: 请运行 enana upgrade')"; return 6; }
+    [ "$got" = "$(cat "$H/core-binary.sha256")" ] || { CORE_TUN_WHY=preflight-core-changed; return 1; }
+  fi
+  return 0
+}
+enhanced_start() {
+  local stage rc name choice line ref why refused
+  enhanced_paths
+  enhanced_supported || { printf '%s\n' 'Enhanced/TUN requires sing-box >= 1.12 (enana upgrade).' > "$H/check.log"; return 1; }
+  ENHANCED_REFUSED=0; ENHANCED_REFUSED_WHY=''
+  # 6.1 + 6.2 (core_tun_ok): 来源不是官方钉死的 / 核心文件不在 / 校验之后被改动过, 都在弹框之前拒绝
+  if ! core_tun_ok; then
+    case $CORE_TUN_WHY in
+      preflight-core-unpinned) enhanced_preflight_refuse preflight-core-unpinned "$(_t 'TUN 需要官方的、钉死版本号的核心: 请运行 enana upgrade, 或改用系统代理模式')" ;;
+      preflight-core-changed)  enhanced_preflight_refuse preflight-core-changed "$(_t '核心在校验之后被改动过: 请运行 enana upgrade')" ;;
+      *)                       enhanced_preflight_refuse "$CORE_TUN_WHY" ;;
+    esac
+    return 6
   fi
   # 6.3 快照里不能有符号链接 (cat 会顺着链接读到别处的文件)
   if [ -n "$(find "$H/rules" "$H/certs" -type l 2>/dev/null)" ]; then enhanced_preflight_refuse preflight-stage-link; return 6; fi

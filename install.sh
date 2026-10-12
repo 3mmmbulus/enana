@@ -196,12 +196,39 @@ st_preflight() {
   fi
 }
 
+# 升级时核心要不要重新下载 (cmd_install 的升级分支调用; tests/enhanced.sh 取这段函数的原文测试) -> REC_core / WHY_core, 重新钉死时还设置 SINGBOX_VERSION / CORE_PINNED_ONLY
+#   · 核心比本版本固定的 CORE_PIN 旧: 下载 CORE_PIN (和以前一样)
+#   · TUN 模式, 而现在的核心不能交给 root 运行 (core_tun_ok: 来源没有记成官方钉死的, 或者校验之后被改动过): 重新下载并钉死。2.3.23 及更早的版本从来不记录核心来源,
+#     不重新下载的话, 新版本的 TUN 预检必然拒绝 (preflight-core-unpinned), 配置那一步失败, 程序文件被还原 —— 每次更新都这样失败, enana upgrade 也救不了 (旧版本不记来源)。
+#     下载现在这一版 (随程序发布的 core-pins.conf 或验过签的兼容清单里有这台电脑的构建的 SHA-256 时), 否则下载 CORE_PIN; 只接受钉死的下载 (CORE_PINNED_ONLY, 见 lib/fetch.sh 的 core_install)
+#   · 其它情况 (系统代理模式, 或者核心已经是钉死的、没有被改动过): 不重装
+upgrade_core_plan() {
+  local cur nm
+  [ "$ST_core" = 1 ] || return 0
+  cur=$(core_version)
+  if version_gt "$CORE_PIN" "$cur"; then REC_core=chain; WHY_core="本版本要求 sing-box $CORE_PIN, 将升级核心"; return 0; fi
+  REC_core=skip
+  if [ "${NETWORK_MODE:-system}" != tun ] || core_tun_ok; then return 0; fi
+  SINGBOX_VERSION=$CORE_PIN
+  for nm in $(core_names); do
+    if [ -n "$(core_pin_sha "$cur" "$nm")" ]; then SINGBOX_VERSION=$cur; break; fi
+  done
+  CORE_PINNED_ONLY=1; REC_core=chain
+  WHY_core="TUN 需要官方的、钉死版本号的核心: 将重新下载 sing-box $SINGBOX_VERSION 并校验 SHA-256"
+}
+
 st_core() {
   step "安装 sing-box 核心 (代理引擎)"
   if [ "$SEL_core" = skip ] && [ -z "$FORCE" ]; then ok "已安装 sing-box $(core_version), 无需重装"; return 0; fi
+  [ "${CORE_PINNED_ONLY:-0}" != 1 ] || info "$WHY_core"            # 为 TUN 重新钉死核心 (upgrade_core_plan): 说明为什么要重新下载
   info "正在下载 sing-box 核心, 可能需要 1–2 分钟…"
   [ "$SEL_core" = skip ] && SEL_core=chain
   core_install "$SEL_core"; local rc=$?
+  # 为 TUN 重新钉死核心, 却没有下载到钉死的官方包 (返回 1): 停在这里。程序文件还没有替换 (st_config 才换), 当前版本和原来的核心都原样保留;
+  # TUN 只能用钉死的官方核心, 所以不能改用 Homebrew 硬装上去。下载了但不能运行 (返回 2) 照常用下面那条提示
+  if [ "$rc" = 1 ] && [ "${CORE_PINNED_ONLY:-0}" = 1 ]; then
+    die "TUN 需要官方的、钉死版本号的核心, 但没能下载到 sing-box ${SINGBOX_VERSION:-$CORE_PIN}" "已保留当前版本, 原来的核心没有改动; 检查网络后重试, 或者先改用系统代理模式 (enana network-mode system) 再更新"
+  fi
   case $rc in
     0) ok "sing-box $(core_version) 安装完成" ;;
     2) die "sing-box 已下载但无法在这台 Mac 上运行" "你的系统是 macOS $MACOS ($ARCH); 请把这行信息反馈出来, 或升级系统" ;;
@@ -235,6 +262,8 @@ st_config() {
   case $rc in
     0) ;;
     3) die "新配置没能让代理核心启动, 已回滚到原来的配置" "日志: $H/sing-box.log   $(tail -n 3 "$H/sing-box.log" 2>/dev/null | tr '\n' ' ')" ;;
+    # 5 = TUN 被拒绝 (弹框之前的预检, 或者旧的根守护进程还在运行; 见 lib/config.sh 的 config_tun_refused): 原因在 TXN_ERR 里, 和配置校验无关。EXIT 陷阱照常还原程序文件
+    5) die "${TXN_ERR:-TUN 没有启动, 新配置没有应用}" "已保留当前版本, 没有升级" ;;
     *) die "生成的配置没有通过 sing-box 校验" "$(head -c 400 "$H/check.log" 2>/dev/null | tr '\n' ' ') — 请把这段信息反馈出来" ;;
   esac
   ok "配置已生成并通过 sing-box 校验 (服务器 $(srv_count) 台 · 目录 $(catalog_list | wc -l | tr -d ' ') 项)"
@@ -305,11 +334,9 @@ cmd_install() {
   [ -n "$UPGRADE" ] || print_detection
   recommend
   [ -n "$FORCE" ] && [ "$REC_core" = skip ] && REC_core=chain
-  if [ -n "$UPGRADE" ]; then                   # 升级: 沿用已有选择, 不动系统代理 / 不弹菜单; 核心低于本版固定版本时才重装
+  if [ -n "$UPGRADE" ]; then                   # 升级: 沿用已有选择, 不动系统代理 / 不弹菜单; 核心低于本版固定版本, 或者 TUN 用不了现在的核心时才重装 (upgrade_core_plan)
     REC_sysproxy=0
-    if [ "$ST_core" = 1 ]; then
-      if version_gt "$CORE_PIN" "$(core_version)"; then REC_core=chain; WHY_core="本版本要求 sing-box $CORE_PIN, 将升级核心"; else REC_core=skip; fi
-    fi
+    upgrade_core_plan
     [ "$ST_rules" = 1 ] && REC_rules=0
   fi
   build_menu

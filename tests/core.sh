@@ -148,6 +148,53 @@ t_ok "没有留下 sing-box.new" test ! -e "$H/sing-box.new"
 printf '' > "$W/data/core-pins.conf"
 SINGBOX_VERSION=9.9.9 core_from_chain >"$W/chain3.out" 2>&1; rc=$?
 eq "没有钉死的版本: 只试官方, 不会去项目目录 (官方又失败, 所以整体失败)" "$([ "$rc" != 0 ] && echo failed || echo installed)" "failed"
+
+echo "== C6b. 只要钉死的下载 (CORE_PINNED_ONLY=1, 升级时为 TUN 重新钉死核心): 记下 pinned 来源和摘要; 没有 SHA-256 / 下载失败时不回落到 Homebrew, 原来的核心不动"
+SB=$H/sing-box
+mkdir -p "$W/fakebrew/prefix/bin"
+printf '#!/bin/sh\necho "sing-box version 0.0.1"\n' > "$W/fakebrew/prefix/bin/sing-box"
+cat > "$W/fakebrew/brew" <<EOF
+#!/bin/sh
+# 假的 Homebrew (放在 PATH 最前面): 记下每次调用; install 假装成功, --prefix 指向放着假核心的目录 —— 真被调用了, 核心就会被换掉, 来源记成 unpinned
+printf '%s\n' "\$*" >> "$W/brew.calls"
+[ "\$1" = --prefix ] && echo "$W/fakebrew/prefix"
+exit 0
+EOF
+chmod +x "$W/fakebrew/brew" "$W/fakebrew/prefix/bin/sing-box"
+printf '#!/bin/sh\necho "sing-box version 1.14.2"\n# 原来的核心\n' > "$SB"; chmod +x "$SB"; cp -p "$SB" "$W/sb.before"
+printf 'unpinned chain\n' > "$H/core-provenance"; shasum -a 256 "$SB" | awk '{print $1}' > "$H/core-binary.sha256"
+cp -p "$H/core-provenance" "$W/prov.before"; cp -p "$H/core-binary.sha256" "$W/binsha.before"
+core_before() { cp -p "$W/sb.before" "$SB"; cp -p "$W/prov.before" "$H/core-provenance"; cp -p "$W/binsha.before" "$H/core-binary.sha256"; rm -f "$H/sing-box.new"; : > "$W/brew.calls"; }
+core_unchanged() { cmp -s "$SB" "$W/sb.before" && cmp -s "$H/core-provenance" "$W/prov.before" && cmp -s "$H/core-binary.sha256" "$W/binsha.before"; }
+brew_calls() { wc -l < "$W/brew.calls" | tr -d ' '; }
+core_before; printf '9.9.9|darwin-arm64|%s\n' "$SHA_T" > "$W/data/core-pins.conf"
+PATH="$W/fakebrew:$PATH" SINGBOX_VERSION=9.9.9 CORE_PINNED_ONLY=1 core_install chain >"$W/pinned.out" 2>&1; rc=$?
+eq "有钉死的 SHA-256: 下载并安装成功" "$rc" "0"
+eq "…来源记成 pinned 9.9.9 <压缩包的 SHA-256>" "$(cat "$H/core-provenance")" "pinned 9.9.9 $SHA_T"
+eq "…二进制的摘要记进 core-binary.sha256 (TUN 预检拿它核对核心有没有被改动)" "$(cat "$H/core-binary.sha256")" "$(shasum -a 256 "$W/pkg/sing-box-9.9.9-darwin-arm64/sing-box" | awk '{print $1}')"
+t_ok "…核心换成了压缩包里的那一份" cmp -s "$SB" "$W/pkg/sing-box-9.9.9-darwin-arm64/sing-box"
+t_ok "…TUN 预检会放行这个核心 (core_tun_ok)" core_tun_ok
+eq "…没有调用 Homebrew" "$(brew_calls)" "0"
+core_before; : > "$W/data/core-pins.conf"
+PATH="$W/fakebrew:$PATH" SINGBOX_VERSION=9.9.9 CORE_PINNED_ONLY=1 core_install chain >"$W/nopin.out" 2>&1; rc=$?
+eq "没有钉死的 SHA-256: 失败" "$([ "$rc" != 0 ] && echo failed || echo installed)" "failed"
+hasnt "…一个构建都没有下载 (连官方源都不试)" '尝试 \[' "$(cat "$W/nopin.out")"
+has "…说明了原因" '没有钉死的 SHA-256' "$(cat "$W/nopin.out")"
+eq "…没有回落到 Homebrew" "$(brew_calls)" "0"
+t_ok "…原来的核心、来源和摘要记录都没有改动" core_unchanged
+t_ok "…没有留下 sing-box.new" test ! -e "$H/sing-box.new"
+core_before; printf '9.9.9|darwin-arm64|%s\n' "$SHA_A" > "$W/data/core-pins.conf"
+PATH="$W/fakebrew:$PATH" SINGBOX_VERSION=9.9.9 CORE_PINNED_ONLY=1 core_install chain >"$W/pinfail.out" 2>&1; rc=$?
+eq "有钉死的 SHA-256, 但所有线路都下载失败 (这里: 内容和钉死值对不上): 失败" "$([ "$rc" != 0 ] && echo failed || echo installed)" "failed"
+eq "…没有回落到 Homebrew" "$(brew_calls)" "0"
+t_ok "…原来的核心、来源和摘要记录都没有改动" core_unchanged
+t_ok "…没有留下 sing-box.new" test ! -e "$H/sing-box.new"
+core_before
+if [ "$(PATH="$W/fakebrew:$PATH"; command -v brew)" = "$W/fakebrew/brew" ]; then          # 对照会真的走 Homebrew 那条路: 只在找到的确实是假的 brew 时才跑
+  PATH="$W/fakebrew:$PATH" SINGBOX_VERSION=9.9.9 core_install chain >"$W/brewfb.out" 2>&1; rc=$?
+  eq "对照: 不要求钉死时, 同样的失败会回落到 (假的) Homebrew —— 上面的「没有调用」不是因为找不到 brew" "$rc:$(grep -c '^install sing-box$' "$W/brew.calls")" "0:1"
+  eq "…这样装上的核心来源记成 unpinned (TUN 不会用它)" "$(cut -d' ' -f1 "$H/core-provenance")" "unpinned"
+else tfail "假的 brew 没有排在 PATH 最前面: 跳过对照 (不能调用真的 Homebrew)"; fi
 DATA=$DATA_SAVE
 
 echo "== C7. 检查更新里的 core_latest 只来自清单, 不再跟着 GitHub 的 latest"

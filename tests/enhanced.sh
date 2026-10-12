@@ -92,6 +92,73 @@ PY
   [ "$PORTS_VERIFIED" = 0 ] || { echo 'FAIL: ports the installer could not confirm were reported as verified'; exit 1; }
 ) || exit 1
 echo 'PASS: installer preserves ports owned by the root TUN service'
+# The installer's upgrade decision for the core (install.sh upgrade_core_plan). TUN hands the core to root, and enana only hands over an official pinned core
+# that has not changed since it was verified (core_tun_ok). Everything 2.3.23 and earlier installed has no provenance record: without a re-download the new
+# TUN preflight refuses, the configuration step fails, the old program files come back and every self-update fails the same way.
+(
+  eval "$(sed -n '/^upgrade_core_plan() {/,/^}/p' "$REPO/install.sh")"
+  type upgrade_core_plan >/dev/null 2>&1 || { echo 'FAIL: upgrade_core_plan not found in install.sh'; exit 1; }
+  . "$LIB/update.sh" || { echo 'FAIL: lib/update.sh did not load (upgrade_core_plan needs version_gt)'; exit 1; }
+  H="$W/plan"; SB="$H/sing-box"; DATA="$W/plan-data"; ARCH=arm64; MACOS_MAJOR=14
+  mkdir -p "$H" "$DATA"
+  printf '#!/bin/sh\necho "sing-box version 1.14.5"\n' > "$SB"; chmod +x "$SB"
+  printf '1.14.5|darwin-arm64|%064d\n' 0 > "$DATA/core-pins.conf"          # 1.14.5 has a pinned SHA-256 for this build, 1.14.6 has none
+  core_version() { printf '%s\n' "$CUR"; }
+  plan() { # <network mode> <installed core version> -> REC_core|SINGBOX_VERSION|CORE_PINNED_ONLY
+    ( NETWORK_MODE=$1; CUR=$2; ST_core=1; REC_core=skip; WHY_core='already installed'; unset SINGBOX_VERSION CORE_PINNED_ONLY
+      upgrade_core_plan; printf '%s|%s|%s' "$REC_core" "${SINGBOX_VERSION:-}" "${CORE_PINNED_ONLY:-}" )
+  }
+  want_plan() { local got; got=$(plan "$2" "$3"); [ "$got" = "$4" ] || { echo "FAIL: $1: expected [$4], got [$got]"; exit 1; }; }
+  rm -f "$H/core-provenance" "$H/core-binary.sha256"                       # what 2.3.23 leaves behind: no record at all
+  want_plan 'TUN, no provenance: re-download the installed version, pinned only' tun 1.14.5 'chain|1.14.5|1'
+  want_plan 'TUN, no provenance, no pinned SHA-256 for the installed version: CORE_PIN instead' tun 1.14.6 "chain|$CORE_PIN|1"
+  want_plan 'System Proxy, no provenance: keep the core' system 1.14.5 'skip||'
+  printf 'pinned 1.14.5 %064d\n' 0 > "$H/core-provenance"; shasum -a 256 "$SB" | awk '{print $1}' > "$H/core-binary.sha256"
+  want_plan 'TUN, pinned and unchanged: keep the core' tun 1.14.5 'skip||'
+  printf '%064d\n' 0 > "$H/core-binary.sha256"
+  want_plan 'TUN, pinned but changed after it was verified: re-download' tun 1.14.5 'chain|1.14.5|1'
+  want_plan 'System Proxy, pinned but changed: keep the core (only TUN hands it to root)' system 1.14.5 'skip||'
+  rm -f "$H/core-provenance" "$H/core-binary.sha256"
+  want_plan 'TUN, core older than CORE_PIN: upgrade to CORE_PIN as before' tun 1.13.0 'chain||'
+  want_plan 'System Proxy, core older than CORE_PIN: upgrade to CORE_PIN as before' system 1.13.0 'chain||'
+  why=$(NETWORK_MODE=system; CUR=1.13.0; ST_core=1; upgrade_core_plan; printf '%s' "$WHY_core")
+  [ "$why" = "本版本要求 sing-box $CORE_PIN, 将升级核心" ] || { echo "FAIL: the reason shown for an old core changed: [$why]"; exit 1; }
+  why=$(NETWORK_MODE=tun; CUR=1.14.5; ST_core=1; upgrade_core_plan; printf '%s' "$WHY_core")
+  case $why in *'sing-box 1.14.5'*) ;; *) echo "FAIL: the re-pin reason does not name the version it downloads: [$why]"; exit 1 ;; esac
+  got=$(NETWORK_MODE=tun; CUR=1.14.5; ST_core=0; REC_core=brew; upgrade_core_plan; printf '%s' "$REC_core")
+  [ "$got" = brew ] || { echo "FAIL: without an installed core the recommendation must stay as it was: [$got]"; exit 1; }
+) || exit 1
+echo 'PASS: an upgrade re-pins the core only for TUN users whose core is unpinned or changed'
+# st_config (install.sh) when apply_config returns 5: TUN was refused before any administrator prompt, or the old root daemon still runs (config_tun_refused).
+# The installer must print that reason (TXN_ERR) and say the current version was kept, not "the generated configuration did not pass sing-box validation"
+# (which sent users looking for a configuration problem), and the upgrade rollback (EXIT trap -> restore_on_fail) must still run.
+(
+  eval "$(sed -n '/^st_config() {/,/^}/p' "$REPO/install.sh")"
+  type st_config >/dev/null 2>&1 || { echo 'FAIL: st_config not found in install.sh'; exit 1; }
+  H="$W/stcfg"; SRC="$W/stcfg-src"; mkdir -p "$H" "$SRC"; printf '2.3.23\n' > "$H/VERSION"
+  step() { :; }; install_files() { :; }; auth_init() { :; }; srv_migrate_v1() { return 1; }; migrate_v1_domains() { :; }
+  sb_ver() { SB_MAJOR=1; SB_MINOR=14; }; lock_take() { return 1; }; op_lock() { return 1; }; op_unlock() { :; }
+  snapshot_program() { echo snapshot >> "$W/stcfg.calls"; }; restore_on_fail() { echo "restore $1" >> "$W/stcfg.calls"; }
+  apply_config() { TXN_ERR=$STUB_ERR; return "$STUB_RC"; }
+  run_st() { # <language> <apply_config return code> <TXN_ERR>  -> rc, out
+    : > "$W/stcfg.calls"; I18N_LANG=$1; LANG_UI=$1; STUB_RC=$2; STUB_ERR=$3
+    out=$( ( st_config ) 2>&1 ); rc=$?
+  }
+  run_st zh 5 'TUN 没有启动 (preflight-core-unpinned): 请运行 enana upgrade, 或改用系统代理模式'
+  [ "$rc" = 1 ] || { echo "FAIL: st_config must stop the installer (rc=$rc)"; exit 1; }
+  printf '%s\n' "$out" | grep -qF '✗ TUN 没有启动 (preflight-core-unpinned): 请运行 enana upgrade, 或改用系统代理模式' || { echo "FAIL: the TUN refusal reason was not printed: $out"; exit 1; }
+  printf '%s\n' "$out" | grep -qF '已保留当前版本, 没有升级' || { echo "FAIL: not told that the current version was kept: $out"; exit 1; }
+  ! printf '%s\n' "$out" | grep -qF '生成的配置没有通过 sing-box 校验' || { echo "FAIL: a TUN refusal was reported as a sing-box validation failure: $out"; exit 1; }
+  [ "$(paste -sd, - < "$W/stcfg.calls")" = 'snapshot,restore 1' ] || { echo "FAIL: the upgrade rollback did not run: $(cat "$W/stcfg.calls")"; exit 1; }
+  run_st zh 5 ''
+  printf '%s\n' "$out" | grep -qF '✗ TUN 没有启动, 新配置没有应用' || { echo "FAIL: no fallback text when TXN_ERR is empty: $out"; exit 1; }
+  run_st en 5 'TUN 没有启动 (preflight-core-unpinned): 请运行 enana upgrade, 或改用系统代理模式'
+  printf '%s\n' "$out" | grep -qF 'TUN did not start (preflight-core-unpinned): run enana upgrade, or switch to system proxy mode' || { echo "FAIL: the refusal reason is not translated: $out"; exit 1; }
+  printf '%s\n' "$out" | grep -qF 'The current version was kept; nothing was upgraded' || { echo "FAIL: the kept-version hint is not translated: $out"; exit 1; }
+  run_st zh 1 ''                                                           # control: a real validation failure keeps its own message
+  printf '%s\n' "$out" | grep -qF '生成的配置没有通过 sing-box 校验' || { echo "FAIL: the validation-failure message is gone: $out"; exit 1; }
+) || exit 1
+echo 'PASS: a TUN refusal while installing reports its reason, keeps the current version and still rolls back'
 (
   SB=${SINGBOX:-$(type -P true)}
   cp "$W/tun.json" "$H/config.json"

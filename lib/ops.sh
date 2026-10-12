@@ -492,7 +492,8 @@ core_meta_drop() { rm -f "$H/core-binary.sha256.old" "$H/core-provenance.old"; }
 # 升级核心: 先下载, 用新核心校验现有配置, 通过才替换, 否则回退
 op_core_upgrade() { # [版本|latest]  latest = 兼容清单里和当前 enana 兼容的最新核心 (没有清单就不升级); 写明版本号 = 照做 (有 SHA-256 才逐个校验)
   local old new want=${1:-latest} was_up=0 pinned_now=0; old=$(core_version)
-  case $(sed -n 1p "$H/core-provenance" 2>/dev/null) in 'pinned '*) pinned_now=1 ;; esac
+  # 和 TUN 预检同一个标准 (lib/enhanced.sh 的 core_tun_ok): 来源记成官方钉死的, 而且校验之后没有被改动过。只看来源的标签不够: 被改动过的核心照样标着 pinned
+  if core_tun_ok; then pinned_now=1; fi
   job_step 0 10 "查询最新版本"
   if [ "$want" = latest ]; then
     core_manifest_refresh >/dev/null 2>&1 || true
@@ -501,7 +502,7 @@ op_core_upgrade() { # [版本|latest]  latest = 兼容清单里和当前 enana �
       oplog "${OP_WHO:-terminal}" "升级核心" "$(kv reason no-compatible-version current "$old")" error
       _txn_end fail "没有经过验证的兼容版本可升级, 保持 sing-box $old" 1; return 1
     fi
-    # 同一版本但来源没有记成官方钉死的 (升级前装的核心; TUN 要求它): 不算「已经最新」, 照常重新下载这一版, 把来源记下来
+    # 同一版本, 但核心不能交给 TUN (升级前装的核心没有记下来源, 或者校验之后被改动过): 不算「已经最新」, 照常重新下载这一版, 把来源和摘要记下来
     if [ -n "$old" ] && ! version_gt "$want" "$old" && [ "$pinned_now" = 1 ]; then _txn_end ok "已经是兼容的最新版本 sing-box $old"; return 0; fi
   fi
   wait_port "$PORT" 1 && was_up=1

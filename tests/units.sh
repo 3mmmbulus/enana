@@ -713,6 +713,11 @@ upg_run() { # 名字 [变量=值 ...] -> rc|调用顺序|警告|当前二进制 
     NETWORK_MODE=system; unset OP_WHO
     [ $# -gt 0 ] && export "$@"
     core_version() { echo 1.14.2; }; job_step() { :; }; update_check() { :; }; proxy_sync_mode() { :; }
+    core_manifest_refresh() { :; }; core_latest_compat() { echo 1.14.2; }      # UPG_WANT=latest: 兼容清单里最新的就是现在这一版 1.14.2 (不联网)
+    case ${CORE_META:-} in   # 现在这个核心的来源 / 摘要记录 (core_tun_ok 看它们); 不设 = 没有记录 (2.3.23 及更早装的核心)
+      pinned)  printf 'pinned 1.14.2 %064d\n' 0 > "$H/core-provenance"; shasum -a 256 "$SB" | awk '{print $1}' > "$H/core-binary.sha256" ;;
+      changed) printf 'pinned 1.14.2 %064d\n' 0 > "$H/core-provenance"; printf '%064d\n' 0 > "$H/core-binary.sha256" ;;
+    esac
     core_install() { # 新核心带 NEW 标记; CHECK_RC 控制它的 check 子命令; STOP_IN_INSTALL 模拟 Windows 替换前先停掉核心
       [ -z "${STOP_IN_INSTALL:-}" ] || WAIT_RC=1
       [ "${INSTALL_RC:-0}" = 0 ] || return 1
@@ -729,7 +734,7 @@ upg_run() { # 名字 [变量=值 ...] -> rc|调用顺序|警告|当前二进制 
     oplog() { :; }; _txn_end() { echo "txn $1${3:+ $3}" >> "$LOG"; echo "$2"; }
     LOG=$UW/up-$name.log; : > "$LOG"
     [ -z "${BACKUP_FAIL:-}" ] || chmod 500 "$H"
-    rc=0; out=$(op_core_upgrade 1.14.3 2>&1) || rc=$?
+    rc=0; out=$(op_core_upgrade "${UPG_WANT:-1.14.3}" 2>&1) || rc=$?
     chmod 700 "$H"
     printf '%s|%s|%s|%s\n' "$rc" "$(paste -sd';' "$LOG")" "$(printf '%s' "$out" | grep -Eo '已先关闭|没能自动关闭|没能自动启动' | paste -sd',' -)" "$(grep -q '# NEW' "$SB" && echo new || echo old)"
   )
@@ -749,6 +754,10 @@ eq "核心没在运行时升级失败: 不拉起服务 (用户停掉的服务不
 eq "升级前在运行, 替换时核心被停掉 (Windows), 随后失败: 拉起旧核心, 报告保持原版本" "$(upg_run winrevive STOP_IN_INSTALL=1 INSTALL_RC=1 UP_AFTER_RESTART=1)" '1|wait 1;wait 1;restart;wait 15;txn fail 1||old'
 eq "…旧核心也拉不起来: 报告请手动启动" "$(upg_run winfail STOP_IN_INSTALL=1 INSTALL_RC=1)" '1|wait 1;wait 1;restart;wait 15;txn fail 1|没能自动启动|old'
 eq "备份旧核心失败: 不下载、不替换、不碰服务" "$(upg_run nobackup BACKUP_FAIL=1)" '1|wait 1;txn fail 1||old'
+# latest 和现在的核心是同一版: 只有核心能交给 TUN 的 root (core_tun_ok: 来源钉死, 校验之后没被改动) 才算已经最新; 否则照常重新下载这一版, 把来源和摘要记下来
+eq "latest 同一版, 但核心没有来源记录 (2.3.23 及更早装的): 不算已经最新, 重新下载这一版" "$(upg_run samever UPG_WANT=latest)" '0|wait 1;trial;restart;wait 15;txn ok||new'
+eq "…来源标着 pinned, 但核心在校验之后被改动过 (摘要对不上): 同样重新下载" "$(upg_run samechanged UPG_WANT=latest CORE_META=changed)" '0|wait 1;trial;restart;wait 15;txn ok||new'
+eq "…钉死且没有被改动过: 已经是最新, 什么都不做 (不下载、不重启)" "$(upg_run samepinned UPG_WANT=latest CORE_META=pinned)" '0|txn ok||old'
 echo
 echo "== U13. 核心试运行 (core_trial): 副本换成临时端口、临时缓存和日志, 去掉 TUN 入站与系统代理开关 → 不改动 config.json, 不写正式的缓存和日志"
 TR=$UW/trial; rm -rf "$TR"; mkdir -p "$TR"

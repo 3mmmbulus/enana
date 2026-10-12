@@ -1022,3 +1022,23 @@ TUN 需要官方的、钉死版本号的核心: 请运行 enana upgrade, 或改�
 核心在校验之后被改动过: 请运行 enana upgrade	The core changed after it was verified: run enana upgrade
 TUN 没有启动 (*), 已切换为系统代理模式	TUN did not start (*); switched to system proxy mode
 TUN 没有启动: *	TUN did not start: *
+# --- TUN core re-pin on upgrade (install.sh upgrade_core_plan / st_core / st_config, lib/fetch.sh) and config_tun_refused reasons (lib/config.sh); the more specific patterns come first
+TUN 需要官方的、钉死版本号的核心: 将重新下载 sing-box * 并校验 SHA-256	TUN needs the official pinned core: sing-box * will be downloaded again and its SHA-256 verified
+TUN 需要官方的、钉死版本号的核心, 但没能下载到 sing-box *	TUN needs the official pinned core, but sing-box * could not be downloaded
+已保留当前版本, 原来的核心没有改动; 检查网络后重试, 或者先改用系统代理模式 (enana network-mode system) 再更新	The current version was kept and the existing core was left unchanged; check your network and try again, or switch to system proxy mode first (enana network-mode system) and then update
+sing-box * 没有钉死的 SHA-256, 没有下载 (只接受钉死的官方包)	sing-box * has no pinned SHA-256, so it was not downloaded (only the pinned official package is accepted)
+TUN 没有启动, 新配置没有应用	TUN did not start; the new configuration was not applied
+已保留当前版本, 没有升级	The current version was kept; nothing was upgraded
+TUN 没有启动 (*): 请运行 enana upgrade, 或改用系统代理模式; 旧的 TUN 仍在运行	TUN did not start (*): run enana upgrade, or switch to system proxy mode; the old TUN is still running
+TUN 没有启动 (*): 请运行 enana upgrade, 或改用系统代理模式	TUN did not start (*): run enana upgrade, or switch to system proxy mode
+TUN 没有启动 (*): 请运行 enana upgrade; 旧的 TUN 仍在运行	TUN did not start (*): run enana upgrade; the old TUN is still running
+TUN 没有启动 (*): 请运行 enana upgrade	TUN did not start (*): run enana upgrade
+TUN 没有启动 (*): 原因: *; 旧的 TUN 仍在运行	TUN did not start (*): reason: *; the old TUN is still running
+TUN 没有启动 (*): 原因: *	TUN did not start (*): reason: *
+TUN 没有启动 (*): *	TUN did not start (*): *
+TUN 没有启动 (*), 系统代理配置没能生成	TUN did not start (*), and the system proxy configuration could not be generated
+TUN 没有启动 (*), 切换到系统代理后核心也没能启动, 请在概览里检查	TUN did not start (*); after switching to the system proxy the core did not start either, check the Overview
+请运行 enana upgrade, 或改用系统代理模式	run enana upgrade, or switch to system proxy mode
+请运行 enana upgrade	run enana upgrade
+原因: *	reason: *
+*; 旧的 TUN 仍在运行	*; the old TUN is still running
