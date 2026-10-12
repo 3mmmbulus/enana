@@ -83,6 +83,7 @@ rf_load_enana() { # 只加载 enana 这一侧的函数 (不跑 install.sh / comm
   enhanced_restore_selectors() { :; }
   LABEL=com.enana.proxy; AUTOSTART=1; LIB=$LIBT; SB=$H/sing-box; PORT=37890
   . "$LIBT/enhanced.sh"
+  sb_ver() { SB_MAJOR=1; SB_MINOR=14; }         # 核心版本检查在 lib/config.sh; 这里假定核心够新
   . "$RF_REPO/lib/os-darwin.sh"                 # os_helper_trusted: 只定义函数, 没有副作用
 }
 rf_reset() { # 每个用例前: 回到"已经装过"之前的干净状态
