@@ -98,6 +98,11 @@ rf_enana_start() {
   if [ "$rc" -ne 0 ]; then
     echo "  (enhanced_start 退出码 $rc, 输出:)"; sed 's/^/    | /' "$W/start.out" | tail -60
     for f in "$H/enhanced-check.log" "$H/check.log"; do [ -f "$f" ] && { echo "  ($f:)"; sed 's/^/    | /' "$f" | tail -20; }; done
+    echo "  (诊断) TUN_ROOT=$ROOT H=$H"
+    echo "  (诊断) 原始配置:"; sed 's/^/    cfg| /' "$H/config.json" 2>&1 | head -c 1500; echo
+    enhanced_stage_config "$H/config.json" "$H" "$ROOT" > "$W/diag-staged.json" 2>"$W/diag-staged.err"
+    echo "  (诊断) 改写后 (rc=$?, err=$(head -c 300 "$W/diag-staged.err")):"; sed 's/^/    st| /' "$W/diag-staged.json" | head -c 1500; echo
+    echo "  (诊断) 检查器对改写结果:"; /bin/bash "$LIBT/enhanced-root.sh" check-config "$W/diag-staged.json" "$ROOT" 2>&1 | sed 's/^/    chk| /'
   fi
   return "$rc"
 }
