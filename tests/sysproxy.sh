@@ -176,7 +176,7 @@ eq "回读确认: 最终系统代理确实指向 enana" "$(os_sysproxy_ok && ech
 echo "-- S6c. 不信任的情况: 版本不对 / 别人可写 / 符号链接 → 重新授权, 不盲目使用"
 # 每个「不信任」用例前都先确认「可信」: 否则助手文件不在也会得到 untrusted, 用例就空跑了
 prep_trusted() { eq "(准备) 助手可信 (下面的 untrusted 不是因为文件本来就不在)" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" trusted; }
-sed -i ''"s/^NS=\(.*\); PORT=\([0-9]*\); VERSION=.*/NS=\1; PORT=\2; VERSION=0/" "$HELPER"
+sed -i '' "s/^NS=\(.*\); PORT=\([0-9]*\); VERSION=.*/NS=\1; PORT=\2; VERSION=0/" "$HELPER"
 eq "版本号不对: 视为没装好" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
 os_sysproxy_apply off </dev/null >/dev/null 2>&1
 eq "版本不对 → 弹一次框重装 (升级), 装好后版本恢复" "$(grep -c '^osascript -e do shell script' "$CALLS"):$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "2:trusted"
