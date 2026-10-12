@@ -186,6 +186,16 @@
     return { enabled: en, mode: mode };
   }
   function proxyDone() { proxyBusy = null; pendingMode = ''; TP.emit('proxy', A.proxyOn()); TP.syncBtns(); TP.loadState(); setTimeout(TP.loadProxies, 400); }
+  /* POST /api/proxy. 核心没在运行、启动它又要管理员授权 (TUN, 或者根守护进程还加载着) 时, 后端把启动交给后台任务, 马上返回 {job}:
+   * 和切换流量接管方式一样在 dock 里跟着任务走 (等管理员密码框不会超时); 任务的结果就是平时的响应 ({enabled, mode, sysproxy})。
+   * 返回 {r: 响应或任务结果, job: 走的是不是任务}; 任务失败 → null (dock 和提示已经说明了原因, 什么都没有改) */
+  async function postProxy(form) {
+    var r = await TP.helper('POST', '/api/proxy', { form: form, timeout: 25000 });
+    if (!r || !r.job) return { r: r, job: false };
+    var d = await TP.jobs.runInDock(t('proxy.startJob'), function () { return Promise.resolve(r); });
+    if (!d || !d.ok) return null;
+    return { r: (d.job && d.job.result) || {}, job: true };
+  }
   /* ---------- 系统代理 ----------
    * 浏览器和多数 App 只有走「系统代理」才会进入 enana (System Proxy 接管方式)。以前总开关打开后系统代理仍然没开, 必须去终端输入 enana on (还要输密码) ——
    * 现在: 打开总开关会一并开启系统代理 (后台任务, macOS 可能弹出「输入 Mac 管理员密码」的原生窗口); 没开成功 / 被其它软件占用时, 顶部提示条和概览里都有「一键开启」按钮。 */
@@ -227,9 +237,12 @@
     proxyBusy = on ? 'on' : 'off'; TP.emit('proxy', cur); TP.syncBtns();
     var sp = null;
     try {
-      var r = await TP.helper('POST', '/api/proxy', { form: { on: on ? 1 : 0 }, timeout: 25000 }), st = keepState(r, on);
-      sp = r && r.sysproxy || null;
-      ui.toast(t(st.enabled ? 'proxy.onDone' : 'proxy.offDone'), 'ok', 4200);
+      var p = await postProxy({ on: on ? 1 : 0 });
+      if (p) {
+        var r = p.r, st = keepState(r, on);
+        sp = r && r.sysproxy || null;
+        if (!p.job) ui.toast(t(st.enabled ? 'proxy.onDone' : 'proxy.offDone'), 'ok', 4200);      // 走任务的话 dock 已经报告了结果
+      }
     } catch (e) {
       if (e && e.code === 'E_NOT_RUNNING') ui.toast(t('proxy.err.notRunning'), 'warn', 8000, { action: { label: t('act.restart.start'), fn: TP.safe(A.restart) } });
       else throw e;
@@ -250,8 +263,11 @@
     if (!ok) return;
     proxyBusy = 'mode'; pendingMode = m; TP.emit('proxy', on); TP.syncBtns();
     try {
-      var st = keepState(await TP.helper('POST', '/api/proxy', { form: { mode: m }, timeout: 25000 }), on);
-      ui.toast(t((st.enabled === false ? 'pmode.saved.' : 'pmode.done.') + st.mode), 'ok', 4600);
+      var p = await postProxy({ mode: m });
+      if (p) {
+        var st = keepState(p.r, on);
+        if (!p.job) ui.toast(t((st.enabled === false ? 'pmode.saved.' : 'pmode.done.') + st.mode), 'ok', 4600);      // 走任务的话 dock 已经报告了结果
+      }
     } finally { proxyDone(); }
   };
 

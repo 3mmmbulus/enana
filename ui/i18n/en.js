@@ -620,6 +620,7 @@
     "proxy.onDone": "Proxy is on — traffic is now routed by your settings",
     "proxy.offDone": "Proxy is off — all traffic goes direct",
     "proxy.err.notRunning": "The proxy core isn’t running, so the proxy can’t be turned on. Start the service and try again.",
+    "proxy.startJob": "Start the proxy service",
     "proxy.pageNote": "The proxy master switch is off right now — the settings below only take effect once the proxy is on.",
     // ---- ov ----
     "ov.addServer": "Add a server",

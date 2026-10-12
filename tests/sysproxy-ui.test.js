@@ -10,7 +10,7 @@ const same = (a, b) => assert.strictEqual(JSON.stringify(a), JSON.stringify(b));
 function setup(over) {
   const log = { helper: [], dock: [], toasts: [], confirm: [], loadState: 0, emits: [] };
   const S = { state: { proxy: { enabled: false, mode: 'auto', network_mode: 'system' }, env: { sysproxy: false, service: true } } };
-  const cfg = Object.assign({ proxyResponse: { ok: true, enabled: true, mode: 'auto' }, confirm: true, dockFail: false }, over);
+  const cfg = Object.assign({ proxyResponse: { ok: true, enabled: true, mode: 'auto' }, confirm: true, dockFail: false, jobResult: {} }, over);
   const TP = {
     S, on() {}, h: (...a) => a, setText() {}, why: { helper: () => '' }, safe: fn => fn,
     emit: (...a) => log.emits.push(a), syncBtns() {},
@@ -20,11 +20,11 @@ function setup(over) {
       toast: (...a) => log.toasts.push(a), modal: () => ({ closed: Promise.resolve('cancel') })
     },
     jobs: {
-      async runInDock(title, start) {
+      async runInDock(title, start) {             // 和真的 TP.jobs.runInDock 一样: 跟着 start() 返回的任务走完, 返回 {ok, job: 任务最后的记录 (带 result), res}
         log.dock.push(title);
         const res = await start();
         if (cfg.dockFail) return { ok: false, error: Error('cancelled') };
-        return { ok: true, res };
+        return { ok: true, res, job: res && res.job ? { state: 'done', result: cfg.jobResult } : null };
       }
     },
     helper: async (method, p, opts) => {
@@ -94,5 +94,29 @@ function setup(over) {
   assert.strictEqual(L.dock.length, 0);
   assert.ok(!L.helper.some(h => h[1] === '/api/sysproxy'));
 
-  console.log('PASS: system proxy follows the master switch, respects other proxies, one-click fix, cancellation recovers');
+  /* 7. 总开关要先启动核心、而启动要管理员授权 (TUN / 根守护进程还加载着): 后端返回任务 → 在 dock 里跟着它走 (和切换流量接管方式一样, 等密码框不会 25 秒超时),
+   *    开关的状态和系统代理的下一步都来自任务的结果 */
+  ({ TP, S, log: L } = setup({ proxyResponse: { ok: true, job: 'proxy-1' }, jobResult: { enabled: true, mode: 'auto', sysproxy: { state: 'pending', job: 'sysproxy-2' } } }));
+  await TP.actions.setProxy(true);
+  same(L.helper[0], ['POST', '/api/proxy', { on: 1 }]);
+  same(L.dock, ['proxy.startJob', 'sysproxy.job']);
+  assert.strictEqual(S.state.proxy.enabled, true, '任务完成后开关显示为开启 (来自任务的结果)');
+  assert.strictEqual(TP.actions.proxyBusy(), null, '任务结束后开关不再忙碌');
+  assert.ok(!L.toasts.some(x => x[0] === 'proxy.onDone'), 'dock 已经报告了结果, 不再另弹一条「已开启」');
+  /*    …任务失败 (比如取消了管理员授权): 开关状态不变, 不留下忙碌状态, 也不会去开系统代理 */
+  ({ TP, S, log: L } = setup({ proxyResponse: { ok: true, job: 'proxy-2' }, dockFail: true }));
+  await TP.actions.setProxy(true);
+  same(L.dock, ['proxy.startJob']);
+  assert.strictEqual(S.state.proxy.enabled, false, '任务失败: 开关仍是关闭');
+  assert.strictEqual(TP.actions.proxyBusy(), null);
+  assert.ok(!L.helper.some(h => h[1] === '/api/sysproxy') && !L.toasts.some(x => x[0] === 'proxy.onDone'));
+  /*    …切换代理模式也一样 (总开关开着、核心没在运行时要先启动) */
+  ({ TP, S, log: L } = setup({ proxyResponse: { ok: true, job: 'proxy-3' }, jobResult: { enabled: true, mode: 'global' } }));
+  S.state.proxy.enabled = true; await TP.actions.setProxyMode('global');
+  same(L.helper[0], ['POST', '/api/proxy', { mode: 'global' }]);
+  same(L.dock, ['proxy.startJob']);
+  assert.strictEqual(S.state.proxy.mode, 'global');
+  assert.strictEqual(TP.actions.proxyBusy(), null);
+
+  console.log('PASS: system proxy follows the master switch, respects other proxies, one-click fix, cancellation recovers; a start that needs administrator rights is followed as a job');
 })().catch(e => { console.error(e); process.exitCode = 1; });

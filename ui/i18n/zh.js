@@ -620,6 +620,7 @@
     "proxy.onDone": "代理已开启, 现在按设置分流",
     "proxy.offDone": "代理已关闭, 所有流量直连",
     "proxy.err.notRunning": "代理核心没有运行, 无法开启代理。请先启动服务再试一次。",
+    "proxy.startJob": "启动代理服务",
     "proxy.pageNote": "代理总开关目前是关闭的: 下面的设置会在代理开启后才生效。",
     // ---- ov ----
     "ov.addServer": "添加服务器",

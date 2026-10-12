@@ -425,6 +425,83 @@ out=run("NETWORK_MODE=system\nqp() { :; }\nlock_take() { return 0; }\napps_scan(
 assert out=='CLEARED\nLIST\n',out
 print('PASS: Enhanced scan endpoint delegates once without inline policy mutation; automatic scans without changes return the list without a job')
 PY
+# POST /api/proxy (the real ep_proxy and _proxy_start_needs_admin): turning the master switch on may have to start the core first. When that start
+# needs administrator authorisation (TUN configured, or the root daemon still loaded / not idle) the request must not sit behind the dialog (the
+# dashboard gives up after 25 s): it returns a job at once. Every other start, and every request with the core running, stays immediate.
+python3 - "$LIB/api.sh" "$W" <<'PY'
+import os,pathlib,subprocess,sys
+s=pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'); w=sys.argv[2]
+i=s.index('_proxy_start_needs_admin() {'); need=s[i:s.index('\n',i)+1]
+i=s.index('ep_proxy() {'); ep=s[i:s.index('\n}',i)+2]
+stub='''PROXY_MODE=auto; PORT=1
+fp() { case $1 in on) printf '%s' "$ON" ;; mode) printf '%s' "$MODE" ;; esac; }
+fail() { printf 'FAIL:%s\\n' "$2"; exit 0; }
+okj() { printf '{"ok":true,%s}\\n' "$1"; }
+job_spawn() { printf '%s|%s|%s|%s' "$1" "$2" "$3" "$4" > "$OUT.spawn"; printf proxy-job; }
+os_service_running() { return "$RUNNING"; }
+os_service_start() { echo START >> "$OUT.calls"; return 0; }
+wait_port() { return 0; }; enhanced_ready() { return 0; }
+enhanced_configured() { return "$TUN"; }; enhanced_loaded() { return "$LOADED"; }; enhanced_paths() { :; }; enhanced_idle() { return "$IDLE"; }
+proxy_switch() { echo SWITCH >> "$OUT.calls"; PROXY_SWITCH_JSON='"enabled":true,"mode":"auto"'; }
+'''
+plist=os.path.join(w,'proxy-test.plist'); open(plist,'w').close()
+def run(n, **kw):
+    out=os.path.join(w,'ep-proxy-%d'%n)
+    env=dict(PATH=os.environ['PATH'], OUT=out, ON='1', MODE='', PROXY_ENABLED='0', RUNNING='1', TUN='1', LOADED='1', IDLE='0', TUN_PLIST=os.path.join(w,'missing.plist'))
+    env.update(kw)
+    r=subprocess.run(['/bin/bash','-c',stub+need+ep+'\nep_proxy\n'],capture_output=True,text=True,encoding='utf-8',check=True,env=env)
+    rd=lambda x: open(out+x,encoding='utf-8').read() if os.path.exists(out+x) else ''
+    return r.stdout, rd('.spawn'), rd('.calls')
+job=('{"ok":true,"job":"proxy-job"}\n','proxy|启动代理服务|开启代理|1|','')
+now=('{"ok":true,"enabled":true,"mode":"auto"}\n','','START\nSWITCH\n')
+assert run(1,TUN='0')==job, run(1,TUN='0')                                           # TUN configured, core not running: the start installs the root core
+assert run(2)==now, run(2)                                                           # System Proxy, no root daemon: the user's own core starts inline
+assert run(3,LOADED='0')==job, run(3,LOADED='0')                                     # System Proxy but the root daemon is still loaded: stopping it needs authorisation
+assert run(4,TUN_PLIST=plist,IDLE='1')==job                                          # its plist is there and it is not idle (unloaded but still enabled): same
+assert run(5,TUN_PLIST=plist,IDLE='0')==now                                          # ...idle (stopped and disabled): no authorisation, inline
+assert run(6,TUN='0',RUNNING='0')==('{"ok":true,"enabled":true,"mode":"auto"}\n','','SWITCH\n')    # core already running: no start, no job
+assert run(7,TUN='0',ON='',MODE='global',PROXY_ENABLED='1')==('{"ok":true,"job":"proxy-job"}\n','proxy|启动代理服务|切换代理模式||global','')   # mode change while on
+assert run(8,TUN='0',ON='0')==('{"ok":true,"enabled":true,"mode":"auto"}\n','','SWITCH\n')        # turning off never starts anything
+print('PASS: /api/proxy hands a start that needs administrator rights to a job and keeps every other request immediate')
+PY
+# The job behind it (op_proxy) and the switch both paths share (proxy_switch). The job starts the core (the administrator dialog is fine here: the
+# dashboard follows the job), reports a cancelled dialog as cancelled, and its result is the usual /api/proxy response.
+(
+  H="$W/proxyh"; mkdir -p "$H"
+  job_step() { :; }; job_ok() { printf 'ok|%s|%s\n' "$1" "$2" > "$W/proxy-job"; }; job_fail() { printf 'fail|%s\n' "$1" > "$W/proxy-job"; }
+  os_service_running() { return 1; }; wait_port() { return 0; }; enhanced_ready() { return 0; }
+  proxy_switch() { printf 'switch|%s|%s|%s|%s\n' "$@" >> "$W/proxy-calls"; PROXY_SWITCH_JSON='"enabled":true,"mode":"global"'; }
+  rm -f "$W/proxy-calls"
+  os_service_start() { ENHANCED_ADMIN_ERR=cancelled; return 1; }
+  op_proxy 1 '' || true
+  [ "$(cat "$W/proxy-job")" = 'fail|已取消管理员授权, 代理没有开启' ] && [ ! -e "$W/proxy-calls" ] || { echo "FAIL: op_proxy after a cancelled dialog: $(cat "$W/proxy-job")"; exit 1; }
+  [ ! -d "$H/.apply.lock" ] || { echo 'FAIL: op_proxy left the apply lock behind'; exit 1; }
+  os_service_start() { ENHANCED_ADMIN_ERR=failed; return 1; }
+  op_proxy 1 '' || true
+  [ "$(cat "$W/proxy-job")" = 'fail|代理服务没有运行, 启动也失败了 (运行 enana doctor 查看原因)' ] || { echo "FAIL: op_proxy after a failed start: $(cat "$W/proxy-job")"; exit 1; }
+  os_service_start() { return 0; }
+  PROXY_ENABLED=0; PROXY_MODE=auto; op_proxy 1 global
+  [ "$(cat "$W/proxy-job")" = 'ok|代理已开启|{"enabled":true,"mode":"global"}' ] && [ "$(cat "$W/proxy-calls")" = 'switch|1|global|0|auto' ] || { echo "FAIL: op_proxy success: $(cat "$W/proxy-job") / $(cat "$W/proxy-calls")"; exit 1; }
+  op_proxy 2 '' || true
+  [ "$(cat "$W/proxy-job")" = 'fail|参数无效' ] || { echo "FAIL: op_proxy accepted on=2: $(cat "$W/proxy-job")"; exit 1; }
+  # proxy_switch itself (the real one): the same response the endpoint always gave; the system proxy only follows in System Proxy mode
+  eval "$(sed -n '/^proxy_switch() {/,/^}/p' "$LIB/ops.sh")"
+  oplog() { :; }; clash() { :; }; switch_note() { :; }; NETWORK_MODE=system
+  os_sysproxy_ok() { return 0; }
+  PROXY_ENABLED=0; proxy_switch 1 '' 0 auto
+  [ "$PROXY_SWITCH_JSON" = '"enabled":true,"mode":"auto","sysproxy":{"state":"on"}' ] || { echo "FAIL: proxy_switch (system proxy on): $PROXY_SWITCH_JSON"; exit 1; }
+  os_sysproxy_ok() { return 1; }; os_sysproxy_foreign() { echo Wi-Fi; }
+  PROXY_ENABLED=0; proxy_switch 1 '' 0 auto
+  [ "$PROXY_SWITCH_JSON" = '"enabled":true,"mode":"auto","sysproxy":{"state":"foreign"}' ] || { echo "FAIL: proxy_switch (foreign proxy): $PROXY_SWITCH_JSON"; exit 1; }
+  os_sysproxy_foreign() { :; }; job_spawn() { printf sysproxy-9; }
+  PROXY_ENABLED=0; proxy_switch 1 '' 0 auto
+  [ "$PROXY_SWITCH_JSON" = '"enabled":true,"mode":"auto","sysproxy":{"state":"pending","job":"sysproxy-9"}' ] || { echo "FAIL: proxy_switch (pending): $PROXY_SWITCH_JSON"; exit 1; }
+  NETWORK_MODE=tun; PROXY_ENABLED=0; proxy_switch 1 global 0 auto
+  [ "$PROXY_SWITCH_JSON" = '"enabled":true,"mode":"global"' ] || { echo "FAIL: proxy_switch (TUN): $PROXY_SWITCH_JSON"; exit 1; }
+  NETWORK_MODE=system; proxy_switch 0 '' 1 global
+  [ "$PROXY_SWITCH_JSON" = '"enabled":false,"mode":"global"' ] || { echo "FAIL: proxy_switch (off): $PROXY_SWITCH_JSON"; exit 1; }
+) || exit 1
+echo 'PASS: the proxy job starts the core, reports a cancelled dialog as cancelled, and returns the usual response'
 # Shell and AppleScript quoting test with actual special characters.
 v="space and ' quote \$(not_a_command)"; q=$(enhanced_quote "$v")
 [ "$(eval "printf '%s' $q")" = "$v" ]

@@ -329,6 +329,10 @@ GitHub 不通: 将依次尝试镜像; 也可手动下载安装包 (SINGBOX_TGZ=�
 参数无效	Invalid parameter
 代理服务没有运行, 启动也失败了 (运行 enana doctor 查看原因)	The proxy service isn’t running and couldn’t be started (run enana doctor to see why)
 关闭代理	Turn proxy off
+启动代理服务	Start the proxy service
+代理已开启	The proxy is on
+代理模式已切换	The proxy mode was changed
+已取消管理员授权, 代理没有开启	Administrator authorization was cancelled, so the proxy was not turned on
 密码在 enana.cc 管理: 请到网站的账号页修改	Passwords are managed on enana.cc — change yours on the website’s account page
 
 # --- lib/api.sh · devices, proxy mode, statistics (lib/session.sh too)

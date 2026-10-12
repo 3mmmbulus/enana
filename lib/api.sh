@@ -187,25 +187,24 @@ ep_sysproxy() { # 单独开启 / 关闭系统代理 (on=0|1) -> 后台任务 (ma
   case $on in 0|1) ;; *) fail "参数无效" ;; esac
   okj "\"job\":\"$(job_spawn sysproxy '修改系统代理|确认结果' "$([ "$on" = 1 ] && echo on || echo off)")\""
 }
+# 启动核心要不要管理员授权 (可能弹出 macOS 的密码框): TUN 配置 (装 root 的核心), 或者根守护进程还加载着 / 停掉它要授权 (enhanced_stop 只有它闲着时才跳过)
+_proxy_start_needs_admin() { enhanced_configured || enhanced_loaded || { enhanced_paths; [ -e "$TUN_PLIST" ] && ! enhanced_idle; }; }
 ep_proxy() { # 代理总开关 + 模式 (on=0|1, mode=auto|global; 至少给一个)
-  local on mode was_on was_mode sp=''; on=$(fp on); mode=$(fp mode); was_on=${PROXY_ENABLED:-0}; was_mode=${PROXY_MODE:-auto}
+  local on mode was_on was_mode steps; on=$(fp on); mode=$(fp mode); was_on=${PROXY_ENABLED:-0}; was_mode=${PROXY_MODE:-auto}
   [ -n "$on" ] || [ -n "$mode" ] || fail "参数无效"
   case $on in ''|0|1) ;; *) fail "参数无效" ;; esac
   case $mode in ''|auto|global) ;; *) fail "代理模式无效" ;; esac
   if { [ "$on" = 1 ] || { [ -z "$on" ] && [ "${PROXY_ENABLED:-0}" = 1 ]; }; } && ! os_service_running; then
+    # 先要启动核心。要管理员授权时它会停在密码框上, 仪表盘等 25 秒就报告失败: 交给后台任务 proxy (lib/ops.sh 的 op_proxy, 和切换流量接管方式一样),
+    # 马上返回任务编号, 仪表盘跟着任务走。不要授权的启动 (用户自己的核心, 几秒钟) 照旧在这里做完
+    if _proxy_start_needs_admin; then
+      steps='启动代理服务|开启代理'; [ -n "$on" ] || steps='启动代理服务|切换代理模式'
+      okj "\"job\":\"$(job_spawn proxy "$steps" "$on" "$mode")\""; return
+    fi
     os_service_start && wait_port "$PORT" 10 && enhanced_ready || fail "代理服务没有运行, 启动也失败了 (运行 enana doctor 查看原因)" E_NOT_RUNNING
   fi
-  [ -n "$mode" ] && proxy_set_mode "$mode"
-  [ -n "$on" ] && proxy_set_enabled "$on"
-  # 打开总开关时让系统代理一并指向 enana (System Proxy 接管方式): 浏览器和多数 App 只有走系统代理才会进入 enana, 以前总开关打开了却「没有效果」, 必须去终端输入 enana on。
-  #   已经指向 enana → 不用动 · 系统里正在用别的代理设置 (其它软件) → 不擅自覆盖, 交给用户在界面上确认 · 否则在后台任务里开启 (可能弹出 macOS 管理员密码窗口)
-  if [ "$on" = 1 ] && [ "${NETWORK_MODE:-system}" != tun ]; then
-    if os_sysproxy_ok; then sp='"sysproxy":{"state":"on"}'
-    elif [ -n "$(os_sysproxy_foreign 2>/dev/null)" ]; then sp='"sysproxy":{"state":"foreign"}'
-    else sp="\"sysproxy\":{\"state\":\"pending\",\"job\":\"$(job_spawn sysproxy '修改系统代理|确认结果' on)\"}"; fi
-  fi
-  oplog dashboard "$([ -n "$on" ] && { [ "$on" = 1 ] && echo 开启代理 || echo 关闭代理; } || echo 切换代理模式)" "$(kv enabled "${PROXY_ENABLED:-0}" mode "${PROXY_MODE:-auto}" was_enabled "$was_on" was_mode "$was_mode" sysproxy "$(printf '%s' "$sp" | sed -n 's/.*"state":"\([a-z]*\)".*/\1/p')")" ok
-  okj "\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\"${sp:+,$sp}"
+  proxy_switch "$on" "$mode" "$was_on" "$was_mode"      # 改开关 / 模式, 系统代理跟上, 写操作记录 (lib/ops.sh)
+  okj "$PROXY_SWITCH_JSON"
 }
 ep_devices() { # 我的设备 (云端)
   auth_logged_in || fail "需要登录" E_AUTH

@@ -380,6 +380,43 @@ op_sysproxy() { # on|off
   job_fail "$msg" 0; return 1
 }
 
+# 代理总开关 + 模式, 核心已经在运行之后的部分 (POST /api/proxy 和后台任务 proxy 共用): 改设置 (热切换), 打开总开关时让系统代理跟上, 写操作记录。
+# 结果放进 PROXY_SWITCH_JSON (响应的 JSON 片段, 不含花括号): "enabled":…,"mode":…[,"sysproxy":{…}]。不向标准输出打印任何东西 (辅助服务里那就是 HTTP 响应)
+proxy_switch() { # <on 0|1|''> <mode auto|global|''> <原来的 on> <原来的 mode>
+  local on=$1 mode=$2 was_on=$3 was_mode=$4 sp=''
+  [ -n "$mode" ] && proxy_set_mode "$mode"
+  [ -n "$on" ] && proxy_set_enabled "$on"
+  # 打开总开关时让系统代理一并指向 enana (System Proxy 接管方式): 浏览器和多数 App 只有走系统代理才会进入 enana, 以前总开关打开了却「没有效果」, 必须去终端输入 enana on。
+  #   已经指向 enana → 不用动 · 系统里正在用别的代理设置 (其它软件) → 不擅自覆盖, 交给用户在界面上确认 · 否则在后台任务里开启 (可能弹出 macOS 管理员密码窗口)
+  if [ "$on" = 1 ] && [ "${NETWORK_MODE:-system}" != tun ]; then
+    if os_sysproxy_ok; then sp='"sysproxy":{"state":"on"}'
+    elif [ -n "$(os_sysproxy_foreign 2>/dev/null)" ]; then sp='"sysproxy":{"state":"foreign"}'
+    else sp="\"sysproxy\":{\"state\":\"pending\",\"job\":\"$(job_spawn sysproxy '修改系统代理|确认结果' on)\"}"; fi
+  fi
+  oplog "${OP_WHO:-dashboard}" "$([ -n "$on" ] && { [ "$on" = 1 ] && echo 开启代理 || echo 关闭代理; } || echo 切换代理模式)" "$(kv enabled "${PROXY_ENABLED:-0}" mode "${PROXY_MODE:-auto}" was_enabled "$was_on" was_mode "$was_mode" sysproxy "$(printf '%s' "$sp" | sed -n 's/.*"state":"\([a-z]*\)".*/\1/p')")" ok
+  PROXY_SWITCH_JSON="\"enabled\":$([ "${PROXY_ENABLED:-0}" = 1 ] && echo true || echo false),\"mode\":\"${PROXY_MODE:-auto}\"${sp:+,$sp}"
+}
+# 代理总开关的后台任务: POST /api/proxy 要先启动核心, 而启动要管理员授权时 (TUN, 或者根守护进程还加载着) 交给它 —— 等管理员密码框的时候不能卡住 HTTP 请求
+# (仪表盘 25 秒就放弃, 报告失败)。仪表盘和切换流量接管方式一样跟着任务走; 任务的结果就是平时 /api/proxy 的响应 (enabled / mode / sysproxy)
+op_proxy() { # <on 0|1|''> <mode auto|global|''>
+  local on=${1:-} mode=${2:-} was_on=${PROXY_ENABLED:-0} was_mode=${PROXY_MODE:-auto}
+  case $on in ''|0|1) ;; *) job_fail "参数无效" 0; return 1 ;; esac
+  case $mode in ''|auto|global) ;; *) job_fail "代理模式无效" 0; return 1 ;; esac
+  op_lock || { job_fail "另一个配置任务正在运行, 请稍后重试" 0; return 1; }
+  job_step 0 20 "启动代理服务"
+  ENHANCED_ADMIN_ERR=''
+  if ! os_service_running && ! { os_service_start && wait_port "$PORT" 10 && enhanced_ready; }; then
+    op_unlock
+    if [ "${ENHANCED_ADMIN_ERR:-}" = cancelled ]; then job_fail "已取消管理员授权, 代理没有开启" 0
+    else job_fail "代理服务没有运行, 启动也失败了 (运行 enana doctor 查看原因)" 0; fi
+    return 1
+  fi
+  job_step 1 80 "$([ -n "$on" ] && echo 开启代理 || echo 切换代理模式)"
+  proxy_switch "$on" "$mode" "$was_on" "$was_mode"
+  op_unlock
+  job_ok "$([ "$on" = 1 ] && echo 代理已开启 || echo 代理模式已切换)" "{$PROXY_SWITCH_JSON}"
+}
+
 op_update_rules() { # 规则集 (本地规则集文件变化后 sing-box 自动重载, 无需重启)
   job_step 0 5 "准备"
   QUIET=1
@@ -627,6 +664,7 @@ job_dispatch() {
     autosites-clear) op_txn "自动识别: 全部撤销" txn_autosites_clear ;;
     restart)        op_restart ;;
     sysproxy)       op_sysproxy "$@" ;;
+    proxy)          op_proxy "$@" ;;
     update-rules)   op_update_rules ;;
     servers-import) trap 'rm -f "$JOB_BODY"' EXIT    # 粘贴的服务器数据可能带着凭据: 成功、失败、锁被占用都在进程结束时删掉 (成功时 txn_import 已经删了)
       TXN_INTERVAL=${3:-}; TXN_USED=${4:-}; TXN_TOTAL=${5:-}; TXN_EXPIRE=${6:-}; TXN_SAVE=${7:-}; op_txn "导入服务器" txn_import "${1:-}" "${2:-merge}" ;;
