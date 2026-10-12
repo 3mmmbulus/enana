@@ -151,7 +151,7 @@
 - 新应用 (`flag=new`): 浏览器 (声明能打开 http / https 链接的应用) 默认「跟随规则」, 其它新应用默认「关」(直连); 仪表盘打开「应用」页就算已知晓, 会 `POST /api/apps/ack?all=1` 把新标记确认掉, 导航上的数字随之消失。
 - 应用扫描范围: `/Applications` (含子目录)、`/System/Applications` (含 Utilities, 终端等系统应用)、`/System/Cryptexes/App/System/Applications` (Safari)、`/System/Library/CoreServices/Applications`、`~/Applications`, 再加 Spotlight 能找到的其它位置 (只收录 /Applications、/System/Applications、`~/Applications`、/opt/homebrew、/usr/local 下的顶层 .app, 不含应用内嵌的辅助程序)。
 
-`GET /api/state` → `{ok,version,prefs_version★,core,platform:{os,osver,arch},ports:{proxy,ui,api,speed★},env:{core,rules,service,sysproxy,shortcut (快捷命令的安装位置, 没装是 null),shortcut_cmd★ (在终端里直接可运行、打开控制台的完整命令: 装了快捷命令 = `enana`, 没装 = 脚本的完整路径),rules_updated,rules_missing[]},servers[],subs[],overrides[],first_run,`
+`GET /api/state` → `{ok,version,prefs_version★,core,platform:{os,osver,arch},ports:{proxy,ui,api,speed★},env:{core,rules,service,sysproxy,shortcut (快捷命令的安装位置, 没装是 null),shortcut_cmd★ (在终端里直接可运行、打开控制台的完整命令: 装了快捷命令 = `enana`, 没装 = 脚本的完整路径),rules_updated,rules_missing[],sysproxy_helper★ (macOS: 系统代理助手是否已安装, 只看文件在不在, 不 sudo; Windows 为 null)},servers[],subs[],overrides[],first_run,`
 `update★:{available,latest,checked},lang★,proxy★:{enabled,mode:"auto|global"},account★:{email}}`
 
 `servers[]` 的每一项是 `{tag,type,server,port,role,sub}`。**官方线路 (会员) 的节点**排在用户自己的服务器后面, 多一个 `"official":true`: `server` 为 `""`、`port` 为 `0` (界面不显示官方节点的地址), `role` 永远是 `auto` (只进「自动线路」池, 不能当固定出口)。它们保存在 `~/.enana/official.jsonl` (权限 600), **不在** `servers.jsonl`, 也不进配置快照 / 云端同步 / `GET /api/export`; 对它们 `GET /api/servers/secret`、`POST /api/servers/delete`、`POST /api/servers/role` 一律 `E_FORBIDDEN`。`first_run` 只看用户自己的服务器。官方节点的标签以保留前缀 `官方-` 开头: 用户导入的节点不能使用这个前缀 (安装端拒绝; 导入器会把别的订阅里的「官方-xx」改名为「官方 xx」)。

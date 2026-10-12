@@ -77,16 +77,20 @@ PY
 # job. A TUN upgrade must keep the ports already used by System Proxy/UI.
 (
   eval "$(sed -n '/^pick_ports() {/,/^}/p' "$REPO/install.sh")"
+  . "$LIB/detect.sh" || { echo 'FAIL: lib/detect.sh did not load (pick_ports needs port_state)'; exit 1; }
   PORT=7890; UI_PORT=9090; API_PORT=9091; SPEED_PORT=7892
   os_service_loaded() { return 0; }
   launchctl() { [ "$1" = print ] && [ "$2" = "$GUI/$LABEL_API" ]; }
   port_busy() { return 0; }
+  lsof() { :; }                  # no visible listener: the root core is invisible to an ordinary account
   port_random() { echo 49999; }
   settings_set() { echo 'FAIL: root core ports were reassigned'; exit 1; }
   set_ui_url() { :; }
   pick_ports
-  [ "$PORT:$UI_PORT:$API_PORT:$SPEED_PORT" = 7890:9090:9091:7892 ]
-)
+  [ "$PORT:$UI_PORT:$API_PORT:$SPEED_PORT" = 7890:9090:9091:7892 ] || { echo 'FAIL: installer moved a port owned by the root TUN service'; exit 1; }
+  [ "$UNSEEN_PORTS" = '7890 / 9090 / 9091 / 7892' ] || { echo "FAIL: unseen ports not reported: [$UNSEEN_PORTS]"; exit 1; }
+  [ "$PORTS_VERIFIED" = 0 ] || { echo 'FAIL: ports the installer could not confirm were reported as verified'; exit 1; }
+) || exit 1
 echo 'PASS: installer preserves ports owned by the root TUN service'
 (
   SB=${SINGBOX:-$(type -P true)}

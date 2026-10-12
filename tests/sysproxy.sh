@@ -19,7 +19,7 @@ export FAKE_STATE=$W/state HOME=$W/home ENANA_HOME=$W/h LC_ALL=C ENANA_LANG=zh P
 mkdir -p "$FAKE_STATE" "$HOME" "$ENANA_HOME"
 export PATH="$HERE/fakebin:$PATH"
 # 系统代理助手会写 /usr/local/libexec 和 /etc/sudoers.d: 测试里全部重定向到沙箱 (假 install 也会拒绝沙箱之外的任何目标)
-export ENANA_ROOT_PREFIX="$W/root" ENANA_NETWORKSETUP="$HERE/fakebin/networksetup" FAKE_SUDOERS_DIR="$W/root/etc/sudoers.d"
+export ENANA_TEST=1 ENANA_ROOT_PREFIX="$W/root" ENANA_NETWORKSETUP="$HERE/fakebin/networksetup" FAKE_SUDOERS_DIR="$W/root/etc/sudoers.d"
 mkdir -p "$W/root"
 for c in networksetup sudo osascript; do
   case "$(command -v $c)" in "$HERE"/fakebin/*) ;; *) echo "REFUSING: 真实的 $c 出现在 PATH 中, 为防止改动系统已中止"; exit 1 ;; esac

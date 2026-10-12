@@ -147,7 +147,7 @@
   async function clearAutoSites() {
     var n = autoList().length, ok, r;
     if (!n) { ui.toast(t('set.asite.noneWhy'), 'warn'); return; }
-    ok = await ui.confirmDialog({ title: t('set.asite.clearTitle'), message: t('set.asite.clearMsg', { n: n }), detail: [t('set.asite.clearD')], confirmText: t('set.asite.clearGo'), danger: true });
+    ok = await ui.confirmDialog({ title: t('set.asite.clearTitle'), message: t('set.asite.clearMsg', { n: n }), detail: TP.tunDetail([t('set.asite.clearD')]), confirmText: t('set.asite.clearGo'), danger: true });
     if (!ok) return;
     r = await TP.helper('POST', '/api/sites/auto/clear');
     if (r.job) await TP.jobs.runInDock(t('set.asite.clear'), function () { return Promise.resolve(r); });
@@ -206,7 +206,7 @@
     if (items.length) kids.push(h('p', { class: 'cfm-d' }, h('b', null, t('set.reset.willClear'))), h('ul', { class: 'cfm-list' }, items.map(function (x) { return h('li', null, x); })));
     kids.push(h('p', { class: 'cfm-d' }, t('set.reset.keeps')), h('p', { class: 'cfm-d' }, t(d.logged_in ? 'set.reset.fromCloud' : 'set.reset.fromLocal')), h('p', { class: 'cfm-d' }, t('set.reset.backupNote')));
     if (d.sync && d.sync.enabled) kids.push(h('p', { class: 'cfm-d' }, t('set.reset.syncNote')));
-    ok = await ui.confirmDialog({ title: t('set.reset.dlgTitle'), message: d.total ? t('set.reset.msg', { n: d.total }) : t('set.reset.msg0'), detail: h('div', null, kids), confirmText: t('set.reset.go'), danger: true, confirmIcon: 'rotate-ccw' });
+    ok = await ui.confirmDialog({ title: t('set.reset.dlgTitle'), message: d.total ? t('set.reset.msg', { n: d.total }) : t('set.reset.msg0'), detail: TP.tunDetail(h('div', null, kids)), confirmText: t('set.reset.go'), danger: true, confirmIcon: 'rotate-ccw' });
     if (!ok) return;
     r = await TP.jobs.runInDock(t('set.reset.job'), function () { return TP.helper('POST', '/api/settings/reset'); });
     if (!r.ok) { await afterReset(); return; }
@@ -217,7 +217,7 @@
   async function undoReset() {
     var why = TP.why.helper(), d = rst.data, ok, r;
     if (why) { ui.toast(why, 'warn'); return; }
-    ok = await ui.confirmDialog({ title: t('set.reset.undoTitle'), message: t('set.reset.undoMsg', { when: d && d.backup ? TP.fmt.dateTime(d.backup.time) : '—' }), detail: [t('set.reset.undoD')], confirmText: t('set.reset.undoGo'), kind: 'warning', confirmIcon: 'history' });
+    ok = await ui.confirmDialog({ title: t('set.reset.undoTitle'), message: t('set.reset.undoMsg', { when: d && d.backup ? TP.fmt.dateTime(d.backup.time) : '—' }), detail: TP.tunDetail([t('set.reset.undoD')]), confirmText: t('set.reset.undoGo'), kind: 'warning', confirmIcon: 'history' });
     if (!ok) return;
     r = await TP.jobs.runInDock(t('set.reset.undoJob'), function () { return TP.helper('POST', '/api/settings/reset/undo'); });
     if (r.ok) ui.toast(t('set.reset.undone'), 'ok');

@@ -165,7 +165,7 @@
     var tagLabel = tag === 'AUTO' ? t('servers.auto.best') : tag, curLabel = cur === 'AUTO' ? t('servers.auto.best') : (cur || '—');
     if (isPin) {                                                         // 默认固定出口: 先列出谁在跟随它 (换了它们的出口 IP 会变), 让用户选择「继续走原出口」还是「跟着换」
       var done = await TP.exits.switchDefault(curLabel, tag, function (pre) {
-        return ui.confirmDialog({ title: t('servers.switch.titlePin'), message: t('servers.switch.msgPin', { from: curLabel, to: tagLabel }), detail: t(pre.none ? 'servers.switch.detailPinNone' : 'servers.switch.detailPin'), confirmText: t('servers.switch.go'), rememberKey: 'policy' });
+        return ui.confirmDialog({ title: t('servers.switch.titlePin'), message: t('servers.switch.msgPin', { from: curLabel, to: tagLabel }), detail: TP.tunDetail(t(pre.none ? 'servers.switch.detailPinNone' : 'servers.switch.detailPin')), confirmText: t('servers.switch.go'), rememberKey: 'policy' });
       });
       if (done) ui.toast(t('servers.switch.done', { group: t('servers.pin.title'), to: tagLabel }), 'ok');
       return;
@@ -173,7 +173,7 @@
     var ok = await ui.confirmDialog({
       title: t('servers.switch.titleAuto'),
       message: t('servers.switch.msgAuto', { from: curLabel, to: tagLabel }),
-      detail: t(tag === 'AUTO' ? 'servers.switch.detailAuto' : 'servers.switch.detailAutoPin'),
+      detail: TP.tunDetail(t(tag === 'AUTO' ? 'servers.switch.detailAuto' : 'servers.switch.detailAutoPin')),
       confirmText: t('servers.switch.go'), rememberKey: 'policy'
     });
     if (!ok) return;
@@ -281,7 +281,7 @@
     }
     if (!Object.keys(pre).length) {                                     // 没有谁在用它: 普通确认 (已经走过事前检查对话框的不再重复确认)
       var tx = TP.txt.role(s.tag, s.role, role);
-      var ok = await ui.confirmDialog({ title: t('servers.role.title'), message: tx.message, detail: tx.detail, confirmText: t('servers.role.go') });
+      var ok = await ui.confirmDialog({ title: t('servers.role.title'), message: tx.message, detail: TP.tunDetail(tx.detail), confirmText: t('servers.role.go') });
       if (!ok) return;
     }
     pendingRole[s.tag] = role; renderTable();
@@ -297,7 +297,7 @@
       Object.keys(pre).forEach(function (k) { q[k] = pre[k]; });
     }
     if (!Object.keys(pre).length) {                                     // 走过事前检查对话框的 (已经明确选择了去向并点了「删除」) 不再重复确认
-      var ok = await ui.confirmDialog({ title: t('servers.del.title'), message: t('servers.del.msg', { tag: s.tag }), detail: [s.sub ? t('servers.del.sub', { name: s.sub }) : '', t('servers.del.d1')].filter(Boolean), confirmText: t('common.delete'), danger: true });
+      var ok = await ui.confirmDialog({ title: t('servers.del.title'), message: t('servers.del.msg', { tag: s.tag }), detail: TP.tunDetail([s.sub ? t('servers.del.sub', { name: s.sub }) : '', t('servers.del.d1')].filter(Boolean)), confirmText: t('common.delete'), danger: true });
       if (!ok) return;
     }
     pendingDel[s.tag] = true; renderTable();
@@ -399,7 +399,7 @@
     setTip(r.del, t('servers.subs.delAria', { name: x.name }));
   }
   async function askRefresh(x) {
-    var ok = await ui.confirmDialog({ title: t('servers.subs.refreshTitle'), message: t('servers.subs.refreshMsg', { name: x.name }), detail: [t('servers.subs.refreshD1'), t('servers.subs.refreshD2')], confirmText: t('servers.subs.refresh'), rememberKey: 'subrefresh' });
+    var ok = await ui.confirmDialog({ title: t('servers.subs.refreshTitle'), message: t('servers.subs.refreshMsg', { name: x.name }), detail: TP.tunDetail([t('servers.subs.refreshD1'), t('servers.subs.refreshD2')]), confirmText: t('servers.subs.refresh'), rememberKey: 'subrefresh' });
     if (!ok) return;
     await TP.subs.refresh(x.name, false);
   }
@@ -409,7 +409,7 @@
       detail.push(t(imp.known ? 'servers.subs.delPins' : 'servers.subs.delPinsUnknown', { pins: imp.pins.join(', '), n: imp.n }));
       q.accept_orphans = 1;
     }
-    var ok = await ui.confirmDialog({ title: t('servers.subs.delTitle'), message: t('servers.subs.delMsg', { name: x.name }), detail: detail, confirmText: t('common.delete'), danger: true });
+    var ok = await ui.confirmDialog({ title: t('servers.subs.delTitle'), message: t('servers.subs.delMsg', { name: x.name }), detail: TP.tunDetail(detail), confirmText: t('common.delete'), danger: true });
     if (!ok) return;
     await TP.jobs.runInDock(t('servers.subs.delJob', { name: x.name }), function () { return TP.helper('POST', '/api/sub/delete', { q: q }); });
     await TP.loadState();

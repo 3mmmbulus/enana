@@ -120,6 +120,7 @@ os_service_start() {
   fi
 }
 os_service_restart() {
+  local rc=0
   type core_mark_start >/dev/null 2>&1 && core_mark_start
   type core_restart_note >/dev/null 2>&1 && core_restart_note
   if enhanced_configured || enhanced_loaded; then
@@ -130,7 +131,11 @@ os_service_restart() {
       type oplog >/dev/null 2>&1 && oplog "${OP_WHO:-auto}" "重启核心方式" "$(kv mode tun via helper)" ok
       return 0
     fi
-    if enhanced_configured && type oplog >/dev/null 2>&1; then oplog "${OP_WHO:-auto}" "重启核心方式" "$(kv mode tun via admin why "${ENHANCED_FAST_WHY:-}")" ok; fi
+    if enhanced_configured && type oplog >/dev/null 2>&1; then
+      os_service_start; rc=$?                              # 管理员框可能被取消: 结果出来之后才记这一条 (ok / cancelled / error), 失败时带上返回码
+      oplog "${OP_WHO:-auto}" "重启核心方式" "$(kv mode tun via admin why "${ENHANCED_FAST_WHY:-}" rc "$([ "$rc" = 0 ] || echo "$rc")")" "$(enhanced_result "$rc")"
+      return "$rc"
+    fi
     os_service_start
   else os_system_service_restart; fi
 }
@@ -157,21 +162,24 @@ os_sysproxy_cached() { # networksetup 很慢: 结果缓存 20 秒 (设置/关闭
   if os_sysproxy_ok; then printf '%s 1\n' "$t" > "$f"; return 0; fi
   printf '%s 0\n' "$t" > "$f"; return 1
 }
-os_sysproxy_foreign() { # 打印正在使用其它代理设置的网络服务 (用于安装前提醒)
-  local s k out
+os_sysproxy_foreign() { # [旧端口] 打印正在使用其它代理设置的网络服务 (用于安装前提醒); 127.0.0.1 上的旧端口是本程序自己留下的 (端口后来被换了), 不算
+  local s k out old=${1:-}
   while IFS= read -r s; do
     for k in webproxy securewebproxy socksfirewallproxy; do
       out=$(networksetup -get$k "$s" 2>/dev/null) || continue
-      if printf '%s\n' "$out" | grep -q '^Enabled: Yes' && ! printf '%s\n' "$out" | grep -q "^Port: $PORT\$"; then printf '%s\n' "$s"; break; fi
+      printf '%s\n' "$out" | grep -q '^Enabled: Yes' || continue
+      printf '%s\n' "$out" | grep -q "^Port: $PORT\$" && continue
+      [ -n "$old" ] && printf '%s\n' "$out" | grep -q "^Port: $old\$" && printf '%s\n' "$out" | grep -q '^Server: 127.0.0.1' && continue
+      printf '%s\n' "$s"; break
     done
   done < <(os_sysproxy_services)
 }
-os_sysproxy_mine() { # 任何网络服务的代理指向本地端口 -> 0
+os_sysproxy_mine() { # [端口] 任何网络服务的代理指向本地端口 (默认 $PORT) -> 0
   local s k out
   while IFS= read -r s; do
     for k in webproxy securewebproxy socksfirewallproxy; do
       out=$(networksetup -get$k "$s" 2>/dev/null) || continue
-      printf '%s\n' "$out" | grep -q '^Enabled: Yes' && printf '%s\n' "$out" | grep -q "^Port: $PORT\$" && printf '%s\n' "$out" | grep -q '^Server: 127.0.0.1' && return 0
+      printf '%s\n' "$out" | grep -q '^Enabled: Yes' && printf '%s\n' "$out" | grep -q "^Port: ${1:-$PORT}\$" && printf '%s\n' "$out" | grep -q '^Server: 127.0.0.1' && return 0
     done
   done < <(os_sysproxy_services)
   return 1
@@ -204,17 +212,17 @@ os_sysproxy_verify() { if [ "$1" = on ]; then os_sysproxy_ok; else ! os_sysproxy
 # 第一次需要授权时, 在同一次授权里顺便安装一个只做「改系统代理」这一件事的小程序 (root 所有、用户改不了、端口写死, 见 lib/sysproxy-helper.tpl),
 # 并给当前用户配置只开放这一个文件的免密 sudo (写入前用 visudo -cf 校验)。之后打开 / 关闭系统代理都直接调用它, 不再弹窗; 卸载时一并删除。
 SYSPROXY_HELPER_VERSION=1
-os_sysproxy_helper_path()  { printf '%s/usr/local/libexec/enana/sysproxy-%s' "${ENANA_ROOT_PREFIX:-}" "$(id -u)"; }
-os_sysproxy_sudoers_path() { printf '%s/etc/sudoers.d/enana-sysproxy-%s' "${ENANA_ROOT_PREFIX:-}" "$(id -u)"; }
-os_sysproxy_helper_text() { # 把端口 / networksetup 路径 / 版本写死进模板, 输出助手脚本全文 (networksetup 路径只有测试 (设了 ENANA_ROOT_PREFIX) 时才允许换)
+os_sysproxy_helper_path()  { printf '%s/usr/local/libexec/enana/sysproxy-%s' "$(test_env ENANA_ROOT_PREFIX)" "$(id -u)"; }
+os_sysproxy_sudoers_path() { printf '%s/etc/sudoers.d/enana-sysproxy-%s' "$(test_env ENANA_ROOT_PREFIX)" "$(id -u)"; }
+os_sysproxy_helper_text() { # 把端口 / networksetup 路径 / 版本写死进模板, 输出助手脚本全文 (networksetup 路径只有测试 (ENANA_TEST 且设了 ENANA_ROOT_PREFIX) 时才允许换)
   local ns=/usr/sbin/networksetup
-  [ -z "${ENANA_ROOT_PREFIX:-}" ] || ns=${ENANA_NETWORKSETUP:-$ns}
+  [ -z "$(test_env ENANA_ROOT_PREFIX)" ] || ns=$(test_env ENANA_NETWORKSETUP "$ns")
   [[ $PORT =~ ^[0-9]+$ ]] && [[ $ns =~ ^/[A-Za-z0-9._/-]+$ ]] || return 1
   sed -e "s|@PORT@|$PORT|g" -e "s|@NETWORKSETUP@|$ns|g" -e "s|@VERSION@|$SYSPROXY_HELPER_VERSION|g" "$LIB/sysproxy-helper.tpl"
 }
 os_helper_trusted() { # <路径> <版本>  已安装、归 root (测试里归当前用户)、别人改不了、不是符号链接、版本对, 并且当前用户可以免密调用 (系统代理助手和 TUN 规则同步助手共用)
   local h=$1 want=$2 v p want_uid=0
-  [ -z "${ENANA_ROOT_PREFIX:-}" ] || want_uid=$(id -u)
+  [ -z "$(test_env ENANA_ROOT_PREFIX)" ] || want_uid=$(id -u)
   [ -f "$h" ] && [ ! -L "$h" ] && [ "$(stat -f %u "$h" 2>/dev/null)" = "$want_uid" ] || return 1
   p=$(stat -f %Sp "$h" 2>/dev/null); [ "${p:5:1}" != w ] && [ "${p:8:1}" != w ] || return 1      # 组 / 其他人可写就不信任
   v=$(sudo -n "$h" version 2>/dev/null) || return 1

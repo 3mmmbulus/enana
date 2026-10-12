@@ -14,7 +14,7 @@ set -u
 _p="${BASH_SOURCE[0]}"
 while [ -L "$_p" ]; do _l=$(readlink "$_p"); case $_l in /*) _p=$_l ;; *) _p=$(dirname "$_p")/$_l ;; esac; done
 _d=$(cd "$(dirname "$_p")" && pwd -P)
-. "$_d/lib/common.sh"
+. "$_d/lib/common.sh" || { printf 'enana: 无法加载 %s/lib/common.sh, 程序文件不完整, 请重新运行安装\nenana: cannot load %s/lib/common.sh (incomplete program files), run the installer again\n' "$_d" "$_d" >&2; exit 1; }
 init_paths "$_p"
 for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops exits speed stats prefs snapshot plan official sync vps diag menu detect console; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
@@ -71,10 +71,31 @@ restore_on_fail() { # EXIT 陷阱: 配置阶段失败时还原
   [ "$1" = 0 ] || { restore_program; info "已还原到升级前的程序文件, 代理配置没有改变" "Restored the previous program files; the proxy configuration was not changed"; }
 }
 
+# lib / data 的替换: 先整棵复制到 $H 旁边的临时目录, 核对文件数与 VERSION, 再换上 (旧目录先挪开, 正在运行的 API 不会读到写了一半的目录)
+_program_tree_fail() { # <暂存目录> <旧目录> <阶段: 0 复制 / 1 挪开旧目录 / 2 换入新目录> <原因>: 把挪开的旧目录换回原位, 清掉临时目录, 退出
+  local d
+  if [ "$3" = 2 ]; then rm -rf "$H/lib" "$H/data"; fi     # 阶段 2: 旧目录都已挪开, $H 里只剩刚换入的新目录
+  for d in lib data; do [ ! -e "$2/$d" ] || mv "$2/$d" "$H/$d"; done
+  rm -rf "$1" "$2"
+  die "$4" "原来的程序文件没有改动"
+}
+program_tree_replace() {
+  local st="$H.stage.$$" old="$H.old.$$" d a b
+  rm -rf "$st" "$old"; mkdir -p "$st" "$old" || die "无法创建临时目录 $st" "原来的程序文件没有改动"
+  for d in lib data; do
+    cp -R "$SRC/$d" "$st/$d" || _program_tree_fail "$st" "$old" 0 "复制 $d/ 失败"
+    a=$(find "$SRC/$d" ! -type d | wc -l | tr -d ' '); b=$(find "$st/$d" ! -type d | wc -l | tr -d ' ')
+    [ "$a" -gt 0 ] && [ "$a" = "$b" ] || _program_tree_fail "$st" "$old" 0 "复制后 $d/ 的文件数不对 ($b / $a)"
+  done
+  grep -Eq '^[0-9]+\.[0-9]+' "$SRC/VERSION" 2>/dev/null || _program_tree_fail "$st" "$old" 0 "VERSION 文件缺失或格式不对"
+  for d in lib data; do [ ! -e "$H/$d" ] || mv "$H/$d" "$old/$d" || _program_tree_fail "$st" "$old" 1 "无法挪开旧的 $d/"; done
+  for d in lib data; do mv "$st/$d" "$H/$d" || _program_tree_fail "$st" "$old" 2 "无法换入新的 $d/"; done
+  rm -rf "$st" "$old"
+}
 install_files() { # 把程序文件复制到 $H (源码目录与 $H 相同时跳过)
   mkdir -p "$H" "$H/ui" "$H/certs"; chmod 700 "$H"
   if [ "$SRC" != "$H" ]; then
-    rm -rf "$H/lib" "$H/data"; cp -R "$SRC/lib" "$H/lib"; cp -R "$SRC/data" "$H/data"
+    program_tree_replace
     cp -R "$SRC/ui/." "$H/ui/"
     [ ! -d "$SRC/windows" ] || { mkdir -p "$H/windows"; cp -R "$SRC/windows/." "$H/windows/"; }
     # 原子替换 (N4): 升级时正在运行的 get.sh 就是这个文件, 原地 cp 会让 bash 读到错位的新内容; 写临时文件再 mv 则旧进程不受影响
@@ -125,19 +146,22 @@ port_random() { # 随机空闲端口 (20000-59999), 避开 $1 里已经选了的
   done
   return 1
 }
-pick_ports() {
-  local spec name lbl cur new used=" $PORT $UI_PORT $API_PORT $SPEED_PORT "
+pick_ports() { # 本地端口: 空闲或只有本程序在用 → 保持不变 (升级不换端口); 被别的程序占着 → 换一个随机的空闲端口并写进设置; 有人在用但看不到是谁 → 保持不变, 记入 UNSEEN_PORTS
+  local spec name lbl cur new st bad=0 unseen='' used=" $PORT $UI_PORT $API_PORT $SPEED_PORT "
   for spec in "PORT:$LABEL" "UI_PORT:$LABEL" "API_PORT:$LABEL_API" "SPEED_PORT:$LABEL"; do
     name=${spec%%:*}; lbl=${spec#*:}; cur=${!name}
-    # A root TUN core owns the same ports but has no GUI LaunchAgent.
-    # Treating it as foreign silently changes ports during an upgrade.
-    [ "$lbl" != "$LABEL" ] || ! os_service_loaded || continue
-    os_label_loaded "$lbl" && continue
-    port_busy "$cur" || continue
-    new=$(port_random "$used") || die "找不到空闲的本地端口" "请先关闭一些占用端口的程序, 再重新运行安装命令"
-    warn "本地端口 $cur 已被其它程序占用, 已自动改用 $new"
-    printf -v "$name" '%s' "$new"; export "$name"; settings_set "$name" "$new"; used="$used$new "
+    st=$(port_state "$cur" "$lbl")
+    case $st in
+      free|own) ;;
+      unseen) unseen="$unseen${unseen:+ / }$cur" ;;
+      foreign) new=$(port_random "$used") || die "找不到空闲的本地端口" "请先关闭一些占用端口的程序, 再重新运行安装命令"
+         warn "本地端口 $cur 已被其它程序占用, 已自动改用 $new"
+         printf -v "$name" '%s' "$new"; export "$name"; settings_set "$name" "$new"; used="$used$new " ;;
+      *) bad=1; warn "没能确认本地端口 $cur 的占用情况, 沿用不变" ;;
+    esac
   done
+  UNSEEN_PORTS=$unseen
+  if [ -n "$unseen" ] || [ "$bad" = 1 ]; then PORTS_VERIFIED=0; else PORTS_VERIFIED=1; fi
   set_ui_url
 }
 
@@ -146,14 +170,28 @@ st_preflight() {
   [ "$MACOS_MAJOR" -ge 12 ] || warn "macOS $MACOS 较旧: 官方 sing-box 1.14 可能无法在此运行 (Intel 会自动尝试兼容包)"
   ok "macOS $MACOS · $ARCH"
   mkdir -p "$H"
+  foreign_check
+  local old_port=$PORT                                       # 换端口之前的端口: 系统代理可能还指着它 (本程序自己设置的)
   pick_ports
-  ok "本地端口 $PORT / $UI_PORT / $API_PORT / $SPEED_PORT 可用"
+  if [ -n "$UNSEEN_PORTS" ]; then info "本地端口 $UNSEEN_PORTS 有人在用, 没能确认是谁 (普通账户看不到 root 核心的监听者), 沿用不变"
+  elif [ "$PORTS_VERIFIED" = 1 ]; then ok "本地端口 $PORT / $UI_PORT / $API_PORT / $SPEED_PORT 可用"; fi
+  if [ "$PORT" != "$old_port" ] && [ "${NETWORK_MODE:-system}" != tun ] && os_sysproxy_mine "$old_port"; then
+    # 端口被别的程序占着、换了端口: 系统代理还指着旧端口, 那是本程序留下的, 不是别人的设置, 所以改成新端口 (升级时也是)
+    [ "$SEL_sysproxy" = 1 ] || { SEL_sysproxy=1; STEPS=$((STEPS + 1)); }
+    info "系统代理还指向旧端口 $old_port (本程序之前设置的), 将改为新端口 $PORT"
+  fi
   if [ "$SEL_sysproxy" = 1 ]; then
-    local foreign; foreign=$(os_sysproxy_foreign | paste -sd, -)
+    local foreign; foreign=$(os_sysproxy_foreign "$old_port" | paste -sd, -)
     if [ -n "$foreign" ]; then
       os_sysproxy_backup
       warn "网络服务「$foreign」已有其它系统代理设置, 继续会覆盖 (原设置已备份到 $H/proxy-backup.txt)"
-      confirm "继续?" y || die "已取消"
+      if _noninteractive; then
+        warn "非交互模式: 没有覆盖它们, 本次跳过系统代理设置 (运行 enana on 会替换现有设置, 原设置已备份到 $H/proxy-backup.txt)"
+        oplog "${OP_WHO:-terminal}" "跳过系统代理设置" "$(kv services "$foreign")" ok
+        SEL_sysproxy=0; STEPS=$((STEPS - 1))
+      else
+        confirm "继续?" n || die "已取消"
+      fi
     fi
   fi
 }
@@ -239,6 +277,10 @@ st_shortcut() {
 st_verify() {
   step "验证"
   local code
+  if [ "$(port_state "$PORT" "$LABEL")" = foreign ]; then    # 启动之后端口仍被别的程序占着: sing-box 没能绑定它, 代理实际没有生效
+    warn "代理端口 $PORT 被别的程序占用: enana 没能绑定它, 代理没有生效 (运行 enana doctor 查看占用的程序)"
+    oplog "${OP_WHO:-terminal}" "代理端口绑定失败" "$(kv port "$PORT")" error
+  fi
   os_service_running && ok "代理服务运行中" || warn "代理服务没有运行"
   code=$(curl -s -o /dev/null -m 6 --noproxy '*' -w '%{http_code}' "$UI_URL" || true)
   [ "$code" = 200 ] && ok "仪表盘可访问" || warn "仪表盘暂时打不开 (HTTP ${code:-无响应})"
@@ -514,6 +556,7 @@ $(_t "  enana open           打开仪表盘")
 $(_t "  enana env            打印终端代理变量 (命令行工具不读系统代理): eval \"\$(enana env)\"")
 $(_t "  enana uninstall      完整卸载 (删除全部本机数据)")
 $(_t "选项: --yes 全部采用推荐值 · --force 强制重装环境 · --quiet 静默 · --lang zh|en 指定语言")
+$(_t "  注意: --yes / --upgrade 不再覆盖别人设置的系统代理 (跳过这一步, 需要时运行 enana on); 交互安装时回车 = 取消 (外部代理的提醒与系统代理的询问默认都是 n)")
 EOF
 }
 

@@ -223,8 +223,8 @@
     if (why) { ui.toast(why, 'warn'); return; }
     if (pending[s.tag]) { ui.toast(t('rules.busy'), 'warn'); return; }
     ok = await ui.confirmDialog(want
-      ? { title: t('rules.on.title'), message: t('rules.on.msg', { name: name }), detail: [t('rules.on.d1', { tag: s.tag }), t('rules.on.d2')], confirmText: t('rules.on.go'), kind: 'success' }
-      : { title: t('rules.off.title'), message: t('rules.off.msg', { name: name }), detail: [t('rules.off.d1'), t('rules.off.d2')], confirmText: t('rules.off.go'), kind: 'warning' });
+      ? { title: t('rules.on.title'), message: t('rules.on.msg', { name: name }), detail: TP.tunDetail([t('rules.on.d1', { tag: s.tag }), t('rules.on.d2')]), confirmText: t('rules.on.go'), kind: 'success' }
+      : { title: t('rules.off.title'), message: t('rules.off.msg', { name: name }), detail: TP.tunDetail([t('rules.off.d1'), t('rules.off.d2')]), confirmText: t('rules.off.go'), kind: 'warning' });
     if (!ok) return;
     pending[s.tag] = want ? 'on' : 'off'; render();
     try {
@@ -239,7 +239,7 @@
     if (why) { ui.toast(why, 'warn'); return; }
     if (!s.custom) return;
     if (pending[s.tag]) { ui.toast(t('rules.busy'), 'warn'); return; }
-    ok = await ui.confirmDialog({ title: t('rules.del.title'), message: t('rules.del.msg', { name: name }), detail: [t('rules.del.d1'), t('rules.del.d2')], confirmText: t('common.delete'), danger: true });
+    ok = await ui.confirmDialog({ title: t('rules.del.title'), message: t('rules.del.msg', { name: name }), detail: TP.tunDetail([t('rules.del.d1'), t('rules.del.d2')]), confirmText: t('common.delete'), danger: true });
     if (!ok) return;
     pending[s.tag] = 'del'; render();
     try {
@@ -314,7 +314,7 @@
           nm = name.value.trim(); u = url.value.trim();
           ok = await ui.confirmDialog({
             title: t('rules.add.confirmTitle'), message: t('rules.add.confirmMsg', { name: nm, host: parseUrl(u).host }),
-            detail: [t('rules.add.confirmD1', { policy: TP.name.route(pv) }), t('rules.add.confirmD2'), t('rules.add.confirmD3')], confirmText: t('rules.add.confirmGo')
+            detail: TP.tunDetail([t('rules.add.confirmD1', { policy: TP.name.route(pv) }), t('rules.add.confirmD2'), t('rules.add.confirmD3')]), confirmText: t('rules.add.confirmGo')
           });
           if (!ok) return false;
           if (lastCard) lastCard.close();

@@ -55,6 +55,7 @@ ts<TAB>who<TAB>action<TAB>detail<TAB>result      ← tsv 的第一行是列名, 
 | `health` | tsv | **连接健康记录 (2.3.8)**: `ts kind target result ms detail`, 每分钟一批, 最多最近 6000 行; 见下面「连接健康记录」 |
 | `health_summary` | tsv | 健康记录分桶统计: `bucket kind target n ok fail ms_avg ms_max errors` (范围 ≤ 24 小时 10 分钟一桶, ≤ 72 小时 30 分钟, 更长 1 小时) |
 | `outages` | tsv | 连续失败的时段: `start end minutes kind target result samples` (服务器端口至少连续 2 分钟, 经代理探测至少连续 2 次) |
+| `apilog` | raw | **辅助服务日志 (`api.log`) 的最后 200 行**, 只含导出时间范围内的行 (带日期时间的按时间筛; 没有时间的行跟随前一行, 同代理日志)。先取上一代 `api.log.1` 再取当前文件 (超过 5 MB 轮转, 保留三代, 超过保留期的一并删除)。打码: 服务器地址和标签 (标签换成 `<server>`), 文字里的 IP (同服务器地址), URL 的用户名 / 密码与路径, 用户名。更新任务写的行带日期时间 |
 | `ops` | tsv | **操作记录**: `ts who action detail result` |
 | `access` | tsv | **网站访问** (一条连接一行): `ts id net host port app user route node reason result err dur ips errmsg path` |
 | `proxy` | raw | **代理日志** (核心原始日志, 去掉颜色码, 用户名打码) |
@@ -92,8 +93,12 @@ ts<TAB>who<TAB>action<TAB>detail<TAB>result      ← tsv 的第一行是列名, 
 | `已被退出登录` | `reason=kicked http=401 proxy_was=1` | **来源 `auto`** (2.3.8 起; 以前误记为 terminal, 详情也不是 key=value): 云端撤销了会话 (`kicked` 被同账号其它设备下线 · `limit` 超过设备数 · `expired` · `logout`) 或离线超过 7 天 (`offline_expired`)。**本机会随之关闭代理 (全部直连)**, 重新登录后总开关仍是关闭的 |
 | `开启代理` / `关闭代理` (来源 `terminal`) | `enabled=1 via=console` | 终端 / 控制台里改总开关 (以前不留记录) |
 | `导出诊断日志` / `清除日志` | `hours=24 sections=ops,access,proxy,snapshot bytes=…` / `type=all before=… freed=…` | 日志本身的操作也会留痕 |
-| `服务器检测重试` / `取消服务器检测` | `attempt=1 max=3 code=E_SSH_UNREACHABLE` / `id=vps-probe-…` | 只读检测的重试与取消; 实时阶段和耗时见任务接口 `result.connection`, 不包含 SSH 凭据 |
-| `添加自己的服务器` (失败, `result=error`) | `host=1.2.3.4 code=E_VPS_VERIFY reason=blocked_cloud tcp=timeout` | 部署 / 重新验证失败: `reason` 是本机判断的原因 (`handshake` `not_listening` `refused` `unreachable` `blocked_server` `blocked_cloud` `blocked_unknown` `unknown`, 含义见 API.md「待验证的部署」), `tcp` 是本机到节点端口的 TCP 预检结果; 不含端口以外的服务器信息和任何凭据 |
+| `取消服务器检测` | `id=vps-probe-…` | 只读检测被取消 (实时阶段和耗时见任务接口 `result.connection`, 不包含 SSH 凭据) |
+| `探测服务器` | `host=1.2.3.4 os=…` (失败时 `code=… reason=…`, `result=error`) | **每次 SSH 探测结束写一行**: 成功 `ok`; 失败或取消 `error` (取消的码是 `E_CANCELLED`)。导出时 `host` 打码。不写的: 同一次探测里的重试 (次数只在任务结果里) 和主机指纹的确认 (确认前没有改动任何东西, 确认后的探测才写行) |
+| `测速` | `mode=direct nodes=3` | **每次测速结束写一行** (`result`: `ok`; 被停止时 `cancelled`): 只记模式 (`direct` / `node` / `both`) 和节点数, 不记测速目标 (结果在任务接口)。测速会切换测速用的选择器, 所以留痕 |
+| `重启核心方式` (`via=admin`) | `mode=tun via=admin why=changed` (失败时多 `rc=返回码`) | TUN 模式下需要管理员授权才重启核心: `result` 是 `ok` / `cancelled` (在密码框里点了取消) / `error` (其它失败); 结果在授权之后才写 |
+| `更新 enana` (失败, `result=error`) | `from=2.3.22 step=安装并重新生成配置 reason=…` | `step` 是真正失败的那一步; `reason` 是安装脚本输出的最后一条「✗」原因。这些行同时写进 `api.log` (带日期时间) |
+| `添加自己的服务器` (失败, `result=error`) | `host=1.2.3.4 code=E_VPS_VERIFY reason=blocked_cloud tcp=timeout` | 部署 / 重新验证失败 (探测失败记在「探测服务器」): `reason` 是本机判断的原因 (`handshake` `not_listening` `refused` `unreachable` `blocked_server` `blocked_cloud` `blocked_unknown` `unknown`, 含义见 API.md「待验证的部署」), `tcp` 是本机到节点端口的 TCP 预检结果; 不含端口以外的服务器信息和任何凭据 |
 | `放弃待验证的部署` | `id=p-0a1b2c` | 用户放弃了「部署完成但验证没通过」的记录 (只删本机保存的待验证节点) |
 
 - 排查「为什么昨晚突然不走代理了」: 先看 `ops` 里的时间线 (**谁、什么时候、把什么从什么改成了什么**), 再对照 `access` 里同一时间之后的 `route` / `reason`。
@@ -242,7 +247,8 @@ python3 tools/diag-summary.py <文件> --app "Google Chrome" --host google.com
 ## 保留与隐私
 
 - 三类日志各有独立开关 (设置 → 日志): **操作记录** / **网站访问** / **代理日志**; 关闭哪一类, 导出里对应分区就没有数据 (`meta` 的 `settings.*` 会如实标出)。
-- 保留时长 12 小时 – 30 天 (默认 3 天), 按小时清理; 超出的日志在每小时的维护里自动压缩 / 删除。
+- 保留时长 12 小时 – 30 天 (默认 3 天), 按小时清理; 超出的日志在每小时的维护里自动压缩 / 删除 (包括 `api.log` 的历史代 `api.log.1` – `api.log.3`)。
+- 导出里的路径、地址都做了打码: 系统用户名 (`/Users/<user>`, `C:\Users\<user>`); 服务器地址 (操作记录详情里的 `host=` 也一样); 自定义规则集 / 自定义 DNS 的地址只保留域名 (路径和查询串可能带着令牌, `用户:密码@` 整段去掉); 自定义解析的 IP 同服务器地址一样打码; 辅助服务日志 (`apilog`) 里的 IP 和服务器标签同样处理。
 - 日志只存在本机 (`~/.enana/logs`); **完整日志不会自动上传**, 导出文件由用户自己决定发给谁。2.3.9 起另有可关闭的「诊断摘要上传」(不含网站 / 应用名 / IP / 服务器地址, 见上面「诊断上传」)。健康记录 (`health-*.log`) 只含服务器名 / 角色 / 端口连通结果和探测站点的状态码, 不含服务器地址、凭据或访问过的网站; 算在「操作记录」的占用和开关里。
 
 ## 接管与绕过代理的证据
@@ -263,4 +269,4 @@ localhost 回调、局域网 socket 和核心自身出口不计入绕过系统�
 
 诊断与 Mac 使用同一导出入口与格式, 增加 Windows 版本/架构、用户任务和 TUN 任务、双栈与 localhost 接口归属、WinINet 代理状态和 PIN 主/辅助 EXE 的 TCP 连接快照。`possible_system_proxy_bypass` 仅为候选; `tun_os_socket_observed` 表示 TUN 模式下观察到 OS socket, 不单独证明出口。UDP 远端不可见时明确标记 `unavailable-on-Windows`。详见 [Windows 验收](WINDOWS.md)。
 
-辅助服务的日志 (`worker.log` `api.log` `launcher.log` `tick.log` `check.log`) 里的错误行, 以及 `worker.start` / `core.ready` 事件, 现在也进入导出的 `env` 分区 (`helperlog.<文件>: …` 行)。Windows 目前**不**自动上传摘要, 也不记录健康 (`health_on` / `diag_enabled` 只认 macOS); 辅助服务的启动 / 核心就绪 / 核心失败只写在它自己的 `worker.log` 里, 不进操作记录。
+辅助服务的日志 (`worker.log` `launcher.log` `tick.log` `check.log`) 里的错误行, 以及 `worker.start` / `core.ready` 事件, 现在也进入导出的 `env` 分区 (`helperlog.<文件>: …` 行); `api.log` 则放在 `apilog` 分区 (最后 200 行, 只含导出时间范围内的行)。最近一次失败的「更新 enana」写在 `env` 里的 `update.last_failed.*`, 只在导出里选了操作记录时才有; 之后又成功更新过, 就写 `none`。Windows 目前**不**自动上传摘要, 也不记录健康 (`health_on` / `diag_enabled` 只认 macOS); 辅助服务的启动 / 核心就绪 / 核心失败只写在它自己的 `worker.log` 里, 不进操作记录。

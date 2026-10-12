@@ -56,7 +56,7 @@ function setup(over = {}) {
   const I18N = { lang: 'en', t: (k, p) => k + (p ? JSON.stringify(p) : ''), L: k => k, isL: () => false, has: () => true, pick: e => e.name };
   const S = { state: { servers: cfg.servers }, proxies: { PIN: { now: cfg.pinNow } }, exits: null, svcByTag: { 'svc-chatgpt': { group: 'ai', name: 'N:chatgpt' }, 'svc-claude': { group: 'ai', name: 'N:claude' }, 'svc-news': { group: 'media', name: 'N:news' } } };
   const TP = {
-    S, h, I18N, V: {}, cfg: {},
+    S, h, I18N, V: {}, cfg: {}, tunDetail: d => d, tunNote: () => null,      // 没有 actions 模块: 不开增强模式, 管理员提示为空
     on: (ev, fn) => { (bus[ev] = bus[ev] || []).push(fn); },
     emit: (ev, d) => { log.emits.push(ev); (bus[ev] || []).forEach(fn => fn(d)); },
     setText: (el, v) => { el.textContent = String(v); },

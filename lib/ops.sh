@@ -519,28 +519,53 @@ op_core_upgrade() { # [版本|latest]  latest = 兼容清单里和当前 enana �
   fi
 }
 
+# get.sh 的错误输出 (die 打印的「✗」行等) 追加进 api.log, 每行加上日期时间 (这一次运行的行统一用运行结束的时刻); 标准输出是最后一条「✗」行的文字, 即失败原因
+_update_err_flush() { # <错误输出文件>
+  local ts l reason=''
+  ts=$(date '+%F %T')
+  while IFS= read -r l || [ -n "$l" ]; do
+    l=$(printf '%s' "$l" | sed $'s/\033\\[[0-9;]*m//g')
+    [ -n "$l" ] || continue
+    printf '%s %s\n' "$ts" "$l" >> "$H/api.log"
+    case $l in *✗*) reason=$(printf '%s' "$l" | sed 's/^[[:space:]]*✗[[:space:]]*//') ;; esac
+  done < "$1"
+  printf '%s' "$reason"
+}
 # 更新 enana 本体: 重新运行 get.sh 的升级流程 (下载 → 校验 SHA-256 → 替换文件 → 重新生成配置)
+# 错误输出按任务各写一个文件 (jobs/<任务编号>.get.err, 终端运行时用进程编号), 不会和别的更新混在一起; 进程中途被结束 (TERM / INT / HUP 也走正常退出) 时, 已经写进去的行在 EXIT 时补进 api.log
+_update_err_file() { printf '%s/jobs/%s.get.err' "$H" "${JOB_ID:-$$}"; }
 op_self_update() {
-  local rc line new
+  local rc line new reason idx=0 label='检查新版本' err stepf
+  err=$(_update_err_file); stepf="${err%.get.err}.get.step"
   job_step 0 5 "检查新版本"
   update_check force >/dev/null 2>&1 || true
   if ! update_has_new; then _txn_end ok "已经是最新版本 ($VERSION)"; return 0; fi
   [ -f "$H/get.sh" ] || { _txn_end fail "缺少升级脚本 get.sh, 请重新运行安装命令" 1; return 1; }
+  mkdir -p "$H/jobs"; : > "$err"; rm -f "$stepf"
+  trap 'exit 143' TERM INT HUP
+  trap '_update_err_flush "$(_update_err_file)" >/dev/null 2>&1; rm -f "$(_update_err_file)"' EXIT
   if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then
     job_step 1 30 "下载并校验新版本"
-    if win_bridge self-update >> "$H/api.log" 2>&1; then
+    if win_bridge self-update > "$err" 2>&1; then
+      _update_err_flush "$err" >/dev/null; rm -f "$err"
       IFS= read -r new < "$H/VERSION"; _txn_end ok "已更新到 v$new"; return 0
-    else _txn_end fail "Windows 更新失败, 已保留当前版本 (详情见 api.log)" 2; return 1; fi
+    else _update_err_flush "$err" >/dev/null; rm -f "$err"; _txn_end fail "Windows 更新失败, 已保留当前版本 (详情见 api.log)" 1; return 1; fi
   fi
-  # get.sh 在 ENANA_PROGRESS=1 时打印「##job 步骤序号 百分比 文字」, 这里转成任务进度
-  ENANA_PROGRESS=1 ENANA_LANG="${I18N_LANG:-}" bash "$H/get.sh" --upgrade --yes 2>>"$H/api.log" | while IFS= read -r line; do
-    case $line in '##job '*) set -- ${line#\#\#job }; job_step "$1" "$2" "${line#\#\#job $1 $2 }" ;; esac
+  # get.sh 在 ENANA_PROGRESS=1 时打印「##job 步骤序号 百分比 文字」, 这里转成任务进度; 最后一个序号记下来, 失败就是停在这一步
+  ENANA_PROGRESS=1 ENANA_LANG="${I18N_LANG:-}" bash "$H/get.sh" --upgrade --yes 2>"$err" | while IFS= read -r line; do
+    case $line in '##job '*) set -- ${line#\#\#job }; printf '%s %s\n' "$1" "${line#\#\#job $1 $2 }" > "$stepf"; job_step "$1" "$2" "${line#\#\#job $1 $2 }" ;; esac
   done
   rc=${PIPESTATUS[0]}
+  if [ -f "$stepf" ]; then read -r idx label < "$stepf"; fi
+  case $idx in ''|*[!0-9]*) idx=0 ;; esac
+  reason=$(_update_err_flush "$err"); rm -f "$err" "$stepf"
   if [ "$rc" = 0 ]; then
     IFS= read -r new < "$H/VERSION" 2>/dev/null || new=$VERSION
     oplog "${OP_WHO:-terminal}" "更新 enana" "$VERSION → $new" ok; _txn_end ok "已更新到 v$new"
-  else oplog "${OP_WHO:-terminal}" "更新 enana" "失败" error; _txn_end fail "更新失败, 已保留当前版本 (详情见 $H/api.log)" 2; return 1; fi
+  else
+    oplog "${OP_WHO:-terminal}" "更新 enana" "$(kv from "$VERSION" step "$label" reason "$reason")" error
+    _txn_end fail "更新失败, 已保留当前版本 (详情见 $H/api.log)" "$idx"; return 1
+  fi
 }
 
 # 每天一次的维护 (launchd 触发): 日志按天切分/压缩/按保留期清理 · 检查更新 · 每 3 天更新规则集与订阅
@@ -578,7 +603,8 @@ job_dispatch() {
     restart)        op_restart ;;
     sysproxy)       op_sysproxy "$@" ;;
     update-rules)   op_update_rules ;;
-    servers-import) TXN_INTERVAL=${3:-}; TXN_USED=${4:-}; TXN_TOTAL=${5:-}; TXN_EXPIRE=${6:-}; TXN_SAVE=${7:-}; op_txn "导入服务器" txn_import "${1:-}" "${2:-merge}" ;;
+    servers-import) trap 'rm -f "$JOB_BODY"' EXIT    # 粘贴的服务器数据可能带着凭据: 成功、失败、锁被占用都在进程结束时删掉 (成功时 txn_import 已经删了)
+      TXN_INTERVAL=${3:-}; TXN_USED=${4:-}; TXN_TOTAL=${5:-}; TXN_EXPIRE=${6:-}; TXN_SAVE=${7:-}; op_txn "导入服务器" txn_import "${1:-}" "${2:-merge}" ;;
     servers-delete) op_txn "删除服务器" txn_delete "$1" "${2:-}" "${3:-0}" "${4:-0}" ;;
     servers-role)   op_txn "修改服务器角色" txn_role "$1" "$2" "${3:-}" "${4:-0}" "${5:-0}" ;;
     exits-move)     op_exit_move "$@" ;;

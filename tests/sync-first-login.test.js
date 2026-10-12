@@ -15,7 +15,7 @@ function fixture(o) {
   const summary = o.summary || { servers: 2, subs: 1, custom_rulesets: 0, prefs: true };
   const window = { I18N: { t: (k, p) => (p ? k + JSON.stringify(p) : k), L: k => k, has: () => false } };
   const TP = {
-    S, h: () => null, setText() {}, fmt: { rel: v => 'rel' + v, num: v => String(v), dateTime: v => String(v), bytes: v => String(v) },
+    S, h: () => null, setText() {}, tunDetail: d => d, tunNote: () => null, fmt: { rel: v => 'rel' + v, num: v => String(v), dateTime: v => String(v), bytes: v => String(v) },
     on() {}, poll() {}, why: { helper: () => null }, safe: f => f, afterApply() {}, loadState() {}, loadSettings() {},
     ui: {
       confirmDialog: async opts => { dialogs.push(opts); return o.answer === true; },

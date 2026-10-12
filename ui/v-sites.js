@@ -84,7 +84,7 @@
     function lg(v, icon, nameKey) { return h('span', { class: 'sx-lg sx-lg-' + v }, ui.icon(icon, 15, 'ci'), h('span', null, L(nameKey)), help(v)); }
     /* 误删 / 设错了: 一键把网站页的改动全部恢复为系统默认 (后台任务, 清掉之前先备份) */
     function resetAllSites() {
-      return ui.confirmDialog({ title: t('sites.resetAll.title'), message: t('sites.resetAll.msg'), detail: [t('sites.resetAll.detail')], confirmText: t('sites.resetAll.go'), danger: true }).then(function (ok) {
+      return ui.confirmDialog({ title: t('sites.resetAll.title'), message: t('sites.resetAll.msg'), detail: TP.tunDetail([t('sites.resetAll.detail')]), confirmText: t('sites.resetAll.go'), danger: true }).then(function (ok) {
         if (!ok) return;
         return TP.jobs.runInDock(t('sites.resetAll.title'), function () { return TP.helper('POST', '/api/sites/reset'); }).then(function () { return TP.loadState(); });
       });
@@ -303,7 +303,7 @@
     row._r.seg.set(segOf(prev) || '');
     if (segOf(prev) === v) return;
     var tx = TP.txt.policy(name, segOf(prev), v, e.group), risk = TP.riskGroup(e.group) && v !== 'PIN';
-    var ok = await ui.confirmDialog({ title: t('sites.change.title'), message: tx.message, detail: tx.detail, confirmText: t('sites.change.go'), danger: risk, rememberKey: 'policy' });
+    var ok = await ui.confirmDialog({ title: t('sites.change.title'), message: tx.message, detail: TP.tunDetail(tx.detail), confirmText: t('sites.change.go'), danger: risk, rememberKey: 'policy' });
     if (!ok) return;
     p.now = v; updateEntry(row, e);
     try { await TP.setPolicy(tag, v); }
@@ -316,7 +316,7 @@
     if (!p || !to) return;
     var prev = p.now, pv = TP.pinTargetOf(prev) || 'PIN';
     if (to === pv) return;
-    var ok = await ui.confirmDialog({ title: t('apps.tg.title'), message: t('apps.tg.msg', { name: name, from: tgName(pv), to: tgName(to) }), detail: [X.targetDetail(to)], confirmText: t('apps.tg.go'), rememberKey: 'policy' });
+    var ok = await ui.confirmDialog({ title: t('apps.tg.title'), message: t('apps.tg.msg', { name: name, from: tgName(pv), to: tgName(to) }), detail: TP.tunDetail([X.targetDetail(to)]), confirmText: t('apps.tg.go'), rememberKey: 'policy' });
     if (!ok) { updateEntry(row, e); return; }
     p.now = to; updateEntry(row, e);
     try { await TP.setPolicy(tag, to); }
@@ -358,7 +358,7 @@
       return r;
     }
     inp.addEventListener('input', function () { live(false); });
-    var form = h('form', { novalidate: true, class: 'mform' }, ui.field(t('sites.add.field'), inp, t('sites.add.fieldHint')), msg, ui.field(t('sites.add.state'), sel), h('p', { class: 'muted sm' }, t('sites.add.note')));
+    var form = h('form', { novalidate: true, class: 'mform' }, ui.field(t('sites.add.field'), inp, t('sites.add.fieldHint')), msg, ui.field(t('sites.add.state'), sel), h('p', { class: 'muted sm' }, t('sites.add.note')), TP.tunNote() ? h('p', { class: 'muted sm' }, TP.tunNote()) : null);
     var api = ui.modal({
       title: t('sites.add.title'), icon: 'plus', iconKind: 'pri', size: 'sm', body: form,
       dirty: function () { return !!inp.value.trim(); },
@@ -396,7 +396,7 @@
   async function clearAuto() {
     var n = sitesOf('auto').length, ok, r;
     if (!n) return;
-    ok = await ui.confirmDialog({ title: t('set.asite.clearTitle'), message: t('set.asite.clearMsg', { n: n }), detail: [t('set.asite.clearD')], confirmText: t('set.asite.clearGo'), danger: true });
+    ok = await ui.confirmDialog({ title: t('set.asite.clearTitle'), message: t('set.asite.clearMsg', { n: n }), detail: TP.tunDetail([t('set.asite.clearD')]), confirmText: t('set.asite.clearGo'), danger: true });
     if (!ok) return;
     r = await TP.helper('POST', '/api/sites/auto/clear');
     ui.toast(t('set.asite.cleared', { n: (r && +r.removed) || n }), 'ok'); await TP.loadState();
@@ -465,7 +465,7 @@
     row._host = host; row._sel = sel; row._del = del; row._src = src; row._meta = meta; row._tg = tg; row._gone = gone;
     ui.selectAct(sel, function () { return row._o.state; }, async function (want) {
       var o = row._o, prev = o.state, tx = TP.txt.app(o.value, prev, want);
-      var ok = await ui.confirmDialog({ title: t('sites.change.title'), message: tx.message, detail: tx.detail, confirmText: t('sites.change.go'), rememberKey: 'policy' });
+      var ok = await ui.confirmDialog({ title: t('sites.change.title'), message: tx.message, detail: TP.tunDetail(tx.detail), confirmText: t('sites.change.go'), rememberKey: 'policy' });
       if (!ok) return;
       o.state = want; if (want !== 'pin') o.target = ''; sel.value = want; paintCustomPin(row, o);
       try { await TP.override('site', o.value, want); } catch (e) { o.state = prev; sel.value = prev; paintCustomPin(row, o); throw e; }
@@ -475,7 +475,7 @@
     ui.selectAct(tg, function () { return customTarget(row._o); }, async function (want) {
       var o = row._o, prev = o.target || '', to = want === 'PIN' ? '' : want;
       if (to === prev) return;
-      var ok = await ui.confirmDialog({ title: t('apps.tg.title'), message: t('apps.tg.msg', { name: o.value, from: tgName(prev), to: tgName(want) }), detail: [X.targetDetail(want)], confirmText: t('apps.tg.go'), rememberKey: 'policy' });
+      var ok = await ui.confirmDialog({ title: t('apps.tg.title'), message: t('apps.tg.msg', { name: o.value, from: tgName(prev), to: tgName(want) }), detail: TP.tunDetail([X.targetDetail(want)]), confirmText: t('apps.tg.go'), rememberKey: 'policy' });
       if (!ok) { paintCustomPin(row, o); return; }
       o.target = to; o.target_ok = true;
       try { await TP.override('site', o.value, 'pin', to); } catch (e) { o.target = prev; paintCustomPin(row, o); throw e; }
@@ -483,7 +483,7 @@
     });
     ui.act(del, async function () {
       var o = row._o, v = o.value, auto = o.src === 'auto';
-      var ok = await ui.confirmDialog({ title: t('sites.custom.delTitle'), message: t(auto ? 'sites.auto.delMsg' : 'sites.custom.delMsg', { host: v }), detail: t('sites.custom.delDetail'), confirmText: t('common.delete'), danger: true });
+      var ok = await ui.confirmDialog({ title: t('sites.custom.delTitle'), message: t(auto ? 'sites.auto.delMsg' : 'sites.custom.delMsg', { host: v }), detail: TP.tunDetail([t('sites.custom.delDetail')]), confirmText: t('common.delete'), danger: true });
       if (!ok) return;
       await TP.override('site', v, 'follow');
       ui.toast(t('sites.custom.deleted', { host: v }), 'ok'); await TP.loadState();
@@ -559,7 +559,8 @@
     var lh = h('div', { class: 'sdm-lh' }, h('b', null, L('sites.dm.listTitle'), help('src')), sum);
     var ul = h('ul', { class: 'sdm-list', 'aria-label': L('sites.dm.listTitle') }), box = ui.emptyBox();
     var roBox = h('section', { class: 'sdm-ro', hidden: true });
-    var body = h('div', { class: 'sdm' }, h('div', { class: 'sdm-tools' }, qIn, addForm), taskBox, note, h('div', { class: 'sdm-listbox' }, lh, ul, box.el, pg.el), roBox);
+    var tunP = h('p', { class: 'muted sm sdm-tun', hidden: true });                 // 增强模式下改域名会重新生成配置, 可能要管理员授权 (render 里按当前状态显示)
+    var body = h('div', { class: 'sdm' }, h('div', { class: 'sdm-tools' }, qIn, addForm), taskBox, note, tunP, h('div', { class: 'sdm-listbox' }, lh, ul, box.el, pg.el), roBox);
 
     /* ---- 状态相关的小函数 ---- */
     function lockWhy() {                                                            // 现在为什么不能改 ('' = 可以)
@@ -670,6 +671,7 @@
       if (f.k === 'input' && node.select) node.select();
     }
     function render() {
+      var tn = TP.tunNote(); tunP.hidden = !tn; setText(tunP, tn || '');
       paintHead(); paintRo();
       var d = st.data, list = st.rows.filter(matchRow), shown = false, parts = [], r = { start: 0, end: 0 }, fl = st.flash;
       st.flash = '';
@@ -720,7 +722,7 @@
         var del = dk(ui.btn(L('sites.dm.del'), { sm: true, kind: 'ghost', cls: 'danger-t', icon: 'delete', aria: t('sites.dm.delAria', { domain: dom }) }), 'del');
         ui.act(ed, function () { st.edit = { domain: dom, value: dom, err: '', saving: false }; st.focus = { d: dom, k: 'input' }; render(); });
         ui.act(del, async function () {
-          var ok = await ui.confirmDialog({ kind: 'warning', title: t('sites.dm.del.title'), message: t('sites.dm.del.msg', { domain: dom, name: name }), detail: t(x.src === 'added' ? 'sites.dm.del.added' : 'sites.dm.del.sys'), confirmText: t('common.delete'), confirmIcon: 'delete', rememberKey: 'site-domain-remove' });
+          var ok = await ui.confirmDialog({ kind: 'warning', title: t('sites.dm.del.title'), message: t('sites.dm.del.msg', { domain: dom, name: name }), detail: TP.tunDetail([t(x.src === 'added' ? 'sites.dm.del.added' : 'sites.dm.del.sys')]), confirmText: t('common.delete'), confirmIcon: 'delete', rememberKey: 'site-domain-remove' });
           if (!ok) return;
           await run({ kind: 'remove', domain: dom, src: x.src, idx: Array.prototype.indexOf.call(ul.children, li) });
         });
@@ -813,7 +815,7 @@
       if (st.nA) det.push(t('sites.dm.reset.added', { n: st.nA }));
       if (st.nR) det.push(t('sites.dm.reset.removed', { n: st.nR }));
       det.push(t('sites.dm.reset.final'));
-      var ok = await ui.confirmDialog({ danger: true, title: t('sites.dm.reset.title'), message: t('sites.dm.reset.msg', { name: name }), detail: det, confirmText: t('sites.dm.reset.go'), confirmIcon: 'rotate-ccw' });
+      var ok = await ui.confirmDialog({ danger: true, title: t('sites.dm.reset.title'), message: t('sites.dm.reset.msg', { name: name }), detail: TP.tunDetail(det), confirmText: t('sites.dm.reset.go'), confirmIcon: 'rotate-ccw' });
       if (!ok) return false;
       await run({ kind: 'reset' });
       return false;

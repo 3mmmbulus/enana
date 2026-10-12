@@ -11,7 +11,8 @@
  *
  * API:
  *   TPImporter.classify(text)  -> {urls:[订阅链接...], content:'其余文本'}
- *   TPImporter.parse(text, {role:'auto', existingTags:[]}) -> {format, servers:[{role,outbound,summary}], skipped:[{name,reason}]}
+ *   TPImporter.parse(text, {role:'auto', existingTags:[]}) -> {format, servers:[{role,outbound,summary,warn}], skipped:[{name,reason,vars,line}]}
+ *     reason / warn 是词典键 (import.reason.* / import.warn.*), vars 是它的 {占位符} 值; 界面负责翻译; 跳过的链接行只有 line (行号), 不带原文
  *   TPImporter.toJSONL(servers, sub) -> 每行 {"role":"auto"[,"sub":"名称"],"outbound":{"type":..,"tag":..,...}}
  *
  * 约定: outbound 的第一个键是 type, 第二个键是 tag (安装端 bash 依赖这个顺序)。
@@ -215,7 +216,7 @@
   function fromClash(p) {
     var type = String(p.type || '').toLowerCase(), name = clean(p.name), server = clean(p.server), port = toInt(p.port), ob, tr;
     if (!name) name = server + ':' + port;
-    if (!server || !port) return { skip: '缺少 server/port', name: name };
+    if (!server || !port) return { skip: 'import.reason.noServerPort', name: name };
     var pw = (p.password == null ? '' : String(p.password));
     switch (type) {
       case 'http':
@@ -225,7 +226,7 @@
         if (p.tls === true) ob.tls = clashTls(p);
         return { outbound: ob };
       case 'socks5': case 'socks':
-        if (p.tls === true) return { skip: '暂不支持 SOCKS5 over TLS (sing-box 无此能力)', name: name };
+        if (p.tls === true) return { skip: 'import.reason.socksTls', name: name };
         ob = { type: 'socks', tag: name, server: server, server_port: port, version: '5' };
         if (p.username) ob.username = String(p.username);
         if (pw) ob.password = pw;
@@ -260,10 +261,10 @@
         ob.tls = clashTls(p);
         return { outbound: ob };
       case 'ss': case 'shadowsocks':
-        if (p.plugin) return { skip: '暂不支持 Shadowsocks 插件', name: name };
+        if (p.plugin) return { skip: 'import.reason.ssPlugin', name: name };
         return { outbound: { type: 'shadowsocks', tag: name, server: server, server_port: port, method: String(p.cipher || p.method || ''), password: pw } };
       default:
-        return { skip: '暂不支持的类型: ' + (type || '未知'), name: name };
+        return { skip: 'import.reason.badType', vars: { x: type }, name: name };
     }
   }
 
@@ -285,31 +286,32 @@
     var scheme = sch[1].toLowerCase(), name, ob, t, tr, d;
     if (scheme === 'vmess') {
       d = b64decode(line.slice(8).split('#')[0]);
-      var j; try { j = JSON.parse(d); } catch (e) { return { skip: 'vmess 链接无法解析', name: 'vmess' }; }
+      var j = null; try { j = JSON.parse(d); } catch (e) { /* 下面统一处理 */ }
+      if (!j || typeof j !== 'object') return { skip: 'import.reason.vmessParse', name: 'vmess' };
       name = clean(j.ps) || (j.add + ':' + j.port);
       ob = { type: 'vmess', tag: name, server: clean(j.add), server_port: toInt(j.port), uuid: String(j.id || ''), security: String(j.scy || 'auto'), alter_id: toInt(j.aid || 0) || 0 };
-      if (!ob.server || !ob.server_port) return { skip: '缺少地址/端口', name: name };
+      if (!ob.server || !ob.server_port) return { skip: 'import.reason.noAddrPort', name: name };
       if (String(j.tls || '').toLowerCase() === 'tls') ob.tls = tlsOf({ sni: j.sni || j.host || '', alpn: j.alpn ? splitList(j.alpn) : null, fp: j.fp || '', insecure: false });
       tr = transportOf(j.net, { host: j.host, path: j.path, serviceName: j.path }); if (tr) ob.transport = tr;
       return { outbound: ob };
     }
-    if (scheme === 'ssr') return { skip: '暂不支持 ssr', name: 'ssr' };
+    if (scheme === 'ssr') return { skip: 'import.reason.ssr', name: 'ssr' };
     if (scheme === 'ss') {
       var body = line.slice(5), hash = '', hi = body.indexOf('#');
       if (hi >= 0) { hash = dec(body.slice(hi + 1)); body = body.slice(0, hi); }
       body = body.split('?')[0].replace(/\/$/, '');
       var at = body.lastIndexOf('@'), cred, hp;
       if (at >= 0) { cred = body.slice(0, at); hp = body.slice(at + 1); cred = cred.indexOf(':') < 0 ? b64decode(cred) : dec(cred); }
-      else { d = b64decode(body); at = d ? d.lastIndexOf('@') : -1; if (at < 0) return { skip: 'ss 链接无法解析', name: 'ss' }; cred = d.slice(0, at); hp = d.slice(at + 1); }
+      else { d = b64decode(body); at = d ? d.lastIndexOf('@') : -1; if (at < 0) return { skip: 'import.reason.ssParse', name: 'ss' }; cred = d.slice(0, at); hp = d.slice(at + 1); }
       var ci = cred ? cred.indexOf(':') : -1, hpm = hp.match(/^(.*):(\d+)$/);
-      if (ci < 0 || !hpm) return { skip: 'ss 链接无法解析', name: 'ss' };
+      if (ci < 0 || !hpm) return { skip: 'import.reason.ssParse', name: 'ss' };
       return { outbound: { type: 'shadowsocks', tag: clean(hash) || (hpm[1] + ':' + hpm[2]), server: hpm[1].replace(/^\[|\]$/g, ''), server_port: parseInt(hpm[2], 10), method: cred.slice(0, ci), password: cred.slice(ci + 1) } };
     }
     var u = parseUri(line);
-    if (!u || !u.host) return { skip: '链接格式错误', name: line.slice(0, 20) };
+    if (!u || !u.host) return { skip: 'import.reason.badLink' };
     var port = toInt(u.port) || (scheme === 'https' ? 443 : undefined), q = u.query;
     name = clean(u.hash) || (u.host + ':' + port);
-    if (!port) return { skip: '缺少端口', name: name };
+    if (!port) return { skip: 'import.reason.noPort', name: name };
     var up = userPass(u.userinfo);
     if (scheme === 'trojan') {
       ob = { type: 'trojan', tag: name, server: u.host, server_port: port, password: dec(u.userinfo), tls: linkTls(q, true) };
@@ -338,22 +340,22 @@
       ob = { type: 'http', tag: name, server: u.host, server_port: port };
       if (up[0]) ob.username = up[0]; if (up[1]) ob.password = up[1];
       if (scheme === 'https' || truthy(q.tls)) ob.tls = linkTls(q, true);
-      return { outbound: ob, warn: up[0] ? '' : '链接里没有账号密码' };
+      return { outbound: ob, warn: up[0] ? '' : 'import.warn.noCreds' };
     }
     if (scheme === 'socks5' || scheme === 'socks' || scheme === 'socks5h') {
-      if (truthy(q.tls) || String(q.security || '').toLowerCase() === 'tls') return { skip: '暂不支持 SOCKS5 over TLS (sing-box 无此能力)', name: name };
-      if (port === 443 || port === 8443) return { skip: '端口 ' + port + ' 的 SOCKS5 通常是 TLS 封装 (链接里没有 TLS 标记), sing-box 不支持, 已忽略; 建议改用订阅的 sing-box/Clash 格式', name: name };
+      if (truthy(q.tls) || String(q.security || '').toLowerCase() === 'tls') return { skip: 'import.reason.socksTls', name: name };
+      if (port === 443 || port === 8443) return { skip: 'import.reason.socksPort', vars: { x: port }, name: name };
       ob = { type: 'socks', tag: name, server: u.host, server_port: port, version: '5' };
       if (up[0]) ob.username = up[0]; if (up[1]) ob.password = up[1];
       return { outbound: ob };
     }
-    return { skip: '暂不支持的链接类型: ' + scheme, name: name };
+    return { skip: 'import.reason.badScheme', vars: { x: scheme }, name: name };
   }
 
   /* ---------------- sing-box JSON 原样接收 ---------------- */
   function fromSingbox(o) {
-    if (!o || typeof o !== 'object' || TYPES.indexOf(o.type) < 0) return { skip: '不是受支持的出站类型: ' + (o && o.type), name: String(o && o.tag || '?') };
-    if (!o.server || !o.server_port) return { skip: '缺少 server/server_port', name: String(o.tag || '?') };
+    if (!o || typeof o !== 'object' || TYPES.indexOf(o.type) < 0) return { skip: 'import.reason.badOutbound', vars: { x: o && o.type }, name: String(o && o.tag || '?') };
+    if (!o.server || !o.server_port) return { skip: 'import.reason.noServerPort2', name: String(o.tag || '?') };
     var ob = { type: o.type, tag: clean(o.tag) || (o.server + ':' + o.server_port) }, k;
     for (k in o) if (k !== 'type' && k !== 'tag' && k !== 'detour' && o.hasOwnProperty(k)) ob[k] = o[k];
     return { outbound: ob };
@@ -427,18 +429,20 @@
     } else if (fmt === 'clash-yaml') {
       yamlProxies(text).forEach(function (p) { if (p && typeof p === 'object') items.push(fromClash(p)); });
     } else if (fmt === 'links') {
-      text.replace(/\r/g, '').split('\n').forEach(function (ln) {
+      text.replace(/\r/g, '').split('\n').forEach(function (ln, i) {
         ln = ln.trim(); if (!ln || ln.charAt(0) === '#') return;
-        items.push(fromLink(ln) || { skip: '无法识别的行', name: ln.slice(0, 24) });
+        var r = fromLink(ln) || { skip: 'import.reason.badLine' };
+        if (r.skip) r.line = i + 1;                                   // 跳过的行只给行号, 不回显原文 (界面显示「第 N 行」)
+        items.push(r);
       });
     } else if (fmt !== 'empty') {
-      skipped.push({ name: text.slice(0, 24), reason: '无法识别的内容格式' });
+      skipped.push({ reason: 'import.reason.badContent' });           // 整段内容都不认识: 没有名称也没有行号, 界面显示通用的「(无名称)」
     }
     var used = {};
     items.forEach(function (it) {
-      if (it.skip) { skipped.push({ name: it.name, reason: it.skip }); return; }
+      if (it.skip) { skipped.push({ name: it.name, reason: it.skip, vars: it.vars, line: it.line }); return; }
       var ob = it.outbound;
-      if (isInfoNode(ob)) { skipped.push({ name: ob.tag, reason: '订阅提示节点(流量/到期信息), 已忽略' }); return; }
+      if (isInfoNode(ob)) { skipped.push({ name: ob.tag, reason: 'import.reason.infoNode' }); return; }
       var base = ob.tag.slice(0, 60) || 'node', tag, n = 2;
       /* 官方-… 是官方线路 (会员) 的保留前缀, 安装端会拒绝用户导入占用它的节点: 别的订阅里叫「官方-xx」的节点改成「官方 xx」, 不要整行丢掉 */
       base = base.replace(/^官方-/, '官方 ').replace(/^enana-official-/i, 'enana official ');

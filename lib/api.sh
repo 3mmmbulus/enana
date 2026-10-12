@@ -11,7 +11,7 @@
 [ "${ENANA_API_PIPE:-0}" = 1 ] || exec 1>&0
 export LC_ALL=C
 _self="${BASH_SOURCE[0]}"; _dir=$(cd "$(dirname "$_self")" && pwd -P)
-. "$_dir/common.sh"; init_paths "$_self"
+. "$_dir/common.sh" || { echo "enana: 无法加载 $_dir/common.sh, 程序文件不完整, 请重新运行安装 (cannot load $_dir/common.sh: incomplete program files, run the installer again)" >&2; exit 1; }; init_paths "$_self"
 load_settings
 QUIET=1; cd "$H" || exit 0
 
@@ -446,13 +446,14 @@ ep_billing() {
 
 # ---------- 状态 ----------
 ep_state() {
-  local core svc sp sc scmd missing='' t rs=1 osver arch
+  local core svc sp sc scmd missing='' t rs=1 osver arch sph
   core=$(core_version); os_service_info; svc=$SVC_RUNNING; os_sysproxy_cached && sp=1 || sp=0
+  sph=null; [ "${ENANA_PLATFORM:-darwin}" = darwin ] && { [ -f "$(os_sysproxy_helper_path)" ] && sph=true || sph=false; }     # 系统代理助手是否已安装: 只看文件在不在 (状态接口不能每次都 sudo 去验证)
   sc=$(shortcut_path 2>/dev/null || true)
   if [ -n "$sc" ]; then scmd=enana; else scmd="$H/enana"; fi              # 在终端里能直接运行、打开控制台的完整命令: 装了快捷命令就是 enana, 没装就是脚本的完整路径
   for t in $(rules_missing); do missing="$missing${missing:+,}\"$t\""; rs=0; done
   [ -s "$H/.osver" ] || os_version > "$H/.osver" 2>/dev/null; IFS= read -r osver < "$H/.osver"; arch=$(os_arch)
-  json "{\"ok\":true,\"rules_watch_error\":$(rules_watch_state),\"version\":\"$VERSION\",\"prefs_version\":$(prefs_version),\"core\":\"${core:-}\",\"lang\":\"${LANG_UI:-zh}\",\"platform\":{\"os\":\"${ENANA_PLATFORM:-darwin}\",\"osver\":\"${osver:-}\",\"arch\":\"$arch\"},\"ports\":{\"proxy\":$PORT,\"ui\":$UI_PORT,\"api\":$API_PORT,\"speed\":$SPEED_PORT},\"env\":{\"core\":$([ -n "$core" ] && echo true || echo false),\"rules\":$(bool $rs),\"service\":$(bool $svc),\"sysproxy\":$(bool $sp),\"shortcut\":$([ -n "$sc" ] && printf '"%s"' "$sc" || printf null),\"shortcut_cmd\":\"$(jesc "$scmd")\",\"rules_updated\":$(rules_updated_at),\"rules_missing\":[$missing]},\"update\":$(update_available),\"proxy\":{\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\",\"network_mode\":\"${NETWORK_MODE:-system}\",\"tun_ready\":$(enhanced_ready && enhanced_configured && echo true || echo false)},\"account\":{\"email\":\"$(jesc "$(auth_current_email)")\"},\"servers\":$(servers_json),\"subs\":$(subs_json),\"overrides\":$(overrides_json),\"first_run\":$([ "$(srv_count)" = 0 ] && echo true || echo false)}"
+  json "{\"ok\":true,\"rules_watch_error\":$(rules_watch_state),\"version\":\"$VERSION\",\"prefs_version\":$(prefs_version),\"core\":\"${core:-}\",\"lang\":\"${LANG_UI:-zh}\",\"platform\":{\"os\":\"${ENANA_PLATFORM:-darwin}\",\"osver\":\"${osver:-}\",\"arch\":\"$arch\"},\"ports\":{\"proxy\":$PORT,\"ui\":$UI_PORT,\"api\":$API_PORT,\"speed\":$SPEED_PORT},\"env\":{\"core\":$([ -n "$core" ] && echo true || echo false),\"rules\":$(bool $rs),\"service\":$(bool $svc),\"sysproxy\":$(bool $sp),\"shortcut\":$([ -n "$sc" ] && printf '"%s"' "$sc" || printf null),\"shortcut_cmd\":\"$(jesc "$scmd")\",\"rules_updated\":$(rules_updated_at),\"rules_missing\":[$missing],\"sysproxy_helper\":$sph},\"update\":$(update_available),\"proxy\":{\"enabled\":$(bool "${PROXY_ENABLED:-0}"),\"mode\":\"${PROXY_MODE:-auto}\",\"network_mode\":\"${NETWORK_MODE:-system}\",\"tun_ready\":$(enhanced_ready && enhanced_configured && echo true || echo false)},\"account\":{\"email\":\"$(jesc "$(auth_current_email)")\"},\"servers\":$(servers_json),\"subs\":$(subs_json),\"overrides\":$(overrides_json),\"first_run\":$([ "$(srv_count)" = 0 ] && echo true || echo false)}"
 }
 apps_resp() {
   [ -f "$H/ui/appicons/index.tsv" ] || ( apps_icons >/dev/null 2>&1 & )          # 第一次: 后台提取应用图标

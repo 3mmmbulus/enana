@@ -4,10 +4,10 @@
 enhanced_paths() {
   TUN_UID=$(id -u)
   TUN_LABEL="$LABEL.tun.$TUN_UID"
-  # Fixture overrides apply only to unprivileged lookups. The root helper
+  # Fixture overrides (test_env) apply only under ENANA_TEST and only to unprivileged lookups. The root helper
   # independently uses its fixed Library paths and never trusts these values.
-  TUN_ROOT="${ENANA_TUN_ROOT:-/Library/Application Support/enana-$TUN_UID}"
-  TUN_PLIST="${ENANA_TUN_PLIST_DIR:-/Library/LaunchDaemons}/$TUN_LABEL.plist"
+  TUN_ROOT=$(test_env ENANA_TUN_ROOT "/Library/Application Support/enana-$TUN_UID")
+  TUN_PLIST="$(test_env ENANA_TUN_PLIST_DIR /Library/LaunchDaemons)/$TUN_LABEL.plist"
 }
 enhanced_configured() { grep -q '"type":"tun"' "$H/config.json" 2>/dev/null; }
 enhanced_loaded() { enhanced_paths; launchctl print "system/$TUN_LABEL" >/dev/null 2>&1; }
@@ -16,14 +16,24 @@ enhanced_supported() { sb_ver; [ "$SB_MAJOR" -gt 1 ] || { [ "$SB_MAJOR" -eq 1 ] 
 # paths into shell/AppleScript source without quoting both layers.
 enhanced_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 enhanced_admin() {
-  local cmd='' a
+  local cmd='' a rc ef msg
+  ENHANCED_ADMIN_ERR=''                                  # 管理员框的结果 (只在弹框时设置): cancelled 用户点了取消 · failed 其它失败; 见 enhanced_result
   for a in "$@"; do cmd="$cmd${cmd:+ }$(enhanced_quote "$a")"; done
   if [ -t 0 ] && [ -t 1 ]; then sudo "$@"
   elif sudo -n true >/dev/null 2>&1; then sudo -n "$@"
   else
     cmd=$(printf '%s' "$cmd" | sed 's/\\/\\\\/g; s/"/\\"/g')
-    osascript -e "do shell script \"$cmd\" with administrator privileges" >&2
+    ef=$(mktemp 2>/dev/null) || ef=/dev/null        # 建不了临时文件也要弹框; 这时拿不到错误文字, 取消只能记成 error
+    osascript -e "do shell script \"$cmd\" with administrator privileges" >&2 2>"$ef"; rc=$?
+    msg=$(cat "$ef"); cat "$ef" >&2; [ "$ef" = /dev/null ] || rm -f "$ef"      # 错误文字照原样输出; 只是多留一份来判断是不是取消
+    if [ "$rc" != 0 ]; then
+      case $msg in *"(-128)"*) ENHANCED_ADMIN_ERR=cancelled ;; *) ENHANCED_ADMIN_ERR=failed ;; esac      # osascript 的取消码是带括号的 (-128), 不能只按 -128 子串匹配 (-1280 · 路径里的 -128 都不是取消)
+    fi
+    return "$rc"
   fi
+}
+enhanced_result() { # <返回码> -> 操作记录的结果: ok | cancelled (管理员密码框被取消) | error (其它失败; 和别的操作一样写 error, 失败筛选才能找到)
+  if [ "$1" = 0 ]; then printf 'ok'; elif [ "${ENHANCED_ADMIN_ERR:-}" = cancelled ]; then printf 'cancelled'; else printf 'error'; fi
 }
 # The fingerprint of everything the root core was installed from EXCEPT the app/site policy rule sets (rules/*/ovr-*.json): those are plain routing data
 # that enhanced_sync_ovr can push into the root snapshot without a restart (see enhanced_ovr_fingerprint). A change to anything else needs a full,
@@ -69,7 +79,7 @@ enhanced_ovr_fingerprint() { # the app/site policy rule sets (written by ovr_syn
 # A helper installed by an older enana reports 1, 2 or 3, so enhanced_helper_ok rejects it and the next full install (one administrator authorisation, the same one
 # that already follows any upgrade of enhanced.sh / enhanced-root.sh) replaces it. Nothing silently calls a helper that lacks the action or the layout.
 TUNRULES_HELPER_VERSION=4
-enhanced_helper_path() { enhanced_paths; printf '%s/usr/local/libexec/enana/tunrules-%s' "${ENANA_ROOT_PREFIX:-}" "$TUN_UID"; }
+enhanced_helper_path() { enhanced_paths; printf '%s/usr/local/libexec/enana/tunrules-%s' "$(test_env ENANA_ROOT_PREFIX)" "$TUN_UID"; }
 enhanced_helper_ok() { os_helper_trusted "$(enhanced_helper_path)" "$TUNRULES_HELPER_VERSION"; }
 enhanced_ovr_bundle() { # {"ovr-pin.json": {...}, ...} from $H/rules/*/ovr-*.json (the helper validates it again, strictly)
   perl -MJSON::PP -MFile::Glob=:bsd_glob -e '

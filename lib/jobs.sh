@@ -10,10 +10,33 @@ job_ticket() { # 打印下一个序号 (全局单调递增; 用目录锁保护�
   printf '%s\n' "$n"
 }
 
+JOB_KEEP=200        # 最多保留多少个已结束的任务的文件 (仪表盘只看最近的); 进行中的任务不计入, 也从不删除
+job_prune() { # 删掉已结束的任务的文件: 超过一天的, 以及最近 JOB_KEEP 个之外的; 进行中的不动; .cred / .body (密码、粘贴的数据) 超过一天就删, 不管记录还在不在
+  local d="$H/jobs" f id k=0 busy old stale
+  [ -d "$d" ] || return 0
+  busy=$(grep -l '"state":"running"' "$d"/*.json 2>/dev/null || true)       # 顶层状态是 running (步骤的状态是 run / done, 不会误中)
+  old=$(find "$d" -maxdepth 1 -name '*.json' -mtime +1 2>/dev/null || true)  # 超过一天的记录 (一次 find, 不逐个查)
+  while IFS= read -r f; do
+    case $busy in *"$d/$f"*) continue ;; esac
+    k=$((k + 1)); stale=0; case $old in *"$d/$f"*) stale=1 ;; esac
+    if [ "$k" -gt "${JOB_KEEP:-200}" ] || [ "$stale" = 1 ]; then id=${f%.json}; rm -f "$d/$id".*; fi
+  done < <(ls -1t "$d" 2>/dev/null | grep '\.json$')
+  find "$d" -maxdepth 1 -type f \( -name '*.cred' -o -name '*.body' \) -mtime +1 2>/dev/null | while IFS= read -r f; do
+    id=${f##*/}; id=${id%.*}
+    case $busy in *"$d/$id.json"*) continue ;; esac
+    rm -f "$f"
+  done
+  find "$d" -maxdepth 1 -type f ! -name '*.json' -mtime +1 2>/dev/null | while IFS= read -r f; do
+    id=${f##*/}; id=${id%%.*}
+    [ -f "$d/$id.json" ] || rm -f "$f"
+  done
+  return 0
+}
+
 job_new() { # job_new 名称 "步骤1|步骤2|…"  -> 打印 id
   local name=$1 steps=$2 id
   mkdir -p "$H/jobs"
-  find "$H/jobs" -type f -mtime +1 -exec rm -f {} + 2>/dev/null || true
+  job_prune
   id="$name-$(now)-$RANDOM"
   printf '%s' "$steps" > "$H/jobs/$id.steps"
   case $name in net-info|speedtest|self-update|core-upgrade|maintain|dns-bench|sync-push|sync-login|vps-probe|vps-provision|vps-redetect|vps-verify|sysproxy) ;; *) job_ticket > "$H/jobs/$id.ticket" ;; esac   # 长时间的只读/独立任务不排队
@@ -79,7 +102,7 @@ job_launch() { # job_launch 名称 id [参数…]  在后台启动 `<主脚本> 
   local name=$1 id=$2; shift 2
   if [ ! -x "$H/enana" ]; then
     job_write "$id" "$name" error 0 100 "后台任务启动失败: enana 没有执行权限, 请重新安装" '{"code":"E_JOB_LAUNCH"}'
-    rm -f "$H/jobs/$id.cred"
+    rm -f "$H/jobs/$id.cred" "$H/jobs/$id.body"
     return 1
   fi
   ( ENANA_LANG="${I18N_LANG:-${LANG_UI:-}}" OP_WHO="${OP_WHO:-}" nohup "$H/enana" _job "$name" "$id" "$@" >>"$H/api.log" 2>&1 & ) >/dev/null 2>&1

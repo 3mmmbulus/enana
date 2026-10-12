@@ -44,6 +44,8 @@ jobs:
           node tests/vps-verify-ui.test.js
       - name: Unit tests (log parsing, app scan and times, subscription refresh stability, diagnostics)
         run: bash tests/units.sh
+      - name: Foreign sing-box inventory, port ownership and install-time prompts (stubbed ps, lsof, launchctl)
+        run: bash tests/detect.sh
       - name: Enhanced/TUN isolated regressions (fingerprint, stop/restart decisions)
         run: bash tests/enhanced.sh
       - name: Exit assignment (which apps/sites/services use which fixed exit; default exit; move/freeze; delete/role guards)

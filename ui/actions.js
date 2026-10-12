@@ -6,13 +6,25 @@
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, setText = TP.setText, I = window.I18N, t = I.t, L = I.L;
   function pt(k) { return TP.pt ? TP.pt(k) : k; }   // 平台专用文案 (见 core.js 的 TP.pt)
   var A = TP.actions = {};
+  /* 增强模式 (TUN) 下改配置 / 重启核心可能弹出管理员授权窗口 (macOS 密码框, Windows 为 UAC): 只在 TUN 开着时提示; force 用于「开启 TUN」本身 */
+  A.tunNote = function (force) { return force || (S.state && S.state.proxy && S.state.proxy.network_mode === 'tun') ? t(pt('tun.admin.note')) : null; };
+  /* 确认窗口的说明加上管理员提示: 文字 / 节点 = 一段正文; 列表 = 列表; 提示都另起一段 (不会变成列表里的一个圆点); 不开 TUN 时原样返回 */
+  A.withTun = function (detail, force) {
+    var n = A.tunNote(force);
+    if (!n) return detail;
+    var note = h('p', { class: 'cfm-d' }, n);
+    if (Array.isArray(detail)) return h('div', null, h('ul', { class: 'cfm-list' }, detail.filter(Boolean).map(function (x) { return h('li', null, x); })), note);
+    return h('div', null, typeof detail === 'string' ? h('p', { class: 'cfm-d' }, detail) : detail, note);
+  };
+  /* 所有确认窗口 / 弹窗共用的入口 (视图模块只用它; 只加载了部分模块的测试里要提供同名的假函数) */
+  TP.tunNote = A.tunNote; TP.tunDetail = A.withTun;
   var rules = { running: false, pct: 0, doneAt: 0 }, restarting = false, killing = false;
   var changingCapture = false;
   A.setNetworkMode = async function (mode, confirmed) {
     if (changingCapture) return false;
     var why = TP.why.helper();
     if (why) { ui.toast(why, 'warn'); return false; }
-    if (!confirmed && !await ui.confirmDialog({ title: t('set.network.title'), message: t('set.network.confirm'), detail: t(pt('set.network.note')), confirmText: t(mode === 'tun' ? 'apps.capture.enable' : 'common.apply') })) return false;
+    if (!confirmed && !await ui.confirmDialog({ title: t('set.network.title'), message: t('set.network.confirm'), detail: TP.tunDetail(t(pt('set.network.note')), mode === 'tun'), confirmText: t(mode === 'tun' ? 'apps.capture.enable' : 'common.apply') })) return false;
     changingCapture = true;
     try {
       await TP.jobs.runInDock(t('set.network.title'), function () { return TP.helper('POST', '/api/network-mode', { form: { mode: mode } }); });
@@ -23,7 +35,7 @@
   };
   A.offerAppCapture = async function (name) {
     var choice = await ui.modal({ title: t('apps.capture.title'), size: 'md', icon: 'warning', iconKind: 'warn',
-      body: h('div', null, h('p', null, t(pt('apps.capture.choose'), { name: name })), h('p', { class: 'muted sm' }, t(pt('set.network.note')))),
+      body: h('div', null, h('p', null, t(pt('apps.capture.choose'), { name: name })), h('p', { class: 'muted sm' }, t(pt('set.network.note'))), h('p', { class: 'muted sm' }, t(pt('tun.admin.note')))),
       actions: [
         { label: t('common.cancel'), cancel: true },
         { label: t('apps.capture.limited'), value: 'system' },
@@ -74,7 +86,7 @@
     var ok = await ui.confirmDialog({
       title: t(missing.length ? 'act.rules.confirmMissingTitle' : 'act.rules.confirmTitle'),
       message: missing.length ? t('act.rules.msgMissing', { n: missing.length, list: missing.slice(0, 4).join(', ') + (missing.length > 4 ? ' …' : '') }) : t('act.rules.msgAll'),
-      detail: [t('act.rules.d1'), t('act.rules.d2')], confirmText: t(missing.length ? 'act.rules.goMissing' : 'act.rules.go')
+      detail: TP.tunDetail([t('act.rules.d1'), t('act.rules.d2')]), confirmText: t(missing.length ? 'act.rules.goMissing' : 'act.rules.go')
     });
     if (!ok) return;
     rules.running = true; rules.pct = 0; TP.syncBtns();
@@ -103,8 +115,8 @@
     var st = A.restartState();
     if (st.reason) { ui.toast(st.reason, 'warn'); return; }
     var ok = await ui.confirmDialog(st.stopped
-      ? { title: t('act.restart.startTitle'), message: t('act.restart.startMsg'), detail: [t('act.restart.startD1'), t('act.restart.startD2')], confirmText: t('act.restart.start'), kind: 'success', confirmIcon: 'power' }
-      : { title: t('act.restart.title'), message: t('act.restart.msg'), detail: [t('act.restart.d1'), t('act.restart.d2')], confirmText: t('act.restart.label'), kind: 'warning', confirmIcon: 'restart' });
+      ? { title: t('act.restart.startTitle'), message: t('act.restart.startMsg'), detail: TP.tunDetail([t('act.restart.startD1'), t('act.restart.startD2')]), confirmText: t('act.restart.start'), kind: 'success', confirmIcon: 'power' }
+      : { title: t('act.restart.title'), message: t('act.restart.msg'), detail: TP.tunDetail([t('act.restart.d1'), t('act.restart.d2')]), confirmText: t('act.restart.label'), kind: 'warning', confirmIcon: 'restart' });
     if (!ok) return;
     restarting = true; TP.syncBtns();
     try { await TP.jobs.runInDock(t(st.stopped ? 'act.restart.startJob' : 'act.restart.job'), function () { return TP.helper('POST', '/api/restart'); }); }
@@ -176,7 +188,7 @@
   function proxyDone() { proxyBusy = null; pendingMode = ''; TP.emit('proxy', A.proxyOn()); TP.syncBtns(); TP.loadState(); setTimeout(TP.loadProxies, 400); }
   /* ---------- 系统代理 ----------
    * 浏览器和多数 App 只有走「系统代理」才会进入 enana (System Proxy 接管方式)。以前总开关打开后系统代理仍然没开, 必须去终端输入 enana on (还要输密码) ——
-   * 现在: 打开总开关会一并开启系统代理 (后台任务, macOS 可能弹出「输入 Mac 登录密码」的原生窗口); 没开成功 / 被其它软件占用时, 顶部提示条和概览里都有「一键开启」按钮。 */
+   * 现在: 打开总开关会一并开启系统代理 (后台任务, macOS 可能弹出「输入 Mac 管理员密码」的原生窗口); 没开成功 / 被其它软件占用时, 顶部提示条和概览里都有「一键开启」按钮。 */
   var sysproxyBusy = false;
   A.sysproxyBusy = function () { return sysproxyBusy; };
   A.sysproxyNeeded = function () {        // 总开关开着、用的是 System Proxy 接管方式、核心在运行, 但系统代理没有指向 enana
@@ -205,11 +217,12 @@
     var why = TP.why.helper(); if (why) { ui.toast(why, 'warn'); return; }
     var cur = A.proxyOn();
     if (cur === on) { ui.toast(t(on ? 'proxy.alreadyOn' : 'proxy.alreadyOff'), ''); return; }
-    var onDetail = [t('proxy.on.d1'), t('proxy.on.d2')];
+    var onDetail = [t('proxy.on.d1'), t('proxy.on.d2')], offDetail = [t('proxy.off.d1'), t('proxy.off.d2'), t('proxy.off.d3')];
     if (on && S.state && S.state.proxy && S.state.proxy.network_mode !== 'tun' && S.state.env && S.state.env.sysproxy === false) onDetail.push(t(pt('proxy.on.d3')));      // 系统代理还没指向 enana: 说明会一并开启, 以及 macOS 可能弹出密码窗口
+    if (!on && S.state && S.state.proxy && S.state.proxy.network_mode !== 'tun' && S.state.env && S.state.env.sysproxy === true && S.state.env.sysproxy_helper === false) offDetail.push(t('proxy.off.dHelper'));      // 系统代理助手还没装: 关闭系统代理时 macOS 会弹出管理员密码窗口
     var ok = await ui.confirmDialog(on
-      ? { title: t('proxy.on.title'), message: t('proxy.on.msg'), detail: onDetail, confirmText: t('proxy.on.go'), kind: 'success', confirmIcon: 'power' }
-      : { title: t('proxy.off.title'), message: t('proxy.off.msg'), detail: [t('proxy.off.d1'), t('proxy.off.d2'), t('proxy.off.d3')], confirmText: t('proxy.off.go'), danger: true, confirmIcon: 'power' });
+      ? { title: t('proxy.on.title'), message: t('proxy.on.msg'), detail: TP.tunDetail(onDetail), confirmText: t('proxy.on.go'), kind: 'success', confirmIcon: 'power' }
+      : { title: t('proxy.off.title'), message: t('proxy.off.msg'), detail: TP.tunDetail(offDetail), confirmText: t('proxy.off.go'), danger: true, confirmIcon: 'power' });
     if (!ok) return;
     proxyBusy = on ? 'on' : 'off'; TP.emit('proxy', cur); TP.syncBtns();
     var sp = null;
@@ -233,7 +246,7 @@
     var detail = ['auto', 'global'].map(function (k) { return h('span', null, h('b', null, t('pmode.' + k)), ' — ', t('pmode.' + k + '.sub')); });      // 两种模式的区别, 各一行
     if (m === 'global') detail.push(h('span', { class: 'warn-t' }, t('pmode.global.warn')));                                                         // 全局代理: 国内网站也会走代理, 可能变慢
     if (on === false) detail.push(t('pmode.offLine'));
-    var ok = await ui.confirmDialog({ title: t('pmode.' + m + '.title'), message: t('pmode.' + m + '.msg'), detail: detail, confirmText: t('pmode.' + m + '.go'), kind: m === 'global' ? 'warning' : 'primary', confirmIcon: m === 'global' ? 'globe' : 'auto' });
+    var ok = await ui.confirmDialog({ title: t('pmode.' + m + '.title'), message: t('pmode.' + m + '.msg'), detail: TP.tunDetail(detail), confirmText: t('pmode.' + m + '.go'), kind: m === 'global' ? 'warning' : 'primary', confirmIcon: m === 'global' ? 'globe' : 'auto' });
     if (!ok) return;
     proxyBusy = 'mode'; pendingMode = m; TP.emit('proxy', on); TP.syncBtns();
     try {

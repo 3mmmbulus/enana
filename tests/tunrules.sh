@@ -179,7 +179,7 @@ rm -rf "$W"/snap/rules/ovr-*-[0-9]*
 
 echo "== T4. apply_config 的决策: 免密同步 还是 完整安装 (要管理员授权)"
 export HOME=$W/home ENANA_HOME=$W/h LC_ALL=C ENANA_LANG=zh ENANA_PLATFORM=darwin PORT=37970 UI_PORT=37971 API_PORT=37972 SPEED_PORT=37973 ENANA_NO_DIAG=1
-export FAKE_STATE=$W/state ENANA_ROOT_PREFIX=$W/root FAKE_SUDOERS_DIR=$W/root/etc/sudoers.d ENANA_TUN_ROOT=$W/snap
+export ENANA_TEST=1 FAKE_STATE=$W/state ENANA_ROOT_PREFIX=$W/root FAKE_SUDOERS_DIR=$W/root/etc/sudoers.d ENANA_TUN_ROOT=$W/snap
 mkdir -p "$HOME" "$ENANA_HOME" "$FAKE_STATE" "$ENANA_ROOT_PREFIX"
 export PATH="$HERE/fakebin:$PATH"
 . "$REPO/lib/common.sh"; init_paths "$REPO/install.sh"; LIB=$REPO/lib; DATA=$REPO/data

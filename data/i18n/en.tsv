@@ -31,6 +31,15 @@ sing-box 核心 · 来源	sing-box core · source
 发现旧版安装目录 *, 但 * 已存在, 没有自动迁移 (需要的话请手动复制 servers.jsonl 等文件)	Found an old installation directory *, but * already exists, so nothing was migrated automatically (copy servers.jsonl and other files by hand if you need them)
 已从 v1 迁移你的服务器配置 (无需重新输入, 在仪表盘「服务器」页可见)	Migrated your server configuration from v1 (no need to enter it again; see the dashboard’s Servers page)
 
+# --- install.sh · program files (install_files)
+原来的程序文件没有改动	The previous program files were not changed
+无法创建临时目录 *	Could not create the temporary directory *
+复制 */ 失败	Copying */ failed
+复制后 */ 的文件数不对 (* / *)	Wrong file count after copying */ (* / *)
+VERSION 文件缺失或格式不对	The VERSION file is missing or malformed
+无法挪开旧的 */	Could not move the old */ aside
+无法换入新的 */	Could not move the new */ into place
+
 # --- install.sh · install steps
 检查环境	Check the environment
 macOS * 较旧: 官方 sing-box 1.14 可能无法在此运行 (Intel 会自动尝试兼容包)	macOS * is quite old: the official sing-box 1.14 may not run here (on Intel, a compatibility build is tried automatically)
@@ -41,6 +50,21 @@ macOS * 较旧: 官方 sing-box 1.14 可能无法在此运行 (Intel 会自动�
 网络服务「*」已有其它系统代理设置, 继续会覆盖 (原设置已备份到 */proxy-backup.txt)	Network service “*” already has other system proxy settings, and continuing will overwrite them (the originals are backed up to */proxy-backup.txt)
 继续?	Continue?
 已取消	Canceled
+发现外部 sing-box: 程序 * 个 · launchd 任务 * 个 · 运行中的进程 * 个 · 配置目录 * 个	Found an external sing-box: * program(s) · * launchd job(s) · * running process(es) · * config folder(s)
+默认路由经过别的 TUN 网卡 (*): 其它 VPN / 代理软件可能与增强模式冲突	The default route goes through another TUN interface (*); other VPN or proxy software may conflict with Enhanced mode
+清单已写入 */foreign-inventory.txt (只含名称、路径、进程号, 不含配置内容)	Inventory written to */foreign-inventory.txt (names, paths and process IDs only; no configuration contents)
+继续? (外部程序不会被关闭或修改)	Continue? (external programs will not be stopped or changed)
+非交互模式: 照常继续安装; 外部程序没有被关闭、卸载或修改	Non-interactive mode: continuing with the installation; external programs were not stopped, removed or changed
+发现外部 sing-box 文件 (未运行, 仅供参考): 程序 * 个 · launchd 配置 * 个 · 配置目录 * 个	External sing-box files found (not running, for reference only): * program(s) · * launchd config(s) · * config folder(s)
+默认路由经过别的 TUN 网卡 (*) (VPN / 代理软件; 系统代理模式不受影响, 只有增强模式才可能冲突)	The default route goes through another TUN interface (*) (VPN or proxy software; System Proxy mode is not affected, only Enhanced mode can conflict)
+本地端口 * 有人在用, 没能确认是谁 (普通账户看不到 root 核心的监听者), 沿用不变	Local port(s) * are in use, but the holder could not be confirmed (an ordinary account cannot see the listeners of the root core); kept as they are
+没能确认本地端口 * 的占用情况, 沿用不变	Could not confirm whether local port * is in use; kept as it is
+非交互模式: 没有覆盖它们, 本次跳过系统代理设置 (运行 enana on 会替换现有设置, 原设置已备份到 */proxy-backup.txt)	Non-interactive mode: the existing settings were not overwritten, so system proxy setup is skipped this time (enana on replaces the existing settings; they are backed up to */proxy-backup.txt)
+系统代理还指向旧端口 * (本程序之前设置的), 将改为新端口 *	The system proxy still points to the old port * (set earlier by enana); it will be changed to the new port *
+代理端口 * 被别的程序占用: enana 没能绑定它, 代理没有生效 (运行 enana doctor 查看占用的程序)	Proxy port * is used by another program: enana could not bind it, so the proxy is not working (run enana doctor to see which program holds it)
+检测到外部代理内核	External proxy core detected
+跳过系统代理设置	System proxy setup skipped
+代理端口绑定失败	Proxy port bind failed
 安装 sing-box 核心 (代理引擎)	Install the sing-box core (the proxy engine)
 已安装 sing-box *, 无需重装	sing-box * is already installed, no need to reinstall
 sing-box * 安装完成	sing-box * installed
@@ -211,6 +235,7 @@ enana * — 代理环境控制台 (服务器/订阅/应用/网站请在仪表盘
   enana env            打印终端代理变量 (命令行工具不读系统代理): eval "$(enana env)"	  enana env            Print the terminal proxy variables (command-line tools don’t read the system proxy): eval "$(enana env)"
   enana uninstall      卸载 (--keep-data 保留数据目录)	  enana uninstall      Uninstall (--keep-data keeps the data directory)
 选项: --yes 全部采用推荐值 · --force 强制重装环境 · --quiet 静默 · --lang zh|en 指定语言	Options: --yes accept all recommended settings · --force force a reinstall · --quiet quiet mode · --lang zh|en set the language
+  注意: --yes / --upgrade 不再覆盖别人设置的系统代理 (跳过这一步, 需要时运行 enana on); 交互安装时回车 = 取消 (外部代理的提醒与系统代理的询问默认都是 n)	  Note: --yes / --upgrade no longer overwrite system proxy settings made by another program (that step is skipped; run enana on when needed); in interactive installs, Enter cancels (the external-proxy warning and the system-proxy question both default to n)
 配置已应用	Configuration applied
 配置无效	Invalid configuration
 

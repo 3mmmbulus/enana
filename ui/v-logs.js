@@ -148,7 +148,7 @@
       h('span', { class: 'log-c log-who' }, who ? badge(I.has(wk) ? t(wk) : who) : null),
       h('span', { class: 'log-c log-act' + (known ? '' : ' mono'), title: known ? act : null }, known ? t(key) : act),
       h('span', { class: 'log-c log-d' }, detailInline(r.detail, act)),
-      h('span', { class: 'log-c log-res' }, res === 'error' ? ui.chip(t('logs.result.error'), 'bad', 'error') : res === 'ok' ? ui.chip(t('logs.result.ok'), 'ok', 'success') : (res ? ui.chip(str(res)) : null)));
+      h('span', { class: 'log-c log-res' }, res === 'error' ? ui.chip(t('logs.result.error'), 'bad', 'error') : res === 'ok' ? ui.chip(t('logs.result.ok'), 'ok', 'success') : res === 'cancelled' ? ui.chip(t('logs.result.cancelled')) : (res ? ui.chip(str(res)) : null)));
   }
   function nodeText(r) { return routeKind(r.route) === 'direct' ? (reasonText(r.reason) || str(r.node)) : str(r.node); }      // 「出口」列的文字: 直连时写「为什么直连」
   function accessRow(r) {
@@ -274,7 +274,7 @@
     var d = fmt.toDate(ts), raw = str(ts);
     return h('span', null, d ? fmt.dateTime(ts) : raw, d && raw ? h('span', { class: 'muted sm lgd-raw' }, ' ' + raw) : null);
   }
-  function resultBadge(res) { return res === 'error' ? ui.badge(t('logs.result.error'), 'bad', 'error') : res === 'ok' ? ui.badge(t('logs.result.ok'), 'ok', 'success') : (res ? ui.badge(str(res), 'neutral') : '—'); }
+  function resultBadge(res) { return res === 'error' ? ui.badge(t('logs.result.error'), 'bad', 'error') : res === 'ok' ? ui.badge(t('logs.result.ok'), 'ok', 'success') : res === 'cancelled' ? ui.badge(t('logs.result.cancelled'), 'neutral') : (res ? ui.badge(str(res), 'neutral') : '—'); }
   function levelBadge(lv) { var u = str(lv).toUpperCase(); return u ? h('span', { class: 'chip log-chip' + (own(LEVEL, u) && LEVEL[u] ? ' ' + LEVEL[u] : '') }, u) : '—'; }
   function detailNode(raw, act) {
     var pairs = kvParse(raw);
@@ -660,6 +660,7 @@
           else if (choice === 'type') msg = t('logs.clear.msgType', { type: tname });
           else msg = t('logs.clear.msgAll');
           if (choice !== 'all' && type !== 'ops') det.push(t('logs.clear.sharedNote'));
+          if (choice === 'all' || type === 'ops') det.push(choice === 'before' ? t('logs.clear.dOpsBefore', { day: dayLabel(selDay) }) : t('logs.clear.dOps'));     // 操作记录 (含更新记录) 也会被删; 只删某天之前的, 就只说那段时间的
           det.push(t('logs.clear.irreversible'));
           ok = await ui.confirmDialog({ title: t('logs.clear.confirmTitle'), message: msg, detail: det, confirmText: t('logs.clear.confirmGo'), danger: true });
           if (!ok) return false;
@@ -921,7 +922,7 @@
     if (why) { ui.toast(why, 'warn'); return; }
     if (busy[kind]) return;
     detail = w ? [t('logs.' + kind + '.onD1'), t('logs.' + kind + '.onD2', { keep: keep })] : [t('logs.' + kind + '.offD1')];
-    if (restart) detail.push(t('logs.acc.restart'));
+    if (restart) { detail.push(t('logs.acc.restart')); detail = TP.tunDetail(detail); }     // 重启核心才提示管理员授权 (增强模式下)
     ok = await ui.confirmDialog({
       title: t('logs.' + kind + (w ? '.onTitle' : '.offTitle')), message: t('logs.' + kind + (w ? '.onMsg' : '.offMsg')), detail: detail,
       confirmText: t('logs.' + kind + (w ? '.onGo' : '.offGo')), kind: w ? 'success' : 'warning'

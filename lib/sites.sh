@@ -5,7 +5,7 @@
 
 SITE_EDITS=${SITE_EDITS:-$H/site-domains.tsv}
 
-site_entry() { catalog_list | awk -F'|' -v id="$1" '$1==id {print; exit}'; }          # 条目的原始行 (没有则空)
+site_entry() { local f; f=$(content_file services.conf); [ -f "$f" ] || return 0; awk -F'|' -v id="$1" '/^(#|[[:space:]]|$)/ {next} $1==id {print; exit}' "$f"; }   # 条目的原始行 (没有则空); 直接读文件: 管道里 awk 提前退出会让 catalog_list 报 Broken pipe
 
 site_domain_norm() { # 规范化用户输入: 小写、去首尾空白、去结尾的点
   printf '%s' "$1" | tr 'A-Z' 'a-z' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/\.$//'

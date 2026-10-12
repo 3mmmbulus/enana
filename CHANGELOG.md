@@ -1,5 +1,25 @@
 # Changelog / 更新日志
 
+## 未发布 / Unreleased
+
+### 中文
+- **行为变化: `--yes` 与 `--upgrade` 不再覆盖别人设置的系统代理:** 发现网络服务已有其它代理设置时, 这一步会被跳过 (原设置已备份到 proxy-backup.txt), 需要时运行 `enana on` 替换。
+- **行为变化: 交互安装时回车 = 取消:** 外部代理的提醒与系统代理的询问默认都是「否」, 直接回车会取消安装 (原来系统代理的询问默认是「是」)。
+- **安装前的外部代理提醒更准确:** 只有正在运行的外部 sing-box 进程、已加载的 launchd 任务, 以及增强模式下经过别的 TUN 网卡的默认路由才会提醒并询问; 只装了程序、只有 plist 或配置目录、系统代理模式下的 VPN 路由只写进清单, 不再询问。Homebrew 装的 sing-box 不算外部。
+- **换端口后系统代理跟着走:** 本地端口被别的程序占着、换了端口时, 指向旧端口的系统代理 (本程序自己留下的) 会改成新端口, 不再被当成别人的设置。
+- **端口检查更诚实:** 有人在用、但看不到是谁 (增强模式的 root 核心) 时, 只列出这些端口并说明没能确认; 启动之后端口仍被别的程序占着, 会明确提示代理没有生效。
+- **外部清单更安全:** 清单文件在 umask 077 下创建, 只记 enana 自己四个端口上的监听者, 不记别的程序的端口。
+- **测试用的路径覆盖:** ENANA_TUN_ROOT、ENANA_TUN_PLIST_DIR、ENANA_ROOT_PREFIX、ENANA_SINGBOX_DIRS、ENANA_NETWORKSETUP 只在设置了 ENANA_TEST 时才生效, 普通安装不再读取它们。
+
+### English
+- **Behaviour change: `--yes` and `--upgrade` no longer overwrite a system proxy set by another program:** when a network service already has other proxy settings, that step is skipped (the originals are backed up to proxy-backup.txt); run `enana on` to replace them when needed.
+- **Behaviour change: in interactive installs, Enter cancels:** the external-proxy warning and the system-proxy question now default to no, so pressing Enter cancels the install (the system-proxy question used to default to yes).
+- **More accurate external-proxy warning before installing:** only a running external sing-box process, a loaded launchd job, and a default route through another TUN interface in Enhanced mode prompt for confirmation; a program that is only installed, a plist alone, a config folder, or a VPN route in System Proxy mode is listed in the inventory only. A sing-box installed by Homebrew is not counted as external.
+- **System proxy follows a port change:** when another program holds a local port and enana moves to a new one, a system proxy still pointing at the old port (left by enana) is switched to the new port instead of being treated as someone else's setting.
+- **Honest port check:** when a port is in use but its holder cannot be seen (the Enhanced-mode root core), only those ports are listed and the check says it could not confirm them; if another program still holds the proxy port after start, enana says the proxy is not working.
+- **Safer external inventory:** the inventory file is created under umask 077 and lists only listeners on enana's own four ports.
+- **Test-only path overrides:** ENANA_TUN_ROOT, ENANA_TUN_PLIST_DIR, ENANA_ROOT_PREFIX, ENANA_SINGBOX_DIRS and ENANA_NETWORKSETUP take effect only when ENANA_TEST is set; normal installs no longer read them.
+
 ## 2.3.23 (2026-10-11)
 
 ### 中文
