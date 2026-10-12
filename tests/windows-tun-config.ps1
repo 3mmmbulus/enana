@@ -70,6 +70,14 @@ Test-Case 'keys spelled in other cases or with U+017F still reach every check' '
     experimental = '{"Cache_File":{"Enabled":true,"Path":"@ROOT@/cache.db"},"Clash_API":{"External_Controller":"127.0.0.1:9090"}}'
 }
 
+# path is a file only inside a local rule set or a hosts DNS server; elsewhere it
+# is a URL path, which every default configuration has (DNS-over-HTTPS servers)
+Test-Case 'DNS-over-HTTPS server with path /dns-query (the default DNS)' '' @{ dns = '{"servers":[{"type":"local","tag":"dns-local"},{"type":"https","tag":"dns-global","server":"1.1.1.1","path":"/dns-query"}],"final":"dns-local"}' }
+Test-Case 'WebSocket transport with path /ws' '' @{ outbounds = '[{"type":"direct","tag":"direct"},{"type":"vless","tag":"v","server":"a.example","server_port":443,"transport":{"type":"ws","path":"/ws"}}]' }
+Test-Case 'hosts DNS server with a string path outside the root' $escapes @{ dns = '{"servers":[{"type":"local","tag":"dns-local"},{"type":"hosts","tag":"dns-hosts","path":"@OUT@/hosts"}],"final":"dns-local"}' }
+Test-Case 'cache_file path outside the root' $escapes @{ experimental = '{"cache_file":{"enabled":true,"path":"@OUT@/cache.db"},"clash_api":{"external_controller":"127.0.0.1:9090"}}' }
+Test-Case 'Cache_File Path (folded) outside the root' $escapes @{ experimental = '{"Cache_File":{"Enabled":true,"Path":"@OUT@/cache.db"},"clash_api":{"external_controller":"127.0.0.1:9090"}}' }
+
 # A: a file-key suffix that is not lower case
 Test-Case 'key_Path (upper-case suffix) outside the root' $escapes @{ outbounds = '[{"type":"direct","tag":"direct"},{"type":"trojan","tag":"t","tls":{"enabled":true,"key_Path":"@OUT@/client.key"}}]' }
 # B, C: a decoy next to a U+017F spelling, which sing-box would use instead

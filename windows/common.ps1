@@ -205,19 +205,25 @@ function Test-SnapshotPath($Value, [string]$Root) {
     return $full.StartsWith($Root + '\', [StringComparison]::OrdinalIgnoreCase)
 }
 function Assert-ConfigPaths($Object, [string]$Root) {
-    # $Object is a folded copy (ConvertTo-FoldedConfig). File keys are path,
-    # output, directory, data_directory and names ending in _path, _file, _dir
-    # or _directory. Unlike macOS every key named path counts, so URL paths
-    # (a WebSocket or DNS-over-HTTPS path) are refused as well.
+    # $Object is a folded copy (ConvertTo-FoldedConfig). File keys are output,
+    # directory, data_directory and names ending in _path, _file, _dir or
+    # _directory; path is a file key only inside a local or hosts object (a
+    # local rule set, a hosts DNS server), as in lib/enhanced-root.sh.
+    # Elsewhere path is a URL path (a WebSocket transport, a DNS-over-HTTPS
+    # server, which every default configuration has), not a file; treating it
+    # as one refused every such snapshot. experimental.cache_file.path is
+    # checked by Assert-TunConfig.
     if ($Object -is [Array]) {
         foreach ($item in $Object) { Assert-ConfigPaths $item $Root }
         return
     }
     if ($Object -isnot [System.Management.Automation.PSCustomObject]) { return }
+    $type = Get-ConfigMember $Object 'type'
+    $fileType = (Test-ConfigText $type 'local') -or (Test-ConfigText $type 'hosts')
     foreach ($property in $Object.PSObject.Properties) {
         $name = $property.Name; $value = $property.Value
         if ($name -cmatch '^external_ui\z') { throw 'Snapshot must not serve external UI files' }
-        if ($name -cmatch '^(?:path|output|directory|data_directory)\z|_(?:path|file|dir|directory)\z') {
+        if ($name -cmatch '^(?:output|directory|data_directory)\z|_(?:path|file|dir|directory)\z' -or ($fileType -and $name -cmatch '^path\z')) {
             if ($value -is [System.Management.Automation.PSCustomObject]) { Assert-ConfigPaths $value $Root; continue } # e.g. cache_file
             # sing-box takes a string or a list for many file keys (hosts path,
             # client_certificate_path, certificate_directory_path, ...).
@@ -252,6 +258,10 @@ function Assert-TunConfig($Config, [string]$Root) {
     foreach ($ruleSet in $ruleSets) {
         if (!(Test-ConfigText (Get-ConfigMember $ruleSet 'type') 'local') -or !(Test-SnapshotPath (Get-ConfigMember $ruleSet 'path') $Root)) { throw 'Rule file escapes protected snapshot' }
     }
+    # cache_file has no type, so Assert-ConfigPaths does not see its path as a file key.
+    $cacheFile = Get-ConfigMember (Get-ConfigMember $c 'experimental') 'cache_file'
+    $cachePath = Get-ConfigMember $cacheFile 'path'
+    if ($null -ne $cachePath -and !(Test-SnapshotPath $cachePath $Root)) { throw 'Config path escapes protected snapshot' }
     Assert-ConfigPaths $c $Root
     return $c
 }
