@@ -493,7 +493,8 @@ core_meta_drop() { rm -f "$H/core-binary.sha256.old" "$H/core-provenance.old"; }
 op_core_upgrade() { # [版本|latest]  latest = 兼容清单里和当前 enana 兼容的最新核心 (没有清单就不升级); 写明版本号 = 照做 (有 SHA-256 才逐个校验)
   local old new want=${1:-latest} was_up=0 pinned_now=0; old=$(core_version)
   # 和 TUN 预检同一个标准 (lib/enhanced.sh 的 core_tun_ok): 来源记成官方钉死的, 而且校验之后没有被改动过。只看来源的标签不够: 被改动过的核心照样标着 pinned
-  if core_tun_ok; then pinned_now=1; fi
+  # Windows 不记核心来源 (TUN 安装时 tun.ps1 自己核对钉死的官方压缩包), core_tun_ok 在那里永远不过: 按已经钉死处理, 否则每次都重新下载同一版
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ] || core_tun_ok; then pinned_now=1; fi
   job_step 0 10 "查询最新版本"
   if [ "$want" = latest ]; then
     core_manifest_refresh >/dev/null 2>&1 || true
