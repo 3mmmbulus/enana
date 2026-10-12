@@ -92,5 +92,9 @@ rf_reset() { # 每个用例前: 回到"已经装过"之前的干净状态
 }
 # enana 的 TUN 启动 (和 os_service_start 调的是同一个函数); stage 路径记在 $W/stage.path, 用例可以在管理员调用之前改动它 (HOOK)
 mktemp() { if [ "${1:-}" = -d ]; then local d; d=$(command mktemp -d "$W/stg.XXXXXX") && printf '%s\n' "$d" > "$W/stage.path" && printf '%s\n' "$d"; else command mktemp "$@"; fi; }
-rf_enana_start() { enhanced_start >/dev/null 2>&1; }
+rf_enana_start() {
+  ( enhanced_start ) >"$W/start.out" 2>&1; local rc=$?
+  if [ "$rc" -ne 0 ]; then echo "  (enhanced_start 退出码 $rc, 输出:)"; sed 's/^/    | /' "$W/start.out" | tail -60; fi
+  return "$rc"
+}
 rf_admin_calls() { wc -l < "$W/sudo.log" 2>/dev/null | tr -d ' '; }
