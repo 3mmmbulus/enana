@@ -29,6 +29,15 @@ check "ech.config_path 指向 ROOT 之外: 拒绝 (M3)" cc_fail '{"outbounds":[{
 check "client_key_path 在 ROOT 之下: 放行" cc_pass '{"outbounds":[{"type":"trojan","tls":{"client_key_path":"ROOT/certs/k.pem"}}]}'
 check "shadowsocks 的 plugin (要运行的程序): 拒绝 (M7)" cc_fail '{"outbounds":[{"type":"shadowsocks","plugin":"/bin/sh"}]}' /outbounds/0/plugin
 check "hosts 类型的 path 在 ROOT 之外: 拒绝 (M7)" cc_fail '{"dns":{"servers":[{"type":"hosts","path":"/etc/hosts"}]}}' /dns/servers/0/path
+# sing-box 解码时键名不分大小写 (Go encoding/json 的折叠匹配), 检查也必须一样: 换个大小写 / 用折叠成 k、s 的字符都不能绕过
+check "键名换成大写 (sing-box 照样认): log.Output 指向 ROOT 之外 → 拒绝" cc_fail '{"log":{"Output":"/etc/x"}}' /log/output
+check "…clash_api 的 External_UI → 拒绝" cc_fail '{"experimental":{"clash_api":{"External_UI":"ROOT/ui"}}}' /experimental/clash_api/external_ui
+check "…Experimental.Cache_File.Path 指向 ROOT 之外 → 拒绝" cc_fail '{"Experimental":{"Cache_File":{"Path":"/etc/x"}}}' /experimental/cache_file/path
+check "…U+212A (开尔文符号, sing-box 当成 k) 拼的 key_path → 拒绝" cc_fail '{"outbounds":[{"type":"trojan","tls":{"Key_path":"/etc/shadow"}}]}' /outbounds/0/tls/key_path
+check "…U+017F (长 s, 当成 s) 拼的 tls: 证书照样必须在 certs/ 里" cc_fail '{"outbounds":[{"tlſ":{"certificate_path":"ROOT/rules/x.crt"}}]}' /outbounds/0/tls/certificate_path
+check "…Type / Path 大写的 local 规则集: 路径照样只能是 rules/目录/文件" cc_fail '{"route":{"rule_set":[{"Type":"local","Path":"ROOT/rules/geo/x/geo.srs"}]}}' /route/rule_set/0/path
+check "…同一个对象里 output 和 Output (折叠后重复; 两个值都在 ROOT 之下也不行) → 拒绝" cc_fail '{"log":{"output":"ROOT/a.log","Output":"ROOT/b.log"}}' /log/output
+check "请求头这类自由的键名 (Host) 不受影响: 放行" cc_pass '{"outbounds":[{"type":"vless","transport":{"type":"ws","path":"/ws","headers":{"Host":"a.example"}}}]}'
 
 echo "== B. 快照文件的筛选 (3.4): 规则集 rules/目录/文件, 证书 certs/名字.crt"
 mkdir -p "$H/rules/app/deep" "$H/certs"

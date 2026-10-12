@@ -41,7 +41,8 @@ helper_render() {
 # 配置里的路径检查 (安装和 enana 预检共用): 文件类的键 (名字以 _path / _file / _dir / _directory 结尾, 以及 output、data_directory,
 # 还有 local / hosts 类型对象里的 path) 的值必须在 $root 之下 (每一段都是安全的文件名); 证书 (certificate_path) 还要在 certs/ 里并列出引用;
 # 禁止 experimental.clash_api.external_ui 和 shadowsocks 的 plugin (那是要运行的程序); 任何字符串值不能以 / 开头又含 ..
-# 不靠列出的键名: 新的文件类键会被默认拒绝。输出配置引用到的快照文件 (rules/X/Y、certs/NAME), 每行一个; 不通过: 退出 4
+# 不靠列出的键名: 新的文件类键会被默认拒绝。键名和 sing-box 一样不分大小写比较 (fold_key), 换个大小写不能绕过检查。
+# 输出配置引用到的快照文件 (rules/X/Y、certs/NAME), 每行一个; 不通过: 退出 4
 CONFIG_PL='use strict; use warnings; use JSON::PP;
 my ($file,$root)=@ARGV;
 sub bad { print STDERR "enana-root: refused: config-path: $_[0]\n"; exit 4 }
@@ -50,6 +51,17 @@ open(my $fh,"<",$file) or bad("unreadable");
 my $raw = do { local $/; <$fh> };
 my $doc = eval { JSON::PP->new->utf8->decode($raw) };
 bad("invalid-json") unless ref $doc eq "HASH";
+# sing-box 解码配置时键名不分大小写 (Go encoding/json: 先找一模一样的键, 找不到再按 Unicode 简单大小写折叠匹配: ASCII 字母不分大小写,
+# U+212A 开尔文符号等于 k, U+017F 长 s 等于 s)。所以先把每个键折叠成 ASCII 小写再检查, 否则 "Output"、"External_UI" 这样的写法
+# 能绕过下面的检查, root 的核心却照样采用; 同一个对象里两个键折叠后相同 (sing-box 会把两个值都写进同一个字段): 拒绝
+sub fold_key { my $k=shift; $k =~ tr/A-Z/a-z/; $k =~ s/\x{212A}/k/g; $k =~ s/\x{17F}/s/g; return $k }
+sub fold_doc {
+  my ($n,$p)=@_;
+  if (ref $n eq "HASH") { my %o; for my $k (sort keys %$n) { my $f = fold_key($k); bad("$p/$f") if exists $o{$f}; $o{$f} = fold_doc($n->{$k}, "$p/$f") } return \%o }
+  return [ map { fold_doc($n->[$_], "$p/$_") } 0 .. $#$n ] if ref $n eq "ARRAY";
+  return $n;
+}
+$doc = fold_doc($doc, "");
 my %refs;
 sub comp_ok { my $c=shift; return defined $c && $c =~ /\A[A-Za-z0-9._-]+\z/ && $c ne "." && $c ne ".." }
 sub under_root {
@@ -154,6 +166,7 @@ root=''; plist=''; label=''; uid=''; agent=''; work=''; backup=''; self_dir=''; 
 changed=0; committed=0; helper_state=0; had_root=0; had_gui=0; gui_plist=''
 cleanup() {
   local rc=$?
+  set +e                                             # 回滚的每一步都要做: 某一步失败也接着恢复其余的 (和清掉临时目录), 最后返回原来的退出码
   if [ "$changed" = 1 ] && [ "$committed" = 0 ]; then
     "$launchctl_bin" bootout "system/$label" 2>/dev/null || true
     for name in sing-box config.json rules certs bin; do
@@ -325,9 +338,9 @@ done
 
 # d. 规则助手和免密规则 (提交之后, 不影响 TUN 本身): 目录链不合格或助手不能用时, 两个文件都删掉 (旧的也不留)
 if [ -n "$username" ]; then
-  helper_state=1
   [ ! -e "$libexec/tunrules-$uid" ] || /bin/cp -p "$libexec/tunrules-$uid" "$backup/helper"
   [ ! -e "$sudoers_dir/enana-tunrules-$uid" ] || /bin/cp -p "$sudoers_dir/enana-tunrules-$uid" "$backup/sudoers"
+  helper_state=1                                     # 两份备份都做好了才算: 备份失败时回滚不碰现有的助手和免密规则 (否则会删掉它们又恢复不了)
   if [ -f "$work/tunrules-helper" ] && libexec_ok && /bin/mkdir -p "$sudoers_dir" \
      && printf '%s ALL=(root) NOPASSWD: %s\n' "$username" "$libexec/tunrules-$uid" > "$work/sudoers" \
      && /usr/bin/install -m 755 -o root -g wheel "$work/tunrules-helper" "$libexec/tunrules-$uid" \

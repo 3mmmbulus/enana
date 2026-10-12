@@ -81,6 +81,35 @@ rf_reset; rf_enana_start; : > "$W/sudo.log"
 enhanced_stop; enhanced_stop
 check "第二次停止没有新的管理员调用" test "$(rf_admin_calls)" = 1
 
+echo "== 8. 备份现有的助手失败 (第 d 步还没动它们): 回滚 TUN 文件, 现有的助手和免密规则原样保留"
+rf_reset; rf_enana_start
+set_level debug
+cfg_before=$(shasum -a 256 < "$ROOT/config.json"); helper_before=$(shasum -a 256 < "$HELPER"); sudo_before=$(cat "$SUDOERS")
+chmod 000 "$HELPER"                                   # 假 root 就是当前用户: 读不了它, cp -p 备份就失败 (set -e 退出, 走回滚)
+rf_enana_start; rc=$?
+chmod 755 "$HELPER" 2>/dev/null
+check "失败返回 1 (已回滚)" test "$rc" = 1
+check "配置恢复为安装之前的字节" test "$(shasum -a 256 < "$ROOT/config.json")" = "$cfg_before"
+check "现有的助手还在, 字节不变" test "$(shasum -a 256 < "$HELPER" 2>/dev/null)" = "$helper_before"
+check "现有的免密规则还在" test "$(cat "$SUDOERS" 2>/dev/null)" = "$sudo_before"
+check "没有残留的回滚 / 准备目录" test -z "$(find "$ROOT" -name '.prepare.*' -o -name '.rollback.*')"
+
+echo "== 9. 回滚时有一步失败 (plist 目录不可写): 其余的照样恢复, 临时目录照样清掉"
+rf_reset; rf_enana_start
+cfg_before=$(shasum -a 256 < "$ROOT/config.json"); helper_before=$(shasum -a 256 < "$HELPER"); sudo_before=$(cat "$SUDOERS")
+printf '# 新版本的助手模板: 渲染出来的字节和装着的不同\n' >> "$LIBT/tunrules-helper.pl"
+set_level debug
+printf '#!/bin/sh\necho "inet 10.0.0.1 netmask 0xffffff00"\n' > "$W/bin/ifconfig"      # 路由一直不是我们的: 安装失败, 走回滚
+printf '#!/bin/sh\nchmod 555 "%s"\n' "$W/daemons" > "$W/bin/sleep"                  # 等路由的时候把 plist 目录改成只读: 回滚里删除 / 换回 plist 都会失败
+rf_enana_start; rc=$?
+chmod 755 "$W/daemons"; printf '#!/bin/sh\nexit 0\n' > "$W/bin/sleep"; printf '#!/bin/sh\necho "inet 172.19.0.1 netmask 0xfffffffc"\n' > "$W/bin/ifconfig"
+cp "$RF_REPO/lib/tunrules-helper.pl" "$LIBT/"
+check "失败返回 1" test "$rc" = 1
+check "配置恢复为安装之前的字节" test "$(shasum -a 256 < "$ROOT/config.json")" = "$cfg_before"
+check "plist 那一步失败之后: 助手仍然恢复为安装之前的字节" test "$(shasum -a 256 < "$HELPER" 2>/dev/null)" = "$helper_before"
+check "…免密规则恢复" test "$(cat "$SUDOERS" 2>/dev/null)" = "$sudo_before"
+check "…临时目录照样清掉 (没有残留的回滚 / 准备目录)" test -z "$(find "$ROOT" -name '.prepare.*' -o -name '.rollback.*')"
+
 echo
-if [ "$fails" = 0 ]; then echo 'PASS: root snapshot install, bootstrap / route rollback, staged symlink refusal, stop and remove from the root copy'
+if [ "$fails" = 0 ]; then echo 'PASS: root snapshot install, bootstrap / route rollback, staged symlink refusal, stop and remove from the root copy, rollback without a helper backup and past a failed step'
 else echo "FAIL: $fails check(s) failed"; exit 1; fi
