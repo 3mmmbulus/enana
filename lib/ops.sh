@@ -110,7 +110,8 @@ op_txn() {
     5) # TUN 安装被拒绝或需要管理员授权, 根服务没有被动到 (见 config.sh 的 config_tun_refused / apply_config): 撤销本次更改。
        # 后台任务 (APPS_BG_JOB) 和回到系统代理时重新应用一次 (不会再弹框); 还是 TUN 时不重试, 免得又弹一次管理员框
        txn_restore
-       if [ "${APPS_BG_JOB:-0}" = 1 ] || [ "${NETWORK_MODE:-system}" != tun ]; then APPLY_QUIET=1 apply_config >/dev/null 2>&1 || true; fi
+       # 重新应用带 APPS_BG_JOB=1: 系统代理模式下还加载着根守护进程时, 停它要授权 —— 这次的授权已经用过 (root 拒绝了), 不为撤销再弹一次框
+       if [ "${APPS_BG_JOB:-0}" = 1 ] || [ "${NETWORK_MODE:-system}" != tun ]; then APPS_BG_JOB=1 APPLY_QUIET=1 apply_config >/dev/null 2>&1 || true; fi
        op_unlock
        oplog "${OP_WHO:-terminal}" "$desc" "$detail" error
        _txn_end fail "${TXN_ERR:-TUN 没有启动, 已撤销本次更改}" 5; return 1 ;;
@@ -404,10 +405,11 @@ op_proxy() { # <on 0|1|''> <mode auto|global|''>
   case $mode in ''|auto|global) ;; *) job_fail "代理模式无效" 0; return 1 ;; esac
   op_lock || { job_fail "另一个配置任务正在运行, 请稍后重试" 0; return 1; }
   job_step 0 20 "启动代理服务"
-  ENHANCED_ADMIN_ERR=''
+  ENHANCED_ADMIN_ERR=''; ENHANCED_REFUSED=0; ENHANCED_REFUSED_WHY=''
   if ! os_service_running && ! { os_service_start && wait_port "$PORT" 10 && enhanced_ready; }; then
     op_unlock
     if [ "${ENHANCED_ADMIN_ERR:-}" = cancelled ]; then job_fail "已取消管理员授权, 代理没有开启" 0
+    elif [ "${ENHANCED_REFUSED:-0}" = 1 ]; then job_fail "TUN 没有启动 (${ENHANCED_REFUSED_WHY:-refused}), 代理没有开启" 0      # 被拒绝的原因 (核心来源 / 配置检查 …) 带给用户
     else job_fail "代理服务没有运行, 启动也失败了 (运行 enana doctor 查看原因)" 0; fi
     return 1
   fi

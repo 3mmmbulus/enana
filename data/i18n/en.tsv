@@ -1036,6 +1036,7 @@ TUN 需要官方的、钉死版本号的核心, 但没能下载到 sing-box *	TU
 已保留当前版本, 原来的核心没有改动; 检查网络后重试, 或者先改用系统代理模式 (enana network-mode system) 再更新	The current version was kept and the existing core was left unchanged; check your network and try again, or switch to system proxy mode first (enana network-mode system) and then update
 sing-box * 没有钉死的 SHA-256, 没有下载 (只接受钉死的官方包)	sing-box * has no pinned SHA-256, so it was not downloaded (only the pinned official package is accepted)
 TUN 没有启动, 新配置没有应用	TUN did not start; the new configuration was not applied
+TUN 没有启动 (*), 代理没有开启	TUN did not start (*); the proxy was not turned on
 已保留当前版本, 没有升级	The current version was kept; nothing was upgraded
 TUN 没有启动 (*): 请运行 enana upgrade, 或改用系统代理模式; 旧的 TUN 仍在运行	TUN did not start (*): run enana upgrade, or switch to system proxy mode; the old TUN is still running
 TUN 没有启动 (*): 请运行 enana upgrade, 或改用系统代理模式	TUN did not start (*): run enana upgrade, or switch to system proxy mode

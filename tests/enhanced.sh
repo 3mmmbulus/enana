@@ -270,6 +270,15 @@ echo 'PASS: administrator cancellation restores config without a second restart/
   [ "$(cat "$H/overrides.tsv")" = "$before" ] || { echo 'FAIL: S2: the refused change was not rolled back'; exit 1; }
   [ "$(cat "$W/s2-end")" = 'fail|TUN 没有启动 (stage-extra): 原因: stage-extra|5' ] || { echo "FAIL: S2: the refusal was not reported with its reason: $(cat "$W/s2-end")"; exit 1; }
   [ "$STARTS" = 0 ] || { echo "FAIL: S2: the refusal started a core by itself ($STARTS)"; exit 1; }
+  # a stray root daemon is still loaded while System Proxy is configured: after root refused the TUN install (the dialog was already used), the
+  # rollback re-apply must not go on to stop that daemon - that is a second administrator dialog for one click; the user's next action stops it
+  RESTARTS=0; os_service_restart() { if enhanced_configured; then ENHANCED_REFUSED=1; ENHANCED_REFUSED_WHY=stage-extra; return 3; fi; RESTARTS=$((RESTARTS + 1)); return 0; }
+  enhanced_loaded() { return 0; }
+  cp "$W/system.json" "$H/config.json"; rm -f "$H/config.json.bak"; settings_set NETWORK_MODE system; load_settings || true; : > "$W/s2-end"
+  if op_txn '切换流量接管模式' txn_settings NETWORK_MODE=tun >/dev/null 2>&1; then echo 'FAIL: S2: a refused switch with a stray root daemon reported success'; exit 1; fi
+  load_settings || true
+  [ "$NETWORK_MODE" = system ] || { echo "FAIL: S2: a refused switch with a stray root daemon did not end on System Proxy ($NETWORK_MODE)"; exit 1; }
+  [ "$RESTARTS" = 0 ] || { echo "FAIL: S2: the rollback re-apply restarted to stop the stray root daemon (a second dialog for one click): $RESTARTS"; exit 1; }
 ) || exit 1
 settings_set NETWORK_MODE system; load_settings || true; cp "$W/system.json" "$H/config.json"; ovr_sync >/dev/null 2>&1 || true
 echo 'PASS: a TUN refusal keeps the capture mode and the running configuration, rolls the change back and reports why (S2)'
@@ -479,6 +488,9 @@ PY
   os_service_start() { ENHANCED_ADMIN_ERR=failed; return 1; }
   op_proxy 1 '' || true
   [ "$(cat "$W/proxy-job")" = 'fail|代理服务没有运行, 启动也失败了 (运行 enana doctor 查看原因)' ] || { echo "FAIL: op_proxy after a failed start: $(cat "$W/proxy-job")"; exit 1; }
+  os_service_start() { ENHANCED_REFUSED=1; ENHANCED_REFUSED_WHY=preflight-core-unpinned; return 6; }      # TUN refused before any dialog: the job says why
+  op_proxy 1 '' || true
+  [ "$(cat "$W/proxy-job")" = 'fail|TUN 没有启动 (preflight-core-unpinned), 代理没有开启' ] || { echo "FAIL: op_proxy did not give the TUN refusal reason: $(cat "$W/proxy-job")"; exit 1; }
   os_service_start() { return 0; }
   PROXY_ENABLED=0; PROXY_MODE=auto; op_proxy 1 global
   [ "$(cat "$W/proxy-job")" = 'ok|代理已开启|{"enabled":true,"mode":"global"}' ] && [ "$(cat "$W/proxy-calls")" = 'switch|1|global|0|auto' ] || { echo "FAIL: op_proxy success: $(cat "$W/proxy-job") / $(cat "$W/proxy-calls")"; exit 1; }

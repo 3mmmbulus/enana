@@ -645,6 +645,13 @@ eq "TUN + 仪表盘: 用户在场 → 正常应用, deferred 清零" "$?:$(nappl
 NETWORK_MODE=tun OP_WHO=auto FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync; eq "TUN + 后台: 内容没变 → 什么都不做 (也不记 deferred)" "$(napply):$(official_state_get deferred)" "$((n3 + 1)):0"
 NETWORK_MODE=tun OP_WHO=terminal APPS_BG_JOB=1 FAKE_BODY=$OFFD/ok.json FAKE_CODE=200 official_sync
 eq "TUN + 后台任务 (APPS_BG_JOB=1; OP_WHO 不是 auto 也一样, 比如 tick 里前面一步留下的 terminal): 不应用, 记下 deferred=1" "$?:$(napply):$(official_state_get deferred)" "0:$((n3 + 1)):1"
+# 系统代理模式, 但根守护进程还加载着 (切回系统代理没有完成): 应用要先停它 (要授权), 后台同样推迟
+official_state_set deferred=0
+( enhanced_loaded() { return 0; }; NETWORK_MODE=system OP_WHO=auto FAKE_BODY=$OFFD/ok.json FAKE_CODE=200 official_sync >/dev/null 2>&1 )
+eq "系统代理模式 + 根守护进程还加载着 + 后台: 不应用, 记下 deferred=1" "$(napply):$(official_state_get deferred)" "$((n3 + 1)):1"
+# 管理员框被取消: 没应用成功, 但这份线路没有问题, 不记成坏的 (否则一天之内都不再试)
+( apply_config() { echo x >> "$OFFD/applies"; ENHANCED_ADMIN_ERR=cancelled; return 3; }; NETWORK_MODE=tun OP_WHO=dashboard FAKE_BODY=$OFFD/ok.json FAKE_CODE=200 official_sync >/dev/null 2>&1 )
+eq "TUN + 仪表盘, 管理员框被取消: 不记成坏的" "$(official_state_get bad)" ""
 NETWORK_MODE=system; unset OP_WHO
 
 # 套餐刷新后判断是否需要同步 / 退出账号清除
@@ -718,6 +725,16 @@ eq "服务没有加载 (还没启动核心): 只写配置, 不重启, 不清理�
 eq "后台任务 + 系统代理模式 (没有根守护进程): 照常应用并重启用户核心 (不需要授权)" "$(apply_run bgsys APPS_BG_JOB=1)" '0|restart;wait 15;proxy_sync|{"new":1}|pruned|'
 eq "后台任务 + TUN: 要管理员授权 → 撤销 (返回 5), 不重启, 配置和规则集文件都不动" "$(apply_run bgtun APPS_BG_JOB=1 NETWORK_MODE=tun)" '5||{"old":1}|kept|'
 eq "后台任务 + 系统代理模式但根守护进程还加载着 (重启要先停它, 要授权): 同样撤销" "$(apply_run bgloaded APPS_BG_JOB=1 TUN_LOADED_RC=0)" '5||{"old":1}|kept|'
+same_run() { # 名字 [变量=值 ...] -> rc|调用顺序   (配置没变: config.json 已经是 gen_config 会生成的那一份)
+  local name=$1; shift
+  ( H=$UW/same-$name; rm -rf "$H"; mkdir -p "$H/rules"; printf '{"new":1}' > "$H/config.json"
+    NETWORK_MODE=system; unset OP_WHO; [ $# -gt 0 ] && export "$@"
+    . "$LIB/config.sh"; apply_mocks; LOG=$UW/same-$name.log; : > "$LOG"
+    rc=0; apply_config >/dev/null 2>&1 || rc=$?; printf '%s|%s\n' "$rc" "$(paste -sd';' "$LOG")" )
+}
+eq "配置没变 + 后台任务 + 系统代理模式但根守护进程还加载着: 停不了它 (要授权), 照旧什么都不做, 返回 0 (不撤销, 同步 / 官方线路不记成失败)" "$(same_run bgsame APPS_BG_JOB=1 TUN_LOADED_RC=0)" '0|'
+eq "…用户自己操作 (前台): 往下走重启, 由重启停掉根守护进程" "$(same_run fgsame TUN_LOADED_RC=0)" '0|restart;wait 15;proxy_sync'
+eq "…根守护进程没加载: 前台也什么都不做" "$(same_run fgnone)" '0|'
 gcf=$(H=$UW/gcfail; rm -rf "$H"; mkdir -p "$H/rules"; printf 'file' > "$H/rules/geosite-cn"; printf 'OLD' > "$H/rules/geosite-cn.srs"; printf '{"old":1}' > "$H/config.json"; . "$LIB/config.sh"; sb_ver() { :; }; dns_load() { :; }; srv_emit() { :; }; official_emit() { :; }; NETWORK_MODE=system; rc=0; out=$(gen_config 2>&1) || rc=$?; echo "rc=$rc|$(test -e "$H/config.json.new" && echo new-written || echo no-new)|$(cat "$H/config.json")|$(printf '%s' "$out" | grep -c '规则集目录整理失败')")
 eq "规则集迁移失败 (新位置被占用): gen_config 返回 1, 不写新配置, 原配置不动, 给出提示" "$gcf" 'rc=1|no-new|{"old":1}|1'
 echo
