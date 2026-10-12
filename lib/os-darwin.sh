@@ -110,7 +110,9 @@ os_service_start() {
     # Only a TUN -> System transition needs to restore user autostart settings.
     # Ordinary starts must not rewrite all plists from a differently resolved
     # /tmp vs /private/tmp path and cause a later installer restart.
-    [ ! -e "$TUN_PLIST" ] || os_write_plists >/dev/null || true
+    # This branch starts the user core, so the plist is written for System Proxy even while NETWORK_MODE still says tun (a failed transaction
+    # being rolled back): with tun, RunAtLoad / KeepAlive would be written false and the user core would not come back after a reboot or crash.
+    [ ! -e "$TUN_PLIST" ] || NETWORK_MODE=system os_write_plists >/dev/null || true
     os_system_service_start || rc=$?
     if [ -n "$selected" ]; then
       if [ "$rc" = 0 ] && wait_port "$PORT" 15; then enhanced_restore_selectors "$selected"; else rc=1; fi

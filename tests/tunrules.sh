@@ -250,8 +250,12 @@ reset; install_helper; rm -f "$FAKE_SUDOERS_DIR"/*; ovr changed.example
 apply_config
 eq "sudoers 规则不在了 (sudo -n 要密码): 完整安装" "$RESTARTS" "1"
 reset; install_helper; NETWORK_MODE=system; printf 'NETWORK_MODE=system\n' > "$H/settings.env"; ovr changed.example
+enhanced_loaded() { return 1; }                                   # 系统代理模式: 根守护进程没有加载 (正常的状态)
 apply_config; rc=$?
 eq "系统代理模式: 完全不涉及助手 (规则本来就是热加载的)" "$rc:$RESTARTS:$(ops | grep -c 同步策略规则)" "0:0:0"
+enhanced_loaded() { return 0; }                                   # 切回系统代理没有完成: 设置是系统代理, 根守护进程却还加载着
+apply_config; rc=$?
+eq "系统代理模式、配置没变, 但根守护进程还加载着: 不能直接返回 (它还在接管流量), 重启一次 (停掉它、启动用户核心); 不走助手同步" "$rc:$RESTARTS:$(ops | grep -c 同步策略规则)" "0:1:0"
 printf 'NETWORK_MODE=tun\n' > "$H/settings.env"
 
 echo "== T5. 指纹: 策略规则文件不再计入「核心」指纹"
@@ -428,7 +432,7 @@ echo "== T6. 重启核心 (os_service_restart): 指纹没变 + 助手可信 → 
 echo "== T7. 停止已经停掉的守护进程不要管理员授权 (stop 之后 plist 还在; 更完整的覆盖在 tests/enhanced.sh)"
 (
   eval "$(sed -n -e '/^enhanced_idle()/,/^}/p' -e '/^enhanced_stop()/,/^}/p' "$LIB/enhanced.sh")"        # 真实的函数 (前面没有换成假的, 这里只换掉特权调用和 launchd)
-  ADMIN=0; enhanced_admin() { ADMIN=$((ADMIN + 1)); return 0; }
+  ADMIN=0; enhanced_admin() { ADMIN=$((ADMIN + 1)); LOADED=0; return 0; }       # 和真的 root stop 一样: 停掉之后守护进程就不在 launchd 里了
   enhanced_paths() { TUN_UID=501; TUN_LABEL=com.enana.proxy.tun.501; TUN_ROOT="$W/stop-root"; TUN_PLIST="$W/stop.plist"; }; : > "$W/stop.plist"
   LOADED=1; enhanced_loaded() { [ "$LOADED" = 1 ]; }
   launchctl() { return 1; }                                   # launchd 查不到 print-disabled: 只能靠本机记录

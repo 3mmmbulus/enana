@@ -112,7 +112,7 @@ TUN 的核心是 root 守护进程: 改核心、配置、规则库 (`.srs`)、�
 | 「重启 enana」每次都弹 | `os_service_restart` → `enhanced_start` 一律走完整安装 | 核心 / 配置 / 规则库指纹没变、且 root 助手可信时, 用助手的 `restart` 动作 (`launchctl kickstart -k`) 重启, 不弹; 否则走原来的完整安装。操作记录里的 `重启核心方式` 写明走了哪条路: `via=helper`, 或 `via=admin why=no-helper|changed|rejected|not-loaded|sync-failed` |
 | `enana update` / 每日维护 (订阅「自动更新」) 弹 | 指纹把每次都会重写的 `rules/.updated` 算进去了; 总开关 / 模式切换会改写磁盘配置里的 `default_mode`, 也让指纹对不上 | 指纹忽略隐藏文件 / `*.new` / `*.tmp`, 并把 `default_mode` 的值抹平后再算; 真的变了的 `.srs` / 配置 / 证书仍然触发完整安装 |
 | 订阅内容没变也重启核心 | 订阅刷新「删光再追加」, 有两个以上订阅或订阅后面有手动服务器时文件顺序变了, 生成的配置 (默认固定出口、自动线路顺序) 随之不同 | 刷新是就地合并 (见 `docs/API.md` 的 `servers/import`), 内容相同的刷新不改动 `servers.jsonl`; 多个订阅一次事务、一次应用; 订阅里用户固定的角色保留 |
-| 切到系统代理模式后, 每次启动 / 停止都弹 | 停止动作只看 plist 在不在 (停止后 plist 还在), 对已经停掉的守护进程也要授权 | 守护进程没加载、且不会自己回来 (launchd 里已禁用, 或本机记下了上一次成功的停止) 时直接跳过 |
+| 切到系统代理模式后, 每次启动 / 停止都弹 | 停止动作只看 plist 在不在 (停止后 plist 还在), 对已经停掉的守护进程也要授权 | 守护进程没加载、且不会自己回来 (launchd 里已禁用, 或本机记下了上一次成功的停止) 时直接跳过; 「已停止」的记录只在 root 停止成功、而且守护进程确实不在 launchd 里之后才写。反过来, 设置已经是系统代理、配置也没变, 但根守护进程还加载着 (切回没有完成) 时, `apply_config` 不再直接返回, 而是重启一次把它停掉; 用户核心的 plist 按系统代理写 (开机自启 / 崩溃重启), 即使这时设置里还是 TUN (失败事务的回滚中) |
 | 点了取消, 同一次点击又连着弹 (最多四次) | op_txn 回滚后的重新应用、apply_config 自己的回滚重启、root-copy-untrusted 的 inband 重试、升级核心失败后的重启都会再要授权 | 取消记在进程里 (`ENHANCED_PROMPT_CANCELLED`, 不导出): 同一个操作里 `enhanced_admin` / `os_admin_dialog` 不再弹框, 直接返回 7 (不是拒绝); 结果报告为「已取消管理员授权, 已撤销本次更改」, 操作记录写 `cancelled` |
 | 取消了一次规则集开关, 之后每次 TUN 应用都弹 | 下载下来的 `rules/<x>/<x>.srs` 留在磁盘上, 指纹把 `rules/*/*` 全部算进去 | 指纹只算配置里 `route.rule_set` 引用到的本地规则文件 (和 root 安装时 `check-config` 列出的是同一份); 证书照旧全部算, 策略规则集 (`ovr-*.json`) 照旧有自己的指纹 |
 

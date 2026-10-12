@@ -217,6 +217,17 @@ os_service_start
 [ "$(head -1 "$W/switch-calls")" = stop ]
 grep -q '/proxies/PIN.*Fixed Exit' "$W/switch-calls"
 echo 'PASS: switching back restores root PIN choice into System core'
+# The user-core branch of os_service_start can run while NETWORK_MODE still says tun (the rollback of a failed transaction): the plists it rewrites
+# must be written for System Proxy, or RunAtLoad / KeepAlive become false and the user core does not come back after a reboot or a crash.
+(
+  NETWORK_MODE=tun
+  os_write_plists() { printf '%s\n' "${NETWORK_MODE:-}" > "$W/plist-mode"; return 1; }
+  enhanced_loaded() { return 1; }
+  os_service_start >/dev/null 2>&1
+  [ "$(cat "$W/plist-mode")" = system ] || { echo "FAIL: the user core's plist was written for NETWORK_MODE=$(cat "$W/plist-mode")"; exit 1; }
+  [ "$NETWORK_MODE" = tun ] || { echo 'FAIL: os_service_start changed NETWORK_MODE'; exit 1; }
+) || exit 1
+echo 'PASS: starting the user core writes its plist for System Proxy even while the setting still says TUN'
 
 # A denied administrator request leaves a healthy old core alone.
 cp "${SINGBOX:-$(type -P true)}" "$H/sing-box"
@@ -262,6 +273,18 @@ echo 'PASS: administrator cancellation restores config without a second restart/
 ) || exit 1
 settings_set NETWORK_MODE system; load_settings || true; cp "$W/system.json" "$H/config.json"; ovr_sync >/dev/null 2>&1 || true
 echo 'PASS: a TUN refusal keeps the capture mode and the running configuration, rolls the change back and reports why (S2)'
+# The refusal says "旧的 TUN 仍在运行" only when the root daemon is actually running, not when launchd merely still lists it (it exited / crashed).
+(
+  sysproxy_off_if_core_down() { :; }; warn() { :; }; ENHANCED_REFUSED_WHY=stage-extra
+  cp "$W/system.json" "$H/config.json.bak"
+  enhanced_loaded() { return 0; }; os_service_running() { return 1; }
+  config_tun_refused || true
+  [ "$TXN_ERR" = 'TUN 没有启动 (stage-extra): 原因: stage-extra' ] || { echo "FAIL: a loaded but not running daemon was reported as running: $TXN_ERR"; exit 1; }
+  os_service_running() { return 0; }
+  config_tun_refused || true
+  [ "$TXN_ERR" = 'TUN 没有启动 (stage-extra): 原因: stage-extra; 旧的 TUN 仍在运行' ] || { echo "FAIL: a running daemon was not mentioned: $TXN_ERR"; exit 1; }
+) || exit 1
+echo 'PASS: a refusal mentions the old TUN only when its daemon is actually running'
 # One click, one administrator dialog: after the user cancels it, apply_config's rollback restart and op_txn's rollback re-apply both need
 # authorisation again (the old core is not healthy here), but nothing in the same operation asks again, and the result is reported as cancelled.
 # The real os_service_restart / os_service_start / enhanced_admin run; only the staged install is a stand-in (one administrator call).
@@ -415,7 +438,8 @@ echo 'PASS: privileged argument shell quoting'
   TUN_LABEL=com.enana.proxy.tun.501; TUN_UID=501; TUN_ROOT="$W/stop-root"; TUN_PLIST="$W/stop.plist"
   enhanced_paths() { :; }
   ADMIN=0; ADMIN_RC=0; ADMIN_LOG="$W/admin-calls"; : > "$ADMIN_LOG"
-  enhanced_admin() { ADMIN=$((ADMIN + 1)); printf '%s\n' "$*" >> "$ADMIN_LOG"; return "$ADMIN_RC"; }
+  # like the real root `stop`: a successful stop unloads the daemon (STOP_LEAVES_LOADED=1: launchd still lists it afterwards)
+  enhanced_admin() { ADMIN=$((ADMIN + 1)); printf '%s\n' "$*" >> "$ADMIN_LOG"; [ "$ADMIN_RC" != 0 ] || [ "${STOP_LEAVES_LOADED:-0}" = 1 ] || LOADED=0; return "$ADMIN_RC"; }
   LOADED=0; enhanced_loaded() { [ "$LOADED" = 1 ]; }
   DISABLED=''                                              # launchctl print-disabled system 的输出: 空 = 查不到 / 没有这一项
   launchctl() { [ "$1" = print-disabled ] || return 1; printf 'disabled services = {\n\t"com.apple.example" => disabled\n'; [ -z "$DISABLED" ] || printf '\t"%s" => %s\n' "$TUN_LABEL" "$DISABLED"; printf '}\n'; }
@@ -446,6 +470,12 @@ echo 'PASS: privileged argument shell quoting'
   # a stale marker never hides a daemon that is loaded again
   reset_stop; : > "$H/.enhanced-stopped"; LOADED=1
   enhanced_stop; [ "$ADMIN" = 1 ] || { echo 'FAIL: stale marker hid a loaded daemon'; exit 1; }
+  # root reported the stop as done but the daemon is still loaded: no "stopped" marker (it would hide the daemon once it is unloaded but still enabled)
+  reset_stop; LOADED=1; STOP_LEAVES_LOADED=1
+  enhanced_stop; rc=$?
+  [ "$rc:$ADMIN" = 0:1 ] && [ ! -e "$H/.enhanced-stopped" ] || { echo "FAIL: a stop that left the daemon loaded was recorded as stopped (rc:admin $rc:$ADMIN)"; exit 1; }
+  enhanced_stop; [ "$ADMIN" = 2 ] || { echo "FAIL: a daemon still loaded after a stop must be stopped again ($ADMIN calls)"; exit 1; }
+  STOP_LEAVES_LOADED=0
   # a failed / cancelled authorisation is reported and not remembered
   reset_stop; ADMIN_RC=1
   if enhanced_stop; then echo 'FAIL: cancelled authorisation reported as success'; exit 1; fi

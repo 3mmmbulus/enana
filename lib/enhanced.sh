@@ -329,7 +329,8 @@ enhanced_stop() {
   local rc; enhanced_paths; [ -e "$TUN_PLIST" ] || return 0
   enhanced_idle && return 0
   enhanced_root_action stop; rc=$?
-  [ "$rc" != 0 ] || : > "$H/.enhanced-stopped"
+  # 「已经停掉」的记录只在守护进程真的不在了时才写: root 说停了但它还加载着 (比如刚好又被拉起来), 写了记录之后 enhanced_idle 会一直以为没什么可停
+  [ "$rc" != 0 ] || enhanced_loaded || : > "$H/.enhanced-stopped"
   return "$rc"
 }
 enhanced_remove() {

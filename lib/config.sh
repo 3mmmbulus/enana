@@ -230,7 +230,7 @@ config_tun_refused() { # TUN 安装被拒绝 (root 没有动任何东西; 这里
   esac
   rm -f "$H/config.json.new"
   [ ! -f "$H/config.json.bak" ] || cp -p "$H/config.json.bak" "$H/config.json"
-  enhanced_loaded && detail="$detail; 旧的 TUN 仍在运行"
+  if enhanced_loaded && os_service_running; then detail="$detail; 旧的 TUN 仍在运行"; fi      # 真的在运行 (只是加载着、已经退出的不算)
   sysproxy_off_if_core_down
   TXN_ERR="TUN 没有启动 ($why): $detail"; warn "$TXN_ERR"; return 5
 }
@@ -250,8 +250,11 @@ apply_config() {
     else return 1; fi
   fi
   if [ -f "$H/config.json" ] && cmp -s "$H/config.json" "$H/config.json.new"; then
-    if [ "${NETWORK_MODE:-system}" != tun ]; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi
-    if enhanced_loaded && [ "$(enhanced_fingerprint)" = "$(cat "$H/.enhanced-fingerprint" 2>/dev/null)" ]; then
+    # 系统代理模式, 配置没变: 什么都不做 —— 除非根守护进程还加载着 (切回系统代理没有完成 / 被打断过): 那就往下走重启, 由 os_service_restart 停掉它、
+    # 启动用户自己的核心; 以前直接返回, 设置写着系统代理, root 的 TUN 却一直在接管流量
+    if [ "${NETWORK_MODE:-system}" != tun ]; then
+      if ! enhanced_loaded; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi
+    elif enhanced_loaded && [ "$(enhanced_fingerprint)" = "$(cat "$H/.enhanced-fingerprint" 2>/dev/null)" ]; then
       # 核心、配置、规则库都没变 (指纹不含 default_mode 和 rules/.updated 这类记账内容, 见 enhanced_fingerprint): 只有应用 / 网站的代理策略 (rules/*/ovr-*.json, 纯路由数据)
       # 可能变了。已经装过规则同步助手 (上一次管理员授权时顺带装的) 就免密同步到 root 快照, 核心自己热加载 —— 不重启, 也就不用再输入管理员密码。没有助手 /
       # 被拒绝就走下面的完整安装 (要管理员授权, 同时把助手装上)。总开关 / 模式只改了 default_mode 的话, 运行中的核心靠接口和缓存记住模式, 这里补一次同步即可。
