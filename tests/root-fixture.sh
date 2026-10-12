@@ -58,7 +58,7 @@ MOCK
 echo "$*" >> "$RF_W/sudo.log"
 [ -z "${RF_HOOK:-}" ] || eval "$RF_HOOK" # 用例可以在管理员命令运行之前改动暂存目录 (见 tests/enhanced-root-integrity.sh)
 # 以 root 运行的固定路径改写成夹具里的路径: TUN 副本的目录 (/Library/Application Support/enana-UID) 和 libexec (/usr/local)
-args=(); for a in "$@"; do args+=("$(printf '%s' "$a" | sed -e "s|/Library/Application Support/enana-$(id -u)|$RF_ROOT|g" -e "s|/usr/local|$RF_W/usr/local|g")"); done
+args=(); for a in "$@"; do args+=("$(printf '%s' "$a" | sed -e "s|/Library/Application Support/enana-$(id -u)|$RF_ROOT|g" -e "s|/usr/local|$RF_W/usr/local|g" -e "s|/usr/bin/env -i PATH=|/usr/bin/env -i RF_W=$RF_W RF_ROOT=$RF_ROOT ENANA_TEST=1 ENANA_TUN_ROOT=$RF_ROOT ENANA_ROOT_PREFIX=$RF_W ENANA_TUN_LAUNCHCTL=$RF_W/bin/launchctl ENANA_TUN_PLIST_DIR=$RF_W/daemons PATH=|g")"); done
 set -- "${args[@]}"
 exec "$@"
 MOCK
