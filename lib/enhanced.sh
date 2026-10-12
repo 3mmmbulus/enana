@@ -130,11 +130,12 @@ tun_residual_clean() { enhanced_helper_ok || return 0; sudo -n "$(enhanced_helpe
 enhanced_stage_config() {
   # Explicitly open the config: decode(<>) evaluates the diamond in list
   # context and consumes the home/root arguments as additional filenames.
+  # canonical: Perl hash order is random per process, so without it the same config gives different bytes on every call.
   perl -MJSON::PP -e '
     my ($file,$h,$r)=@ARGV; open my $fh,"<",$file or die "$file: $!";
     local $/; my $j=JSON::PP->new->utf8->decode(scalar <$fh>);
     sub walk { my ($x)=@_; if(ref $x eq "HASH") { for my $k(keys %$x) { if(($k eq "path" || $k eq "output" || $k =~ /_path$/) && !ref($x->{$k}) && index($x->{$k}, "$h/")==0) { $x->{$k}=$r.substr($x->{$k},length($h)); } else { walk($x->{$k}); } } } elsif(ref $x eq "ARRAY") { walk($_) for @$x; } }
-    walk($j); print JSON::PP->new->utf8->encode($j);
+    walk($j); print JSON::PP->new->utf8->canonical->encode($j);
   ' "$1" "$2" "$3"
 }
 # ---- 安装 TUN (见 lib/enhanced-root.sh 的 4.x): 数据 → 暂存 (每个文件只读一次) → 预检 (弹框之前) → 一条命令交给管理员执行 ----

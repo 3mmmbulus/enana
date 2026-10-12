@@ -32,10 +32,11 @@ SED
   cat > "$W/bin/install" <<'MOCK'
 #!/bin/bash
 # 假 install: 忽略 -o/-g, 支持 -d / -m; 只许写进夹具 (ENANA_ROOT_PREFIX 之下)
+# 和真的 install 一样先删掉已有的目标 (不带 -S 时 install 先 unlink): 否则重装时 cp 写不进上一次装好的 440 免密规则
 mode=''; dirs=0; args=(); while [ $# -gt 0 ]; do case $1 in -d) dirs=1; shift ;; -m) mode=$2; shift 2 ;; -o|-g) shift 2 ;; -*) shift ;; *) args+=("$1"); shift ;; esac; done
 if [ "$dirs" = 1 ]; then for d in "${args[@]}"; do mkdir -p "$d" && { [ -z "$mode" ] || chmod "$mode" "$d"; } || exit 1; done; exit 0; fi
 [ "${#args[@]}" -eq 2 ] || exit 1
-cp "${args[0]}" "${args[1]}" && { [ -z "$mode" ] || chmod "$mode" "${args[1]}"; }
+rm -f "${args[1]}" && cp "${args[0]}" "${args[1]}" && { [ -z "$mode" ] || chmod "$mode" "${args[1]}"; }
 MOCK
   cat > "$W/bin/launchctl" <<'MOCK'
 #!/bin/sh
