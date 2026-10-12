@@ -129,7 +129,14 @@ echo "== S6. 系统代理助手: 授权一次, 之后打开 / 关闭系统代理
 if [ "$(uname)" != Darwin ] || ! command -v visudo >/dev/null 2>&1; then
   echo "  (跳过: 需要 macOS 的 stat / visudo)"
 else
-HELPER=$(os_sysproxy_helper_path); SUDOERS=$(os_sysproxy_sudoers_path); ME=$(id -un)
+# 这一段用可写的 lib 副本 (段末换回来): 下面要改 proxy-state.js / 模板的字节, 证明卸载时 root 运行的是装好的副本, 不是 lib 里改得了的那份
+REPO_LIB=$LIB; mkdir -p "$W/lib"; cp "$REPO_LIB/proxy-state.js" "$REPO_LIB/sysproxy-helper.tpl" "$W/lib/"; LIB=$W/lib
+HELPER=$(os_sysproxy_helper_path); SUDOERS=$(os_sysproxy_sudoers_path); COPY=$(os_sysproxy_js_path); DIR=$(dirname "$HELPER"); ME=$(id -un)
+sp_sha() { shasum -a 256 < "$1" | awk '{print $1}'; }
+sp_files() { printf '%s:%s:%s' "$([ -e "$SUDOERS" ] && echo sudoers || echo none)" "$([ -e "$HELPER" ] && echo helper || echo none)" "$([ -e "$COPY" ] && echo copy || echo none)"; }
+acl_lines() { /bin/ls -lde "$1" | awk 'END{print NR}'; }        # ls -le: 没有 ACL 是一行, 每条 ACL 多一行
+roots() { grep -c '^sudo ' "$CALLS"; }                           # 调用了几次 sudo (卸载恢复: 每种形式一次)
+restores() { grep -c '^proxy-state restore ' "$CALLS"; }         # proxy-state.js 的 restore 真的运行了几次 (假 osascript 记的)
 TXT=$(os_sysproxy_helper_text)
 hsnt "助手脚本里没有残留的 @占位符@" "@[A-Z]+@" "$TXT"
 hs "端口写死在脚本里" "^NS=.*; PORT=$PORT; VERSION=$SYSPROXY_HELPER_VERSION$" "$TXT"
@@ -160,6 +167,9 @@ eq "sudoers 片段只有这一条规则 (没有通配符 / 别的命令)" "$(gre
 eq "sudoers 片段权限 440" "$(stat -f %Lp "$SUDOERS")" "440"
 eq "sudoers 片段通过 visudo -cf 校验" "$(/usr/sbin/visudo -cf "$SUDOERS" >/dev/null 2>&1 && echo valid || echo invalid)" "valid"
 eq "助手文件权限 755 (组 / 其他人不可写)" "$(stat -f %Lp "$HELPER")" "755"
+t_ok "同一次授权里装好了 proxy-state.js 的 root 副本 (字节和 lib 里的一样)" cmp -s "$COPY" "$LIB/proxy-state.js"
+eq "副本权限 644 (root 读得到, 别人改不了)" "$(stat -f %Lp "$COPY")" "644"
+hasnt "副本不在 sudoers 里 (免密的只有助手这一个文件)" "proxy-state" "$SUDOERS"
 sysproxy_record terminal on 0
 hs "操作记录里记着 helper=installed" "开启系统代理	method=dialog helper=installed" "$(oplines)"
 
@@ -205,6 +215,30 @@ os_sysproxy_apply off </dev/null >/dev/null 2>&1
 eq "…重装之后又走助手 (不再弹框)" "$SYSPROXY_METHOD" "helper"
 PORT=$OLD_PORT; export FAKE_PORT=$OLD_PORT
 
+echo "-- S6c3. 目录有 ACL / 目录链不合格 / 助手脚本语法不对: 不信任; 下一次授权时 root 把旧的免密规则、助手和副本都删掉 (规则不能继续指向不安全的路径)"
+revoked() { # <说明>: 关闭系统代理要授权 → 弹框成功; root 的核对不通过 → 助手没装上 (failed), 旧的三个文件都没了
+  os_sysproxy_apply off </dev/null >/dev/null 2>&1; local rc=$?
+  eq "$1: 系统代理照样关闭 (dialog), 助手没装上 (failed), 旧的免密规则 / 助手 / 副本都删掉了" "$rc:$SYSPROXY_METHOD:$SYSPROXY_HELPER:$(sp_files)" "0:dialog:failed:none:none:none"
+}
+reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
+os_sysproxy_apply on </dev/null >/dev/null 2>&1; prep_trusted
+chmod +a "group:admin allow add_file,add_subdirectory,delete_child" "$DIR"      # 沙箱里的目录 (测试自己建的), 不碰真实系统
+eq "(准备) 助手目录上真的有一条 ACL (ls -le 多一行)" "$(acl_lines "$DIR")" "2"
+eq "助手目录有 ACL (允许 admin 组写入; stat 的权限位看不出来): 不信任" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
+revoked "目录有 ACL (root 的目录链检查也看 ACL)"
+chmod -N "$DIR"
+reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
+os_sysproxy_apply on </dev/null >/dev/null 2>&1; prep_trusted
+chmod 775 "$(dirname "$DIR")"
+eq "上一级目录 (libexec) 组可写: 不信任" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
+revoked "目录链不合格 (libexec 组可写)"
+chmod 755 "$(dirname "$DIR")"
+reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
+os_sysproxy_apply on </dev/null >/dev/null 2>&1; prep_trusted
+printf 'if then\n' >> "$LIB/sysproxy-helper.tpl"                                 # 渲染出来的助手语法不对: root 的 bash -n 不通过
+revoked "助手脚本语法不对 (bash -n)"
+cp "$REPO_LIB/sysproxy-helper.tpl" "$LIB/sysproxy-helper.tpl"
+
 echo "-- S6d. 不装助手的情况: 用户名不合法 / 明确关闭 / 本来就有免密 sudo / 授权被取消"
 reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
 id() { case ${1:-} in -un) printf 'bad user;name' ;; *) command id "$@" ;; esac; }
@@ -231,14 +265,71 @@ eq "…且没有写入 sudoers 规则" "$([ -e "$SUDOERS" ] && echo sudoers || e
 t_ok "(准备) 助手文件已经装上了 (只是没有规则, 不是文件不在)" test -f "$HELPER"
 eq "…助手即使装上了也不可用 (没有规则 → 不信任), 下次照常授权" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "untrusted"
 
-echo "-- S6f. 卸载: 助手和免密规则一并删除"
+echo "-- S6g. 卸载时以 root 恢复系统代理: 有 root 副本就只运行它 (不运行 lib 里改得了的字节); 收据按字节交给 root"
+reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
+os_sysproxy_apply on </dev/null >/dev/null 2>&1
+COPY_SHA=$(sp_sha "$COPY")
+printf '\n// edited after the root copy was installed\n' >> "$LIB/proxy-state.js"; LIB_SHA=$(sp_sha "$LIB/proxy-state.js")
+eq "(准备) 副本装好了, lib 里的 proxy-state.js 之后又被改过" "$(sp_files):$([ "$COPY_SHA" != "$LIB_SHA" ] && echo edited || echo same)" "sudoers:helper:copy:edited"
+RECEIPT='{"schema":1,"services":{}}'; printf '%s\n' "$RECEIPT" > "$H/proxy-state.json"
+: > "$CALLS"; os_sysproxy_restore_root >/dev/null 2>&1; rc=$?
+eq "有副本: 恢复成功, 只用了一次 root" "$rc:$(roots):$(restores)" "0:1:1"
+has "root 运行的是安装时的字节 (副本), 带着收据参数" "^proxy-state restore js=$COPY_SHA receipt=yes\$" "$CALLS"
+hasnt "…不是 lib 里改过的字节" "js=$LIB_SHA" "$CALLS"
+has "命令里是写死的 root 副本路径" "^sudo /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash -p -c C='$(os_sysproxy_js_root)' " "$CALLS"
+hasnt "…命令里没有 inband 的脚本 (JB=)" "bash -p -c JB=" "$CALLS"
+hasnt "root 不打开用户目录里的收据 (收据的字节放进 root 自己的临时目录)" "restore $PORT $H/proxy-state.json" "$CALLS"
+eq "系统代理已恢复" "$(os_sysproxy_mine && echo mine || echo clean)" "clean"
+rm -f "$H/proxy-state.json"; touch "$FAKE_STATE/sysproxy-on"; : > "$CALLS"; os_sysproxy_restore_root >/dev/null 2>&1; rc=$?
+eq "没有收据: 照样成功, 不传收据参数 (以前会交给 root 一个空收据: 恢复失败, 卸载停下)" "$rc:$(grep -c "^proxy-state restore js=$COPY_SHA receipt=no\$" "$CALLS")" "0:1"
+printf '{broken' > "$H/proxy-state.json"; touch "$FAKE_STATE/sysproxy-on"; : > "$CALLS"; os_sysproxy_restore_root >/dev/null 2>&1; rc=$?
+eq "收据坏了: 失败, 不换 inband 形式再试 (只运行了副本一次)" "$([ "$rc" != 0 ] && echo failed || echo ok):$(roots):$(restores):$(grep -c 'bash -p -c JB=' "$CALLS")" "failed:1:1:0"
+eq "…系统代理没有被改动" "$(os_sysproxy_mine && echo mine || echo clean)" "mine"
+printf '%s\n' "$RECEIPT" > "$H/proxy-state.json"
+copy_ok() { # (准备) 副本可信: 一次 root, 运行的就是副本 (否则下面的「不可信」用例就空跑了)
+  local rc; touch "$FAKE_STATE/sysproxy-on"; : > "$CALLS"; os_sysproxy_restore_root >/dev/null 2>&1; rc=$?
+  eq "(准备) 副本可信: 一次 root, 运行的是副本" "$rc:$(roots):$(grep -c "^proxy-state restore js=$COPY_SHA " "$CALLS")" "0:1:1"
+}
+falls_back() { # <说明>: root 回答 root-copy-untrusted → 用 inband 形式 (lib 此刻的字节) 再试一次; 副本没有被运行
+  local rc; touch "$FAKE_STATE/sysproxy-on"; : > "$CALLS"; os_sysproxy_restore_root >/dev/null 2>&1; rc=$?
+  eq "$1: root 不信任副本, 改用 inband 形式, 恢复成功" "$rc:$(roots):$(restores):$(grep -c "^proxy-state restore js=$LIB_SHA receipt=yes\$" "$CALLS")" "0:2:1:1"
+}
+copy_ok; chmod 664 "$COPY"; falls_back "副本是 664 (组可写)"; chmod 644 "$COPY"
+copy_ok; chmod 775 "$DIR"; falls_back "副本所在的目录组可写"; chmod 755 "$DIR"
+copy_ok; mv "$COPY" "$COPY.real"; ln -s "$COPY.real" "$COPY"; falls_back "副本换成了符号链接"; rm -f "$COPY"; mv "$COPY.real" "$COPY"
+copy_ok; chmod +a "group:admin allow write" "$COPY"
+eq "(准备) 副本上真的有一条 ACL" "$(acl_lines "$COPY")" "2"
+falls_back "副本有 ACL (允许 admin 组写入)"; chmod -N "$COPY"
+copy_ok
+
+echo "-- S6h. 2.3.23 装的助手 (还没有副本): 打开 / 关闭照样免密, 不多弹框; 卸载恢复用 inband 形式"
+rm -f "$COPY"; touch "$FAKE_STATE/sysproxy-on"
+eq "没有副本: 助手照样可信" "$(os_sysproxy_helper_ok && echo trusted || echo untrusted)" "trusted"
+: > "$CALLS"; os_sysproxy_apply off </dev/null >/dev/null 2>&1; m1=$SYSPROXY_METHOD; os_sysproxy_apply on </dev/null >/dev/null 2>&1
+eq "…关闭 / 打开都走助手, 没有弹框" "$m1:$SYSPROXY_METHOD:$(grep -c '^osascript -e do shell script' "$CALLS")" "helper:helper:0"
+: > "$CALLS"; os_sysproxy_restore_root >/dev/null 2>&1; rc=$?
+eq "…卸载恢复: 直接用 inband 形式 (lib 此刻的字节), 只用一次 root" "$rc:$(roots):$(grep -c "^proxy-state restore js=$LIB_SHA receipt=yes\$" "$CALLS")" "0:1:1"
+hasnt "…命令里没有副本路径 (C=)" "bash -p -c C=" "$CALLS"
+
+echo "-- S6f. 卸载: 助手、免密规则和 proxy-state.js 副本一并删除"
 reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
 os_sysproxy_apply on </dev/null >/dev/null 2>&1
 t_ok "(准备) 助手和规则都在" test -e "$HELPER" -a -e "$SUDOERS"
+t_ok "(准备) 副本也在" test -e "$COPY"
+: > "$CALLS"
 os_sysproxy_helper_remove
 eq "卸载后助手和 sudoers 规则都被删除" "$([ -e "$HELPER" ] && echo helper || echo none):$([ -e "$SUDOERS" ] && echo sudoers || echo none)" "none:none"
+eq "…副本也删掉了" "$([ -e "$COPY" ] && echo copy || echo none)" "none"
+has "以 root 删除用的是 /bin/rm (sudo 不按用户的 PATH 去找 rm)" "^sudo /bin/rm -f -- " "$CALLS"
 t_ok "没有残留的空目录 (助手目录)" test ! -d "$(dirname "$HELPER")"
 os_sysproxy_helper_remove; eq "没装过 / 已删除时再调用是空操作" "$?" "0"
+reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
+os_sysproxy_apply on </dev/null >/dev/null 2>&1; printf '%s\n' "$RECEIPT" > "$H/proxy-state.json"
+: > "$CALLS"; os_sysproxy_uninstall >/dev/null 2>&1; rc=$?
+eq "完整卸载 (os_sysproxy_uninstall): 成功, 系统代理已恢复" "$rc:$(os_sysproxy_mine && echo mine || echo clean)" "0:clean"
+eq "…恢复用的是 root 副本 (一次, 没有 inband)" "$(grep -c "^sudo /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash -p -c C='" "$CALLS"):$(grep -c 'bash -p -c JB=' "$CALLS"):$(restores)" "1:0:1"
+eq "…助手、免密规则、副本都删掉了, 目录也不在了" "$(sp_files):$([ -d "$DIR" ] && echo dir || echo nodir)" "none:none:none:nodir"
+LIB=$REPO_LIB
 fi
 
 echo "== S7. 端口不是数字: 直接拒绝, 不运行任何命令 (端口会被拼进以 root 运行的命令串)"

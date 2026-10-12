@@ -240,8 +240,11 @@ python3 tools/diag-summary.py <文件> --app "Google Chrome" --host google.com
 `osascript … with administrator privileges` 每次调用都是新进程, macOS 不会记住授权, 所以以前每次要改系统代理 (比如 `iPhone USB` 这类新出现的网络服务没指向 enana) 都会再弹一次密码框。2.3.9 起第一次需要授权时, 在**同一次授权**里装一个只做「改系统代理」的小程序:
 
 - `/usr/local/libexec/enana/sysproxy-<uid>` (root 所有, 用户改不了; 端口和 `networksetup` 路径在安装时写死, 只接受 `on` / `off` / `version`, `off` 只关「正指向 enana」的服务) 和 `/etc/sudoers.d/enana-sysproxy-<uid>` (只有一行: `<用户> ALL=(root) NOPASSWD: <助手路径>`, 写入前用 `visudo -cf` 校验, 失败不留半成品)。
-- 之后打开 / 关闭系统代理走 `sudo -n <助手>`, 不再弹窗。使用前检查: 文件归 root、组 / 其他人不可写、不是符号链接、版本对、sudo 真的免密, 任何一条不满足就回到原来的授权流程 (并顺便重装)。
-- 已经有免密 sudo 的用户不装助手; `ENANA_NO_SYSPROXY_HELPER=1` 可以关掉; 卸载时 (`enana uninstall`) 一并删除助手和规则。
+- 之后打开 / 关闭系统代理走 `sudo -n <助手>`, 不再弹窗。使用前检查: 文件归 root、组 / 其他人不可写、不是符号链接、没有 ACL (`stat` 的权限位看不到 ACL, 所以要求 `ls -lde` 每个路径只打印一行; 往上直到 `/usr/local` 的每一级目录也一样)、版本对、sudo 真的免密, 任何一条不满足就回到原来的授权流程 (并顺便重装)。
+- 同一次授权里还装一份 `/usr/local/libexec/enana/proxy-state-<uid>.js` (root:wheel `0644`, **不在** sudoers 里): 卸载时以 root 恢复系统代理用的 `proxy-state.js`。enana 把 lib 里的这个文件读一次, 按 base64 + SHA-256 交给 root, root 在自己的临时目录里解码、核对之后才 `install`; 先装副本, 再装助手和规则。root 安装前的核对 (解码、摘要、`bash -n`、目录链: 真目录、归 root、组 / 其他人不可写、没有 ACL) 有一项不通过, 就把**旧的**免密规则、助手和副本一起删掉, 不让规则继续指向一个已经不安全的路径。
+- 恢复 (`enana uninstall`, 系统代理还指向 enana 时): 有副本就只运行它。root 先自己再核对一遍: 副本是普通文件、不是链接、归 root、模式 `0644`、没有 ACL, `/usr/local`、`/usr/local/libexec`、`/usr/local/libexec/enana` 都是真目录、归 root、组 / 其他人不可写、没有 ACL; 不合格就输出 `enana-sysproxy: refused: root-copy-untrusted` (退出码 2), 什么也不运行。只有**没有副本** (2.3.23 装的助手、从没装过助手、本来就有免密 sudo、`ENANA_NO_SYSPROXY_HELPER=1`) 或 root 回答了 `root-copy-untrusted` 时, 才退回旧的 inband 形式 (lib 里的 `proxy-state.js` 按字节放进命令, root 核对摘要后运行)。收据不对、脚本出错、授权失败等其它失败不换形式重试; 也不要求副本和 lib 里的字节一样 (否则改一下 lib 就能把 root 逼回 inband 形式)。
+- 收据 `~/.enana/proxy-state.json` 是数据: 是普通文件才读, 只读一次, 字节 (base64 + SHA-256) 放进 root 自己的临时目录, root 不打开用户目录里的路径; 没有收据就不传收据参数 (只清掉指向 enana 的字段)。`proxy-state.js` 在 `check` 和 `restore` 改动任何东西之前先核对收据是 `snapshot` 写出的形状, 而且恢复时会写回去的值都合理: `*Enable` / `*ProxyAuthenticated` 只能是 0 / 1 / true / false, `*Port` 是 0–65535 的整数 (字符串也不行), 其它 HTTP / HTTPS / SOCKS 字段是不超过 255 个字符、没有控制字符的字符串, `ExceptionsList` 是最多 1024 条这样的字符串; 不合格 (包括空文件) 就报 `Invalid proxy receipt`, 什么都不改, 卸载在这一步停下。
+- 已经有免密 sudo 的用户不装助手; `ENANA_NO_SYSPROXY_HELPER=1` 可以关掉; 卸载时 (`enana uninstall`) 一并删除助手、规则、副本和空目录 (以 root 运行的 `rm` / `rmdir` 都写绝对路径 `/bin/rm` / `/bin/rmdir`: sudo 按用户的 PATH 找命令, 那里可能有用户可写的目录)。
 - 操作记录: `开启系统代理` 的 `method=` (`already` `direct` `helper` `sudo` `sudo-nopass` `dialog`) 和 `helper=` (`used` `installed` `failed`)。
 
 ## 保留与隐私
