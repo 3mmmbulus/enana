@@ -148,3 +148,110 @@ function Stop-EnanaRuntime([string]$HomeDir) {
     }
     throw 'Private enana runtime processes did not stop; files were retained.'
 }
+# ---- Snapshot configuration checks, run by the elevated tun.ps1 before
+# sing-box runs the snapshot as SYSTEM. sing-box decodes JSON like Go
+# encoding/json: a key with no exact field match still matches a field
+# case-insensitively, where ASCII letters fold together, U+212A KELVIN SIGN
+# folds to k and U+017F LATIN SMALL LETTER LONG S folds to s (no other
+# non-ASCII character folds to an ASCII letter), and of two spellings in one
+# object the later one wins. PowerShell member access ignores ASCII case only,
+# so a decoy "listen" next to a U+017F spelling of it would show the checks one
+# value and sing-box the other. Every check therefore runs on a copy with
+# folded keys (as fold_key / fold_doc in lib/enhanced-root.sh), an object whose
+# keys collide after folding is refused, and the copy is read with exact
+# ordinal comparisons (-eq and -ceq compare strings culture-aware).
+function ConvertTo-FoldedKey([string]$Name) {
+    $chars = $Name.ToCharArray()
+    for ($i = 0; $i -lt $chars.Length; $i++) {
+        $code = [int]$chars[$i] # integer code points: comparisons of [char] ignore case
+        if ($code -ge 0x41 -and $code -le 0x5A) { $chars[$i] = [char]($code + 0x20) }
+        elseif ($code -eq 0x212A) { $chars[$i] = [char]0x6B }
+        elseif ($code -eq 0x017F) { $chars[$i] = [char]0x73 }
+    }
+    return (-join $chars)
+}
+function ConvertTo-FoldedConfig($Node) {
+    if ($null -eq $Node -or $Node -is [string] -or $Node -is [ValueType]) { return $Node }
+    if ($Node -is [Array]) {
+        $copy = New-Object 'object[]' $Node.Count
+        for ($i = 0; $i -lt $Node.Count; $i++) { $copy[$i] = ConvertTo-FoldedConfig $Node[$i] }
+        return ,$copy # the comma keeps PowerShell from unrolling the array
+    }
+    if ($Node -isnot [System.Management.Automation.PSCustomObject]) { throw 'Unsupported value in snapshot configuration' }
+    $copy = New-Object PSObject
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($property in $Node.PSObject.Properties) {
+        $name = ConvertTo-FoldedKey $property.Name
+        if (!$seen.Add($name)) { throw "Snapshot configuration has two '$name' keys after case folding" }
+        $copy.PSObject.Properties.Add([System.Management.Automation.PSNoteProperty]::new($name, (ConvertTo-FoldedConfig $property.Value)))
+    }
+    return $copy
+}
+function Get-ConfigMember($Object, [string]$Name) {
+    if ($Object -is [System.Management.Automation.PSCustomObject]) {
+        foreach ($property in $Object.PSObject.Properties) {
+            if ([string]::Equals($property.Name, $Name, [StringComparison]::Ordinal)) { return ,$property.Value }
+        }
+    }
+    return $null
+}
+function Test-ConfigText($Value, [string]$Text) {
+    return ($Value -is [string] -and [string]::Equals($Value, $Text, [StringComparison]::Ordinal))
+}
+function Test-SnapshotPath($Value, [string]$Root) {
+    # $Root: the protected snapshot directory, absolute, no trailing backslash.
+    if ($Value -isnot [string] -or $Root -notmatch '^[A-Za-z]:\\[^\\]') { return $false }
+    try { $full = [IO.Path]::GetFullPath($Value) } catch { return $false }
+    return $full.StartsWith($Root + '\', [StringComparison]::OrdinalIgnoreCase)
+}
+function Assert-ConfigPaths($Object, [string]$Root) {
+    # $Object is a folded copy (ConvertTo-FoldedConfig). File keys are path,
+    # output, directory, data_directory and names ending in _path, _file, _dir
+    # or _directory. Unlike macOS every key named path counts, so URL paths
+    # (a WebSocket or DNS-over-HTTPS path) are refused as well.
+    if ($Object -is [Array]) {
+        foreach ($item in $Object) { Assert-ConfigPaths $item $Root }
+        return
+    }
+    if ($Object -isnot [System.Management.Automation.PSCustomObject]) { return }
+    foreach ($property in $Object.PSObject.Properties) {
+        $name = $property.Name; $value = $property.Value
+        if ($name -cmatch '^external_ui\z') { throw 'Snapshot must not serve external UI files' }
+        if ($name -cmatch '^(?:path|output|directory|data_directory)\z|_(?:path|file|dir|directory)\z') {
+            if ($value -is [System.Management.Automation.PSCustomObject]) { Assert-ConfigPaths $value $Root; continue } # e.g. cache_file
+            # sing-box takes a string or a list for many file keys (hosts path,
+            # client_certificate_path, certificate_directory_path, ...).
+            if ($value -isnot [string] -and $value -isnot [Array]) { throw "Config file key '$name' is not a path" }
+            foreach ($path in @($value)) { if (!(Test-SnapshotPath $path $Root)) { throw 'Config path escapes protected snapshot' } }
+        } else { Assert-ConfigPaths $value $Root }
+    }
+}
+function Assert-TunConfig($Config, [string]$Root) {
+    # Returns the folded copy that passed every check.
+    $c = ConvertTo-FoldedConfig $Config
+    $inbounds = Get-ConfigMember $c 'inbounds'
+    $route = Get-ConfigMember $c 'route'
+    $hasTun = $false
+    foreach ($inbound in $inbounds) { if (Test-ConfigText (Get-ConfigMember $inbound 'type') 'tun') { $hasTun = $true } }
+    if (!$hasTun -or !(Get-ConfigMember $route 'auto_detect_interface')) { throw 'Not a TUN configuration' }
+    $controller = Get-ConfigMember (Get-ConfigMember (Get-ConfigMember $c 'experimental') 'clash_api') 'external_controller'
+    $exposed = !($controller -is [string] -and $controller -cmatch '^127\.0\.0\.1:\d+$')
+    foreach ($inbound in $inbounds) {
+        if (!(Test-ConfigText (Get-ConfigMember $inbound 'type') 'tun') -and !(Test-ConfigText (Get-ConfigMember $inbound 'listen') '127.0.0.1')) { $exposed = $true }
+    }
+    if ($exposed) { throw 'Snapshot must only expose loopback listeners' }
+    # enana generates only tun and loopback mixed inbounds. Any other type is
+    # refused even on 127.0.0.1: a hysteria2 masquerade, for example, makes the
+    # SYSTEM core serve a directory as a file server.
+    if ($inbounds -isnot [Array]) { throw 'Snapshot inbounds must be tun or loopback mixed' }
+    foreach ($inbound in $inbounds) {
+        $type = Get-ConfigMember $inbound 'type'
+        if (!(Test-ConfigText $type 'tun') -and !(Test-ConfigText $type 'mixed')) { throw 'Snapshot inbounds must be tun or loopback mixed' }
+    }
+    $ruleSets = Get-ConfigMember $route 'rule_set'
+    foreach ($ruleSet in $ruleSets) {
+        if (!(Test-ConfigText (Get-ConfigMember $ruleSet 'type') 'local') -or !(Test-SnapshotPath (Get-ConfigMember $ruleSet 'path') $Root)) { throw 'Rule file escapes protected snapshot' }
+    }
+    Assert-ConfigPaths $c $Root
+    return $c
+}
