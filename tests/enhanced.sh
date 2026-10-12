@@ -262,6 +262,39 @@ echo 'PASS: administrator cancellation restores config without a second restart/
 ) || exit 1
 settings_set NETWORK_MODE system; load_settings || true; cp "$W/system.json" "$H/config.json"; ovr_sync >/dev/null 2>&1 || true
 echo 'PASS: a TUN refusal keeps the capture mode and the running configuration, rolls the change back and reports why (S2)'
+# One click, one administrator dialog: after the user cancels it, apply_config's rollback restart and op_txn's rollback re-apply both need
+# authorisation again (the old core is not healthy here), but nothing in the same operation asks again, and the result is reported as cancelled.
+# The real os_service_restart / os_service_start / enhanced_admin run; only the staged install is a stand-in (one administrator call).
+(
+  eval "$(sed -n -e '/^os_service_restart()/,/^}/p' -e '/^os_service_start()/,/^}/p' "$LIB/os-darwin.sh")"
+  enhanced_paths() { TUN_UID=501; TUN_LABEL=com.enana.proxy.tun.501; TUN_ROOT="$W/root"; TUN_PLIST="$W/daemon.plist"; }
+  job_step() { :; }; oplog() { :; }; sysproxy_off_if_core_down() { :; }; tun_residual_clean() { :; }; proxy_sync_mode() { :; }
+  core_mark_start() { :; }; core_restart_note() { :; }
+  _txn_end() { printf '%s|%s|%s\n' "$1" "$2" "${3:-}" > "$W/cancel-end"; }
+  DIALOGS=0
+  sudo() { return 1; }                                               # no terminal and no passwordless sudo: the native dialog branch
+  osascript() { DIALOGS=$((DIALOGS + 1)); echo 'execution error: User canceled. (-128)' >&2; return 1; }
+  enhanced_start() { enhanced_admin '/bin/true install' > "$H/enhanced-check.log" 2>&1; }
+  enhanced_restart_fast() { return 1; }; enhanced_loaded() { return 0; }; enhanced_ready() { return 0; }
+  os_service_running() { return 1; }; wait_port() { return 1; }     # the old core is not healthy: apply_config's rollback restarts it
+  cp "$W/tun.json" "$H/config.json"; rm -f "$H/config.json.bak"; settings_set NETWORK_MODE tun; load_settings || true
+  ovr_set app Gemini pin ack ''; ovr_sync || exit 1; before=$(cat "$H/overrides.tsv")
+  if op_txn '修改应用/网站策略' txn_override app Gemini direct '' </dev/null >/dev/null 2>&1; then echo 'FAIL: a cancelled authorisation reported success'; exit 1; fi
+  [ "$DIALOGS" = 1 ] || { echo "FAIL: one cancelled click showed $DIALOGS administrator dialogs"; exit 1; }
+  [ "$(cat "$W/cancel-end")" = 'fail|已取消管理员授权, 已撤销本次更改|3' ] || { echo "FAIL: a cancel was not reported as cancelled: $(cat "$W/cancel-end")"; exit 1; }
+  [ "$(cat "$H/overrides.tsv")" = "$before" ] || { echo 'FAIL: the cancelled change was not rolled back'; exit 1; }
+  cmp -s "$W/tun.json" "$H/config.json" || { echo 'FAIL: the configuration that was running was not put back'; exit 1; }
+  # with the cancel remembered, the real enhanced_start stages nothing and enhanced_stop runs nothing (and does not record a stop): both return 7
+  eval "$(sed -n -e '/^enhanced_start()/,/^}/p' -e '/^enhanced_stop()/,/^}/p' "$LIB/enhanced.sh")"
+  mktemp() { echo STAGED >> "$W/cancel-calls"; command mktemp "$@"; }
+  touch "$W/daemon.plist"; rm -f "$H/.enhanced-stopped" "$W/cancel-calls"
+  rc=0; enhanced_start </dev/null >/dev/null 2>&1 || rc=$?
+  [ "$rc:$DIALOGS:$(cat "$W/cancel-calls" 2>/dev/null)" = 7:1: ] || { echo "FAIL: enhanced_start after a cancel: rc:dialogs:calls = $rc:$DIALOGS:$(cat "$W/cancel-calls" 2>/dev/null)"; exit 1; }
+  rc=0; enhanced_stop </dev/null >/dev/null 2>&1 || rc=$?
+  [ "$rc:$DIALOGS" = 7:1 ] && [ ! -e "$H/.enhanced-stopped" ] || { echo "FAIL: enhanced_stop after a cancel: rc:dialogs = $rc:$DIALOGS, marker $(test -e "$H/.enhanced-stopped" && echo written || echo absent)"; exit 1; }
+) || exit 1
+settings_set NETWORK_MODE system; load_settings || true; cp "$W/system.json" "$H/config.json"; ovr_sync >/dev/null 2>&1 || true
+echo 'PASS: after a cancelled administrator dialog nothing in the same operation asks again; the result is reported as cancelled'
 # Core-affecting implementation changes change the snapshot fingerprint; policy-rule-only edits change only the rule-data fingerprint.
 SB=${SINGBOX:-$(type -P true)}
 before=$(enhanced_fingerprint)

@@ -15,9 +15,19 @@ enhanced_supported() { sb_ver; [ "$SB_MAJOR" -gt 1 ] || { [ "$SB_MAJOR" -eq 1 ] 
 # Shell quoting and AppleScript quoting are distinct. Never interpolate user
 # paths into shell/AppleScript source without quoting both layers.
 enhanced_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+# 管理员框被取消之后, 同一个操作 (这个进程) 里不再弹第二次: op_txn 回滚后的重新应用、apply_config 自己的回滚重启、root-copy-untrusted 的 inband 重试、
+# 升级核心失败后的重启都会再要一次授权, 而用户刚刚已经点了取消 (以前一次点击最多弹四次框)。进程内的状态, 不导出: 每个后台任务 / 每个请求 / 每条命令各自从头开始。
+# 设置之后 enhanced_admin 和 os_admin_dialog (lib/os-darwin.sh) 不弹框, 直接返回 7 —— 不是拒绝 (enhanced_start 把 2|3|4|6 当作拒绝), ENHANCED_ADMIN_ERR 仍是 cancelled
+ENHANCED_PROMPT_CANCELLED=0
+enhanced_prompt_cancelled() { [ "${ENHANCED_PROMPT_CANCELLED:-0}" = 1 ]; }
 enhanced_admin() { # <命令串>: 整条命令 (每个参数都已 enhanced_quote 过) 交给 /bin/sh 以管理员身份执行。超过 64 KB 或含换行 → 返回 6, 弹框之前就拒绝
   local cmd=${1:-} rc ef msg esc
   ENHANCED_ADMIN_ERR=''                                  # 管理员框的结果 (只在弹框时设置): cancelled 用户点了取消 · failed 其它失败; 见 enhanced_result
+  if enhanced_prompt_cancelled; then                     # 这个操作里已经取消过一次管理员框: 不再弹, 什么都不运行
+    ENHANCED_ADMIN_ERR=cancelled
+    printf '%s\n' 'enana: administrator authorization was cancelled earlier in this operation; not asking again' >&2
+    return 7
+  fi
   if [ "${#cmd}" -gt 65536 ]; then ENHANCED_ADMIN_ERR=preflight-command-size; return 6; fi
   case $cmd in *"
 "*) ENHANCED_ADMIN_ERR=preflight-command-newline; return 6 ;; esac
@@ -29,7 +39,8 @@ enhanced_admin() { # <命令串>: 整条命令 (每个参数都已 enhanced_quot
     osascript -e "do shell script \"$esc\" with administrator privileges" >&2 2>"$ef"; rc=$?
     msg=$(cat "$ef"); cat "$ef" >&2; [ "$ef" = /dev/null ] || rm -f "$ef"      # 错误文字照原样输出; 只是多留一份来判断是不是取消
     if [ "$rc" != 0 ]; then
-      case $msg in *"(-128)"*) ENHANCED_ADMIN_ERR=cancelled ;; *) ENHANCED_ADMIN_ERR=failed ;; esac      # osascript 的取消码是带括号的 (-128), 不能只按 -128 子串匹配 (-1280 · 路径里的 -128 都不是取消)
+      # osascript 的取消码是带括号的 (-128), 不能只按 -128 子串匹配 (-1280 · 路径里的 -128 都不是取消); 取消了就记下, 这个操作里不再弹框 (见上面)
+      case $msg in *"(-128)"*) ENHANCED_ADMIN_ERR=cancelled; ENHANCED_PROMPT_CANCELLED=1 ;; *) ENHANCED_ADMIN_ERR=failed ;; esac
     fi
     return "$rc"
   fi
@@ -48,6 +59,8 @@ enhanced_result() { # <返回码> -> 操作记录的结果: ok | cancelled (管�
 #     progress) are bookkeeping, not rule data.
 #   - rules/<name>.srs files left flat by 2.3.22: the core reads only rules/<name>/<name>.srs, and the upgrade removes the flat copies after a verified start.
 #     Counting them would change the fingerprint at that moment and ask for an administrator password on the next apply.
+#   - rule files the configuration does not reference (enhanced_data_hashes): the root core never reads them. A rule-set toggle whose authorisation was
+#     cancelled leaves its download (rules/<x>/<x>.srs) behind; counting it made every later TUN apply ask for the password again.
 enhanced_config_hash() { sed 's/"default_mode":"[A-Za-z]*"/"default_mode":"-"/' "$H/config.json" 2>/dev/null | shasum -a 256 | awk '{print $1}'; }
 # 快照里要带到 root 的文件 (相对 $H, 每行一个, C 排序): 规则集只要 rules/<目录>/<文件> (深一层或浅一层的都不带), 证书只要 certs/<名字>.crt。
 # 名字的格式和 root 脚本的清单检查一样 (见 lib/enhanced-root.sh MANIFEST_PL): 隐藏文件、*.new、*.tmp、旧版留下的 rules/*.srs 都不带。
@@ -56,7 +69,21 @@ enhanced_snapshot_files() {
     | LC_ALL=C grep -E '^(rules/[A-Za-z0-9_][A-Za-z0-9._-]*/[A-Za-z0-9_][A-Za-z0-9._-]*|certs/[A-Za-z0-9._-]{1,40}\.crt)$' \
     | LC_ALL=C grep -Ev '\.(new|tmp)$' | LC_ALL=C sort
 }
-enhanced_data_hashes() { enhanced_snapshot_files | LC_ALL=C grep -v '/ovr-[^/]*\.json$' | while IFS= read -r rel; do shasum -a 256 "$H/$rel"; done 2>/dev/null; }
+# 配置真正引用的本地规则集文件 (rules/<目录>/<文件>, 每行一个): 和 root 安装时核对的是同一份清单 (lib/enhanced-root.sh 的 check-config, 不需要 root)。
+# 配置读不了 / 不合格时 (root 那边反正会拒绝) 打印 ALL: 调用方退回「全部规则文件都算」
+enhanced_rule_refs() {
+  local refs
+  refs=$(/bin/bash "$LIB/enhanced-root.sh" check-config "$H/config.json" "$H" 2>/dev/null) || { echo ALL; return 0; }
+  printf '%s\n' "$refs" | LC_ALL=C grep '^rules/' || true
+}
+# 指纹里的数据文件: 证书全部算; 规则集只算配置引用到的 (见上面的说明); 策略规则集 (ovr-*.json) 不算, 它们有自己的指纹 (enhanced_ovr_fingerprint)
+enhanced_data_hashes() {
+  local refs rel; refs=$(enhanced_rule_refs)
+  enhanced_snapshot_files | LC_ALL=C grep -v '/ovr-[^/]*\.json$' | while IFS= read -r rel; do
+    case $rel in rules/*) [ "$refs" = ALL ] || printf '%s\n' "$refs" | LC_ALL=C grep -qxF -- "$rel" || continue ;; esac
+    shasum -a 256 "$H/$rel"
+  done 2>/dev/null
+}
 enhanced_fingerprint() {
   {
     printf 'autostart=%s\n' "${AUTOSTART:-1}"; shasum -a 256 "$SB"; printf 'config:%s\n' "$(enhanced_config_hash)"
@@ -206,6 +233,7 @@ enhanced_start() {
   enhanced_paths
   enhanced_supported || { printf '%s\n' 'Enhanced/TUN requires sing-box >= 1.12 (enana upgrade).' > "$H/check.log"; return 1; }
   ENHANCED_REFUSED=0; ENHANCED_REFUSED_WHY=''
+  if enhanced_prompt_cancelled; then ENHANCED_ADMIN_ERR=cancelled; return 7; fi       # 这个操作里管理员框已经被取消过: 不暂存、不弹框 (见 enhanced_admin)
   # 6.1 + 6.2 (core_tun_ok): 来源不是官方钉死的 / 核心文件不在 / 校验之后被改动过, 都在弹框之前拒绝
   if ! core_tun_ok; then
     case $CORE_TUN_WHY in

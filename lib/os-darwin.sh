@@ -329,7 +329,10 @@ os_sysproxy_helper_remove() { # 卸载: 删掉免密规则, 以及两个位置�
   all="${files[*]}"; warn "没能删除系统代理助手, 可以手动删除: sudo /bin/rm -f $all"; return 0
 }
 os_admin_dialog() { # <命令串>  弹出 macOS 原生的管理员密码框 (仪表盘的后台服务没有终端): 命令串放进 /usr/bin/env -i (清空环境) + /bin/bash -p -c 里运行; 写法与 enhanced_admin 的对话框分支相同
-  local cmd; cmd="/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash -p -c $(enhanced_quote "$1")"
+  local cmd
+  # 这个操作里管理员框已经被取消过 (ENHANCED_PROMPT_CANCELLED, 见 lib/enhanced.sh 的 enhanced_admin): 不再弹框, 什么都不运行, 返回 7; 调用方按「用户取消」处理 (os_sysproxy_apply 认这段文字)
+  if [ "${ENHANCED_PROMPT_CANCELLED:-0}" = 1 ]; then printf '%s\n' 'enana: administrator authorization was cancelled earlier in this operation (User canceled); not asking again' >&2; return 7; fi
+  cmd="/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash -p -c $(enhanced_quote "$1")"
   cmd=$(printf '%s' "$cmd" | sed 's/\\/\\\\/g; s/"/\\"/g')
   osascript -e "do shell script \"$cmd\" with administrator privileges"
 }

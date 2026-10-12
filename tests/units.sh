@@ -724,7 +724,7 @@ upg_run() { # 名字 [变量=值 ...] -> rc|调用顺序|警告|当前二进制 
       printf '#!/bin/sh\n# NEW\n[ "$1" = check ] && exit "${CHECK_RC:-0}"\nexit 0\n' > "$SB"; chmod +x "$SB"
     }
     core_trial() { echo trial >> "$LOG"; return "${TRIAL_RC:-0}"; }
-    os_service_restart() { echo restart >> "$LOG"; [ -z "${UP_AFTER_RESTART:-}" ] || WAIT_RC=0; return "${RESTART_RC:-0}"; }
+    os_service_restart() { echo restart >> "$LOG"; [ -z "${UP_AFTER_RESTART:-}" ] || WAIT_RC=0; [ -z "${CANCEL_RESTART:-}" ] || ENHANCED_ADMIN_ERR=cancelled; return "${RESTART_RC:-0}"; }   # CANCEL_RESTART: 管理员框被取消
     wait_port() { echo "wait $2" >> "$LOG"; return "${WAIT_RC:-0}"; }
     tun_residual_clean() { echo cleanup >> "$LOG"; }
     enhanced_ready() { return 0; }
@@ -736,7 +736,7 @@ upg_run() { # 名字 [变量=值 ...] -> rc|调用顺序|警告|当前二进制 
     [ -z "${BACKUP_FAIL:-}" ] || chmod 500 "$H"
     rc=0; out=$(op_core_upgrade "${UPG_WANT:-1.14.3}" 2>&1) || rc=$?
     chmod 700 "$H"
-    printf '%s|%s|%s|%s\n' "$rc" "$(paste -sd';' "$LOG")" "$(printf '%s' "$out" | grep -Eo '已先关闭|没能自动关闭|没能自动启动' | paste -sd',' -)" "$(grep -q '# NEW' "$SB" && echo new || echo old)"
+    printf '%s|%s|%s|%s\n' "$rc" "$(paste -sd';' "$LOG")" "$(printf '%s' "$out" | grep -Eo '已先关闭|没能自动关闭|没能自动启动|已取消管理员授权' | paste -sd',' -)" "$(grep -q '# NEW' "$SB" && echo new || echo old)"
   )
 }
 eq "核心升级成功: 试运行通过 → 才重启 → 新二进制保留" "$(upg_run ok)" '0|wait 1;trial;restart;wait 15;txn ok||new'
@@ -748,6 +748,7 @@ eq "新核心重启后没就绪 (TUN): 清残留路由 → 还原旧二进制 �
 eq "…系统代理模式: 同上" "$(upg_run sys RESTART_RC=1 WAIT_RC=1 MINE_RC=0)" '1|wait 1;trial;restart;cleanup;restart;wait 15;cleanup;wait 1;apply off quiet;record auto off 0;txn fail 4|已先关闭|old'
 eq "…系统代理关不掉 (需要管理员授权): 记入操作记录 (off 1), 提示去仪表盘关闭" "$(upg_run stuck NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=1 MINE_RC=0 APPLY_RC=1)" '1|wait 1;trial;restart;cleanup;restart;wait 15;cleanup;wait 1;apply off quiet;record auto off 1;txn fail 4|没能自动关闭|old'
 eq "…旧核心还活着 (端口通): 不关系统代理" "$(upg_run alive NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=0 MINE_RC=0)" '1|wait 1;trial;restart;cleanup;restart;wait 15;cleanup;wait 1;txn fail 4||old'
+eq "…重启新核心时管理员框被取消: 同样回退 (回退的重启不会再弹框), 报告「已取消管理员授权」而不是「新版本未能启动」" "$(upg_run cancel NETWORK_MODE=tun RESTART_RC=1 CANCEL_RESTART=1 WAIT_RC=0 MINE_RC=0)" '1|wait 1;trial;restart;cleanup;restart;wait 15;cleanup;wait 1;txn fail 4|已取消管理员授权|old'
 eq "…系统代理不是 enana 的: 不碰系统代理" "$(upg_run other NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=1 MINE_RC=1)" '1|wait 1;trial;restart;cleanup;restart;wait 15;cleanup;txn fail 4||old'
 eq "重启成功但 15 秒内端口不通 (TUN): 同样回退" "$(upg_run notready NETWORK_MODE=tun WAIT_RC=1 MINE_RC=0)" '1|wait 1;trial;restart;wait 15;cleanup;restart;wait 15;cleanup;wait 1;apply off quiet;record auto off 0;txn fail 4|已先关闭|old'
 eq "核心没在运行时升级失败: 不拉起服务 (用户停掉的服务不能被升级顺手启动)" "$(upg_run stopdl WAIT_RC=1 INSTALL_RC=1)" '1|wait 1;txn fail 1||old'
@@ -1087,6 +1088,15 @@ PY
   osascript() { echo 'execution error: User canceled. (-128)' >&2; return 1; }
   enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
   eq "弹框被取消: 返回 1, 结果 cancelled, 错误文字照样输出 (弹框本身不变)" "$rc:$ENHANCED_ADMIN_ERR:$(enhanced_result "$rc"):$(grep -c 'User canceled' "$H/err")" "1:cancelled:cancelled:1"
+  # 取消之后, 同一个操作 (这个进程) 里不再弹第二次框: 回滚 / 重试 / 回退重启要授权时直接返回 7 (不是拒绝的 2|3|4|6), 什么都不运行
+  osascript() { : > "$H/osa.again"; return 0; }; rm -f "$H/osa.again"
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
+  eq "…同一个操作里再要管理员授权: 不弹框 (osascript 没被调用), 返回 7, 结果仍记成 cancelled" "$rc:$ENHANCED_ADMIN_ERR:$(enhanced_result "$rc"):$(test -e "$H/osa.again" && echo shown || echo none)" "7:cancelled:cancelled:none"
+  os_admin_dialog '/bin/true y' >/dev/null 2>"$H/err"; rc=$?
+  eq "…系统代理的管理员框 (os_admin_dialog) 也不弹, 返回 7; 文字让 os_sysproxy_apply 认成用户取消" "$rc:$(test -e "$H/osa.again" && echo shown || echo none):$(grep -c 'User canceled' "$H/err")" "7:none:1"
+  ENHANCED_PROMPT_CANCELLED=0                                           # 下面每一项都是一个新的操作 (新的进程)
+  os_admin_dialog '/bin/true y' >/dev/null 2>"$H/err"; rc=$?
+  eq "…新的操作: os_admin_dialog 照常弹框" "$rc:$(test -e "$H/osa.again" && echo shown || echo none)" "0:shown"
   osascript() { echo 'execution error: something broke (1)' >&2; return 1; }
   enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
   eq "弹框的其它失败: 结果 error" "$rc:$ENHANCED_ADMIN_ERR:$(enhanced_result "$rc")" "1:failed:error"
@@ -1099,6 +1109,7 @@ PY
   osascript() { echo 'execution error: User canceled. (-128)' >&2; return 1; }
   enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
   eq "取消的写法不变: (-128) 仍然是 cancelled" "$rc:$ENHANCED_ADMIN_ERR" "1:cancelled"
+  ENHANCED_PROMPT_CANCELLED=0                                           # (新的操作)
   osascript() { : > "$H/osa.called"; return 0; }
   mktemp() { return 1; }
   enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?

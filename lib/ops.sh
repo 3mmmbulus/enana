@@ -91,7 +91,7 @@ _txn_detail() { # <变更函数> <参数…>
 # op_txn <描述> <变更函数> [参数…]   变更函数失败时可把原因放进 TXN_ERR
 op_txn() {
   local desc=$1 fn=$2 rc line detail; shift 2
-  detail=$(_txn_detail "$fn" "$@"); TXN_ERR=''
+  detail=$(_txn_detail "$fn" "$@"); TXN_ERR=''; ENHANCED_ADMIN_ERR=''         # (管理员框这一次的结果, 见 lib/enhanced.sh 的 enhanced_admin)
   op_lock || { _txn_end fail "另一个配置任务正在运行, 请稍后重试"; return 1; }
   txn_backup
   if ! "$fn" "$@"; then
@@ -114,7 +114,11 @@ op_txn() {
        op_unlock
        oplog "${OP_WHO:-terminal}" "$desc" "$detail" error
        _txn_end fail "${TXN_ERR:-TUN 没有启动, 已撤销本次更改}" 5; return 1 ;;
-    *) txn_restore; APPLY_QUIET=1 apply_config >/dev/null 2>&1 || true; op_unlock
+    *) txn_restore; APPLY_QUIET=1 apply_config >/dev/null 2>&1 || true; op_unlock      # 管理员框被取消的话, 这次重新应用不会再弹框 (ENHANCED_PROMPT_CANCELLED, 见 lib/enhanced.sh)
+       if [ "${ENHANCED_ADMIN_ERR:-}" = cancelled ]; then     # 这次的授权被用户取消了 (或者这个操作里早先取消过, 这次没有再问): 说成取消, 不是「新配置无法启动」
+         oplog "${OP_WHO:-terminal}" "$desc" "$detail" cancelled
+         _txn_end fail "已取消管理员授权, 已撤销本次更改" 3; return 1
+       fi
        oplog "${OP_WHO:-terminal}" "$desc" "$detail" error
        _txn_end fail "新配置无法启动, 已撤销本次更改并恢复原配置" 3; return 1 ;;
   esac
@@ -522,8 +526,11 @@ op_core_upgrade() { # [版本|latest]  latest = 兼容清单里和当前 enana �
       _txn_end fail "新版本试运行失败, 保持原版本 $old" 3; return 1
     fi
     job_step 4 85 "重启服务"
+    ENHANCED_ADMIN_ERR=''
     if ! os_service_restart || ! wait_port "$PORT" 15 || ! enhanced_ready; then
+      local cancelled=0; [ "${ENHANCED_ADMIN_ERR:-}" = cancelled ] && cancelled=1      # 管理员框被取消: 回退时的重启不会再弹框 (lib/enhanced.sh 的 ENHANCED_PROMPT_CANCELLED)
       tun_residual_clean; mv "$SB.old" "$SB"; core_meta_restore; os_service_restart >/dev/null 2>&1 || true; wait_port "$PORT" 15 || true; tun_residual_clean; sysproxy_off_if_core_down
+      if [ "$cancelled" = 1 ]; then oplog "${OP_WHO:-terminal}" "升级核心" "已取消管理员授权, 已回退" cancelled; _txn_end fail "已取消管理员授权, 保持原版本 $old" 4; return 1; fi
       oplog "${OP_WHO:-terminal}" "升级核心" "新版本未就绪, 已回退" error
       _txn_end fail "新版本未能启动, 已回退到 $old" 4; return 1
     fi

@@ -421,6 +421,7 @@ DNS 设置无效	Invalid DNS settings
 另一个配置任务正在运行, 请稍后重试	Another configuration task is running — please try again shortly
 配置未通过校验, 已撤销本次更改*	The configuration didn’t pass validation, so the change was rolled back*
 新配置无法启动, 已撤销本次更改并恢复原配置	The new configuration couldn’t start, so the change was rolled back and your previous configuration restored
+已取消管理员授权, 已撤销本次更改	Administrator authorization was cancelled, so the change was rolled back
 名称、链接或策略不合法 (链接必须是 http/https 的 .srs 规则集)	The name, link or policy isn’t valid (the link must point to an http/https .srs rule set)
 已经有同名的规则集	A rule set with that name already exists
 规则集下载失败或不是有效的 .srs 文件	The rule set couldn’t be downloaded or isn’t a valid .srs file
@@ -907,6 +908,8 @@ Enhanced/TUN 需要 sing-box 1.12 或更新版本	Enhanced/TUN requires sing-box
 核心令牌尚未更新; Enhanced/TUN 需要管理员授权, 运行 enana doctor 查看原因	The core token has not been updated; Enhanced/TUN requires administrator authorization. Run enana doctor for details
 新版本未就绪, 已回退	New version not ready; rolled back
 新版本未能启动, 已回退到 *	New version failed to start; rolled back to *
+已取消管理员授权, 已回退	Administrator authorization cancelled; rolled back
+已取消管理员授权, 保持原版本 *	Administrator authorization was cancelled; keeping the previous version *
 新版本试运行失败, 已回退	New version failed its trial run; rolled back
 新版本试运行失败, 保持原版本 *	New version failed its trial run; keeping the previous version *
 Enhanced/TUN: 保留现有系统代理设置	Enhanced/TUN: preserving existing System Proxy settings
