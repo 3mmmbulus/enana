@@ -359,6 +359,26 @@ eq "之后关闭: 走新位置的助手, 不再弹框" "$rc:$SYSPROXY_METHOD:$(g
 has "…sudo -n 调用新位置的写死路径" "^sudo -n $(os_sysproxy_helper_root) off" "$CALLS"
 chmod 755 "$W/root/usr/local"
 
+echo "-- S6k. 旧位置的免密规则还在、旧位置又不安全, 而直接修改就能成功 (多数管理员账户): 不走直接修改, 弹一次框把规则改写到新位置; 静默调用照旧不弹框"
+reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
+legacy_install; chmod 775 "$W/root/usr/local"                       # 老的 Homebrew 把 /usr/local 改成组可写 (沙箱里): 别人能在旧路径放文件再 sudo -n
+export FAKE_NS_NEEDS_ADMIN=0                                        # 直接修改能成功
+t_ok "(准备) 检测到: 旧规则还在、旧位置不安全" os_sysproxy_legacy_rule_unsafe
+os_sysproxy_apply on quiet </dev/null >/dev/null 2>&1; rc=$?
+eq "静默调用 (不能弹框): 照旧直接修改" "$rc:$SYSPROXY_METHOD" "0:direct"
+: > "$CALLS"; os_sysproxy_apply on </dev/null >/dev/null 2>&1; rc=$?
+eq "已经是打开的状态也不跳过: 弹一次框, 同一次授权把助手装到新位置" "$rc:$SYSPROXY_METHOD:$SYSPROXY_HELPER:$(grep -c '^osascript -e do shell script' "$CALLS")" "0:dialog:installed:1"
+hs "…免密规则改写成新路径 (指向旧位置的那条作废)" "^$ME ALL=\(root\) NOPASSWD: $HELPER\$" "$(cat "$SUDOERS")"
+eq "…旧位置的助手和副本删掉了" "$(legacy_files)" "none:none:nodir"
+t_ok "…之后检测不到危险状态了" test "$(os_sysproxy_legacy_rule_unsafe && echo unsafe || echo ok)" = ok
+: > "$CALLS"; os_sysproxy_apply off </dev/null >/dev/null 2>&1; rc=$?
+eq "之后关闭: 直接修改, 不再弹框" "$rc:$SYSPROXY_METHOD:$(grep -c '^osascript -e do shell script' "$CALLS")" "0:direct:0"
+reset; export FAKE_NS_NEEDS_ADMIN=0 FAKE_SUDO_NOPASS=0
+legacy_install; chmod 775 "$W/root/usr/local"; export ENANA_NO_SYSPROXY_HELPER=1
+: > "$CALLS"; os_sysproxy_apply on </dev/null >/dev/null 2>&1; rc=$?; unset ENANA_NO_SYSPROXY_HELPER
+eq "明确关闭了助手: 同样弹一次框, 只把指向旧位置的规则删掉 (不装助手)" "$rc:$SYSPROXY_METHOD:$([ -e "$SUDOERS" ] && echo sudoers || echo none)" "0:dialog:none"
+chmod 755 "$W/root/usr/local"
+
 echo "-- S6j. 卸载恢复选哪一份副本: 两个位置都有时用新位置的; 旧位置的目录链不合格时 root 不信任它, 退回 inband 形式"
 mkdir -p "$LDIR"; chmod 755 "$LDIR"; { cat "$LIB/proxy-state.js"; printf '// 2.3.23 root copy\n'; } > "$LCOPY"; chmod 644 "$LCOPY"
 NEW_SHA=$(sp_sha "$COPY")

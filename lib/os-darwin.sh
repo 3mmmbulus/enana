@@ -279,6 +279,21 @@ os_sysproxy_helper_port() { sed -n 's/^NS=.*; PORT=\([0-9][0-9]*\); VERSION=.*/\
 os_sysproxy_helper_sha() { os_sysproxy_helper_text | shasum -a 256 | awk '{print $1}'; }      # 期望的字节 = 此刻渲染出来的助手 (端口 / 路径 / 版本都在里面, 所以字节一致就包含了端口检查)
 os_sysproxy_helper_trusted() { os_helper_pick "sysproxy-$(id -u)" "$(os_sysproxy_helper_sha)"; }      # 可信的那一份助手的 root 路径 (新位置优先, 再看旧位置); 都不可信: 返回 1
 os_sysproxy_helper_ok() { os_sysproxy_helper_trusted >/dev/null; }
+# 0 = 2.3.23 及更早版本装的系统代理免密规则还在 (新位置还没有助手: 规则没有改写过, 还指向旧位置), 而旧位置的目录链已经不安全
+# (例如老的 Homebrew 把 /usr/local 改成了用户所有): 任何以这个用户运行的程序都能在旧路径放一个文件, 再 sudo -n 它拿到 root (见 os_sysproxy_apply)。
+# 现有的每一级都要是真目录、归 root、组 / 其他人不可写、没有 ACL; 不在的那一级 (和更深的) 不用查: 上一级安全, 别人建不出来
+os_sysproxy_legacy_rule_unsafe() {
+  local pre d p want_uid=0
+  pre=$(test_env ENANA_ROOT_PREFIX); [ -z "$pre" ] || want_uid=$(id -u)
+  [ -e "$(os_sysproxy_sudoers_path)" ] && [ ! -e "$pre$(os_sysproxy_helper_root)" ] || return 1
+  for d in "$pre/usr/local" "$pre/usr/local/libexec" "$pre$OS_HELPER_LEGACY_DIR"; do
+    [ -e "$d" ] || [ -L "$d" ] || return 1
+    [ -d "$d" ] && [ ! -L "$d" ] && [ "$(stat -f %u "$d" 2>/dev/null)" = "$want_uid" ] || return 0
+    p=$(stat -f %Sp "$d" 2>/dev/null); [ "${p:5:1}" != w ] && [ "${p:8:1}" != w ] || return 0
+    [ "$(/bin/ls -lde "$d" 2>/dev/null | awk 'END{print NR}')" = 1 ] || return 0
+  done
+  return 1
+}
 os_sysproxy_helper_files_ok() { # 装完之后核对新位置的文件本身: 助手是普通文件、模式 755; 免密规则是普通文件、模式 440; proxy-state.js 副本是普通文件、模式 644 (属主 / 字节 / sudo 规则由 os_helper_trusted 核对)
   # 只在刚装完时用 (判断 installed): 平时的可信判断 (os_sysproxy_helper_ok) 不要求副本, 2.3.23 装的助手 (还没有副本) 照样免密打开 / 关闭系统代理
   local pre h s j; pre=$(test_env ENANA_ROOT_PREFIX); h=$pre$(os_sysproxy_helper_root); s=$(os_sysproxy_sudoers_path); j=$pre$(os_sysproxy_js_root)
@@ -343,33 +358,41 @@ os_admin_dialog() { # <命令串>  弹出 macOS 原生的管理员密码框 (仪
 # 每次修改后回读确认, 结果记在 SYSPROXY_METHOD (already|direct|helper|sudo|sudo-nopass|dialog)、SYSPROXY_HELPER (used|installed|failed: 系统代理助手这次的情况) 与 SYSPROXY_ERR (失败原因, 英文短码)。
 # 这个函数不向标准输出打印任何内容: 仪表盘的辅助服务里标准输出就是 HTTP 响应。
 os_sysproxy_apply() { # on|off [force|quiet]  -> 0 = 已是想要的状态 · 1 = 没有改成功; force = 已经是想要的状态也重新写一遍 (修复被改过的绕过列表); quiet = 不弹任何授权框, 需要管理员授权时直接返回 1 (SYSPROXY_ERR=needs-admin)
-  local want=$1 c errf msg rc inst hr quiet=''
+  local want=$1 c errf msg rc inst hr quiet='' legacy_fix=''
   [ "${2:-}" = quiet ] && quiet=1
   SYSPROXY_METHOD=''; SYSPROXY_ERR=''; SYSPROXY_HELPER=''
   [[ $PORT =~ ^[0-9]+$ ]] || { SYSPROXY_ERR=bad-port; return 1; }      # 端口会被拼进以 root 运行的命令串 (os_sysproxy_chain / 安装助手), 只接受数字
   rm -f "$H/.cache-sysproxy"
-  if [ "${2:-}" != force ] && os_sysproxy_verify "$want"; then SYSPROXY_METHOD=already; return 0; fi
+  # 旧位置的免密规则还在、旧位置又不安全 (os_sysproxy_legacy_rule_unsafe): 这一次不算「已经是想要的状态」, 也不走直接修改和助手, 走一次授权 ——
+  # 安装命令把规则改写到新位置 (新位置也不合格时删掉), 堵住「在旧路径放一个文件再 sudo -n」。直接修改就能成功的用户 (多数管理员账户) 不这样就永远走不到这里。静默调用不能弹框, 照旧
+  if [ -z "$quiet" ] && os_sysproxy_legacy_rule_unsafe; then legacy_fix=1; fi
+  if [ -z "$legacy_fix" ] && [ "${2:-}" != force ] && os_sysproxy_verify "$want"; then SYSPROXY_METHOD=already; return 0; fi
   if [ "$want" = on ]; then os_sysproxy_backup >/dev/null 2>&1 || { SYSPROXY_ERR=backup-failed; return 1; }; fi
   c=$(os_sysproxy_chain "$want"); [ "$c" != 'r=0; exit $r' ] || { SYSPROXY_ERR=no-network-service; return 1; }
   errf=$(mktemp)
-  /bin/bash -c "$(os_sysproxy_chain "$want" "$(test_env ENANA_NETWORKSETUP /usr/sbin/networksetup)")" >/dev/null 2>"$errf"; rc=$?      # ① 直接修改 (当前用户, 不提权: 测试可换成替身路径)
-  # 成功 = 所有命令都成功, 或回读确认所有网络服务都已是想要的状态 (个别服务读取出错时, 命令都成功了也不能判失败, 否则会反复要密码)
-  if [ "$rc" = 0 ] || os_sysproxy_verify "$want"; then SYSPROXY_METHOD=direct; rm -f "$errf" "$H/.cache-sysproxy"; return 0; fi
-  if hr=$(os_sysproxy_helper_trusted); then                                            # ①b 系统代理助手 (授权过一次): 免密, 不弹窗; 调用的是判为可信的那一份 (新位置, 或者还没换过的旧位置)
-    SYSPROXY_METHOD=helper; sudo -n "$hr" "$want" >/dev/null 2>"$errf"; rc=$?
-    rm -f "$H/.cache-sysproxy"
-    if [ "$rc" = 0 ] || os_sysproxy_verify "$want"; then SYSPROXY_HELPER=used; rm -f "$errf"; return 0; fi
-    SYSPROXY_HELPER=failed
+  if [ -z "$legacy_fix" ]; then
+    /bin/bash -c "$(os_sysproxy_chain "$want" "$(test_env ENANA_NETWORKSETUP /usr/sbin/networksetup)")" >/dev/null 2>"$errf"; rc=$?      # ① 直接修改 (当前用户, 不提权: 测试可换成替身路径)
+    # 成功 = 所有命令都成功, 或回读确认所有网络服务都已是想要的状态 (个别服务读取出错时, 命令都成功了也不能判失败, 否则会反复要密码)
+    if [ "$rc" = 0 ] || os_sysproxy_verify "$want"; then SYSPROXY_METHOD=direct; rm -f "$errf" "$H/.cache-sysproxy"; return 0; fi
+    if hr=$(os_sysproxy_helper_trusted); then                                            # ①b 系统代理助手 (授权过一次): 免密, 不弹窗; 调用的是判为可信的那一份 (新位置, 或者还没换过的旧位置)
+      SYSPROXY_METHOD=helper; sudo -n "$hr" "$want" >/dev/null 2>"$errf"; rc=$?
+      rm -f "$H/.cache-sysproxy"
+      if [ "$rc" = 0 ] || os_sysproxy_verify "$want"; then SYSPROXY_HELPER=used; rm -f "$errf"; return 0; fi
+      SYSPROXY_HELPER=failed
+    fi
   fi
   # 助手还没装 (或失败): 这一次的授权顺便把助手装上 (inst), 以后打开 / 关闭系统代理都不再要密码
   inst=$(os_sysproxy_helper_install_cmds 2>/dev/null || true)
+  # 要撤销旧规则, 而这次不装助手 (明确关闭了助手 / 用户名不合规): 授权的命令里至少删掉那条规则
+  if [ -n "$legacy_fix" ] && [ -z "$inst" ]; then inst="/bin/rm -f $(enhanced_quote "$(os_sysproxy_sudoers_root)"); "; fi
   if [ -z "$quiet" ] && [ -t 0 ] && [ -t 1 ]; then SYSPROXY_METHOD=sudo; sudo /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash -p -c "$inst$c" 2>"$errf" >/dev/null; rc=$?     # ② 终端: 密码提示走 /dev/tty
   elif sudo -n true >/dev/null 2>&1; then SYSPROXY_METHOD=sudo-nopass; sudo -n /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash -p -c "$c" >/dev/null 2>"$errf"; rc=$?   # ③ 本来就有免密 sudo: 不需要助手
   elif [ -n "$quiet" ]; then rm -f "$errf" "$H/.cache-sysproxy"; SYSPROXY_ERR=needs-admin; return 1
   else SYSPROXY_METHOD=dialog; os_admin_dialog "$inst$c" >/dev/null 2>"$errf"; rc=$?; fi                      # ④
   rm -f "$H/.cache-sysproxy"
   if [ -n "$inst" ] && [ "$SYSPROXY_METHOD" != sudo-nopass ]; then
-    if [ "$(os_sysproxy_helper_trusted)" = "$(os_sysproxy_helper_root)" ] && os_sysproxy_helper_files_ok; then SYSPROXY_HELPER=installed      # 可信的是刚装到新位置的那一份
+    # 这次的授权成功了, 而且可信的是新位置的那一份才算装好 (之前就装着、这次弹框失败 / 没弹的不算)
+    if [ "$rc" = 0 ] && [ "$(os_sysproxy_helper_trusted)" = "$(os_sysproxy_helper_root)" ] && os_sysproxy_helper_files_ok; then SYSPROXY_HELPER=installed
     elif [ "$rc" = 0 ]; then SYSPROXY_HELPER=failed; fi      # 授权步骤说成功了, 但助手 / 免密规则没有装上 (文件或模式不对): 记下来 (以后每次还是要输入密码)
   fi
   if [ "$rc" = 0 ] || os_sysproxy_verify "$want"; then rm -f "$errf"; return 0; fi

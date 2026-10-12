@@ -180,6 +180,17 @@ helper_dir_ok() {
     /bin/ls -lde "$d" | /usr/bin/awk 'END {exit NR != 1}' || return 1        # 权限位看不到 ACL: 有任何 ACL 条目 (ls -e 多出的行, 可能让别人能往里写) 也不合格
   done
 }
+# 旧位置的目录链 (/usr/local → libexec → enana): 现有的每一级都是真目录、归 root、组 / 其他人不可写、没有 ACL。
+# 不在的那一级 (和更深的) 不用查: 它的上一级已经查过是安全的, 别人建不出来
+legacy_chain_ok() {
+  local d p
+  for d in "$usr_local" "$usr_local/libexec" "$legacy_dir"; do
+    [ -e "$d" ] || [ -L "$d" ] || return 0
+    [ -d "$d" ] && [ ! -L "$d" ] && [ "$(/usr/bin/stat -f %u "$d")" = "$root_owner" ] || return 1
+    p=$(/usr/bin/stat -f %Sp "$d") && [ "${p:5:1}" != w ] && [ "${p:8:1}" != w ] || return 1
+    /bin/ls -lde "$d" | /usr/bin/awk 'END {exit NR != 1}' || return 1
+  done
+}
 # 旧位置 ($legacy_dir) 的规则助手: 删掉, 目录空了也删 (系统代理助手还在就留着)。三级都是真目录才动它, 不顺着符号链接删到别处;
 # 删不掉也不算失败 (免密规则已经改写或删掉了, 留下的旧文件没有用)
 legacy_remove() {
@@ -374,13 +385,20 @@ if [ -n "$username" ]; then
   [ ! -e "$helper_dir/tunrules-$uid" ] || /bin/cp -p "$helper_dir/tunrules-$uid" "$backup/helper"
   [ ! -e "$sudoers_dir/enana-tunrules-$uid" ] || /bin/cp -p "$sudoers_dir/enana-tunrules-$uid" "$backup/sudoers"
   helper_state=1                                     # 两份备份都做好了才算: 备份失败时回滚不碰现有的助手和免密规则 (否则会删掉它们又恢复不了)
-  # 目录链不合格时 helper_state=2: 两个文件删掉, 回滚时也不装回去 (装回去就是让免密规则指向别人能换掉的文件)
-  if [ -f "$work/tunrules-helper" ] && { helper_dir_ok || { helper_state=2; false; }; } && /bin/mkdir -p "$sudoers_dir" \
+  # 目录链不合格时 helper_state=2: 两个文件删掉, 回滚时也不装回去 (装回去就是让免密规则指向别人能换掉的文件)。
+  # 目录链先查 (助手编译没通过时也查): 否则回滚会不经检查就把备份的助手和规则放回去
+  if { helper_dir_ok || { helper_state=2; false; }; } && [ -f "$work/tunrules-helper" ] && /bin/mkdir -p "$sudoers_dir" \
      && printf '%s ALL=(root) NOPASSWD: %s\n' "$username" "$helper_dir/tunrules-$uid" > "$work/sudoers" \
      && /usr/bin/install -m 755 -o root -g wheel "$work/tunrules-helper" "$helper_dir/tunrules-$uid" \
      && /usr/sbin/visudo -cf "$work/sudoers" >/dev/null 2>&1 \
      && /usr/bin/install -m 440 -o root -g wheel "$work/sudoers" "$sudoers_dir/enana-tunrules-$uid"; then legacy_remove
   else helper_remove; echo 'enana-root: note: rule helper not installed' >&2; fi
+fi
+# 系统代理的免密规则: 2.3.23 及更早版本装的那一条指向旧位置。只要新位置还没有系统代理助手 (规则还没改写过), 而旧位置的目录链又不安全
+# (例如老的 Homebrew 把 /usr/local 改成了用户所有), 任何以这个用户运行的程序都能在那里放一个文件再 sudo -n 它: 这次授权顺便把规则撤销
+# (直接修改系统代理的用户可能永远走不到系统代理助手的重装; 下一次需要授权时它装到新位置)
+if [ -e "$sudoers_dir/enana-sysproxy-$uid" ] && [ ! -e "$helper_dir/sysproxy-$uid" ] && ! legacy_chain_ok; then
+  /bin/rm -f "$sudoers_dir/enana-sysproxy-$uid"; echo 'enana-root: note: revoked the system proxy rule that pointed at an unsafe legacy directory' >&2
 fi
 
 # e. 守护进程: plist 写死的路径, 装上并启动; 确认 IPv4 / IPv6 默认路由都进了我们的 utun 才算成功

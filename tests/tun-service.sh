@@ -156,6 +156,19 @@ check "…新位置的助手也不在 (回到「没有助手」)" test ! -e "$HE
 check "…旧位置的助手也不在" test ! -e "$LEGACY"
 check "没有残留的回滚 / 准备目录" test -z "$(find "$ROOT" -name '.prepare.*' -o -name '.rollback.*')"
 
+echo "== 11. 系统代理的旧免密规则 (2.3.23 装的, 指向旧位置): 旧位置不安全时 TUN 的安装顺便撤销它; 旧位置安全 / 新位置已经有系统代理助手时不动"
+SPR=$W/sudoers.d/enana-sysproxy-$ME
+sp_rule() { printf '%s ALL=(root) NOPASSWD: %s\n' "$(id -un)" "/usr/local/libexec/enana/sysproxy-$ME" > "$SPR"; }
+rf_reset; mkdir -p "$W/usr/local/libexec/enana"; sp_rule
+rf_enana_start; rc=$?
+check "旧位置安全: 安装成功, 系统代理的规则照旧" test "$rc:$(test -e "$SPR" && echo y || echo n)" = "0:y"
+rf_reset; mkdir -p "$W/usr/local/libexec/enana"; sp_rule; chmod g+w "$W/usr/local"
+rf_enana_start; rc=$?; chmod g-w "$W/usr/local"
+check "旧位置不安全 (/usr/local 组可写, 别人能在那里放文件再 sudo -n): 安装成功, 系统代理的规则被撤销" test "$rc:$(test -e "$SPR" && echo y || echo n)" = "0:n"
+rf_reset; mkdir -p "$W/usr/local/libexec/enana" "$W/Library/PrivilegedHelperTools/com.enana.proxy"; : > "$W/Library/PrivilegedHelperTools/com.enana.proxy/sysproxy-$ME"; sp_rule; chmod g+w "$W/usr/local"
+rf_enana_start; rc=$?; chmod g-w "$W/usr/local"
+check "新位置已经有系统代理助手 (规则已经改写成新路径): 不动它" test "$rc:$(test -e "$SPR" && echo y || echo n)" = "0:y"
+
 echo
 if [ "$fails" = 0 ]; then echo 'PASS: root snapshot install, bootstrap / route rollback, staged symlink refusal, stop and remove from the root copy, rollback without a helper backup, past a failed step and without restoring a helper into an unsafe directory, migration from /usr/local/libexec'
 else echo "FAIL: $fails check(s) failed"; exit 1; fi
