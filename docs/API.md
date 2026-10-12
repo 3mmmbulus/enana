@@ -156,7 +156,7 @@
 
 `servers[]` 的每一项是 `{tag,type,server,port,role,sub}`。**官方线路 (会员) 的节点**排在用户自己的服务器后面, 多一个 `"official":true`: `server` 为 `""`、`port` 为 `0` (界面不显示官方节点的地址), `role` 永远是 `auto` (只进「自动线路」池, 不能当固定出口)。它们保存在 `~/.enana/official.jsonl` (权限 600), **不在** `servers.jsonl`, 也不进配置快照 / 云端同步 / `GET /api/export`; 对它们 `GET /api/servers/secret`、`POST /api/servers/delete`、`POST /api/servers/role` 一律 `E_FORBIDDEN`。`first_run` 只看用户自己的服务器。官方节点的标签以保留前缀 `官方-` 开头: 用户导入的节点不能使用这个前缀 (安装端拒绝; 导入器会把别的订阅里的「官方-xx」改名为「官方 xx」)。
 
-`GET /api/apps` · `POST /api/apps/scan` · `POST /api/apps/adopt` (表单 `names` 可选: 换行分隔的应用名, 只处理这几个; 不带 = 所有 flag=new 的应用) · `POST /api/apps/ack?name=|all=1` · `POST /api/override?kind=&value=&state=[&target=]` ·
+`GET /api/apps` · `POST /api/apps/scan[?background=1]` (界面自动扫描带 `background=1`: TUN 下没有变化时不开任务、不写操作记录, 直接返回列表; 有变化但应用会要求管理员授权的, 也不开任务, 而是记为待应用 `pending`: `{at,count,names}`, 没有时为 `null`; `GET /api/apps` 与扫描的响应都带这个字段, 界面的「应用」按钮才会发起授权) · `POST /api/apps/adopt` (表单 `names` 可选: 换行分隔的应用名, 只处理这几个; 不带 = 所有 flag=new 的应用) · `POST /api/apps/ack?name=|all=1` · `POST /api/override?kind=&value=&state=[&target=]` ·
 `POST /api/servers/import?sub=&mode=merge|replace&save=0|1` (正文=JSONL; **save★**: 1 = 「保存到云端」, 这些节点 (和订阅) 进入云端同步清单, 第一次用时自动打开云端同步; 0 = 只留在本机; 不带 = 不改动, 例如订阅自动刷新) · `POST /api/servers/delete?tag=[&reassign=][&freeze=1][&accept_orphans=1]` · `POST /api/servers/role?tag=&role=pin|auto|off|dl[&reassign=][&freeze=1][&accept_orphans=1]` (删除 / 改角色的新参数见「出口分配」: 固定出口有人在用时必须先指明去向) ·
 `POST /api/cert?name=` · `POST /api/sub/fetch` · `POST /api/sub/save?name=&save=0|1` · `POST /api/sub/delete?name=[&accept_orphans=1]` · `POST /api/restart` — 形状不变 (订阅里有被使用的固定出口时的新参数见「出口分配」)。
 
@@ -494,7 +494,7 @@
 
 `POST /api/network-mode` 表单 `mode=system|tun` → `{ok:true,job}`。设置是本机独有, 不进入跨设备同步; 升级缺省 `system`。`GET /api/state` 与 `/api/settings` 的 `proxy` 增加 `network_mode`、`tun_ready`。
 
-TUN 使用管理员授权后的规则快照。此模式下 `/api/override`、`/api/exits/move`、`/api/exits/freeze`、`/api/apps/adopt`、`/api/apps/scan`、`/api/sites/auto/clear` 返回异步 `{ok:true,job}`, 前端必须等 job 完成再显示成功, 取消授权时事务撤销。System Proxy 下这些接口沿用立即响应/文件热加载。自动识别网站也必须先应用快照, 再验证实际连接; 不能把用户目录文件已更改当成 root 核心规则已生效。
+TUN 使用管理员授权后的规则快照。此模式下 `/api/override`、`/api/exits/move`、`/api/exits/freeze`、`/api/apps/adopt`、`/api/apps/scan` (界面自动扫描 `background=1` 且没有变化时除外, 直接返回列表)、`/api/sites/auto/clear` 返回异步 `{ok:true,job}`, 前端必须等 job 完成再显示成功, 取消授权时事务撤销。System Proxy 下这些接口沿用立即响应/文件热加载。自动识别网站也必须先应用快照, 再验证实际连接; 不能把用户目录文件已更改当成 root 核心规则已生效。
 
 访问记录新增 `capture:"mixed|tun"` (老记录可能为空)。
 

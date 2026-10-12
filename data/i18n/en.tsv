@@ -1018,3 +1018,7 @@ IP 查询 (本机出口 IP)	IP lookup (this computer's exit IP)
 规则集目录整理失败 (磁盘满或没有写权限?), 已保留现有配置	The rule-set folder could not be reorganised (disk full or no write permission?); the current configuration was kept
 核心没有起来, 已先关闭系统代理 (应用不再连接已停止的代理); 若仍无法上网, 运行 enana doctor 查看原因	The core did not start, so the system proxy was turned off first (apps no longer connect to the stopped proxy); if the network is still down, run enana doctor to see why
 核心没有起来, 系统代理也没能自动关闭 (需要管理员授权), 请在仪表盘概览里关闭系统代理; 运行 enana doctor 查看原因	The core did not start and the system proxy could not be turned off automatically (administrator permission is needed); turn off the system proxy from the dashboard Overview; run enana doctor to see why
+TUN 需要官方的、钉死版本号的核心: 请运行 enana upgrade, 或改用系统代理模式	TUN needs the official pinned core: run enana upgrade, or switch to system proxy mode
+核心在校验之后被改动过: 请运行 enana upgrade	The core changed after it was verified: run enana upgrade
+TUN 没有启动 (*), 已切换为系统代理模式	TUN did not start (*); switched to system proxy mode
+TUN 没有启动: *	TUN did not start: *

@@ -1,123 +1,86 @@
 #!/bin/bash
-# Execute the privileged helper only after replacing its fixed Library paths in
-# a TEMPORARY COPY. All privileged/OS commands are fakes; never calls sudo.
-set -eu
-R=$(cd "$(dirname "$0")/.." && pwd -P)
-W=$(mktemp -d /tmp/enana-root-test.XXXXXX); trap 'rm -rf "$W"' EXIT
-export FIXTURE="$W"; mkdir -p "$W/bin" "$W/stage/rules"
-touch "$W/gui.plist"
-python3 - "$R" "$W" <<'PY'
-import sys
-r,w=sys.argv[1:]; s=open(r+'/lib/enhanced-root.sh').read()
-s=s.replace('root="/Library/Application Support/enana-$uid"','root="'+w+'/runtime"')
-s=s.replace('plist="/Library/LaunchDaemons/$label.plist"','plist="'+w+'/daemon.plist"')
-s=s.replace('libexec="/usr/local/libexec/enana"; sudoers_dir="/etc/sudoers.d"','libexec="'+w+'/libexec"; sudoers_dir="'+w+'/sudoers.d"')
-assert 'launchctl_bin="/bin/launchctl"' in s
-s=s.replace('launchctl_bin="/bin/launchctl"','launchctl_bin="'+w+'/bin/launchctl"')
-open(w+'/helper.sh','w').write(s)
-PY
-for c in chown sleep; do printf '#!/bin/sh\nexit 0\n' > "$W/bin/$c"; done
-printf '#!/bin/sh\necho 0\n' > "$W/bin/id"
-printf '#!/bin/sh\necho 0\n' > "$W/bin/stat"
-printf '#!/bin/sh\necho "interface: utun42"\n' > "$W/bin/route"
-printf '#!/bin/sh\necho "inet 172.19.0.1 netmask 0xfffffffc"\n' > "$W/bin/ifconfig"
-cat > "$W/bin/launchctl" <<'MOCK'
-#!/bin/sh
-echo "$*" >> "$FIXTURE/calls"
-case $1 in
- print) echo 'pid = 100'; echo "path = $FIXTURE/gui.plist"; exit 0 ;;
- bootstrap) if [ -f "$FIXTURE/fail-bootstrap" ]; then rm "$FIXTURE/fail-bootstrap"; exit 1; fi ;;
-esac
-exit 0
-MOCK
-cat > "$W/stage/sing-box" <<'MOCK'
-#!/bin/sh
-[ "$1" = check ]
-MOCK
-chmod +x "$W/bin/"* "$W/stage/sing-box"
-export PATH="$W/bin:$PATH"
-printf '{"snapshot":"first"}\n' > "$W/stage/config.json"
-printf '{}\n' > "$W/stage/rules/one.json"
-bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1
-cmp "$W/stage/config.json" "$W/runtime/config.json"
-grep -q '^asuser 501 launchctl bootout gui/501/com.enana.proxy$' "$W/calls"
-! grep -q '^asuser 501 launchctl kill ' "$W/calls"
-printf '{"snapshot":"second"}\n' > "$W/stage/config.json"
-touch "$W/fail-bootstrap"
-if bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1; then echo 'FAIL: bootstrap failure succeeded'; exit 1; fi
-grep -q first "$W/runtime/config.json"
-grep -q 'asuser 501 launchctl enable gui/501/com.enana.proxy' "$W/calls"
-grep -q "asuser 501 launchctl bootstrap gui/501 $W/gui.plist" "$W/calls"
-[ -f "$W/daemon.plist" ]
-# Reject staged symlinks before replacing any running service.
-ln -s /tmp "$W/stage/link"
-if bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1; then echo 'FAIL: snapshot symlink accepted'; exit 1; fi
-grep -q first "$W/runtime/config.json"
-rm "$W/stage/link"
-# A successful bootstrap with wrong ownership of routes must also roll back.
+# TUN 的 root 安装 / 回滚 / 停止 / 删除 (新协议: 每个文件只读一次、按摘要核对、一条命令; 见 lib/enhanced-root.sh 与 lib/enhanced.sh)。
+#   全部在临时目录里: 假的 launchctl / install / chown / route / ifconfig / sleep / sudo (见 tests/root-fixture.sh); 绝不碰真实的 /Library、/usr/local 或 launchd。
+set -u
+HERE=$(cd "$(dirname "$0")" && pwd -P)
+W=$(mktemp -d /tmp/enana-tun-service.XXXXXX); W=$(cd "$W" && pwd -P); trap 'rm -rf "$W"' EXIT
+. "$HERE/root-fixture.sh"
+rf_setup "$W"
+ME=$(id -u); HELPER=$W/usr/local/libexec/enana/tunrules-$ME; SUDOERS=$W/sudoers.d/enana-tunrules-$ME; PLIST=$W/daemons/com.enana.proxy.tun.$ME.plist
+fails=0
+check() { local n=$1; shift; if "$@" >/dev/null 2>&1; then echo "  ✓ $n"; else echo "  ✗ $n"; fails=$((fails + 1)); fi; }
+root_sig() { find "$ROOT" -print0 2>/dev/null | xargs -0 shasum -a 256 2>/dev/null | LC_ALL=C sort; }
+set_level() { printf '%s\n' '{"log":{"level":"'"$1"'","output":"'"$H"'/sing-box.log"},"inbounds":[{"type":"tun","tag":"tun-in"}],"route":{"rule_set":[{"type":"local","tag":"geo","path":"'"$H"'/rules/geo/geo.srs"}],"final":"direct"}}' > "$H/config.json"; }
+cfg_matches() { cmp -s "$ROOT/config.json" <(enhanced_stage_config "$H/config.json" "$H" "$ROOT"); }
+line_no() { grep -n "^$1" "$W/calls" | head -1 | cut -d: -f1; }
+in_order() { [ -n "$1" ] && [ -n "$2" ] && [ "$1" -lt "$2" ]; }
+
+echo "== 1. 正常安装: 字节一致, 一次管理员授权, launchctl 顺序 bootout → bootstrap → kickstart"
+rf_reset
+rf_enana_start; rc=$?
+check "安装成功 (退出码 0)" test "$rc" = 0
+check "配置与暂存时的字节一致" cfg_matches
+check "sing-box 与当前核心一致" cmp -s "$ROOT/sing-box" "$H/sing-box"
+check "规则集逐字节一致" cmp -s "$ROOT/rules/geo/geo.srs" "$H/rules/geo/geo.srs"
+check "root 脚本副本 = lib 原文" cmp -s "$ROOT/bin/enhanced-root.sh" "$LIBT/enhanced-root.sh"
+check "规则助手 = 渲染结果" test "$(shasum -a 256 < "$HELPER" | awk '{print $1}')" = "$(enhanced_helper_expected)"
+check "免密规则只有这一条, 权限 440" test "$(cat "$SUDOERS")" = "$(id -un) ALL=(root) NOPASSWD: $HELPER"
+check "只调用了一次管理员命令" test "$(rf_admin_calls)" = 1
+check "launchctl 顺序正确" in_order "$(line_no 'bootout system')" "$(line_no 'bootstrap system')"
+check "kickstart 在 bootstrap 之后" in_order "$(line_no 'bootstrap system')" "$(line_no 'kickstart system')"
+check "暂存目录用完即删" test -z "$(ls -d "$W"/stg.* 2>/dev/null)"
+
+echo "== 2. bootstrap 失败: 回滚到安装之前的 sing-box / 配置 / 助手 / 免密规则"
+rf_reset; rf_enana_start
+set_level debug
+cfg_before=$(shasum -a 256 < "$ROOT/config.json"); helper_before=$(shasum -a 256 < "$HELPER"); sudo_before=$(cat "$SUDOERS")
+: > "$W/fail-bootstrap"
+rf_enana_start; rc=$?
+check "失败返回 1 (已回滚)" test "$rc" = 1
+check "配置恢复为安装之前的字节" test "$(shasum -a 256 < "$ROOT/config.json")" = "$cfg_before"
+check "助手恢复为安装之前的字节" test "$(shasum -a 256 < "$HELPER")" = "$helper_before"
+check "免密规则恢复" test "$(cat "$SUDOERS")" = "$sudo_before"
+check "旧守护进程重新加载" test -f "$W/loaded"
+check "没有残留的回滚 / 准备目录" test -z "$(find "$ROOT" -name '.prepare.*' -o -name '.rollback.*')"
+
+echo "== 3. 路由没有归到我们的 utun: 回滚"
+rf_reset; rf_enana_start
 printf '#!/bin/sh\necho "inet 10.0.0.1 netmask 0xffffff00"\n' > "$W/bin/ifconfig"
-if bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1; then echo 'FAIL: route mismatch accepted'; exit 1; fi
-grep -q first "$W/runtime/config.json"
-[ -z "$(find "$W/runtime" -name '.prepare.*' -o -name '.rollback.*')" ]
-rm -f "$W/daemon.plist"
-bash "$W/helper.sh" remove 501
-[ ! -e "$W/runtime" ] && [ ! -e "$W/daemon.plist" ]
-grep -q 'enable system/com.enana.proxy.tun.501' "$W/calls"
-# ---- the rule-data helper is installed by the same authorisation (best effort), validated first, and removed with the service ----
+rf_enana_start; rc=$?
 printf '#!/bin/sh\necho "inet 172.19.0.1 netmask 0xfffffffc"\n' > "$W/bin/ifconfig"
-cat > "$W/bin/install" <<'MOCK'
-#!/bin/bash
-# fake install: ignore -o/-g (the test is not root), support -m and -d
-mode=''; args=(); while [ $# -gt 0 ]; do case $1 in -m) mode=$2; shift 2 ;; -o|-g) shift 2 ;; -d) shift ;; *) args+=("$1"); shift ;; esac; done
-cp "${args[0]}" "${args[1]}" && { [ -z "$mode" ] || chmod "$mode" "${args[1]}"; }
-MOCK
-chmod +x "$W/bin/install"
-mkdir -p "$W/stage/rules"; printf '{"snapshot":"third"}\n' > "$W/stage/config.json"
-HV=$(sed -n 's/^TUNRULES_HELPER_VERSION=\([0-9][0-9]*\).*/\1/p' "$R/lib/enhanced.sh")       # enhanced_start 把这个版本号写进暂存的助手
-sed "s|@VERSION@|$HV|g" "$R/lib/tunrules-helper.pl" > "$W/stage/tunrules-helper"
-bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1 tester
-[ -x "$W/libexec/tunrules-501" ]
-grep -qx "tester ALL=(root) NOPASSWD: $W/libexec/tunrules-501" "$W/sudoers.d/enana-tunrules-501"
-[ "$(wc -l < "$W/sudoers.d/enana-tunrules-501" | tr -d ' ')" = 1 ]
-[ "$(stat -f %Lp "$W/libexec/tunrules-501")" = 755 ] && [ "$(stat -f %Lp "$W/sudoers.d/enana-tunrules-501")" = 440 ]
-! grep -q '@ROOT@\|@ROOTUID@\|@VERSION@\|@LABEL@\|@LAUNCHCTL@' "$W/libexec/tunrules-501"
-grep -q "my \$ROOT = '$W/runtime'" "$W/libexec/tunrules-501"
-grep -q 'my \$ROOT_UID = 0;' "$W/libexec/tunrules-501"
-# `restart` 动作: 标签和 launchctl 路径是 root 脚本按自己的固定值写死进去的 (不来自调用者); 助手本身没有任何别的 launchctl 调用
-grep -q "my \$LABEL = 'com.enana.proxy.tun.501';" "$W/libexec/tunrules-501"
-grep -q "my \$LAUNCHCTL = '$W/bin/launchctl';" "$W/libexec/tunrules-501"
-/usr/bin/perl -c "$W/libexec/tunrules-501" >/dev/null 2>&1
-/usr/sbin/visudo -cf "$W/sudoers.d/enana-tunrules-501" >/dev/null
-# 真实运行已安装的那份助手 (只把「必须是 root」的 uid 换成当前用户: 生产里是 0, 测试不是 root)
-sed "s/^my \$ROOT_UID = 0;/my \$ROOT_UID = $(/usr/bin/id -u);/" "$W/libexec/tunrules-501" > "$W/installed-copy.pl"
-[ "$(/usr/bin/perl "$W/installed-copy.pl" version)" = "$HV" ]
-before=$(wc -l < "$W/calls" | tr -d ' ')
-/usr/bin/perl "$W/installed-copy.pl" restart >/dev/null
-[ "$(wc -l < "$W/calls" | tr -d ' ')" = $((before + 1)) ]
-[ "$(tail -1 "$W/calls")" = 'kickstart -k system/com.enana.proxy.tun.501' ]
-for bad in 'restart system/com.apple.mDNSResponder' 'restart -k' 'bootout' 'kickstart'; do
-  # shellcheck disable=SC2086
-  if /usr/bin/perl "$W/installed-copy.pl" $bad >/dev/null 2>&1; then echo "FAIL: helper accepted: $bad"; exit 1; fi
-done
-[ "$(wc -l < "$W/calls" | tr -d ' ')" = $((before + 1)) ]          # 被拒绝的调用没有碰 launchctl
-[ ! -e "$W/stage/../runtime/.helper."* ] 2>/dev/null
-# A bad user name, a non-perl helper or a helper that does not compile never blocks or breaks the TUN install, and leaves no rule behind.
-rm -rf "$W/libexec" "$W/sudoers.d"
-bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1 'bad user;name'
-[ ! -e "$W/libexec/tunrules-501" ] && [ ! -e "$W/sudoers.d/enana-tunrules-501" ]
-printf '#!/bin/sh\necho pwned\n' > "$W/stage/tunrules-helper"
-bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1 tester
-[ ! -e "$W/libexec/tunrules-501" ] && [ ! -e "$W/sudoers.d/enana-tunrules-501" ]
-printf '#!/usr/bin/perl\nthis is not perl (\n' > "$W/stage/tunrules-helper"
-bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1 tester
-[ ! -e "$W/libexec/tunrules-501" ] && [ ! -e "$W/sudoers.d/enana-tunrules-501" ]
-rm -f "$W/stage/tunrules-helper"
-bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1 tester
-[ ! -e "$W/libexec/tunrules-501" ]
-# Installing a good helper again and then removing the service removes the helper and its sudoers rule.
-sed "s|@VERSION@|$HV|g" "$R/lib/tunrules-helper.pl" > "$W/stage/tunrules-helper"
-bash "$W/helper.sh" install 501 "$W/stage" com.enana.proxy 1 tester
-[ -x "$W/libexec/tunrules-501" ] && [ -f "$W/sudoers.d/enana-tunrules-501" ]
-bash "$W/helper.sh" remove 501
-[ ! -e "$W/libexec/tunrules-501" ] && [ ! -e "$W/sudoers.d/enana-tunrules-501" ] && [ ! -e "$W/libexec" ]
-echo 'PASS: root snapshot install, bootstrap rollback, GUI recovery, symlink rejection, foreign VPN route rollback, staging cleanup, rule-data helper install / validation / removal'
+check "路由不对: 失败 (退出码 1)" test "$rc" = 1
+
+echo "== 4. 暂存目录里有符号链接: root 拒绝 (退出码 3), 正在运行的系统一个字节都不动"
+rf_reset; rf_enana_start; before=$(root_sig)
+export RF_HOOK='ln -s /etc/hosts "$(cat "$RF_W/stage.path")/link"'
+rf_enana_start; rc=$?
+unset RF_HOOK
+check "拒绝 (退出码 3)" test "$rc" = 3
+check "根目录没有变化" test "$(root_sig)" = "$before"
+
+echo "== 5. 停止 / 删除: 运行的是 root 副本 (不是 lib 里被改过的文件); 删除把副本、助手、免密规则、plist 全部删掉"
+rf_reset; rf_enana_start
+printf '# edited after install\n' >> "$LIBT/enhanced-root.sh"
+enhanced_stop; rc=$?
+check "停止成功" test "$rc" = 0
+check "停止运行的是 root 副本" grep -q "bin/enhanced-root.sh' 'root' 'stop'" "$W/sudo.log"
+enhanced_remove; rc=$?
+check "删除成功" test "$rc" = 0
+check "根目录没了" test ! -e "$ROOT"
+check "助手没了" test ! -e "$HELPER"
+check "免密规则没了" test ! -e "$SUDOERS"
+check "plist 没了" test ! -e "$PLIST"
+
+echo "== 6. 旧版本没有 root 副本: 停止 / 删除走一次性的 inband 形式, 仍然只要一次授权"
+rf_reset; rf_enana_start; rm -rf "$ROOT/bin"
+enhanced_stop; check "inband 停止成功" test $? = 0
+check "inband 形式: 脚本随命令带进去" grep -q "enana-root '" "$W/sudo.log"
+
+echo "== 7. 停止成功之后再停止: 不再要管理员授权 (enhanced_idle)"
+rf_reset; rf_enana_start; : > "$W/sudo.log"
+enhanced_stop; enhanced_stop
+check "第二次停止没有新的管理员调用" test "$(rf_admin_calls)" = 1
+
+echo
+if [ "$fails" = 0 ]; then echo 'PASS: root snapshot install, bootstrap / route rollback, staged symlink refusal, stop and remove from the root copy'
+else echo "FAIL: $fails check(s) failed"; exit 1; fi

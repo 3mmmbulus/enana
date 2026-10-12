@@ -151,7 +151,8 @@ core_urls() { # 名称 版本 有无 SHA-256 钉死(1/0) [fast|all]: 每行一�
 }
 
 _core_try() { # <临时目录> <版本> <名称> <SHA-256|空> <fast|all>  -> 0 = 下载并解出了 $H/sing-box.new
-  local tmp=$1 ver=$2 nm=$3 expect=$4 mode=$5 u
+  local tmp=$1 ver=$2 nm=$3 expect=$4 mode=$5 u priv members member rc
+  CORE_PROV=''; CORE_BINSHA=''
   set --; while IFS= read -r u; do set -- "$@" "$u"; done < <(core_urls "$nm" "$ver" "$([ -n "$expect" ] && echo 1 || echo 0)" "$mode")
   if [ "$mode" = fast ]; then
     DL_SPEED=${ENANA_DL_FAST_SPEED:-204800} DL_SPEED_TIME=${ENANA_DL_FAST_TIME:-20} EXPECT_SHA=$expect fetch_any "$tmp/sb.tgz" valid_core "$@" || return 1
@@ -159,8 +160,27 @@ _core_try() { # <临时目录> <版本> <名称> <SHA-256|空> <fast|all>  -> 0 
     EXPECT_SHA=$expect fetch_any "$tmp/sb.tgz" valid_core "$@" || return 1
   fi
   ok "下载完成 (线路: $DL_VIA)${expect:+, SHA-256 校验通过}"
-  tar -xzf "$tmp/sb.tgz" -C "$tmp" || return 1
-  cp "$tmp"/sing-box-*/sing-box "$H/sing-box.new" && chmod +x "$H/sing-box.new"
+  # 压缩包拷进只属于自己的私有目录 (0700): 之后的校验和解压都只用这一份字节, 不会被下载目录里的同名文件换掉 (D4)
+  priv=$(mktemp -d "$H/.core-priv.XXXXXX") || return 1
+  chmod 700 "$priv"
+  cat "$tmp/sb.tgz" | tee "$priv/sb.tgz" > /dev/null || { rm -rf "$priv"; return 1; }
+  if [ -n "$expect" ]; then
+    [ "$(shasum -a 256 "$priv/sb.tgz" | awk '{print $1}')" = "$expect" ] || { rm -rf "$priv"; return 1; }
+    CORE_PROV="pinned $ver $expect"
+  else CORE_PROV="unpinned chain"; fi
+  # 压缩包里必须正好有一个 sing-box-*/sing-box, 而且是普通文件 (类型是 '-'; 链接是 'l')
+  members=$(tar -tvzf "$priv/sb.tgz" 2>/dev/null | awk -F' -> ' '{ n = split($1, f, " "); if (f[n] ~ /^sing-box-[^\/]+\/sing-box$/) print substr($1, 1, 1) " " f[n] }')
+  [ "$(printf '%s\n' "$members" | grep -c .)" = 1 ] && [ "${members%% *}" = - ] || { rm -rf "$priv"; return 1; }
+  member=${members#* }
+  tar -xzf "$priv/sb.tgz" -C "$priv" "$member" || { rm -rf "$priv"; return 1; }
+  # 二进制的摘要和写出的字节是同一条管道算出来的 (不用进程替换, 等管道结束再读结果)
+  set -o pipefail
+  cat "$priv/$member" | tee "$H/sing-box.new" | shasum -a 256 | awk '{print $1}' > "$priv/binary.sha"; rc=$?
+  set +o pipefail
+  [ "$rc" = 0 ] && [ -s "$priv/binary.sha" ] || { rm -rf "$priv" "$H/sing-box.new"; return 1; }
+  CORE_BINSHA=$(cat "$priv/binary.sha")
+  chmod +x "$H/sing-box.new"
+  rm -rf "$priv"
 }
 
 core_from_chain() { # -> $H/sing-box.new
@@ -201,16 +221,21 @@ core_from_local() { # SINGBOX_TGZ 指定, 或在源码目录/下载目录里找
 core_install() { # core_install chain|brew|local  -> 安装/替换 $H/sing-box
   if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then win_bridge core-upgrade "${SINGBOX_VERSION:-$CORE_PIN}"; return; fi
   local src=${1:-chain}
+  CORE_PROV=''; CORE_BINSHA=''                     # 来源 (pinned VERSION SHA | unpinned SOURCE) 与二进制摘要, 写进 core-provenance / core-binary.sha256 (TUN 只用官方钉死的核心)
   rm -f "$H/sing-box.new"
   case $src in
-    chain) core_from_chain || { warn "GitHub 下载链全部失败"; command -v brew >/dev/null 2>&1 && core_from_brew; } ;;
+    chain) core_from_chain || { CORE_PROV=''; CORE_BINSHA=''; warn "GitHub 下载链全部失败"; command -v brew >/dev/null 2>&1 && core_from_brew; } ;;
     brew)  core_from_brew ;;
     local) core_from_local ;;
   esac || true
   [ -x "$H/sing-box.new" ] || return 1
   xattr -d com.apple.quarantine "$H/sing-box.new" 2>/dev/null || true
   "$H/sing-box.new" version >/dev/null 2>&1 || { rm -f "$H/sing-box.new"; return 2; }
+  [ -n "$CORE_BINSHA" ] || CORE_BINSHA=$(shasum -a 256 "$H/sing-box.new" | awk '{print $1}')
+  [ -n "$CORE_PROV" ] || CORE_PROV="unpinned $src"
   mv "$H/sing-box.new" "$SB"
+  printf '%s\n' "$CORE_BINSHA" > "$H/core-binary.sha256"
+  printf '%s\n' "$CORE_PROV" > "$H/core-provenance"
 }
 
 # 用临时端口试运行 $SB: 副本去掉 TUN 入站, 日志和缓存指向临时目录, 监听固定在 127.0.0.1, 所以不碰正在运行的服务、系统代理、TUN、原来的缓存和日志

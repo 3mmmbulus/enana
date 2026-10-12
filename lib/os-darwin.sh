@@ -194,8 +194,9 @@ os_sysproxy_backup() {
     for k in webproxy securewebproxy socksfirewallproxy; do printf '[%s %s]\n%s\n' "$s" "$k" "$(networksetup -get$k "$s" 2>/dev/null)" >> "$H/proxy-backup.txt"; done
   done < <(os_sysproxy_services)
 }
-os_sysproxy_chain() { # on|off -> 打印要执行的 networksetup 命令串 (每个服务名都做了 shell 引用; 用绝对路径, 因为提权后 PATH 会被换掉); 任何一条命令失败, 整串的退出码就是 1
-  local s k c='r=0; ' q ns; ns=$(command -v networksetup 2>/dev/null || true); [ -n "$ns" ] || ns=/usr/sbin/networksetup
+os_sysproxy_chain() { # on|off [networksetup 路径] -> 打印要执行的 networksetup 命令串 (每个服务名都做了 shell 引用; 用绝对路径, 因为提权后 PATH 会被换掉); 任何一条命令失败, 整串的退出码就是 1
+  # 默认路径写死 (这串大多数要以 root 运行, 不能由环境变量决定); 只有当前用户直接修改 (os_sysproxy_apply ①) 才由测试传入替身的路径
+  local s k c='r=0; ' q ns=${2:-/usr/sbin/networksetup}
   while IFS= read -r s; do
     q=$(enhanced_quote "$s")
     if [ "$1" = on ]; then
@@ -212,42 +213,64 @@ os_sysproxy_verify() { if [ "$1" = on ]; then os_sysproxy_ok; else ! os_sysproxy
 # 第一次需要授权时, 在同一次授权里顺便安装一个只做「改系统代理」这一件事的小程序 (root 所有、用户改不了、端口写死, 见 lib/sysproxy-helper.tpl),
 # 并给当前用户配置只开放这一个文件的免密 sudo (写入前用 visudo -cf 校验)。之后打开 / 关闭系统代理都直接调用它, 不再弹窗; 卸载时一并删除。
 SYSPROXY_HELPER_VERSION=1
+# 读 / 可信判断用的路径 (测试可以换成沙箱); 以 root 运行的一律用 *_root 写死的路径 (不经过 test_env)
 os_sysproxy_helper_path()  { printf '%s/usr/local/libexec/enana/sysproxy-%s' "$(test_env ENANA_ROOT_PREFIX)" "$(id -u)"; }
 os_sysproxy_sudoers_path() { printf '%s/etc/sudoers.d/enana-sysproxy-%s' "$(test_env ENANA_ROOT_PREFIX)" "$(id -u)"; }
-os_sysproxy_helper_text() { # 把端口 / networksetup 路径 / 版本写死进模板, 输出助手脚本全文 (networksetup 路径只有测试 (ENANA_TEST 且设了 ENANA_ROOT_PREFIX) 时才允许换)
+os_sysproxy_helper_root()  { printf '/usr/local/libexec/enana/sysproxy-%s' "$(id -u)"; }
+os_sysproxy_sudoers_root() { printf '/etc/sudoers.d/enana-sysproxy-%s' "$(id -u)"; }
+os_sysproxy_helper_text() { # 把端口 / 版本和写死的 networksetup 路径 (助手以 root 运行, 所以路径不能由环境变量决定) 写进模板, 输出助手脚本全文
   local ns=/usr/sbin/networksetup
-  [ -z "$(test_env ENANA_ROOT_PREFIX)" ] || ns=$(test_env ENANA_NETWORKSETUP "$ns")
-  [[ $PORT =~ ^[0-9]+$ ]] && [[ $ns =~ ^/[A-Za-z0-9._/-]+$ ]] || return 1
+  [[ $PORT =~ ^[0-9]+$ ]] || return 1
   sed -e "s|@PORT@|$PORT|g" -e "s|@NETWORKSETUP@|$ns|g" -e "s|@VERSION@|$SYSPROXY_HELPER_VERSION|g" "$LIB/sysproxy-helper.tpl"
 }
-os_helper_trusted() { # <路径> <版本>  已安装、归 root (测试里归当前用户)、别人改不了、不是符号链接、版本对, 并且当前用户可以免密调用 (系统代理助手和 TUN 规则同步助手共用)
-  local h=$1 want=$2 v p want_uid=0
-  [ -z "$(test_env ENANA_ROOT_PREFIX)" ] || want_uid=$(id -u)
+os_helper_trusted() { # <路径> <期望的 SHA-256>: 普通文件 (不是链接)、归 root (测试里归当前用户)、从它往上直到 /usr/local 的每一级目录都归 root 且组 / 其他人不可写、
+  # 字节和期望的完全一样, 并且当前用户可以免密调用它 (sudo -n -l 只查规则, 不运行它: 不能靠运行助手来判断它是不是我们装的那份)。系统代理助手和 TUN 规则助手共用。
+  local h=$1 want=$2 p d stop pre want_uid=0 got
+  pre=$(test_env ENANA_ROOT_PREFIX)
+  [ -z "$pre" ] || want_uid=$(id -u)
   [ -f "$h" ] && [ ! -L "$h" ] && [ "$(stat -f %u "$h" 2>/dev/null)" = "$want_uid" ] || return 1
   p=$(stat -f %Sp "$h" 2>/dev/null); [ "${p:5:1}" != w ] && [ "${p:8:1}" != w ] || return 1      # 组 / 其他人可写就不信任
-  v=$(sudo -n "$h" version 2>/dev/null) || return 1
-  [ "$v" = "$want" ]
+  stop="$pre/usr/local"; d=$(dirname "$h")
+  while :; do
+    [ -d "$d" ] && [ ! -L "$d" ] && [ "$(stat -f %u "$d" 2>/dev/null)" = "$want_uid" ] || return 1
+    p=$(stat -f %Sp "$d" 2>/dev/null); [ "${p:5:1}" != w ] && [ "${p:8:1}" != w ] || return 1
+    [ "$d" != "$stop" ] || break
+    [ "$d" != / ] || return 1
+    d=$(dirname "$d")
+  done
+  got=$(shasum -a 256 "$h" 2>/dev/null | awk '{print $1}')
+  [ -n "$want" ] && [ "$got" = "$want" ] || return 1
+  sudo -n -l "$h" >/dev/null 2>&1
 }
 os_sysproxy_helper_port() { sed -n 's/^NS=.*; PORT=\([0-9][0-9]*\); VERSION=.*/\1/p' "$(os_sysproxy_helper_path)" 2>/dev/null | head -1; }      # 助手里写死的端口 (文件归 root、别人改不了, 见 os_helper_trusted)
 # 版本对还不够: 端口是装助手时写死的, 如果后来端口被重新分配了, 旧助手会把系统代理指向旧端口、还报告成功 —— 所以写死的端口也要和现在的一致, 不一致就当作没装好 (重新授权并重装)。
-os_sysproxy_helper_ok() { os_helper_trusted "$(os_sysproxy_helper_path)" "$SYSPROXY_HELPER_VERSION" && [ "$(os_sysproxy_helper_port)" = "$PORT" ]; }
-os_sysproxy_helper_install_cmds() { # 以 root 身份执行的命令串 (末尾带分号): 安装助手 + 免密规则; 任何一步失败都不影响后面的系统代理设置, 也不会留下半成品规则
-  local h s u d sd text b64
+os_sysproxy_helper_sha() { os_sysproxy_helper_text | shasum -a 256 | awk '{print $1}'; }      # 期望的字节 = 此刻渲染出来的助手 (端口 / 路径 / 版本都在里面, 所以字节一致就包含了端口检查)
+os_sysproxy_helper_ok() { os_helper_trusted "$(os_sysproxy_helper_path)" "$(os_sysproxy_helper_sha)"; }
+os_sysproxy_helper_install_cmds() { # 以 root 身份执行的命令串 (末尾带分号, 整条一行): 安装助手 + 免密规则 (目录检查同 lib/enhanced-root.sh 的 libexec_ok); 任何一步失败都不影响后面的系统代理设置, 也不会留下半成品规则
+  # 路径和 install / visudo 都是写死的 (这串以 root 运行, 环境变量不能决定它写到哪里); 测试由假 sudo 改写 (tests/fakebin/sudo)
+  local h s u d sd text b64 sha body own=0
   [ -z "${ENANA_NO_SYSPROXY_HELPER:-}" ] || return 1
   u=$(id -un); [[ $u =~ ^[A-Za-z0-9._-]+$ ]] || return 1
-  h=$(os_sysproxy_helper_path); s=$(os_sysproxy_sudoers_path); d=$(dirname "$h"); sd=$(dirname "$s")
+  h=$(os_sysproxy_helper_root); s=$(os_sysproxy_sudoers_root); d=$(dirname "$h"); sd=$(dirname "$s")
   text=$(os_sysproxy_helper_text) || return 1
   b64=$(printf '%s\n' "$text" | base64 | tr -d '\n')
-  printf '%s' "{ t=\$(mktemp -d) && printf %s $(enhanced_quote "$b64") | base64 -D > \"\$t/h\" && head -1 \"\$t/h\" | grep -q '^#!/bin/bash' && /bin/bash -n \"\$t/h\" && install -d -m 755 -o root -g wheel $(enhanced_quote "$d") && install -m 755 -o root -g wheel \"\$t/h\" $(enhanced_quote "$h") && printf '%s ALL=(root) NOPASSWD: %s\\n' $(enhanced_quote "$u") $(enhanced_quote "$h") > \"\$t/s\" && visudo -cf \"\$t/s\" >/dev/null && install -d -m 755 -o root -g wheel $(enhanced_quote "$sd") && install -m 440 -o root -g wheel \"\$t/s\" $(enhanced_quote "$s"); rm -rf \"\$t\"; } >/dev/null 2>&1 || true; "
+  sha=$(printf '%s\n' "$text" | shasum -a 256 | awk '{print $1}')
+  # 主体是固定文本: 所有变量在前面用 enhanced_quote 写成赋值, 不再拼接路径进命令。以 root 运行时 PATH 由调用方用 /usr/bin/env -i 固定。
+  body=$(cat <<'BODY'
+t=$(/usr/bin/mktemp -d) && printf %s "$B64" > "$t/b64" && /usr/bin/base64 -D < "$t/b64" > "$t/h" && [ "$(/usr/bin/shasum -a 256 "$t/h" | /usr/bin/awk '{print $1}')" = "$SHA" ] && /bin/bash -n "$t/h" && { ( for x in /usr/local/libexec "$D"; do [ -e "$x" ] || [ -L "$x" ] || /usr/bin/install -d -m 755 -o root -g wheel "$x" || exit 1; done; for x in /usr/local /usr/local/libexec "$D"; do [ -d "$x" ] && [ ! -L "$x" ] && [ "$(/usr/bin/stat -f %u "$x")" = "$OWN" ] && p=$(/usr/bin/stat -f %Sp "$x") && [ "${p:5:1}" != w ] && [ "${p:8:1}" != w ] || exit 1; done ) && /bin/rm -f "$H" "$S" && /usr/bin/install -m 755 -o root -g wheel "$t/h" "$H" && /usr/bin/install -d -m 755 -o root -g wheel "$SD" && printf '%s ALL=(root) NOPASSWD: %s\n' "$U" "$H" > "$t/s" && /usr/sbin/visudo -cf "$t/s" >/dev/null && /usr/bin/install -m 440 -o root -g wheel "$t/s" "$S"; } >/dev/null 2>&1; /bin/rm -rf "$t"
+BODY
+  )
+  printf 'H=%s S=%s SD=%s D=%s U=%s SHA=%s B64=%s OWN=%s; %s; ' "$(enhanced_quote "$h")" "$(enhanced_quote "$s")" "$(enhanced_quote "$sd")" "$(enhanced_quote "$d")" \
+    "$(enhanced_quote "$u")" "$(enhanced_quote "$sha")" "$(enhanced_quote "$b64")" "$(enhanced_quote "$own")" "$body"
 }
 os_sysproxy_helper_remove() { # 卸载: 删掉助手和免密规则 (需要管理员授权; 调用前已经 sudo -v 过)。拒绝授权不阻止卸载, 只是提示手动删除
-  local h s; h=$(os_sysproxy_helper_path); s=$(os_sysproxy_sudoers_path)
+  local h s hr sr; h=$(os_sysproxy_helper_path); s=$(os_sysproxy_sudoers_path); hr=$(os_sysproxy_helper_root); sr=$(os_sysproxy_sudoers_root)
   [ -e "$h" ] || [ -e "$s" ] || return 0
-  if sudo rm -f "$s" "$h" 2>/dev/null; then sudo rmdir "$(dirname "$h")" 2>/dev/null || true; return 0; fi
-  warn "没能删除系统代理助手, 可以手动删除: sudo rm -f $s $h"; return 0
+  if sudo rm -f "$sr" "$hr" 2>/dev/null; then sudo rmdir "$(dirname "$hr")" 2>/dev/null || true; return 0; fi      # 以 root 删除: 只用写死的路径
+  warn "没能删除系统代理助手, 可以手动删除: sudo rm -f $sr $hr"; return 0
 }
-os_admin_dialog() { # <命令串>  弹出 macOS 原生的管理员密码框 (仪表盘的后台服务没有终端); 写法与 enhanced_admin 的对话框分支完全相同 (真机验证过)
-  local cmd; cmd=$(enhanced_quote /bin/bash)' -c '$(enhanced_quote "$1")
+os_admin_dialog() { # <命令串>  弹出 macOS 原生的管理员密码框 (仪表盘的后台服务没有终端): 命令串放进 /usr/bin/env -i (清空环境) + /bin/bash -p -c 里运行; 写法与 enhanced_admin 的对话框分支相同
+  local cmd; cmd="/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash -p -c $(enhanced_quote "$1")"
   cmd=$(printf '%s' "$cmd" | sed 's/\\/\\\\/g; s/"/\\"/g')
   osascript -e "do shell script \"$cmd\" with administrator privileges"
 }
@@ -264,19 +287,19 @@ os_sysproxy_apply() { # on|off [force|quiet]  -> 0 = 已是想要的状态 · 1 
   if [ "$want" = on ]; then os_sysproxy_backup >/dev/null 2>&1 || { SYSPROXY_ERR=backup-failed; return 1; }; fi
   c=$(os_sysproxy_chain "$want"); [ "$c" != 'r=0; exit $r' ] || { SYSPROXY_ERR=no-network-service; return 1; }
   errf=$(mktemp)
-  /bin/bash -c "$c" >/dev/null 2>"$errf"; rc=$?                                       # ① 直接修改
+  /bin/bash -c "$(os_sysproxy_chain "$want" "$(test_env ENANA_NETWORKSETUP /usr/sbin/networksetup)")" >/dev/null 2>"$errf"; rc=$?      # ① 直接修改 (当前用户, 不提权: 测试可换成替身路径)
   # 成功 = 所有命令都成功, 或回读确认所有网络服务都已是想要的状态 (个别服务读取出错时, 命令都成功了也不能判失败, 否则会反复要密码)
   if [ "$rc" = 0 ] || os_sysproxy_verify "$want"; then SYSPROXY_METHOD=direct; rm -f "$errf" "$H/.cache-sysproxy"; return 0; fi
   if os_sysproxy_helper_ok; then                                                       # ①b 系统代理助手 (授权过一次): 免密, 不弹窗
-    SYSPROXY_METHOD=helper; sudo -n "$(os_sysproxy_helper_path)" "$want" >/dev/null 2>"$errf"; rc=$?
+    SYSPROXY_METHOD=helper; sudo -n "$(os_sysproxy_helper_root)" "$want" >/dev/null 2>"$errf"; rc=$?
     rm -f "$H/.cache-sysproxy"
     if [ "$rc" = 0 ] || os_sysproxy_verify "$want"; then SYSPROXY_HELPER=used; rm -f "$errf"; return 0; fi
     SYSPROXY_HELPER=failed
   fi
   # 助手还没装 (或失败): 这一次的授权顺便把助手装上 (inst), 以后打开 / 关闭系统代理都不再要密码
   inst=$(os_sysproxy_helper_install_cmds 2>/dev/null || true)
-  if [ -z "$quiet" ] && [ -t 0 ] && [ -t 1 ]; then SYSPROXY_METHOD=sudo; sudo /bin/bash -c "$inst$c" 2>"$errf" >/dev/null; rc=$?     # ② 终端: 密码提示走 /dev/tty
-  elif sudo -n true >/dev/null 2>&1; then SYSPROXY_METHOD=sudo-nopass; sudo -n /bin/bash -c "$c" >/dev/null 2>"$errf"; rc=$?   # ③ 本来就有免密 sudo: 不需要助手
+  if [ -z "$quiet" ] && [ -t 0 ] && [ -t 1 ]; then SYSPROXY_METHOD=sudo; sudo /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash -p -c "$inst$c" 2>"$errf" >/dev/null; rc=$?     # ② 终端: 密码提示走 /dev/tty
+  elif sudo -n true >/dev/null 2>&1; then SYSPROXY_METHOD=sudo-nopass; sudo -n /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash -p -c "$c" >/dev/null 2>"$errf"; rc=$?   # ③ 本来就有免密 sudo: 不需要助手
   elif [ -n "$quiet" ]; then rm -f "$errf" "$H/.cache-sysproxy"; SYSPROXY_ERR=needs-admin; return 1
   else SYSPROXY_METHOD=dialog; os_admin_dialog "$inst$c" >/dev/null 2>"$errf"; rc=$?; fi                      # ④
   rm -f "$H/.cache-sysproxy"
@@ -301,13 +324,27 @@ os_sysproxy_set() { # on|off  终端里使用: 逐项打印结果; 同样会记�
   if [ "$rc" != 0 ]; then warn "系统代理没有${v}成功 (原因: ${SYSPROXY_ERR:-unknown}); 可以在仪表盘概览里再试一次"; return 1; fi
   while IFS= read -r s; do ok "$s: 系统代理已$v"; done < <(os_sysproxy_services)
 }
+os_sysproxy_restore_root() { # 以 root 恢复系统代理: proxy-state.js 与收据各读一次, 摘要按同一份字节算; root 把它们解码到自己的临时目录再核对摘要, 不一致就不运行 (返回非 0)
+  local js rcp jb rb jsb rcb cmd body
+  [[ $PORT =~ ^[0-9]+$ ]] || return 1
+  js=$(cat "$LIB/proxy-state.js"; printf x); js=${js%x}
+  rcp=$(cat "$H/proxy-state.json"; printf x); rcp=${rcp%x}
+  jsb=$(printf '%s' "$js" | shasum -a 256 | awk '{print $1}'); rcb=$(printf '%s' "$rcp" | shasum -a 256 | awk '{print $1}')
+  jb=$(printf '%s' "$js" | base64 | tr -d '\n'); rb=$(printf '%s' "$rcp" | base64 | tr -d '\n')
+  body=$(cat <<'BODY'
+t=$(/usr/bin/mktemp -d) && printf %s "$JB" > "$t/j.b64" && /usr/bin/base64 -D < "$t/j.b64" > "$t/proxy-state.js" && printf %s "$RB" > "$t/r.b64" && /usr/bin/base64 -D < "$t/r.b64" > "$t/receipt.json" && [ "$(/usr/bin/shasum -a 256 "$t/proxy-state.js" | /usr/bin/awk '{print $1}')" = "$JSSHA" ] && [ "$(/usr/bin/shasum -a 256 "$t/receipt.json" | /usr/bin/awk '{print $1}')" = "$RCSHA" ] && /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin "$OSA" -l JavaScript "$t/proxy-state.js" restore "$PORT" "$t/receipt.json"; st=$?; /bin/rm -rf "$t"; exit $st
+BODY
+  )
+  cmd=$(printf 'JB=%s RB=%s JSSHA=%s RCSHA=%s PORT=%s OSA=%s; %s' "$(enhanced_quote "$jb")" "$(enhanced_quote "$rb")" "$(enhanced_quote "$jsb")" "$(enhanced_quote "$rcb")" "$(enhanced_quote "$PORT")" "$(enhanced_quote /usr/bin/osascript)" "$body")
+  sudo /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash -p -c "$cmd"
+}
 os_sysproxy_uninstall() {
   # Restore proxy fields/bypass lists, not just Enable=off with localhost still
   # configured. Never erase foreign endpoints installed after enana.
   local status; status=$(osascript -l JavaScript "$LIB/proxy-state.js" check "$PORT" "$H/proxy-state.json") || return 1
   if [ "$status" = changed ]; then
     sudo -v || return 1
-    sudo osascript -l JavaScript "$LIB/proxy-state.js" restore "$PORT" "$H/proxy-state.json" || return 1
+    os_sysproxy_restore_root || return 1
   fi
   if [ -e "$(os_sysproxy_helper_path)" ] || [ -e "$(os_sysproxy_sudoers_path)" ]; then sudo -v 2>/dev/null; os_sysproxy_helper_remove; fi      # 一次授权时安装的系统代理助手和免密规则
   return 0

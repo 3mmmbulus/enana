@@ -457,7 +457,7 @@ ep_state() {
 }
 apps_resp() {
   [ -f "$H/ui/appicons/index.tsv" ] || ( apps_icons >/dev/null 2>&1 & )          # 第一次: 后台提取应用图标
-  json "{\"ok\":true,\"apps\":$(apps_json),\"new_count\":$(apps_new_count),\"scanned_at\":$(now)}"
+  json "{\"ok\":true,\"apps\":$(apps_json),\"new_count\":$(apps_new_count),\"pending\":$(apps_pending_json),\"scanned_at\":$(now)}"
 }
 ep_sites_domains_get() {
   local id body; id=$(qp id); case $id in ''|*[!a-z0-9-]*) fail "条目编号无效" ;; esac
@@ -526,11 +526,17 @@ ep_apps_adopt() { # 采用推荐设置: 不带 names = 所有「新应用」; �
   okj
 }
 
-ep_apps_scan() {
+ep_apps_scan() { # 手动扫描 (按钮) 照旧开应用任务; 界面自动扫描 (background=1, 每分钟) 只在需要应用、且不需要管理员授权时才由后台开任务, 其它情况直接返回列表 (见 apps_scan_bg)
+  local j bg=0 rc=0 APPS_BG=0
+  [ "$(qp background)" = 1 ] && { bg=1; APPS_BG=1; }
   if [ "${NETWORK_MODE:-system}" = tun ]; then
-    local j; j=$(job_spawn apps-scan "$APPLY_STEPS"); okj "\"job\":\"$j\""; return
+    if [ "$bg" = 0 ]; then j=$(job_spawn apps-scan "$APPLY_STEPS"); okj "\"job\":\"$j\""; return; fi
+    apps_scan_bg; rc=$?
+    # 后台开的任务: 操作记录里写「自动」; APPS_BG_JOB=1 让任务里的配置应用不弹管理员框、不改模式 (见 apply_config). 只作用于这一次启动, 不留在本进程里
+    if [ "$rc" = 0 ]; then j=$(OP_WHO=auto APPS_BG_JOB=1 job_spawn apps-scan "$APPLY_STEPS"); okj "\"job\":\"$j\""; return; fi
+  else
+    lock_take && { apps_scan >/dev/null; apps_pending_clear; lock_drop; }      # 系统代理模式直接应用了, 之前 TUN 记下的待应用就不再需要
   fi
-  lock_take && { apps_scan >/dev/null; lock_drop; }
   ( apps_icons >/dev/null 2>&1 & )
   apps_resp
 }

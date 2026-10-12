@@ -107,6 +107,13 @@ op_txn() {
        txn_restore; APPLY_QUIET=1 apply_config >/dev/null 2>&1 || true; op_unlock      # 撤销时不再写进度 (否则进度条会跳回「生成配置 10%」)
        oplog "${OP_WHO:-terminal}" "$desc" "$detail" error
        _txn_end fail "配置未通过校验, 已撤销本次更改${line:+: $line}" 1; return 1 ;;
+    5) # TUN 安装被拒绝或需要管理员授权, 根服务没有被动到 (见 config.sh 的 config_tun_refused / apply_config): 撤销本次更改。
+       # 后台任务 (APPS_BG_JOB) 和回到系统代理时重新应用一次 (不会再弹框); 还是 TUN 时不重试, 免得又弹一次管理员框
+       txn_restore
+       if [ "${APPS_BG_JOB:-0}" = 1 ] || [ "${NETWORK_MODE:-system}" != tun ]; then APPLY_QUIET=1 apply_config >/dev/null 2>&1 || true; fi
+       op_unlock
+       oplog "${OP_WHO:-terminal}" "$desc" "$detail" error
+       _txn_end fail "${TXN_ERR:-TUN 没有启动, 已撤销本次更改}" 5; return 1 ;;
     *) txn_restore; APPLY_QUIET=1 apply_config >/dev/null 2>&1 || true; op_unlock
        oplog "${OP_WHO:-terminal}" "$desc" "$detail" error
        _txn_end fail "新配置无法启动, 已撤销本次更改并恢复原配置" 3; return 1 ;;
@@ -126,7 +133,7 @@ txn_apps_adopt() {
   if [ -n "${1:-}" ]; then f=$(mktemp); printf '%s\n' "$1" > "$f"; fi
   apps_adopt "$f"; [ -z "$f" ] || rm -f "$f"; return 0
 }
-txn_apps_scan() { apps_scan >/dev/null; }
+txn_apps_scan() { apps_scan >/dev/null; apps_pending_clear; }      # 任务开始应用了, 之前记下的待应用就不再需要 (失败了的话, 下一次后台扫描会重新记下)
 txn_autosites_clear() { autosite_remove_all >/dev/null; }
 txn_none()   { return 0; }
 txn_import() { # sub mode   (内容来自 $JOB_BODY; 订阅信息来自 TXN_* 变量)
@@ -477,9 +484,15 @@ core_upgrade_revive() {
   wait_port "$PORT" 15
 }
 
+# 核心的摘要和来源记录 (core_install 会改写它们): 替换之前存一份 .old, 回滚时和 sing-box.old 一起还原, 否则回滚后的核心会被 TUN 当成「被改动过」或「来源不明」
+core_meta_keep() { local f; for f in core-binary.sha256 core-provenance; do rm -f "$H/$f.old"; [ ! -f "$H/$f" ] || cp -p "$H/$f" "$H/$f.old" || return 1; done; }
+core_meta_restore() { local f; for f in core-binary.sha256 core-provenance; do if [ -f "$H/$f.old" ]; then mv -f "$H/$f.old" "$H/$f"; else rm -f "$H/$f"; fi; done; }
+core_meta_drop() { rm -f "$H/core-binary.sha256.old" "$H/core-provenance.old"; }
+
 # 升级核心: 先下载, 用新核心校验现有配置, 通过才替换, 否则回退
 op_core_upgrade() { # [版本|latest]  latest = 兼容清单里和当前 enana 兼容的最新核心 (没有清单就不升级); 写明版本号 = 照做 (有 SHA-256 才逐个校验)
-  local old new want=${1:-latest} was_up=0; old=$(core_version)
+  local old new want=${1:-latest} was_up=0 pinned_now=0; old=$(core_version)
+  case $(sed -n 1p "$H/core-provenance" 2>/dev/null) in 'pinned '*) pinned_now=1 ;; esac
   job_step 0 10 "查询最新版本"
   if [ "$want" = latest ]; then
     core_manifest_refresh >/dev/null 2>&1 || true
@@ -488,33 +501,35 @@ op_core_upgrade() { # [版本|latest]  latest = 兼容清单里和当前 enana �
       oplog "${OP_WHO:-terminal}" "升级核心" "$(kv reason no-compatible-version current "$old")" error
       _txn_end fail "没有经过验证的兼容版本可升级, 保持 sing-box $old" 1; return 1
     fi
-    if [ -n "$old" ] && ! version_gt "$want" "$old"; then _txn_end ok "已经是兼容的最新版本 sing-box $old"; return 0; fi
+    # 同一版本但来源没有记成官方钉死的 (升级前装的核心; TUN 要求它): 不算「已经最新」, 照常重新下载这一版, 把来源记下来
+    if [ -n "$old" ] && ! version_gt "$want" "$old" && [ "$pinned_now" = 1 ]; then _txn_end ok "已经是兼容的最新版本 sing-box $old"; return 0; fi
   fi
   wait_port "$PORT" 1 && was_up=1
   if [ -f "$SB" ] && ! cp "$SB" "$SB.old" 2>/dev/null; then _txn_end fail "无法备份当前核心, 保持原版本 $old" 1; return 1; fi
+  if ! core_meta_keep; then rm -f "$SB.old"; _txn_end fail "无法备份当前核心, 保持原版本 $old" 1; return 1; fi
   job_step 1 30 "下载并校验新核心"
   if ! SINGBOX_VERSION=$want core_install chain >/dev/null 2>&1; then
-    rm -f "$SB.old"; oplog "${OP_WHO:-terminal}" "升级核心" "$(kv reason download-failed from "$old" to "$want")" error
+    rm -f "$SB.old"; core_meta_restore; oplog "${OP_WHO:-terminal}" "升级核心" "$(kv reason download-failed from "$old" to "$want")" error
     if core_upgrade_revive "$was_up"; then _txn_end fail "升级失败, 保持原版本 $old" 1; else _txn_end fail "升级失败, 原版本 $old 没能自动启动, 请在 enana 里手动启动" 1; fi; return 1
   fi
   job_step 2 70 "用新核心校验现有配置"
   if "$SB" check -c "$H/config.json" >/dev/null 2>&1; then
     job_step 3 75 "在临时端口试运行新核心"
     if ! core_trial; then
-      mv "$SB.old" "$SB"; oplog "${OP_WHO:-terminal}" "升级核心" "新版本试运行失败, 已回退" error
+      mv "$SB.old" "$SB"; core_meta_restore; oplog "${OP_WHO:-terminal}" "升级核心" "新版本试运行失败, 已回退" error
       _txn_end fail "新版本试运行失败, 保持原版本 $old" 3; return 1
     fi
     job_step 4 85 "重启服务"
     if ! os_service_restart || ! wait_port "$PORT" 15 || ! enhanced_ready; then
-      tun_residual_clean; mv "$SB.old" "$SB"; os_service_restart >/dev/null 2>&1 || true; wait_port "$PORT" 15 || true; tun_residual_clean; sysproxy_off_if_core_down
+      tun_residual_clean; mv "$SB.old" "$SB"; core_meta_restore; os_service_restart >/dev/null 2>&1 || true; wait_port "$PORT" 15 || true; tun_residual_clean; sysproxy_off_if_core_down
       oplog "${OP_WHO:-terminal}" "升级核心" "新版本未就绪, 已回退" error
       _txn_end fail "新版本未能启动, 已回退到 $old" 4; return 1
     fi
-    rm -f "$SB.old"; proxy_sync_mode
+    rm -f "$SB.old"; core_meta_drop; proxy_sync_mode
     new=$(core_version); rm -f "$H/.core-version"; update_check force >/dev/null 2>&1 || true
     oplog "${OP_WHO:-terminal}" "升级核心" "$old → $new" ok; _txn_end ok "已升级到 sing-box $new"
   else
-    mv "$SB.old" "$SB"; oplog "${OP_WHO:-terminal}" "升级核心" "新版本无法加载当前配置, 已回退" error
+    mv "$SB.old" "$SB"; core_meta_restore; oplog "${OP_WHO:-terminal}" "升级核心" "新版本无法加载当前配置, 已回退" error
     if core_upgrade_revive "$was_up"; then _txn_end fail "新版本无法加载当前配置, 已回退到 $old" 2; else _txn_end fail "新版本无法加载当前配置, 原版本 $old 没能自动启动, 请在 enana 里手动启动" 2; fi; return 1
   fi
 }

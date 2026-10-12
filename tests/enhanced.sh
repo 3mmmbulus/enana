@@ -99,9 +99,10 @@ echo 'PASS: installer preserves ports owned by the root TUN service'
   enhanced_supported() { return 0; }
   clash() { printf '{"proxies":{}}'; }
   logs_rotate() { :; }
-  enhanced_admin() {
-    [ "$2" = "$5/enhanced-root.sh" ]
-    cmp "$LIB/enhanced-root.sh" "$2"
+  printf '%s\n' 'pinned 1.12.0 0' > "$H/core-provenance"      # 6.1: 预检要求官方钉死版本的核心
+  enhanced_admin() {                                          # 一条命令: 清空环境的 inband 形式; 命令里不能出现 lib/ 下的路径 (脚本和数据都随命令带进去)
+    case $1 in *"/usr/bin/env -i PATH="*" inband "*) ;; *) echo "FAIL: not the inband form: ${1:0:160}"; exit 1 ;; esac
+    case $1 in *"$LIB/"*) echo 'FAIL: a path under lib/ reached the privileged command'; exit 1 ;; esac
     : > "$TUN_ROOT/sing-box.log"
   }
   enhanced_start
@@ -248,11 +249,29 @@ job_spawn() { printf test-job; }
 okj() { printf '{"ok":true,%s}\\n' "$1"; }
 lock_take() { echo INLINE_SCAN_ERROR; }
 apps_scan() { echo INLINE_SCAN_ERROR; }
+apps_icons() { :; }
 apps_resp() { echo SECOND_RESPONSE_ERROR; }
 '''
-r=subprocess.run(['/bin/bash','-c',stub+f+'\nep_apps_scan\n'],capture_output=True,text=True,check=True)
-assert r.stdout=='{"ok":true,"job":"test-job"}\n',r.stdout
-print('PASS: Enhanced scan endpoint delegates once without inline policy mutation')
+def run(case):
+    r=subprocess.run(['/bin/bash','-c',stub+case+f+'\nep_apps_scan\n'],capture_output=True,text=True,check=True)
+    return r.stdout
+# Manual scan (no background flag) always delegates; the background check is never consulted.
+assert run("qp() { :; }\napps_scan_bg() { echo BG_CHECKED; return 1; }\n")=='{"ok":true,"job":"test-job"}\n'
+# Automatic scan that would change rules or overrides still delegates to the apply job.
+assert run("qp() { echo 1; }\napps_scan_bg() { return 0; }\n")=='{"ok":true,"job":"test-job"}\n'
+# Automatic scan with no change returns the current list and starts no job.
+out=run("qp() { echo 1; }\napps_scan_bg() { return 1; }\napps_resp() { echo LIST; }\n")
+assert out=='LIST\n',out
+# A change that needs administrator approval is recorded as pending by apps_scan_bg: no job, the list (with its pending record) is returned.
+out=run("qp() { echo 1; }\napps_scan_bg() { return 2; }\napps_resp() { echo LIST; }\n")
+assert out=='LIST\n',out
+# The automatic job that does start runs as OP_WHO=auto (the operation log shows it as automatic, not as the dashboard).
+out=run("OP_WHO=dashboard\nqp() { echo 1; }\napps_scan_bg() { return 0; }\njob_spawn() { printf \"who=$OP_WHO\"; }\n")
+assert out=='{"ok":true,"job":"who=auto"}\n',out
+# System Proxy mode scans inline (no administrator approval needed) and drops any pending record that TUN left behind (F1).
+out=run("NETWORK_MODE=system\nqp() { :; }\nlock_take() { return 0; }\napps_scan() { :; }\napps_pending_clear() { echo CLEARED; }\napps_resp() { echo LIST; }\n")
+assert out=='CLEARED\nLIST\n',out
+print('PASS: Enhanced scan endpoint delegates once without inline policy mutation; automatic scans without changes return the list without a job')
 PY
 # Shell and AppleScript quoting test with actual special characters.
 v="space and ' quote \$(not_a_command)"; q=$(enhanced_quote "$v")
@@ -277,7 +296,7 @@ echo 'PASS: privileged argument shell quoting'
   enhanced_stop; rc=$?; [ "$rc:$ADMIN" = 0:0 ] || { echo "FAIL: no plist should be a no-op ($rc:$ADMIN)"; exit 1; }
   reset_stop; LOADED=1
   enhanced_stop; rc=$?; [ "$rc:$ADMIN" = 0:1 ] || { echo "FAIL: a loaded daemon must be stopped with one admin call ($rc:$ADMIN)"; exit 1; }
-  grep -q "enhanced-root.sh stop 501" "$ADMIN_LOG" || { echo 'FAIL: wrong privileged command'; cat "$ADMIN_LOG"; exit 1; }
+  grep -q "'stop' '501'" "$ADMIN_LOG" || { echo 'FAIL: wrong privileged command'; cat "$ADMIN_LOG"; exit 1; }      # 没有 root 副本: inband 形式; 有副本: root 形式 (见 tests/tun-service.sh)
   # ...and from then on (the daemon is unloaded, the plist is still there) there is nothing left to stop
   LOADED=0; enhanced_stop; enhanced_stop
   [ "$ADMIN" = 1 ] || { echo "FAIL: stopping an already-stopped daemon asked for administrator rights again ($ADMIN calls)"; exit 1; }

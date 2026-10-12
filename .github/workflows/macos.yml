@@ -34,6 +34,8 @@ jobs:
         run: python3 tests/console-pty.py
       - name: Check protected TUN cleanup and rollback
         run: bash tests/tun-service.sh
+      - name: Root script integrity (config paths, staged tampering, preflight without prompts, command environment)
+        run: bash tests/enhanced-root-integrity.sh
       - name: TUN policy changes without a restart (rule-data helper validation, apply decision)
         run: bash tests/tunrules.sh
       - name: Server deployment that finished but failed verification (actual port, reasons, verify-only retry)

@@ -198,6 +198,67 @@ eq "云端推荐更新后: def+直连 → 推荐 (pin); ack (用户设置过) �
 printf 'app|New Known|direct|new|\napp|New Unknown|direct|new|\n' >> "$H/overrides.tsv"; printf 'New Known|follow|X\n' >> "$UW/apps.conf"
 apps_adopt
 eq "采用推荐: 已知 → 推荐值并确认 (ack), 未知保持关 (仍是 new)" "$(awk -F'|' '$2 ~ /^New / {print $2 "=" $3 "/" $4}' "$H/overrides.tsv" | sort | paste -sd, -)" "New Known=follow/ack,New Unknown=direct/new"
+# ---- 后台扫描 (TUN, 界面每分钟自动发起): 没有变化 → 保留结果、不写操作记录、返回 1 (不开应用任务); 覆盖层或规则集会变 → 覆盖层还原、返回 0; 正在应用配置 → 这次不扫
+echo "== U4b. 后台扫描: 没有变化不写操作记录; 覆盖层 / 规则集有变化才交给应用任务; 应用配置时不扫"
+apps_scan >/dev/null; apps_scan >/dev/null
+ops_rows() { cat "$LOGS"/ops-*.log 2>/dev/null | wc -l | tr -d ' '; }
+ovr_sum() { cksum < "$H/overrides.tsv"; }
+o0=$(ops_rows); s0=$(ovr_sum); rc=0; apps_scan_bg || rc=$?
+eq "没有变化: 返回 1 (调用方直接返回列表, 不开应用任务)" "$rc" "1"
+eq "没有变化: 不写操作记录, 覆盖层一个字节都不变" "$(ops_rows):$(ovr_sum)" "$o0:$s0"
+t "没有变化: 扫描结束后释放应用锁" test ! -d "$H/.apply.lock"
+mkapp "$APPS" "Bg Newcomer"; rc=0; apps_scan_bg || rc=$?
+eq "新装了应用: 返回 0 (调用方开应用任务)" "$rc" "0"
+eq "…覆盖层还原到扫描前 (新应用没有写进去), 操作记录也没有写" "$(grep -c 'Bg Newcomer' "$H/overrides.tsv"):$(ops_rows)" "0:$o0"
+apps_scan >/dev/null
+eq "…应用任务随后的扫描照常把它记为新应用 (不是首次扫描的默认值)" "$(awk -F'|' '$2 == "Bg Newcomer" {print $3 "/" $4}' "$H/overrides.tsv")" "direct/new"
+o1=$(ops_rows); rc=0; apps_scan_bg || rc=$?
+eq "应用任务之后再后台扫描: 又没有变化 (返回 1, 操作记录不变)" "$rc:$(ops_rows)" "1:$o1"
+mkbrowser "$APPS" "Gone Browser"; printf 'app|Gone Browser|direct|ack|\n' >> "$H/overrides.tsv"; apps_scan >/dev/null
+t "卸载前: 直连的浏览器在 browserdirect 规则集里" grep -q 'Gone Browser' "$H/rules/ovr-browserdirect/ovr-browserdirect.json"
+rm -rf "$APPS/Gone Browser.app"; rc=0; apps_scan_bg || rc=$?
+eq "只有规则集会变 (覆盖层一行没动, 卸载了直连的浏览器): 返回 0" "$rc" "0"
+apps_scan >/dev/null
+t "应用任务把它从 browserdirect 挪到 appdirect" sh -c "! grep -q 'Gone Browser' '$H/rules/ovr-browserdirect/ovr-browserdirect.json' && grep -q 'Gone Browser' '$H/rules/ovr-appdirect/ovr-appdirect.json'"
+mkdir "$H/.apply.lock"; mkapp "$APPS" "Busy Newcomer"; rc=0; apps_scan_bg || rc=$?
+eq "正在应用配置 (应用锁被占着): 这次不扫, 返回 1, 覆盖层不动" "$rc:$(grep -c 'Busy Newcomer' "$H/overrides.tsv")" "1:0"
+rmdir "$H/.apply.lock"; rc=0; apps_scan_bg || rc=$?
+eq "锁释放后: 下一次后台扫描照常发现新应用 (返回 0)" "$rc" "0"
+apps_scan >/dev/null
+
+# ---- 后台扫描, TUN 根服务已装 (指纹一致): 助手不可信 → 2 (待应用: 不开任务、覆盖层不动); 助手可信 → 0 (由后台开任务); 失败后 24 小时内不自动重试同一组变化
+echo "== U4c. 后台扫描 (TUN, 根服务已装): 需要授权的变化只记为待应用 · 助手可信才自动开任务 · 失败的一组 24 小时内不自动重试 · 用户按「应用」后清掉"
+NETWORK_MODE=tun
+enhanced_loaded() { return 0; }
+enhanced_fingerprint() { printf 'FP\n'; }
+enhanced_helper_ok() { [ "${FAKE_HELPER:-0}" = 1 ]; }
+printf 'FP\n' > "$H/.enhanced-fingerprint"; enhanced_ovr_fingerprint > "$H/.enhanced-ovr-fingerprint"
+rm -f "$H/.apps-pending" "$H/.apps-bg-tried"
+FAKE_HELPER=0; o2=$(ops_rows); s2=$(ovr_sum); rc=0
+mkapp "$APPS" "Tun Newcomer"; apps_scan_bg || rc=$?
+eq "助手不可信: 变化要管理员授权 → 返回 2 (调用方不开任务)" "$rc" "2"
+eq "…覆盖层一个字节都不动, 操作记录也没有写" "$(ovr_sum):$(ops_rows)" "$s2:$o2"
+t "…记下待应用 (界面的「应用」卡片读它)" grep -q 'Tun Newcomer' "$H/.apps-pending"
+eq "…待应用的内容: 1 个新应用, 名称正确 (JSON 合法)" "$(apps_pending_json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["count"], d["names"][0])')" "1 Tun Newcomer"
+t "…没有记为已开过后台任务" test ! -f "$H/.apps-bg-tried"
+rc=0; apps_scan_bg || rc=$?
+eq "同一组变化再来一次 (还没应用): 仍是待应用 (2), 不会每分钟都想开任务" "$rc" "2"
+FAKE_HELPER=1; rc=0; apps_scan_bg || rc=$?
+eq "助手可信 (只有规则数据变了): 免密同步, 返回 0 (由后台开任务)" "$rc" "0"
+eq "…开任务之前覆盖层已经还原 (任务自己重新扫描、写入)" "$(ovr_sum)" "$s2"
+t "…这组变化记为后台已开过 (.apps-bg-tried)" test -s "$H/.apps-bg-tried"
+t "…待应用记录清掉 (已经在应用)" test ! -f "$H/.apps-pending"
+rc=0; apps_scan_bg || rc=$?
+eq "上一次后台开的任务没有应用成功 (模拟: 没有执行): 24 小时内同一组变化不再自动重开, 改为待应用 (2)" "$rc" "2"
+read -r tc tt < "$H/.apps-bg-tried"; printf '%s\t%s\n' "$tc" "$((tt - 86401))" > "$H/.apps-bg-tried"
+rc=0; apps_scan_bg || rc=$?
+eq "超过 24 小时: 再由后台开一次 (0)" "$rc" "0"
+apps_scan >/dev/null; apps_pending_clear; enhanced_ovr_fingerprint > "$H/.enhanced-ovr-fingerprint"     # 真正的应用任务同步根快照后会记下指纹 (这里模拟)
+rc=0; apps_scan_bg || rc=$?
+eq "用户按「应用」 (手动扫描) 之后: 没有变化 (1)" "$rc" "1"
+t "…没有变化时待应用记录也清掉" test ! -f "$H/.apps-pending"
+# 恢复真实的函数, 其它测试不受影响
+. "$LIB/enhanced.sh"; NETWORK_MODE=system; rm -f "$H/.apps-pending" "$H/.apps-bg-tried" "$H/.enhanced-fingerprint" "$H/.enhanced-ovr-fingerprint"
 
 echo "== U5. 覆盖层 → 规则集: 应用直连 / 网站直连 分开 · 固定出口指定 · 自动选 · 出口被删除"
 rs() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps(d["rules"], ensure_ascii=False, sort_keys=True))' "$H/rules/ovr-$1/ovr-$1.json"; }
@@ -1015,27 +1076,27 @@ PY
   eq "成功: 结果 ok, 没有返回码" "$rc:$(row)" "0:mode=tun via=admin why=changed	ok"
   sudo() { return 1; }
   osascript() { echo 'execution error: User canceled. (-128)' >&2; return 1; }
-  enhanced_admin /bin/true x </dev/null 2>"$H/err"; rc=$?
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
   eq "弹框被取消: 返回 1, 结果 cancelled, 错误文字照样输出 (弹框本身不变)" "$rc:$ENHANCED_ADMIN_ERR:$(enhanced_result "$rc"):$(grep -c 'User canceled' "$H/err")" "1:cancelled:cancelled:1"
   osascript() { echo 'execution error: something broke (1)' >&2; return 1; }
-  enhanced_admin /bin/true x </dev/null 2>"$H/err"; rc=$?
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
   eq "弹框的其它失败: 结果 error" "$rc:$ENHANCED_ADMIN_ERR:$(enhanced_result "$rc")" "1:failed:error"
   osascript() { echo 'execution error: Foo failed (-1280)' >&2; return 1; }
-  enhanced_admin /bin/true x </dev/null 2>"$H/err"; rc=$?
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
   eq "错误码 -1280 不是取消 (只认带括号的 (-128)): 结果 error" "$rc:$ENHANCED_ADMIN_ERR:$(enhanced_result "$rc")" "1:failed:error"
   osascript() { echo 'execution error: cannot open /tmp/-128/x (1)' >&2; return 1; }
-  enhanced_admin /bin/true x </dev/null 2>"$H/err"; rc=$?
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
   eq "路径里含 -128 不是取消: 结果 error" "$rc:$ENHANCED_ADMIN_ERR:$(enhanced_result "$rc")" "1:failed:error"
   osascript() { echo 'execution error: User canceled. (-128)' >&2; return 1; }
-  enhanced_admin /bin/true x </dev/null 2>"$H/err"; rc=$?
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
   eq "取消的写法不变: (-128) 仍然是 cancelled" "$rc:$ENHANCED_ADMIN_ERR" "1:cancelled"
   osascript() { : > "$H/osa.called"; return 0; }
   mktemp() { return 1; }
-  enhanced_admin /bin/true x </dev/null 2>"$H/err"; rc=$?
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
   eq "建不了临时文件: 管理员框照样弹出 (osascript 被调用), 返回 0, 结果 ok" "$rc:$(test -e "$H/osa.called" && echo shown):$(enhanced_result "$rc")" "0:shown:ok"
   unset -f mktemp
   osascript() { return 0; }
-  enhanced_admin /bin/true x </dev/null 2>"$H/err"; rc=$?
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
   eq "弹框通过: 返回 0, 结果 ok" "$rc:$(enhanced_result "$rc")" "0:ok"
 )
 echo

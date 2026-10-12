@@ -60,7 +60,7 @@ echo "== S3. 需要管理员权限: 免密 sudo / 原生密码框 (仪表盘里�
 reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=1
 os_sysproxy_apply on </dev/null >/dev/null 2>&1; rc=$?
 eq "直接修改被拒绝 → 已有免密 sudo 就用它 (sudo-nopass)" "$rc:$SYSPROXY_METHOD" "0:sudo-nopass"
-has "是 sudo -n 执行的 (不在终端里等密码)" '^sudo -n /bin/bash -c' "$CALLS"
+has "是 sudo -n 执行的 (不在终端里等密码), 且在清空环境的 /usr/bin/env -i 里运行" '^sudo -n /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash -p -c' "$CALLS"
 
 reset; export FAKE_NS_NEEDS_ADMIN=1 FAKE_SUDO_NOPASS=0
 os_sysproxy_apply on </dev/null >/dev/null 2>&1; rc=$?
@@ -133,7 +133,7 @@ HELPER=$(os_sysproxy_helper_path); SUDOERS=$(os_sysproxy_sudoers_path); ME=$(id 
 TXT=$(os_sysproxy_helper_text)
 hsnt "助手脚本里没有残留的 @占位符@" "@[A-Z]+@" "$TXT"
 hs "端口写死在脚本里" "^NS=.*; PORT=$PORT; VERSION=$SYSPROXY_HELPER_VERSION$" "$TXT"
-printf '%s\n' "$TXT" > "$W/helper.sh"; chmod 755 "$W/helper.sh"
+printf '%s\n' "$TXT" | sed "s|/usr/sbin/networksetup|$HERE/fakebin/networksetup|" > "$W/helper.sh"; chmod 755 "$W/helper.sh"      # 直接运行的测试副本: networksetup 换成假的
 ok_syntax() { bash -n "$W/helper.sh"; }; t_syntax=$(ok_syntax 2>&1 && echo ok)
 eq "助手脚本语法正确" "$t_syntax" "ok"
 reset; export FAKE_NS_NEEDS_ADMIN=1
@@ -170,7 +170,7 @@ os_sysproxy_apply on </dev/null >/dev/null 2>&1; rc=$?
 eq "第三次 (再打开): 仍是 helper" "$rc:$SYSPROXY_METHOD:$SYSPROXY_HELPER" "0:helper:used"
 os_sysproxy_apply off </dev/null >/dev/null 2>&1; os_sysproxy_apply on </dev/null >/dev/null 2>&1
 eq "反复开关 4 次之后, 密码框总共还是只弹了 1 次" "$(grep -c '^osascript -e do shell script' "$CALLS")" "1"
-has "是 sudo -n 调用助手的 (不在终端里等密码)" "^sudo -n $HELPER o" "$CALLS"
+has "是 sudo -n 调用助手的 (写死的 root 路径, 不在终端里等密码)" "^sudo -n $(os_sysproxy_helper_root) o" "$CALLS"
 eq "回读确认: 最终系统代理确实指向 enana" "$(os_sysproxy_ok && echo on || echo off)" "on"
 
 echo "-- S6c. 不信任的情况: 版本不对 / 别人可写 / 符号链接 → 重新授权, 不盲目使用"

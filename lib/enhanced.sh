@@ -15,16 +15,18 @@ enhanced_supported() { sb_ver; [ "$SB_MAJOR" -gt 1 ] || { [ "$SB_MAJOR" -eq 1 ] 
 # Shell quoting and AppleScript quoting are distinct. Never interpolate user
 # paths into shell/AppleScript source without quoting both layers.
 enhanced_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
-enhanced_admin() {
-  local cmd='' a rc ef msg
+enhanced_admin() { # <命令串>: 整条命令 (每个参数都已 enhanced_quote 过) 交给 /bin/sh 以管理员身份执行。超过 64 KB 或含换行 → 返回 6, 弹框之前就拒绝
+  local cmd=${1:-} rc ef msg esc
   ENHANCED_ADMIN_ERR=''                                  # 管理员框的结果 (只在弹框时设置): cancelled 用户点了取消 · failed 其它失败; 见 enhanced_result
-  for a in "$@"; do cmd="$cmd${cmd:+ }$(enhanced_quote "$a")"; done
-  if [ -t 0 ] && [ -t 1 ]; then sudo "$@"
-  elif sudo -n true >/dev/null 2>&1; then sudo -n "$@"
+  if [ "${#cmd}" -gt 65536 ]; then ENHANCED_ADMIN_ERR=preflight-command-size; return 6; fi
+  case $cmd in *"
+"*) ENHANCED_ADMIN_ERR=preflight-command-newline; return 6 ;; esac
+  if [ -t 0 ] && [ -t 1 ]; then sudo /bin/sh -c "$cmd"
+  elif sudo -n true >/dev/null 2>&1; then sudo -n /bin/sh -c "$cmd"
   else
-    cmd=$(printf '%s' "$cmd" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    esc=$(printf '%s' "$cmd" | sed 's/\\/\\\\/g; s/"/\\"/g')
     ef=$(mktemp 2>/dev/null) || ef=/dev/null        # 建不了临时文件也要弹框; 这时拿不到错误文字, 取消只能记成 error
-    osascript -e "do shell script \"$cmd\" with administrator privileges" >&2 2>"$ef"; rc=$?
+    osascript -e "do shell script \"$esc\" with administrator privileges" >&2 2>"$ef"; rc=$?
     msg=$(cat "$ef"); cat "$ef" >&2; [ "$ef" = /dev/null ] || rm -f "$ef"      # 错误文字照原样输出; 只是多留一份来判断是不是取消
     if [ "$rc" != 0 ]; then
       case $msg in *"(-128)"*) ENHANCED_ADMIN_ERR=cancelled ;; *) ENHANCED_ADMIN_ERR=failed ;; esac      # osascript 的取消码是带括号的 (-128), 不能只按 -128 子串匹配 (-1280 · 路径里的 -128 都不是取消)
@@ -47,7 +49,14 @@ enhanced_result() { # <返回码> -> 操作记录的结果: ok | cancelled (管�
 #   - rules/<name>.srs files left flat by 2.3.22: the core reads only rules/<name>/<name>.srs, and the upgrade removes the flat copies after a verified start.
 #     Counting them would change the fingerprint at that moment and ask for an administrator password on the next apply.
 enhanced_config_hash() { sed 's/"default_mode":"[A-Za-z]*"/"default_mode":"-"/' "$H/config.json" 2>/dev/null | shasum -a 256 | awk '{print $1}'; }
-enhanced_data_hashes() { { find "$H/rules" -mindepth 2 -type f ! -name 'ovr-*.json' ! -name '.*' ! -name '*.new' ! -name '*.tmp' -exec shasum -a 256 {} \; ; find "$H/certs" -type f ! -name 'ovr-*.json' ! -name '.*' ! -name '*.new' ! -name '*.tmp' -exec shasum -a 256 {} \; ; } 2>/dev/null; }
+# 快照里要带到 root 的文件 (相对 $H, 每行一个, C 排序): 规则集只要 rules/<目录>/<文件> (深一层或浅一层的都不带), 证书只要 certs/<名字>.crt。
+# 名字的格式和 root 脚本的清单检查一样 (见 lib/enhanced-root.sh MANIFEST_PL): 隐藏文件、*.new、*.tmp、旧版留下的 rules/*.srs 都不带。
+enhanced_snapshot_files() {
+  { ( cd "$H" 2>/dev/null && find rules -mindepth 2 -maxdepth 2 -type f; find certs -mindepth 1 -maxdepth 1 -type f ) 2>/dev/null; } \
+    | LC_ALL=C grep -E '^(rules/[A-Za-z0-9_][A-Za-z0-9._-]*/[A-Za-z0-9_][A-Za-z0-9._-]*|certs/[A-Za-z0-9._-]{1,40}\.crt)$' \
+    | LC_ALL=C grep -Ev '\.(new|tmp)$' | LC_ALL=C sort
+}
+enhanced_data_hashes() { enhanced_snapshot_files | LC_ALL=C grep -v '/ovr-[^/]*\.json$' | while IFS= read -r rel; do shasum -a 256 "$H/$rel"; done 2>/dev/null; }
 enhanced_fingerprint() {
   {
     printf 'autostart=%s\n' "${AUTOSTART:-1}"; shasum -a 256 "$SB"; printf 'config:%s\n' "$(enhanced_config_hash)"
@@ -79,15 +88,24 @@ enhanced_ovr_fingerprint() { # the app/site policy rule sets (written by ovr_syn
 # A helper installed by an older enana reports 1, 2 or 3, so enhanced_helper_ok rejects it and the next full install (one administrator authorisation, the same one
 # that already follows any upgrade of enhanced.sh / enhanced-root.sh) replaces it. Nothing silently calls a helper that lacks the action or the layout.
 TUNRULES_HELPER_VERSION=4
+# 读 (可信判断) 用的路径可以被测试换成沙箱; 以 root 运行的一律用 enhanced_helper_root 的写死路径 (不经过 test_env: 环境变量不能决定 root 运行什么)
 enhanced_helper_path() { enhanced_paths; printf '%s/usr/local/libexec/enana/tunrules-%s' "$(test_env ENANA_ROOT_PREFIX)" "$TUN_UID"; }
-enhanced_helper_ok() { os_helper_trusted "$(enhanced_helper_path)" "$TUNRULES_HELPER_VERSION"; }
+enhanced_helper_root() { enhanced_paths; printf '/usr/local/libexec/enana/tunrules-%s' "$TUN_UID"; }
+# 助手的可信判断只看字节 (不再运行它查版本): 安装到 root 目录的助手必须和 enana 此刻渲染出来的一模一样 (见 os_helper_trusted)
+enhanced_helper_render() { # <根目录> <标签> <launchctl 路径> < 模板 -> 渲染结果: 取用 lib/enhanced-root.sh 里 helper_render 的原文 (同一段函数, 两边字节一致)
+  local f; f=$(sed -n '/^helper_render() {/,/^}/p' "$LIB/enhanced-root.sh")
+  eval "$f"
+  helper_render "$1" 0 "$2" "$3" "$TUNRULES_HELPER_VERSION"
+}
+enhanced_helper_expected() { enhanced_paths; enhanced_helper_render "$TUN_ROOT" "$TUN_LABEL" "$(test_env ENANA_TUN_LAUNCHCTL /bin/launchctl)" < "$LIB/tunrules-helper.pl" | shasum -a 256 | awk '{print $1}'; }
+enhanced_helper_ok() { os_helper_trusted "$(enhanced_helper_path)" "$(enhanced_helper_expected)"; }
 enhanced_ovr_bundle() { # {"ovr-pin.json": {...}, ...} from $H/rules/*/ovr-*.json (the helper validates it again, strictly)
   perl -MJSON::PP -MFile::Glob=:bsd_glob -e '
     my %o; for my $f (bsd_glob("$ARGV[0]/rules/*/ovr-*.json")) { my ($n) = $f =~ m{([^/]+)$}; open my $fh, "<", $f or next; local $/; my $d = eval { JSON::PP->new->utf8->decode(scalar <$fh>) }; $o{$n} = $d if ref $d eq "HASH"; }
     print JSON::PP->new->utf8->canonical->encode(\%o);' "$H"
 }
 enhanced_sync_ovr() { # 0 = synced (the running root core hot-reloads the files); non-zero = no/untrusted helper or rejected data -> caller does the full install
-  local h; h=$(enhanced_helper_path)
+  local h; h=$(enhanced_helper_root)
   enhanced_helper_ok || return 1
   enhanced_ovr_bundle | sudo -n "$h" sync >/dev/null 2>"$H/enhanced-sync.log" || return 1
   enhanced_ovr_fingerprint > "$H/.enhanced-ovr-fingerprint"
@@ -105,10 +123,10 @@ enhanced_restart_fast() {
   enhanced_helper_ok || { ENHANCED_FAST_WHY=no-helper; return 1; }
   # A policy edit that is still pending must reach the root snapshot before the restart loads it.
   if [ "$(enhanced_ovr_fingerprint)" != "$(cat "$H/.enhanced-ovr-fingerprint" 2>/dev/null)" ]; then enhanced_sync_ovr || { ENHANCED_FAST_WHY=sync-failed; return 1; }; fi
-  sudo -n "$(enhanced_helper_path)" restart >/dev/null 2>"$H/enhanced-restart.log" || { ENHANCED_FAST_WHY=rejected; return 1; }
+  sudo -n "$(enhanced_helper_root)" restart >/dev/null 2>"$H/enhanced-restart.log" || { ENHANCED_FAST_WHY=rejected; return 1; }
 }
 # 助手版本低于 4 (没有 cleanup) 时 enhanced_helper_ok 为假, 什么也不做
-tun_residual_clean() { enhanced_helper_ok || return 0; sudo -n "$(enhanced_helper_path)" cleanup >"$H/enhanced-cleanup.log" 2>&1 || true; }
+tun_residual_clean() { enhanced_helper_ok || return 0; sudo -n "$(enhanced_helper_root)" cleanup >"$H/enhanced-cleanup.log" 2>&1 || true; }
 enhanced_stage_config() {
   # Explicitly open the config: decode(<>) evaluates the diamond in list
   # context and consumes the home/root arguments as additional filenames.
@@ -119,25 +137,95 @@ enhanced_stage_config() {
     walk($j); print JSON::PP->new->utf8->encode($j);
   ' "$1" "$2" "$3"
 }
+# ---- 安装 TUN (见 lib/enhanced-root.sh 的 4.x): 数据 → 暂存 (每个文件只读一次) → 预检 (弹框之前) → 一条命令交给管理员执行 ----
+ENHANCED_WRAP='umask 077 && d=$(/usr/bin/mktemp -d /private/tmp/enana-root.XXXXXX) && [ -n "$d" ] && printf '\''%s'\'' "$1" > "$d/b64" && /usr/bin/base64 -D < "$d/b64" > "$d/root.sh" && rm -f "$d/b64" && shift && exec /bin/bash -p "$d/root.sh" "$@" || { rm -rf "$d"; exit 2; }'
+enhanced_inband_line() { # <脚本 SHA-256> <脚本 base64> <参数…> -> 一行 root 命令: 清空环境; 包装命令把脚本写进只有 root 能进的临时目录, 核对 SHA 后再运行
+  local line a sha=$1 b64=$2; shift 2
+  line="/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/sh -c $(enhanced_quote "$ENHANCED_WRAP") enana-root $(enhanced_quote "$b64") inband $(enhanced_quote "$sha")"
+  for a in "$@"; do line="$line $(enhanced_quote "$a")"; done
+  printf '%s' "$line"
+}
+enhanced_root_line() { # <已装好的 root 副本> <动作> <uid> -> 一行命令: 只运行这份副本 (它自己核对是 root 写的、0700 的普通文件)
+  printf '%s' "/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash -p $(enhanced_quote "$1") $(enhanced_quote root) $(enhanced_quote "$2") $(enhanced_quote "$3")"
+}
+enhanced_preflight_refuse() { # <原因代码> [给用户看的一句话]: 弹框之前的拒绝 (调用方返回 6): 原因写进 enhanced-check.log, 一句话追加到 check.log
+  ENHANCED_REFUSED=1; ENHANCED_REFUSED_WHY=$1                  # 和 root 的拒绝一样: 调用方不再重试 TUN (config.sh 改回系统代理)
+  printf 'enana-root: refused: %s\n' "$1" > "$H/enhanced-check.log"
+  printf '%s\n' "${2:-$(_t "TUN 没有启动: $1")}" >> "$H/check.log"
+}
+enhanced_stage_payloads() { # <暂存目录>: 每个文件只读一次, 摘要和拷贝用的是同一份字节 (lib/enhanced-root.sh 的 4.4b); 结果放进 ENH_SHA_* / ENH_B64_*
+  local st=$1 rel sha man='' files v
+  set -o pipefail
+  ENH_SHA_SB=$(cat "$SB" | tee "$st/sing-box" | shasum -a 256 | awk '{print $1}') || { set +o pipefail; return 1; }
+  ENH_SHA_CFG=$(enhanced_stage_config "$H/config.json" "$H" "$TUN_ROOT" | tee "$st/config.json" | shasum -a 256 | awk '{print $1}') || { set +o pipefail; return 1; }
+  files=$(enhanced_snapshot_files)
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    mkdir -p "$st/${rel%/*}" || { set +o pipefail; return 1; }
+    sha=$(cat "$H/$rel" | tee "$st/$rel" | shasum -a 256 | awk '{print $1}') || { set +o pipefail; return 1; }
+    man="$man$sha  $rel"$'\n'
+  done <<EOF
+$files
+EOF
+  ENH_SHA_MAN=$(printf '%s' "$man" | tee "$st/manifest" | shasum -a 256 | awk '{print $1}') || { set +o pipefail; return 1; }
+  v=$(cat "$LIB/tunrules-helper.pl"; printf x); v=${v%x}
+  ENH_SHA_TPL=$(printf '%s' "$v" | shasum -a 256 | awk '{print $1}') || { set +o pipefail; return 1; }
+  ENH_B64_TPL=$(printf '%s' "$v" | base64 | tr -d '\n') || { set +o pipefail; return 1; }
+  ENH_SHA_OUT=$(printf '%s' "$v" | enhanced_helper_render "$TUN_ROOT" "$TUN_LABEL" "$(test_env ENANA_TUN_LAUNCHCTL /bin/launchctl)" | shasum -a 256 | awk '{print $1}') || { set +o pipefail; return 1; }
+  v=$(cat "$LIB/enhanced-root.sh"; printf x); v=${v%x}
+  ENH_SHA_SCRIPT=$(printf '%s' "$v" | shasum -a 256 | awk '{print $1}') || { set +o pipefail; return 1; }
+  ENH_B64_SCRIPT=$(printf '%s' "$v" | base64 | tr -d '\n') || { set +o pipefail; return 1; }
+  set +o pipefail
+}
 enhanced_start() {
-  local stage rc name choice
+  local stage rc name choice prov got line ref why refused
   enhanced_paths
   enhanced_supported || { printf '%s\n' 'Enhanced/TUN requires sing-box >= 1.12 (enana upgrade).' > "$H/check.log"; return 1; }
-  stage=$(mktemp -d)
+  ENHANCED_REFUSED=0; ENHANCED_REFUSED_WHY=''
+  # 6.1 核心必须是官方的、钉死版本号下载的 (core_install 记下的来源); 没有记录 = 来源不明, 同样不行
+  prov=$(sed -n 1p "$H/core-provenance" 2>/dev/null || true)
+  case $prov in
+    'pinned '*) ;;
+    *) enhanced_preflight_refuse preflight-core-unpinned "$(_t 'TUN 需要官方的、钉死版本号的核心: 请运行 enana upgrade, 或改用系统代理模式')"; return 6 ;;
+  esac
+  # 6.2 核心和上一次校验过的不一样: 不让 root 运行没有校验过的文件 (没有记录 = 状态未知, 允许; 安装成功之后再写)
+  [ -f "$SB" ] || { enhanced_preflight_refuse preflight-sb-missing; return 6; }
+  if [ -f "$H/core-binary.sha256" ]; then
+    got=$(shasum -a 256 "$SB" | awk '{print $1}')
+    [ "$got" = "$(cat "$H/core-binary.sha256")" ] || { enhanced_preflight_refuse preflight-core-changed "$(_t '核心在校验之后被改动过: 请运行 enana upgrade')"; return 6; }
+  fi
+  # 6.3 快照里不能有符号链接 (cat 会顺着链接读到别处的文件)
+  if [ -n "$(find "$H/rules" "$H/certs" -type l 2>/dev/null)" ]; then enhanced_preflight_refuse preflight-stage-link; return 6; fi
+  stage=$(mktemp -d) || return 1
   clash GET /proxies > "$stage/selectors.json" 2>/dev/null || true
-  cp "$SB" "$stage/sing-box" && cp -R "$H/rules" "$stage/rules" || { rm -rf "$stage"; return 1; }
-  [ ! -d "$H/certs" ] || cp -R "$H/certs" "$stage/certs"
-  # Rewrite only local filesystem paths, never server names or credentials.
-  enhanced_stage_config "$H/config.json" "$H" "$TUN_ROOT" > "$stage/config.json" || { rm -rf "$stage"; return 1; }
-  # The privileged AppleScript process cannot read TCC-protected Desktop or
-  # Downloads checkouts. Stage the reviewed helper beside its input snapshot.
-  cp "$LIB/enhanced-root.sh" "$stage/enhanced-root.sh" || { rm -rf "$stage"; return 1; }
-  # The rule-data helper is installed by the same administrator authorisation (best effort, see enhanced-root.sh).
-  sed "s|@VERSION@|$TUNRULES_HELPER_VERSION|g" "$LIB/tunrules-helper.pl" > "$stage/tunrules-helper" 2>/dev/null || true
-  # The root helper never sources settings.env and never installs user scripts
-  # as launchd programs. The executable and configuration are root-owned copies.
-  enhanced_admin /bin/bash "$stage/enhanced-root.sh" install "$TUN_UID" "$stage" "$LABEL" "${AUTOSTART:-1}" "$(id -un)" > "$H/enhanced-check.log" 2>&1; rc=$?
-  if [ "$rc" != 0 ]; then rm -rf "$stage"; cat "$H/enhanced-check.log" >> "$H/check.log"; return "$rc"; fi
+  enhanced_stage_payloads "$stage" || { rm -rf "$stage"; return 1; }
+  # 配置里的路径 (只检查配置, 不读文件) 和它引用的快照文件
+  if ! /bin/bash "$LIB/enhanced-root.sh" check-config "$stage/config.json" "$TUN_ROOT" > "$stage/refs" 2>/dev/null; then rm -rf "$stage"; enhanced_preflight_refuse preflight-config-path; return 6; fi
+  enhanced_snapshot_files > "$stage/list"
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    printf '%s\n' "$ref" | LC_ALL=C grep -Eq '^(rules/[A-Za-z0-9_][A-Za-z0-9._-]*/[A-Za-z0-9_][A-Za-z0-9._-]*|certs/[A-Za-z0-9._-]{1,40}\.crt)$' || { rm -rf "$stage"; enhanced_preflight_refuse preflight-stage-name; return 6; }
+    grep -qxF "$ref" "$stage/list" || { rm -rf "$stage"; enhanced_preflight_refuse preflight-ref-missing; return 6; }
+  done < "$stage/refs"
+  # refs / list 是 enana 自己用的清单: 留在暂存目录里就会被 root 当成多余文件拒绝 (stage-extra), 所以 root 看到的暂存目录只有它认的文件
+  rm -f "$stage/refs" "$stage/list"
+  # 一条命令 (每个参数都做了引用); 超过 64 KB 或含换行 → enhanced_admin 在弹框前返回 6
+  line=$(enhanced_inband_line "$ENH_SHA_SCRIPT" "$ENH_B64_SCRIPT" install "$TUN_UID" "$stage" "$LABEL" "${AUTOSTART:-1}" "$(id -un)" "$TUNRULES_HELPER_VERSION" "$ENH_SHA_SB" "$ENH_SHA_CFG" "$ENH_SHA_MAN" "$ENH_SHA_TPL" "$ENH_SHA_OUT" "$ENH_B64_TPL")
+  enhanced_admin "$line" > "$H/enhanced-check.log" 2>&1; rc=$?
+  if [ "$rc" != 0 ]; then
+    rm -rf "$stage"; cat "$H/enhanced-check.log" >> "$H/check.log"
+    # 拒绝的判断看 root 自己写的那一行, 不能只看退出码: 弹框分支里 osascript 把 root 的退出码包成 1 (2/3/4/6 只有 sudo 分支原样返回)
+    why=$(sed -n 's/.*enana-root: refused: //p' "$H/enhanced-check.log" | tail -1 | sed 's/ ([0-9]*)$//')
+    refused=0
+    case $rc in 2|3|4|6) refused=1 ;; esac
+    [ -z "$why" ] || refused=1
+    if [ "$refused" = 1 ]; then                      # 拒绝 (什么都没改): 不再重试 TUN; config.sh 决定怎么办 (不弹第二次框)
+      ENHANCED_REFUSED=1
+      ENHANCED_REFUSED_WHY=${why:-${ENHANCED_ADMIN_ERR:-refused}}
+      type oplog >/dev/null 2>&1 && oplog "${OP_WHO:-auto}" "启动 TUN" "$(kv reason "$ENHANCED_REFUSED_WHY" state 'nothing changed')" error
+    fi
+    return "$rc"
+  fi
   logs_rotate
   [ ! -f "$H/sing-box.log" ] || [ -L "$H/sing-box.log" ] || mv "$H/sing-box.log" "$H/sing-box.system.log"
   ln -sfn "$TUN_ROOT/sing-box.log" "$H/sing-box.log"
@@ -146,6 +234,7 @@ enhanced_start() {
   enhanced_restore_selectors "$stage/selectors.json"
   rm -rf "$stage"
   enhanced_record_install
+  printf '%s\n' "$ENH_SHA_SB" > "$H/core-binary.sha256"          # 之后启动时核对核心是不是还是这一份
 }
 enhanced_restore_selectors() {
   local name choice
@@ -172,16 +261,31 @@ enhanced_idle() {
 }
 # The plist stays after a stop (only `remove` deletes it), so "plist exists" alone does not mean a daemon is running: asking for administrator rights to
 # stop an already-stopped daemon made every System Proxy start / stop prompt once the user had tried TUN.
+enhanced_root_sys() { printf '/Library/Application Support/enana-%s' "$(id -u)"; }   # 以 root 运行的副本只在这个写死的目录里找 (ENANA_TUN_ROOT 只用于读, 不能让环境变量决定 root 运行哪个文件)
+enhanced_root_action() { # stop|remove: 已装好的 root 副本 (ROOT/bin/enhanced-root.sh) 存在就只运行它; 没有, 或者它不可信 (root-copy-untrusted) 时, 用旧的 inband 形式再试一次 (每次都是一次授权)
+  local act=$1 v sha b64 rc
+  enhanced_paths
+  if [ -f "$TUN_ROOT/bin/enhanced-root.sh" ]; then
+    enhanced_admin "$(enhanced_root_line "$(enhanced_root_sys)/bin/enhanced-root.sh" "$act" "$TUN_UID")" > "$H/enhanced-root.log" 2>&1; rc=$?
+    grep -q 'refused: root-copy-untrusted' "$H/enhanced-root.log" 2>/dev/null || { cat "$H/enhanced-root.log" >&2; return $rc; }
+  fi
+  v=$(cat "$LIB/enhanced-root.sh"; printf x); v=${v%x}
+  sha=$(printf '%s' "$v" | shasum -a 256 | awk '{print $1}')
+  b64=$(printf '%s' "$v" | base64 | tr -d '\n')
+  enhanced_admin "$(enhanced_inband_line "$sha" "$b64" "$act" "$TUN_UID")" > "$H/enhanced-root.log" 2>&1; rc=$?
+  cat "$H/enhanced-root.log" >&2
+  return $rc
+}
 enhanced_stop() {
   local rc; enhanced_paths; [ -e "$TUN_PLIST" ] || return 0
   enhanced_idle && return 0
-  enhanced_admin /bin/bash "$LIB/enhanced-root.sh" stop "$TUN_UID"; rc=$?
+  enhanced_root_action stop; rc=$?
   [ "$rc" != 0 ] || : > "$H/.enhanced-stopped"
   return "$rc"
 }
 enhanced_remove() {
   enhanced_paths; [ -e "$TUN_PLIST" ] || [ -e "$TUN_ROOT" ] || return 0
-  enhanced_admin /bin/bash "$LIB/enhanced-root.sh" remove "$TUN_UID" || return $?
+  enhanced_root_action remove || return $?
   rm -f "$H/.enhanced-stopped"
 }
 enhanced_system_log() {

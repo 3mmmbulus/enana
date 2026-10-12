@@ -148,6 +148,11 @@
     el.bar = h('section', { class: 'banner info newbar' }, h('span', { class: 'banner-ic' }, ui.icon('ai', 22)),
       h('div', { class: 'banner-b' }, h('div', { class: 'apps-bart' }, el.barT, hl('apps.new')), el.barD),
       h('div', { class: 'banner-a' }, el.adopt, el.keep));
+    /* 待应用的变化 (后台扫描发现, 应用需要管理员授权, 所以没有自动开始): 按钮走确认 + 手动扫描 (授权框由系统弹出) */
+    el.pendT = h('b'); el.pendD = h('div', { class: 'sm' });
+    el.pendGo = ui.btn(L('apps.pending.go'), { kind: 'primary', icon: 'check' }); ui.act(el.pendGo, applyPending);
+    el.pend = h('section', { class: 'banner warn pendbar', hidden: true }, h('span', { class: 'banner-ic' }, ui.icon('warning', 22)),
+      h('div', { class: 'banner-b' }, el.pendT, el.pendD), h('div', { class: 'banner-a' }, el.pendGo));
 
     el.q = h('input', { class: 'inp', type: 'search', value: flt.q, placeholder: L('apps.search'), 'aria-label': L('apps.search'), autocomplete: 'off', on: { input: function () { setQ(el.q.value); } } });
     el.g = h('select', { class: 'sel', 'aria-label': L('apps.groupFilter'), on: { change: function () { setGroup(el.g.value); } } }, TP.opt('', t('apps.allGroups')));
@@ -189,6 +194,7 @@
     el.capture = h('section', { class: 'hint warn', hidden: true }, el.captureText, el.captureBtn);
     root.appendChild(el.capture);
     root.appendChild(el.bar);
+    root.appendChild(el.pend);
     root.appendChild(h('div', { class: 'toolbar apps-tb' }, el.q, el.g, h('span', { class: 'apps-sortbox' }, el.sortSel, el.sortDir), el.scan, el.addBtn,
       h('span', { class: 'apps-tb-r' }, h('span', { class: 'apps-opts muted sm' }, L('apps.opts'), hl('apps.policy')), el.count)));
     root.appendChild(el.box);
@@ -255,7 +261,25 @@
   }
 
   /* ---------- 新应用提示条 ---------- */
+  /* 待应用卡片: S.apps.pending 有值 (后台扫描记下的) 就显示; 没有 (已经应用了 / 变化没有了) 就隐藏 */
+  function renderPending() {
+    var p = S.apps && S.apps.pending;
+    el.pend.hidden = !p;
+    if (!p) return;
+    var names = (p.names || []).join(', ');
+    setText(el.pendT, t('apps.pending.title'));
+    setText(el.pendD, t('apps.pending.text') + (names ? ' ' + t('apps.pending.names', { names: names }) : ''));
+    ui.setBtn(el.pendGo, t('apps.pending.go')); ui.avail(el.pendGo, TP.why.helper());
+  }
+  /* 按钮: 先说清楚会改什么、可能要授权 (确认), 再走和「扫描」按钮一样的手动扫描 (进度条 + 授权), 而不是后台路径 */
+  async function applyPending() {
+    var p = S.apps && S.apps.pending; if (!p) return;
+    var ok = await ui.confirmDialog({ title: t('apps.pending.title'), message: t('apps.pending.msg'), detail: TP.tunDetail([t('apps.pending.d1')]), confirmText: t('apps.pending.go') });
+    if (!ok) return;
+    await TP.loadApps(true);
+  }
   function renderBar() {
+    renderPending();
     var news = list().filter(isNew), n = news.length, recN = news.filter(function (a) { return a.rec; }).length, why = TP.why.helper();
     setText(el.barT, t(n ? 'apps.new.title' : 'apps.new.none', { n: n })); setText(el.barD, t(n ? 'apps.new.text' : 'apps.new.noneSub'));
     el.bar.classList.toggle('has-new', n > 0);

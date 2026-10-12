@@ -1,31 +1,37 @@
 #!/bin/bash
-# 测试用的假 sudo: 记录调用并直接执行 (不提权)。支持 -v / -n / -S / -p <提示>; -S 时从标准输入读一行密码, 与 $FAKE_SUDO_PW (没设就是 ctl 里的 sudopw=) 比较, 不对就像真的 sudo 一样失败。
+# 测试用的假 sudo: 记录调用并直接执行 (不提权)。支持 -v / -n / -S / -l / -p <提示>; -S 时从标准输入读一行密码, 与 $FAKE_SUDO_PW (没设就是 ctl 里的 sudopw=) 比较, 不对就像真的 sudo 一样失败。
 #   FAKE_SUDO_NOPASS=0  模拟「需要密码」: sudo -n 失败 (和真的 sudo 一样提示需要密码)
 #   FAKE_SUDOERS_DIR    sudoers 片段目录: 设了以后, sudo -n <命令> 只有片段里有对应的 NOPASSWD 规则才成功 (用来验证「授权一次, 之后免密」)
+#   -l                  只列出规则 (助手可信判断), 绝不运行命令
+# 以 root 运行的命令里写死的路径在这里改写成沙箱 (tests/fakebin/rootpaths.sh); 调用记录 calls.log 记的是改写之前的命令 (和真实 sudo 收到的一样)。
 echo "sudo $*" >> "$FAKE_STATE/calls.log"
 [ "$1" = "-v" ] && exit 0
-S=0; NSET=0
+. "$(dirname "$0")/rootpaths.sh"
+S=0; NSET=0; LSET=0
 while [ $# -gt 0 ]; do
   case $1 in
     -n) NSET=1; shift ;;
     -S) S=1; shift ;;
+    -l) LSET=1; shift ;;
     -p) shift 2 ;;
     --) shift; break ;;
     -*) shift ;;
     *) break ;;
   esac
 done
+# Root TUN installation must never escape the fixture, including CI as root.
+for arg in "$@"; do case $arg in *enana-root*|*enhanced-root.sh*|*Library/Application\ Support*) echo 'Simulated administrator cancellation' >&2; exit 1 ;; esac; done
+args=(); for a in "$@"; do args+=("$(rootpaths_arg "$a")"); done; set -- "${args[@]}"
 if [ "$NSET" = 1 ]; then
   # FAKE_SUDOERS_DIR 设了: 除 true / /bin/bash 之外的命令, 只有 sudoers 片段里有「当前用户 ALL=(root) NOPASSWD: 这条命令」才能免密 (模拟真实的 sudoers 规则)
   if [ -n "${FAKE_SUDOERS_DIR:-}" ] && [ "${1:-}" != true ] && [ "${1:-}" != /bin/bash ]; then
     grep -qsxF "$(id -un) ALL=(root) NOPASSWD: ${1:-}" "$FAKE_SUDOERS_DIR"/* 2>/dev/null || { echo "sudo: a password is required" >&2; exit 1; }
   elif [ "${FAKE_SUDO_NOPASS:-1}" = 0 ]; then echo "sudo: a password is required" >&2; exit 1; fi
 fi
+[ "$LSET" = 1 ] && exit 0
 if [ "$S" = 1 ]; then
   IFS= read -r pw
   want=${FAKE_SUDO_PW:-$(sed -n 's/^sudopw=//p' "${ENANA_MOCK_CTL:-/dev/null}" 2>/dev/null | head -1)}
   if [ -n "$want" ] && [ "$pw" != "$want" ]; then echo "Sorry, try again." >&2; echo "sudo: 1 incorrect password attempt" >&2; exit 1; fi
 fi
-# Root TUN installation must never escape the fixture, including CI as root.
-for arg in "$@"; do case $arg in */enhanced-root.sh) echo 'Simulated administrator cancellation' >&2; exit 1 ;; esac; done
 FAKE_ADMIN=1 exec "$@"

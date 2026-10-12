@@ -3,6 +3,7 @@
 #   「do shell script … with administrator privileges」(原生管理员密码框) 用 FAKE_DIALOG 模拟:
 #     (默认) 用户输入了密码 → 在管理员环境 (FAKE_ADMIN=1) 里执行命令   cancel → 用户点了取消 (真实错误文字)   denied → 当前账户不是管理员
 echo "osascript $*" >> "$FAKE_STATE/calls.log"
+. "$(dirname "$0")/rootpaths.sh"       # 以 root 运行的命令里写死的路径换成沙箱 (见 rootpaths.sh)
 if [ "${1:-}" = -e ]; then
   case ${2:-} in
     "do shell script \""*"\" with administrator privileges")
@@ -12,6 +13,7 @@ if [ "${1:-}" = -e ]; then
       esac
       s=${2#"do shell script \""}; s=${s%"\" with administrator privileges"}
       cmd=$(printf '%s' "$s" | perl -pe 's/\\([\\"])/$1/g')      # 还原 AppleScript 字符串转义 (一次遍历: \\ → \, \" → ")
+      cmd=$(printf '%s' "$cmd" | rootpaths_rewrite)
       FAKE_ADMIN=1 bash -c "$cmd"; exit $? ;;
   esac
 fi

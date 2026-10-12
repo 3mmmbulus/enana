@@ -198,8 +198,11 @@ enhanced_ready() { return 0; }; enhanced_loaded() { return 0; }
 # 助手: 用测试副本安装到沙箱的「/usr/local/libexec」, sudoers 规则写进沙箱的「/etc/sudoers.d」
 install_helper() {
   local h; h=$(enhanced_helper_path); mkdir -p "$(dirname "$h")" "$FAKE_SUDOERS_DIR"
-  cp "$W/helper.pl" "$h"; chmod 755 "$h"
+  # 助手 = enana 自己渲染出来的字节 (enhanced_helper_render, 和 root 安装时用的是同一段函数); 测试不是 root, 所以只把 uid 换成当前用户
+  enhanced_helper_render "$W/snap" "$LBL" "$W/bin/mock-launchctl" < "$REPO/lib/tunrules-helper.pl" | sed "s/^my \$ROOT_UID = 0;/my \$ROOT_UID = $ME;/" > "$h"
+  chmod 755 "$h"
   printf '%s ALL=(root) NOPASSWD: %s\n' "$(id -un)" "$h" > "$FAKE_SUDOERS_DIR/enana-tunrules-$ME"
+  enhanced_helper_expected() { shasum -a 256 < "$(enhanced_helper_path)" | awk '{print $1}'; }      # 测试的期望值 = 刚装上的这一份字节 (信任判断只看字节)
 }
 state() { # 把「现状」记成基线: 配置, 再让真实的 enhanced_record_install 记下完整安装之后留下的东西 (核心指纹 / 策略指纹 / 模式)
   cp "$H/config.json.new" "$H/config.json" 2>/dev/null || printf '{"fixed":"config"}' > "$H/config.json"
@@ -350,7 +353,7 @@ echo "== T6. 重启核心 (os_service_restart): 指纹没变 + 助手可信 → 
   eq "TUN 已安装 + 配置 / 规则没变 + 助手可信: 返回 0, 完整安装一次都没走" "$rc:$FULL" "0:0"
   eq "…助手只做了一件事: kickstart -k 这个用户自己的守护进程" "$(lc)" "kickstart -k system/$LBL"
   hs "…操作记录写明是助手重启" "重启核心方式	mode=tun via=helper	ok" "$(ops)"
-  hs "…sudo 调用的是助手本身, 带 restart 参数, 而且是 -n (不等密码)" "^sudo -n $(enhanced_helper_path) restart" "$(cat "$FAKE_STATE/calls.log" 2>/dev/null)"
+  hs "…sudo 调用的是助手本身 (写死的 root 路径), 带 restart 参数, 而且是 -n (不等密码)" "^sudo -n $(enhanced_helper_root) restart" "$(cat "$FAKE_STATE/calls.log" 2>/dev/null)"
   fresh; ovr changed.example
   os_service_restart
   eq "还有没同步的应用 / 网站策略: 先同步进 root 快照, 再用助手重启 (仍然不走完整安装)" "$FULL:$(grep -c changed.example "$W/snap/rules/ovr-pin/ovr-pin.json"):$(lc)" "0:1:kickstart -k system/$LBL"

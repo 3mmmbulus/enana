@@ -1469,6 +1469,7 @@ if bash "$HERE/detect.sh" > "$W/detect.out" 2>&1; then tpass "Foreign sing-box i
 echo "== 19. Enhanced/TUN isolated regressions"
 if SINGBOX="$SB" bash "$HERE/enhanced.sh" > "$W/enhanced.out" 2>&1; then tpass "System/TUN schema, exclusions, PIN priority and socket evidence"; else tfail "Enhanced config regression"; cat "$W/enhanced.out"; fi
 if bash "$HERE/tun-service.sh" > "$W/tun-service.out" 2>&1; then tpass "Root snapshot rollback and route ownership"; else tfail "TUN service regression"; cat "$W/tun-service.out"; fi
+if bash "$HERE/enhanced-root-integrity.sh" > "$W/root-integrity.out" 2>&1; then tpass "Root script integrity (digests, staged tampering, preflight, command environment)"; else tfail "Root script integrity regression"; cat "$W/root-integrity.out"; fi
 if bash "$HERE/vps-probe.sh" > "$W/vps-probe.out" 2>&1; then tpass "Read-only SSH retries, cancellation and launch failure"; else tfail "SSH detection lifecycle regression"; cat "$W/vps-probe.out"; fi
 if bash "$HERE/vps-pending.sh" > "$W/vps-pending.out" 2>&1; then tpass "Deployed-but-unverified recovery: actual port, failure reasons, verify-only retry without redeploying"; else tfail "Deployed-but-unverified recovery regression"; cat "$W/vps-pending.out"; fi
 if command -v node >/dev/null; then

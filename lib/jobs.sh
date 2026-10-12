@@ -105,7 +105,7 @@ job_launch() { # job_launch 名称 id [参数…]  在后台启动 `<主脚本> 
     rm -f "$H/jobs/$id.cred" "$H/jobs/$id.body"
     return 1
   fi
-  ( ENANA_LANG="${I18N_LANG:-${LANG_UI:-}}" OP_WHO="${OP_WHO:-}" nohup "$H/enana" _job "$name" "$id" "$@" >>"$H/api.log" 2>&1 & ) >/dev/null 2>&1
+  ( ENANA_LANG="${I18N_LANG:-${LANG_UI:-}}" OP_WHO="${OP_WHO:-}" APPS_BG_JOB="${APPS_BG_JOB:-}" nohup "$H/enana" _job "$name" "$id" "$@" >>"$H/api.log" 2>&1 & ) >/dev/null 2>&1
 }
 job_spawn() { # job_spawn 名称 "步骤…" [参数…]  创建并启动, 打印 id
   local name=$1 steps=$2 id; shift 2

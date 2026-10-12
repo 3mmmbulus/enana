@@ -18,7 +18,7 @@ Gemini 自身日志在 12:58:45 接受浏览器回调并开始交换 authorizati
 
 ## 实现与验证范围
 
-System Proxy 默认不变。Enhanced/TUN 是显式选择, 包含双栈捕获、DNS hijack、进程匹配、系统路由私网排除、默认接口出口绑定。root launchdaemon 使用 root 拥有的核心/规则快照; 用户授权后安装。启动检查实际 utun 地址与 IPv4/IPv6 路由。失败在 root helper 内恢复快照, 上层事务恢复设置。切换时通过控制 API 保存并恢复 Selector 选项, 避免丢失已选 PIN 出口。应用 PIN 使用独立进程规则集, 优先于网站指定的其他 PIN 出口; 浏览器 Direct/Auto/PIN 则作为网站策略之后的兜底。
+System Proxy 默认不变。Enhanced/TUN 是显式选择, 包含双栈捕获、DNS hijack、进程匹配、系统路由私网排除、默认接口出口绑定。root launchdaemon 使用 root 拥有的核心/规则快照; 用户授权后安装。enana 在弹出管理员框之前只接受记录为官方 SHA-256 钉死版本的核心 (`core-provenance`, 来源不明的直接拒绝, 不弹框; 升级前装的核心用 `enana upgrade` 重新下载这一版即可记下来源)。root 脚本本身没有内置允许的核心摘要列表: 它只核对 enana 交给它的核心字节与摘要一致, 所以「只装钉死版本」这条保证的执行点是 enana 这一侧。每个文件由 root 只读一次、按字节核对摘要, 核对不过就整体拒绝 (什么都不改): 预检拒绝, 或旧的根守护进程仍在运行时, 保留 TUN 设置并报告原因; 根守护进程没有在运行时才改回系统代理模式, 并且不再重试 TUN。后台的应用任务从不弹管理员框: 需要授权的变化被撤销, 记成「待应用」。启动检查实际 utun 地址与 IPv4/IPv6 路由。失败在 root helper 内恢复快照, 上层事务恢复设置。切换时通过控制 API 保存并恢复 Selector 选项, 避免丢失已选 PIN 出口。应用 PIN 使用独立进程规则集, 优先于网站指定的其他 PIN 出口; 浏览器 Direct/Auto/PIN 则作为网站策略之后的兜底。
 
 固定出口分配 (`POST /api/exits/move|freeze`) 在 TUN 下同 `/api/override` 一样是后台任务: 只改 `rules/*/ovr-*.json` (纯路由数据), 经免密规则同步助手 (`lib/tunrules-helper.pl`) 同步到 root 快照, 核心热加载, 不重启、不要管理员密码; 助手一次最多同步 160 个规则集文件 (32 个固定出口 = 107 个), 旧助手上限 60 (16 个固定出口), 超过时退回完整安装并把助手换成新版。默认固定出口的选择存在 `$H/pin-default`, 核心 (重新) 启动后由 `proxy_sync_mode` 校正, 不改 `config.json`, 所以换默认出口不会触发 TUN 的完整重装。
 
@@ -120,7 +120,9 @@ TUN 的核心是 root 守护进程: 改核心、配置、规则库 (`.srs`)、�
 
 - `sync`: 校验后写入 `rules/*/ovr-*.json` (应用 / 网站策略), 核心热加载。
 - `restart`: 只执行 `launchctl kickstart -k system/com.enana.proxy.tun.<uid>`。标签和 `launchctl` 路径是安装时由 root 脚本写死进助手的 (不是调用者给的), 助手不读任何参数 / 输入 / 环境变量; 有多余参数、标签不合规都会拒绝。威胁模型: 同一用户下的任何进程最多能让自己的 root 守护进程重启一次 (流量中断几秒), 得不到 root 权限, 也改不了任何文件; 助手文件归 root、别人不可写、不是符号链接、sudoers 规则经 `visudo -cf` 校验, 这些检查一条没放松。
-- 从旧版本升级后, 已安装的版本 1 助手不认识 `restart`, `enhanced_helper_ok` 判为不可用, 下一次完整安装 (升级本身会改变 `enhanced.sh` / `enhanced-root.sh` 的指纹, 反正要装一次) 用一次管理员授权换上版本 2。
+- 助手的可信判断只看字节 (`os_helper_trusted`): 安装到 root 目录的助手必须和 enana 此刻渲染出来的一模一样 (`enhanced_helper_render`, 与 root 脚本里的 `helper_render` 是同一段函数), 不再为了查版本而运行它。字节对不上、目录链 (`/usr/local` 到助手) 有组 / 其他人可写, 或者 sudoers 规则不在, 都判为不可用; 下一次完整安装 (一次管理员授权) 换上新的。
+- 停止 / 删除 TUN 只运行安装后留在 root 目录里的副本 `ROOT/bin/enhanced-root.sh` (root 所有、0700); 旧版本没有这个副本时, 才用一次性的 inband 形式 (脚本随命令带进去)。
+- 管理员命令全部是一行、以 `/usr/bin/env -i` 清空环境运行, 所有命令都用绝对路径; 每个传给 root 的数据文件 (脚本、配置、快照、助手模板) 都由 enana 只读一次、算摘要, root 按摘要核对后才写入。
 
 Windows 的 TUN 没有免密助手 (每次完整安装都是 UAC), 指纹的两个问题同样存在, 已用同一套规则修复; 策略规则集 (`ovr-*.json`) 在 Windows 上仍计入指纹。Windows 的 `stop` 本来就会跳过没有运行的任务。
 
