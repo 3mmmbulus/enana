@@ -109,7 +109,7 @@ sub walk {
       tls_check($v,$q) if $k eq "tls" && ref $v eq "HASH";
       bad($q) if $k eq "external_ui";
       bad($q) if $k eq "plugin" && (ref($v) || (defined $v && $v ne ""));
-      bad($q) if file_key($k,$n) && !under_root($v);
+      bad($q) if !ref($v) && file_key($k,$n) && !under_root($v);
       walk($v,$q);
     }
   } elsif (ref $n eq "ARRAY") {
