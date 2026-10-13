@@ -60,7 +60,6 @@ macOS * 较旧: 官方 sing-box 1.14 可能无法在此运行 (Intel 会自动�
 本地端口 * 有人在用, 没能确认是谁 (普通账户看不到 root 核心的监听者), 沿用不变	Local port(s) * are in use, but the holder could not be confirmed (an ordinary account cannot see the listeners of the root core); kept as they are
 没能确认本地端口 * 的占用情况, 沿用不变	Could not confirm whether local port * is in use; kept as it is
 非交互模式: 没有覆盖它们, 本次跳过系统代理设置 (运行 enana on 会替换现有设置, 原设置已备份到 */proxy-backup.txt)	Non-interactive mode: the existing settings were not overwritten, so system proxy setup is skipped this time (enana on replaces the existing settings; they are backed up to */proxy-backup.txt)
-系统代理还指向旧端口 * (本程序之前设置的), 将改为新端口 *	The system proxy still points to the old port * (set earlier by enana); it will be changed to the new port *
 代理端口 * 被别的程序占用: enana 没能绑定它, 代理没有生效 (运行 enana doctor 查看占用的程序)	Proxy port * is used by another program: enana could not bind it, so the proxy is not working (run enana doctor to see which program holds it)
 检测到外部代理内核	External proxy core detected
 跳过系统代理设置	System proxy setup skipped

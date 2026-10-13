@@ -129,6 +129,37 @@ echo 'PASS: installer preserves ports owned by the root TUN service'
   [ "$got" = brew ] || { echo "FAIL: without an installed core the recommendation must stay as it was: [$got]"; exit 1; }
 ) || exit 1
 echo 'PASS: an upgrade re-pins the core only for TUN users whose core is unpinned or changed'
+# Re-running the install command (no --upgrade; install.sh reinstall_core_plan) keeps an installed core, except that TUN can only use an official pinned core:
+# then it re-pins exactly as an upgrade does. Without that the TUN preflight refuses in st_config, the whole install rolls back, and the `enana upgrade` the
+# refusal suggests is the old version's command, which only says the core is already the latest.
+(
+  eval "$(sed -n '/^upgrade_core_plan() {/,/^}/p' "$REPO/install.sh")"
+  eval "$(sed -n '/^reinstall_core_plan() {/,/^}/p' "$REPO/install.sh")"
+  type reinstall_core_plan >/dev/null 2>&1 || { echo 'FAIL: reinstall_core_plan not found in install.sh'; exit 1; }
+  . "$LIB/update.sh" || { echo 'FAIL: lib/update.sh did not load (upgrade_core_plan needs version_gt)'; exit 1; }
+  H="$W/replan"; SB="$H/sing-box"; DATA="$W/replan-data"; ARCH=arm64; MACOS_MAJOR=14
+  mkdir -p "$H" "$DATA"
+  printf '#!/bin/sh\necho "sing-box version 1.14.5"\n' > "$SB"; chmod +x "$SB"
+  printf '1.14.5|darwin-arm64|%064d\n' 0 > "$DATA/core-pins.conf"
+  core_version() { printf '%s\n' "$CUR"; }
+  replan() { # <network mode> <installed core version> <REC_core from recommend> -> REC_core|SINGBOX_VERSION|CORE_PINNED_ONLY
+    ( NETWORK_MODE=$1; CUR=$2; ST_core=1; REC_core=$3; WHY_core='already installed'; unset SINGBOX_VERSION CORE_PINNED_ONLY
+      reinstall_core_plan; printf '%s|%s|%s' "$REC_core" "${SINGBOX_VERSION:-}" "${CORE_PINNED_ONLY:-}" )
+  }
+  want_replan() { local got; got=$(replan "$2" "$3" "$4"); [ "$got" = "$5" ] || { echo "FAIL: $1: expected [$5], got [$got]"; exit 1; }; }
+  rm -f "$H/core-provenance" "$H/core-binary.sha256"                       # what 2.3.23 leaves behind: no record at all
+  want_replan 'TUN, no provenance: re-pin the installed version, pinned only' tun 1.14.5 skip 'chain|1.14.5|1'
+  want_replan 'System Proxy, no provenance: keep the installed core as before' system 1.14.5 skip 'skip||'
+  want_replan 'TUN, a download already chosen (no core installed, or --force): leave the choice alone' tun 1.14.5 chain 'chain||'
+  printf 'pinned 1.14.5 %064d\n' 0 > "$H/core-provenance"; shasum -a 256 "$SB" | awk '{print $1}' > "$H/core-binary.sha256"
+  want_replan 'TUN, pinned and unchanged: keep the core' tun 1.14.5 skip 'skip||'
+  printf '%064d\n' 0 > "$H/core-binary.sha256"
+  want_replan 'TUN, pinned but changed after it was verified: re-pin' tun 1.14.5 skip 'chain|1.14.5|1'
+  rm -f "$H/core-provenance" "$H/core-binary.sha256"
+  why=$(NETWORK_MODE=tun; CUR=1.14.5; ST_core=1; REC_core=skip; reinstall_core_plan; printf '%s' "$WHY_core")
+  case $why in 'TUN 需要官方的'*'sing-box 1.14.5'*) ;; *) echo "FAIL: the install menu does not say why the core is downloaded again: [$why]"; exit 1 ;; esac
+) || exit 1
+echo 'PASS: re-running the install command re-pins the core only for TUN users whose core TUN cannot use'
 # st_config (install.sh) when apply_config returns 5: TUN was refused (config_tun_refused keeps the capture mode, puts the old configuration back and gives the reason).
 # The installer must print that reason (TXN_ERR) and say the current version was kept, not "the generated configuration did not pass sing-box validation"
 # (which sent users looking for a configuration problem), and the upgrade rollback (EXIT trap -> restore_on_fail) must still run.

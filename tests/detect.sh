@@ -421,7 +421,8 @@ echo "== 4. 安装前检查 (st_preflight): 运行中的外部进程 / 已加载
   nomut "4f"
 )
 (
-  # 端口被别的程序占着换了端口, 系统代理还指着旧端口 (本程序自己留下的): 不算别人的设置, 非交互也要改成新端口
+  # 端口被别的程序占着换了端口, 系统代理还指着旧端口 (127.0.0.1): 也算别人的设置。enana 没有记录哪个系统代理是自己设置的, 这时它多半属于
+  # 正占着这个端口的程序 (例如 Clash 也默认用 7890), 所以和其它代理设置一样: 先备份, 非交互跳过, 不覆盖 (以前当成本程序留下的, 不问就改成新端口)
   c=$(mkcase); enter "$c"
   printf '200 /usr/local/bin/otherapp\n' > "$FAKE_PS"; printf '39700 200 127.0.0.1\n' > "$FAKE_LSOF"
   export ENANA_YES=1 FAKE_BUSY=39700 FAKE_PROXY_PORT=39700 FAKE_PROXY_SERVER=127.0.0.1; SEL_sysproxy=1
@@ -429,27 +430,40 @@ echo "== 4. 安装前检查 (st_preflight): 运行中的外部进程 / 已加载
   os_sysproxy_set() { echo "sysproxy-set $*" >> "$FAKE_CALLS"; return 0; }
   st_preflight > "$c/out" 2>&1; rc=$?
   out=$(cat "$c/out")
-  eq "新装 (--yes): 旧端口上的 enana 系统代理不算别人的: 退出码 0" "$rc" "0"
-  eq "端口已换, 系统代理保持要设置, 步骤数不变" "$([ "$PORT" = 39700 ] && echo same || echo moved):$SEL_sysproxy:$STEPS" "moved:1:4"
-  has "写明它还指向旧端口, 将改为新端口" "$out" "系统代理还指向旧端口 39700"
-  hasnt "没有「已有其它系统代理设置」的提醒" "$out" "已有其它系统代理设置"
-  hasnt "没有被当成别人的设置而跳过" "$out" "跳过系统代理设置"
-  st_sysproxy > "$c/out2" 2>&1
-  has "随后真的把系统代理改成新端口" "$(cat "$FAKE_CALLS")" "sysproxy-set on"
+  eq "新装 (--yes): 旧端口上 127.0.0.1 的系统代理算别人的: 退出码 0" "$rc" "0"
+  eq "端口已换, 去掉「设置系统代理」这一步" "$([ "$PORT" = 39700 ] && echo same || echo moved):$SEL_sysproxy:$STEPS" "moved:0:3"
+  has "原设置照样备份" "$(cat "$FAKE_CALLS")" "backup"
+  has "提醒已有其它系统代理设置" "$out" "已有其它系统代理设置"
+  has "写明没有覆盖, 本次跳过" "$out" "本次跳过系统代理设置"
+  hasnt "不再说它是本程序之前设置的" "$out" "本程序之前设置的"
+  hasnt "没有调用修改系统代理" "$(cat "$FAKE_CALLS")" "sysproxy-set"
   nomut "4g"
 )
 (
-  # 升级 (沿用「不动系统代理」, SEL_sysproxy=0): 端口换过、旧端口上是本程序的系统代理 → 不能留着, 改成新端口
+  # 同样的情况, 交互安装: 和其它代理设置一样询问, 默认「否」, 回车取消
+  c=$(mkcase); enter "$c"
+  printf '200 /usr/local/bin/otherapp\n' > "$FAKE_PS"; printf '39700 200 127.0.0.1\n' > "$FAKE_LSOF"
+  export FAKE_BUSY=39700 FAKE_PROXY_PORT=39700 FAKE_PROXY_SERVER=127.0.0.1; SEL_sysproxy=1
+  os_sysproxy_backup() { echo "backup" >> "$FAKE_CALLS"; return 0; }
+  _noninteractive() { return 1; }
+  ( st_preflight ) < /dev/null > "$c/out" 2>&1; rc=$?
+  eq "交互安装: 旧端口上的系统代理也要询问, 默认「否」, 取消安装" "$rc" "1"
+  has "询问之前先备份" "$(cat "$FAKE_CALLS")" "backup"
+  has "提醒已有其它系统代理设置 (交互)" "$(cat "$c/out")" "已有其它系统代理设置"
+  has "取消的提示" "$(cat "$c/out")" "已取消"
+  nomut "4g2"
+)
+(
+  # 升级 (--upgrade 不动系统代理, SEL_sysproxy=0): 端口换过、旧端口上有系统代理 → 照旧不动 (和 2.3.23 一样), 不打开「设置系统代理」这一步
   c=$(mkcase); enter "$c"
   printf '200 /usr/local/bin/otherapp\n' > "$FAKE_PS"; printf '39700 200 127.0.0.1\n' > "$FAKE_LSOF"
   export ENANA_YES=1 FAKE_BUSY=39700 FAKE_PROXY_PORT=39700 FAKE_PROXY_SERVER=127.0.0.1; SEL_sysproxy=0
   os_sysproxy_backup() { echo "backup" >> "$FAKE_CALLS"; return 0; }
   os_sysproxy_set() { echo "sysproxy-set $*" >> "$FAKE_CALLS"; return 0; }
   st_preflight > "$c/out" 2>&1; rc=$?
-  eq "升级 --upgrade (--yes): 旧端口的 enana 系统代理被改到新端口: 退出码 0, 步骤 +1" "$rc:$SEL_sysproxy:$STEPS" "0:1:5"
-  has "升级: 提示将改为新端口" "$(cat "$c/out")" "系统代理还指向旧端口 39700"
-  st_sysproxy > "$c/out2" 2>&1
-  has "升级: 随后把系统代理指向新端口" "$(cat "$FAKE_CALLS")" "sysproxy-set on"
+  eq "升级 --upgrade (--yes): 旧端口上的系统代理不动: 退出码 0, 步骤不变" "$rc:$SEL_sysproxy:$STEPS" "0:0:4"
+  hasnt "升级: 没有「将改为新端口」的提示" "$(cat "$c/out")" "将改为新端口"
+  hasnt "升级: 没有调用修改系统代理" "$(cat "$FAKE_CALLS")" "sysproxy-set"
   nomut "4h"
 )
 (

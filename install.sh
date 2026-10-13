@@ -171,17 +171,13 @@ st_preflight() {
   ok "macOS $MACOS · $ARCH"
   mkdir -p "$H"
   foreign_check
-  local old_port=$PORT                                       # 换端口之前的端口: 系统代理可能还指着它 (本程序自己设置的)
   pick_ports
   if [ -n "$UNSEEN_PORTS" ]; then info "本地端口 $UNSEEN_PORTS 有人在用, 没能确认是谁 (普通账户看不到 root 核心的监听者), 沿用不变"
   elif [ "$PORTS_VERIFIED" = 1 ]; then ok "本地端口 $PORT / $UI_PORT / $API_PORT / $SPEED_PORT 可用"; fi
-  if [ "$PORT" != "$old_port" ] && [ "${NETWORK_MODE:-system}" != tun ] && os_sysproxy_mine "$old_port"; then
-    # 端口被别的程序占着、换了端口: 系统代理还指着旧端口, 那是本程序留下的, 不是别人的设置, 所以改成新端口 (升级时也是)
-    [ "$SEL_sysproxy" = 1 ] || { SEL_sysproxy=1; STEPS=$((STEPS + 1)); }
-    info "系统代理还指向旧端口 $old_port (本程序之前设置的), 将改为新端口 $PORT"
-  fi
+  # 端口被别的程序占着、换了端口时, 指向旧端口 (127.0.0.1) 的系统代理同样算别人的设置: enana 没有记录哪个系统代理是自己设置的, 而这时它多半属于正占着
+  # 这个端口的程序 (例如 Clash 也默认用 7890)。和其它代理设置一样先备份, 交互安装时询问 (默认「否」), 非交互时跳过; 升级不动系统代理 (和 2.3.23 一样)
   if [ "$SEL_sysproxy" = 1 ]; then
-    local foreign; foreign=$(os_sysproxy_foreign "$old_port" | paste -sd, -)
+    local foreign; foreign=$(os_sysproxy_foreign | paste -sd, -)
     if [ -n "$foreign" ]; then
       os_sysproxy_backup
       warn "网络服务「$foreign」已有其它系统代理设置, 继续会覆盖 (原设置已备份到 $H/proxy-backup.txt)"
@@ -215,6 +211,13 @@ upgrade_core_plan() {
   done
   CORE_PINNED_ONLY=1; REC_core=chain
   WHY_core="TUN 需要官方的、钉死版本号的核心: 将重新下载 sing-box $SINGBOX_VERSION 并校验 SHA-256"
+}
+
+# 重新执行安装命令 (没有 --upgrade; cmd_install 调用, tests/enhanced.sh 取这段函数的原文测试): 已装的核心照旧不动 (REC_core=skip), 只有 TUN 用不了它
+# (core_tun_ok: 来源没有记成官方钉死的, 或者校验之后被改动过) 时和升级一样重新钉死 —— 否则 st_config 里 TUN 必然拒绝, 整次安装撤销, 提示的 enana upgrade 又是旧版本的
+reinstall_core_plan() {
+  [ "$REC_core" = skip ] && [ "${NETWORK_MODE:-system}" = tun ] && ! core_tun_ok || return 0
+  upgrade_core_plan
 }
 
 st_core() {
@@ -341,6 +344,8 @@ cmd_install() {
     REC_sysproxy=0
     upgrade_core_plan
     [ "$ST_rules" = 1 ] && REC_rules=0
+  else
+    reinstall_core_plan
   fi
   build_menu
   if menu_interactive; then pf '\n%s选择要安装的内容%s (已按识别结果给出推荐; 用键盘修改):\n\n' "$B" "$N"; elif [ -z "$UPGRADE" ]; then pf '\n%s非交互模式: 按识别结果的推荐设置安装%s\n' "$B" "$N"; fi

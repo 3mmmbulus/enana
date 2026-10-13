@@ -164,14 +164,13 @@ os_sysproxy_cached() { # networksetup 很慢: 结果缓存 20 秒 (设置/关闭
   if os_sysproxy_ok; then printf '%s 1\n' "$t" > "$f"; return 0; fi
   printf '%s 0\n' "$t" > "$f"; return 1
 }
-os_sysproxy_foreign() { # [旧端口] 打印正在使用其它代理设置的网络服务 (用于安装前提醒); 127.0.0.1 上的旧端口是本程序自己留下的 (端口后来被换了), 不算
-  local s k out old=${1:-}
+os_sysproxy_foreign() { # 打印正在使用其它代理设置的网络服务 (用于安装前提醒): 指向当前端口以外的都算, 换端口之前的旧端口也算 (见 install.sh 的 st_preflight)
+  local s k out
   while IFS= read -r s; do
     for k in webproxy securewebproxy socksfirewallproxy; do
       out=$(networksetup -get$k "$s" 2>/dev/null) || continue
       printf '%s\n' "$out" | grep -q '^Enabled: Yes' || continue
       printf '%s\n' "$out" | grep -q "^Port: $PORT\$" && continue
-      [ -n "$old" ] && printf '%s\n' "$out" | grep -q "^Port: $old\$" && printf '%s\n' "$out" | grep -q '^Server: 127.0.0.1' && continue
       printf '%s\n' "$s"; break
     done
   done < <(os_sysproxy_services)
