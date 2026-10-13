@@ -477,9 +477,22 @@
     var top = h('div', { class: 'nd-top' }), info = h('div', { class: 'nd-info' }), secret = null, timer = 0, dm = null;
     /* 常用操作: 徽标下面一排小按钮 (只建一次; render 每次只改它们的「暂不可用」状态, 每秒刷新时键盘焦点不会丢)。底部只留 删除 (最左) · 显示凭据 · 关闭 */
     var bPin = ui.btn(t('servers.row.usePin'), { sm: true, icon: 'pin' }), bAuto = ui.btn(t('servers.row.useAuto'), { sm: true, icon: 'auto' }), bTest = ui.btn(t('servers.nd.test'), { sm: true, icon: 'speed' });
-    ui.act(bPin, async function () { await switchTo('PIN', tag); render(); });
-    ui.act(bAuto, async function () { await switchTo('Global', tag); render(); });
-    ui.act(bTest, function () { return testOne(tag).then(function () { render(); }); });
+    /* 这三个在正文里, ui.act 只锁住被点的那一个: 运行期间 (还有底部的「显示凭据」运行期间) 用 dm.setBusy 锁住整个弹窗 (删除 / 显示凭据 / 关闭 / ✕ / ESC / 点遮罩都不可用),
+     * 另外两个也不能点 —— 和它们以前作为底部操作时一样 (例如切换固定出口还没完成时, 不能先打开「删除」, 否则删除前的影响检查用的是切换之前的状态) */
+    var acting = 0;
+    function syncActs() {
+      if (dm) dm.setBusy(acting > 0);
+      [bPin, bAuto, bTest].forEach(function (b) { if (!b._busy) b.disabled = acting > 0; });
+    }
+    function locked(fn) {
+      return async function () {
+        acting++; syncActs();
+        try { return await fn(); } finally { acting--; syncActs(); }
+      };
+    }
+    ui.act(bPin, locked(async function () { await switchTo('PIN', tag); render(); }));
+    ui.act(bAuto, locked(async function () { await switchTo('Global', tag); render(); }));
+    ui.act(bTest, locked(function () { return testOne(tag).then(function () { render(); }); }));
     var box = h('div', { class: 'nd' }, top, h('div', { class: 'nd-acts', role: 'group', 'aria-label': t('servers.col.act') }, bPin, bAuto, bTest), info);
     function cur() { return servers().filter(function (x) { return x.tag === tag; })[0]; }
     function stopTimer() { clearInterval(timer); timer = 0; }
@@ -541,7 +554,7 @@
       onClose: function () { secret = null; stopTimer(); nodeDlg = null; },
       actions: [
         { label: t('common.delete'), kind: 'soft-bad', icon: 'delete', id: 'del', cls: 'nd-del', keep: true, unavail: s0.official ? { reason: t('servers.row.officialDel') } : null, onClick: function () { var s = cur(); dm.close('del'); return del(s).then(function () { return false; }); } },
-        { label: t('servers.nd.reveal'), icon: 'eye', id: 'rev', keep: true, onClick: reveal, unavail: s0.official ? { reason: t('servers.secret.official') } : null },
+        { label: t('servers.nd.reveal'), icon: 'eye', id: 'rev', keep: true, onClick: locked(reveal), unavail: s0.official ? { reason: t('servers.secret.official') } : null },
         { label: t('common.close'), cancel: true, autofocus: true }
       ]
     });

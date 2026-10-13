@@ -17,7 +17,11 @@ function status(extra={}){return {ok:true,payments_available:true,email:{verifie
 function fixture(handler,opts={}){
  const callbacks={},calls=[],modals=[],copies=[],copyMsgs=[],timers=new Map(),intervals=new Map(),toasts=[],confirmations=[],signIns=[],planLoads=[],segs=[],tabs=[];let id=0;
  const emit=(ev,arg)=>{(callbacks[ev]||[]).forEach(fn=>fn(arg));};
- const ui={btn(label){return Object.assign(node('button'),{label});},avail(b,why,fix){b.reason=why;b.fix=why?fix||null:null;},actionBusy(b,on){b.disabled=on;},act(b,fn){b.click=async()=>b.reason||b.disabled?null:fn();},badge(label,kind){return node('badge',{kind},label);},
+ /* actionBusy / act behave like ui/ui.js: busy remembers whether the control was already disabled (_wasDisabled) and goes back to that;
+    a click is ignored while the control is busy or disabled, and marks it busy until the handler is done */
+ const ui={btn(label){return Object.assign(node('button'),{label});},avail(b,why,fix){b.reason=why;b.fix=why?fix||null:null;},
+  actionBusy(b,on){if(on)b._wasDisabled=b.disabled;b._busy=!!on;b.disabled=!!on||!!b._wasDisabled;},
+  act(b,fn){b.click=async()=>{if(b._busy||b.disabled||b.reason)return null;ui.actionBusy(b,true);try{return await fn();}finally{ui.actionBusy(b,false);}};},badge(label,kind){return node('badge',{kind},label);},
   toast(...x){toasts.push(x);},copy(v,m){copies.push(v);copyMsgs.push(m);},confirmDialog:async o=>{confirmations.push(o);return true;},
   field(label,ctl,hint){return node('label',{class:'fld'},node('span',{class:'fld-l'},label),ctl,hint?node('span',{class:'fld-h'},hint):null);},
   /* ui.seg: an unavailable option only explains itself (toast + fix); onPick decides and calls set() */
@@ -140,8 +144,11 @@ test('closed and past-deadline invoices retain history but cannot encourage anot
  assert.ok(flatten(d.body).some(n=>n.attrs?.role==='status'&&n.children[0]==='billing.status.overdue'));assert.equal(find(d.body,'billing.recheck').reason,'','the lease is still open, so it can be checked again');
 });
 test('logout discards a late status response and closes invoices before another account can see them',async()=>{
- let done;const f=fixture(()=>new Promise(r=>{done=r}));const root=f.B.mount(),load=f.B.load(true),base=f.intervals.size;f.B.openOrder(invoice);f.emit('auth',false);done(status());await load;
+ let done;const f=fixture(()=>new Promise(r=>{done=r}));const root=f.B.mount(),email=f.B.mountEmail(),load=f.B.load(true),base=f.intervals.size;f.B.openOrder(invoice);f.emit('auth',false);done(status());await load;
  assert.equal(f.modals[0].closed,true);assert.ok(!JSON.stringify(root).includes('one@example.test'));assert.equal(f.timers.size,0);assert.equal(f.intervals.size,base,'the invoice countdown is gone too');
+ assert.ok(!JSON.stringify(email).includes('one@example.test'),'the account email (shown only in the email mount) does not reach the next account');assert.ok(hasAny(email,'common.loading'));
+ /* the same late answer without a logout does print the address there, so the check above can fail */
+ let ok;const g=fixture(()=>new Promise(r=>{ok=r}));const shown=g.B.mountEmail(),late=g.B.load(true);ok(status());await late;assert.ok(JSON.stringify(shown).includes('one@example.test'));
 });
 test('wallet purchase and automatic renewal disclose the debit before sending it; decimal remainder stays visible',async()=>{
  const f=fixture(async(m,p)=>m==='GET'?status({wallet:{balance:'10.000037',auto_renew:false,monthly_price:'4.000000'}}):p==='/api/billing/auto-renew'?{ok:true,auto_renew:true,charged:true,needs_topup:false,balance:'6.000037',monthly_price:'4.000000'}:{ok:true,expires_at:1900000000});
@@ -296,4 +303,55 @@ test('payable invoice shows a QR code of the receive address (vendored library, 
  const box=flatten(d.body).find(n=>n.attrs&&n.attrs.class==='billing-qr');
  assert.ok(box,'a payable invoice should render the QR box');
  assert.match(box.innerHTML,/^<svg/);
+});
+test('a background poll never rebuilds an unchanged invoice, and Check again pressed during a poll still runs once the poll is back',async()=>{
+ const polls=[];const f=fixture(async(m,p)=>{if(p==='/api/billing/order')return new Promise(r=>polls.push(r));if(p==='/api/billing/order/recheck')return {ok:true,order:invoice};return status();});
+ const base=new Set(f.intervals.keys());f.B.openOrder(invoice);const d=f.modals[0],tick=[...f.intervals.entries()].find(([k])=>!base.has(k))[1];
+ const kids=d.body.children,acts=d.actions,next=()=>{const task=[...f.timers.values()][0];assert.ok(task,'the next poll is scheduled');f.timers.clear();return task();};
+ const run=next();await flush();assert.equal(polls.length,1,'the poll is in flight');
+ tick.fn();tick.fn();
+ assert.equal(d.body.children,kids,'a tick during the poll leaves the dialog as it is');assert.equal(d.actions,acts,'the footer is not rebuilt, so keyboard focus stays on its button');
+ assert.equal(d.actions.find(a=>a.label==='billing.cancelInvoice').disabled,false,'Cancel invoice does not flip to disabled');assert.equal(find(d.body,'billing.recheck').reason,'','Check again does not flip to Loading');
+ polls[0]({ok:true,order:invoice});await run;
+ assert.equal(d.body.children,kids,'an unchanged answer does not rebuild it either');assert.equal(d.actions,acts);
+ const rechecks=()=>f.calls.filter(c=>c[1]==='/api/billing/order/recheck');
+ const run2=next();await flush();assert.equal(polls.length,2);
+ const click=find(d.body,'billing.recheck').click();await flush();
+ assert.equal(rechecks().length,0,'Check again waits for the poll already under way');assert.equal(find(d.body,'billing.recheck').disabled,true,'and shows that it is working');
+ polls[1]({ok:true,order:invoice});await run2;await click;
+ assert.equal(rechecks().length,1,'the click was not lost');assert.deepEqual(JSON.parse(rechecks()[0][2].body),{id:invoice.id});
+ assert.ok(f.toasts.some(x=>x[0]==='billing.recheckDone'&&x[1]==='ok'));assert.equal(find(d.body,'billing.recheck').reason,'billing.recheckWait','then the 30-second wait');
+ d.close();assert.equal(f.timers.size,0);
+});
+test('a failed auto-renew or verification-mail request leaves the clicked control usable: it is marked busy once, not twice',async()=>{
+ let renews=0;
+ const f=fixture(async(m,p)=>{if(m==='GET')return status();if(p==='/api/billing/auto-renew'&&++renews===1)throw {code:'E_ACCOUNT_UNREACHABLE'};return {ok:true,auto_renew:true,charged:true,needs_topup:false,balance:'6.000000',monthly_price:'4.000000'};});
+ const root=f.B.mount();await f.B.load(true);const sw=switchOf(root);
+ await sw.click();
+ assert.ok(f.toasts.some(x=>x[0]==='billing.err.E_ACCOUNT_UNREACHABLE'&&x[1]==='err'));assert.equal(switchOf(root),sw,'nothing redrew the card after the failure');
+ assert.equal(sw.disabled,false,'the switch is usable again');assert.equal(sw._busy,false);
+ await sw.click();assert.equal(renews,2,'a second click sends the request again');assert.ok(f.toasts.some(x=>x[0]==='billing.renewCharged{"price":"4"}'&&x[1]==='ok'));
+ const replies=[];const g=fixture(async(m)=>m==='GET'?status({email:{verified:false,address:'u@example.test',mail_available:true}}):new Promise((ok,no)=>replies.push({ok,no})));
+ const em=g.B.mountEmail();await g.B.load(true);const sends=()=>g.calls.filter(c=>c[1]==='/api/email/send').length;
+ const send=find(em,'billing.sendVerification');let run=send.click();await flush();assert.equal(send.disabled,true,'busy while the request is out');
+ replies[0].no({code:'E_SERVER_ERROR'});await run;
+ assert.ok(g.toasts.some(x=>x[0]==='billing.err.E_SERVER_ERROR'&&x[1]==='err'));assert.equal(find(em,'billing.sendVerification'),send,'nothing redrew after the failure');assert.equal(send.disabled,false,'the send button is usable again');
+ run=send.click();await flush();assert.equal(sends(),2);
+ g.emit('lang');const fresh=find(em,'billing.sendVerification');assert.notEqual(fresh,send,'a redraw while sending builds a new button');assert.equal(fresh.disabled,true,'that one is busy too');assert.equal(fresh.reason,'','sending is not a reason to be unavailable');
+ replies[1].no({code:'E_SERVER_ERROR'});await run;
+ assert.equal(find(em,'billing.sendVerification'),fresh);assert.equal(fresh.disabled,false);assert.equal(fresh.reason,'','usable again after the failure, not stuck on Loading');
+ run=fresh.click();await flush();assert.equal(sends(),3,'and it sends');replies[2].ok({ok:true,sent:true,retry_after:60});await run;
+ assert.equal(find(em,'billing.sendVerification').reason,'billing.resendWait','then the cooldown');
+});
+test('the pending-order notice and the payment block follow the newest orders even while another orders page is shown',async()=>{
+ let st='pending';const older=i=>({...invoice,id:'o'+String(i).padStart(14,'0'),status:'cancelled',created_at:now()-7200-i*60});
+ const f=fixture(async(m,p,o)=>{const all=[{...invoice,status:st},...Array.from({length:14},(_,i)=>older(i))],page=o.q.orders_page,per=o.q.orders_per_page;return status({orders:all.slice((page-1)*per,page*per),orders_total:all.length,orders_page:page,orders_per_page:per});});
+ const root=f.B.mount();await f.B.load(true);assert.equal(f.calls.length,1,'page 1 needs no second read');
+ assert.ok(hasText(root,'billing.notice.pending'));assert.equal(find(root,'billing.topup').reason,'billing.pendingFirst');
+ await find(root,'pager.next').click();assert.ok(hasAny(root,'billing.pageOf{"page":2,"pages":2}'));
+ assert.deepEqual(f.calls.slice(1).map(c=>({...c[2].q})),[{orders_page:1,orders_per_page:5},{orders_page:2,orders_per_page:10}],'page 2 plus the newest 5 orders (a payable order is always among them)');
+ assert.ok(hasText(root,'billing.notice.pending'),'still unpaid: the notice stays while page 2 is shown');assert.equal(find(root,'billing.topup').reason,'billing.pendingFirst');
+ st='paid';await f.B.load(true);
+ assert.ok(hasAny(root,'billing.pageOf{"page":2,"pages":2}'),'the refresh stays on page 2');assert.equal(f.calls.at(-1)[2].q.orders_page,2);
+ assert.ok(!hasText(root,'billing.notice.pending'),'paid elsewhere: the notice is gone without going back to page 1');assert.equal(find(root,'billing.topup').reason,'','and payments are open again');
 });

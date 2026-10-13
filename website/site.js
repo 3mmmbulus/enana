@@ -201,6 +201,7 @@
 
   var LANG_KEY = 'enana.lang'
   var statusTimer = null
+  var copyTimers = {}       // 每个复制按钮各自的「已复制 -> 复制」计时 (按 data-copy 区分): 几个按钮先后点, 每个都会恢复
 
   // localStorage 在隐私模式 / 被禁用时会抛异常: 读写都包起来, 页面不依赖它也能正常工作
   function store(key, value) {
@@ -297,15 +298,24 @@
       status.textContent = ok ? d['copy.ok'] : d['copy.fail']
       status.className = ok ? 'status' : 'status bad'
     }
+    var key = btn.getAttribute('data-copy')
+    clearTimeout(copyTimers[key])
+    delete copyTimers[key]
+    clearTimeout(statusTimer)               // 状态行只跟最近一次复制计时: 之前那次的计时不会提前抹掉新的结果 (包括复制失败的提示)
+    statusTimer = null
     if (ok) {
       btn.textContent = d.copied
-      clearTimeout(statusTimer)
-      statusTimer = setTimeout(function () {
+      copyTimers[key] = setTimeout(function () {
+        delete copyTimers[key]
         btn.textContent = DICT[currentLang()].copy
+      }, 2200)
+      statusTimer = setTimeout(function () {
+        statusTimer = null
         if (status) { status.textContent = ''; status.className = 'status' }
       }, 2200)
-    } else if (codeEl) {
-      selectNode(codeEl)
+    } else {
+      btn.textContent = d.copy                // 这次没复制成功: 不要还显示上一次的「已复制」
+      if (codeEl) selectNode(codeEl)
     }
   }
 

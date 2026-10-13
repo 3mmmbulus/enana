@@ -30,6 +30,7 @@ jobs:
           node tests/sysproxy-ui.test.js
           node tests/sorter.test.js
           node tests/exits-ui.test.js
+          node tests/moved-actions-ui.test.js
       - name: Verify terminal waits for Enter and renders one action per line
         run: python3 tests/console-pty.py
       - name: Check protected TUN cleanup and rollback

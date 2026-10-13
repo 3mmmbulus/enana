@@ -248,7 +248,7 @@ const S = {
   'e.billServer': ['enana.cc 服务器返回了错误，这次操作可能已生效也可能没有，请先刷新并查看订单和余额', 'The enana.cc server returned an error. The request may or may not have gone through: refresh and check your orders and balance first'],
   'e.billUnverified': ['请先验证账号邮箱', 'Verify your account email first'], 'e.billClosed': ['收款暂未开放', 'Receiving payments is not open yet'], 'e.billPending': ['已有待付款订单', 'You already have a pending invoice'],
   'e.billNotFound': ['找不到这笔订单', 'Invoice not found'], 'e.billBalance': ['余额不足', 'Insufficient funds'], 'e.billNoMail': ['验证邮件暂时无法发送', 'Verification mail could not be sent'],
-  'e.billInvalid': ['付款参数无效', 'Invalid payment details'], 'e.billConflict': ['此操作编号已用于其他订单', 'This request key was used for another order'], 'e.billExpired': ['订单已过期', 'This order has expired'],
+  'e.billInvalid': ['付款参数无效', 'Invalid payment details'], 'e.billPage': ['参数无效', 'Invalid parameter'], 'e.billConflict': ['此操作编号已用于其他订单', 'This request key was used for another order'], 'e.billExpired': ['订单已过期', 'This order has expired'],
   'e.billLimit': ['24 小时内最多创建 {n} 个订单，请稍后再试', 'At most {n} orders can be created in 24 hours; try again later'], 'e.billRate': ['请求过于频繁，请稍后再试', 'Too many requests; try again shortly'], 'e.billCapacity': ['目前无法分配付款金额，请稍后重试', 'No payment amount is available right now; retry later'],
   'plan.free': ['免费版', 'Free'], 'plan.pro': ['专业版', 'Pro'],
   'notice.pwChanged': ['你的登录密码已在另一台设备上修改, 请用新密码重新登录, 代理已关闭', 'Your password was changed on another device. Sign in again with the new password; the proxy was turned off.'],
@@ -1109,7 +1109,8 @@ route('GET', '/api/plan', (c) => {
  * 订单: pay_by = 创建后 1 小时 (付款时间, 过了就可以再下单), expires_at = 24 小时 (金额保留期, 过了显示 expired); 金额先用整数价, 已被未付款的订单占用时才加尾数:
  *   +0.1 … +0.9, 再 +0.01 … +0.99 (跳过 +0.10, +0.20 …), 再 +0.001 … +0.999 (跳过 0.01 的整数倍), 最多三位小数, 都用完 -> E_QUOTE_CAPACITY。收款地址只有一个演示用的 TRC20 地址。
  * 24 小时内 (滚动) 最多 5 个订单, 任何类型、任何状态都算, 幂等重放 (同一个 request_key) 不算 -> E_ORDER_LIMIT {limit:5, retry_after:最早那个订单满 24 小时还差的秒数}。
- * 充值只收 4–1000 的整数 USDT (字符串 /^[1-9][0-9]{0,3}$/), 其它 -> E_INVALID。分页: orders_page (1-1000, 默认 1) / orders_per_page (5-30, 默认 30), 不合法的值按默认处理;
+ * 充值只收 4–1000 的整数 USDT (字符串 /^[1-9][0-9]{0,3}$/), 其它 -> E_INVALID。分页: orders_page (1-1000, 默认 1) / orders_per_page (5-30, 默认 30), 没写或空值按默认处理,
+ *   其它值 (0 / 01 / 1.5 / abc / 31 …) 和 lib/api.sh 的 ep_billing 一样在本机就回 E_INVALID (先于云端的 E_AUTH / E_SERVER_ERROR, 因为根本没发出去);
  * 返回 orders_total / orders_page / orders_per_page, orders 是这一页 (最新的在前)。自动续费: 开启时套餐不是 Pro 且余额够 4 USDT 就立刻扣款续 1 个月 (charged), needs_topup = 开启且余额 < 4。
  * 余额支付 / 自动续费扣款成功会把套餐变成 pro (同 ctl plan=pro, 到期时间按购买的月数累加; ctl plan= 会清掉)。 */
 const BILL_SKUS = [['m1', 1, 4], ['m3', 3, 10], ['m6', 6, 19], ['y1', 12, 35], ['y2', 24, 56], ['y3', 36, 72], ['y5', 60, 100]];
@@ -1161,15 +1162,17 @@ const billGate = (fn) => (c) => {
   return fn(c);
 };
 const billVerified = () => M.billing !== 'unverified' && M.billing !== 'nomail';
-route('GET', '/api/billing', billGate((c) => {
-  const st = BS(), num = (k, lo, hi, d) => { const v = c.q.get(k); return v !== null && /^[1-9][0-9]{0,3}$/.test(v) && +v >= lo && +v <= hi ? +v : d; };
-  const per = num('orders_per_page', 5, 30, 30), page = num('orders_page', 1, 1000, 1), all = st.orders.slice().sort((a, b) => b.created_at - a.created_at), pro = billPro(), t = sec();
+/* 订单分页参数: 和 lib/api.sh 的 ep_billing (云端 pageArg 也一样) 相同, 没写或空值 = 默认, 其它不在范围内的值一律 E_INVALID (不按默认处理) */
+const billPageArg = (c, k, lo, hi, d) => { const v = c.q.get(k); if (v === null || v === '') return d; if (!/^[1-9][0-9]{0,3}$/.test(v) || +v < lo || +v > hi) throw E('E_INVALID', 'e.billPage'); return +v; };
+route('GET', '/api/billing', (c) => { const page = billPageArg(c, 'orders_page', 1, 1000, 1), per = billPageArg(c, 'orders_per_page', 5, 30, 30); return billGate(() => billStatus(page, per))(c); });   // 本机先校验分页, 不合格的请求到不了云端
+function billStatus(page, per) {
+  const st = BS(), all = st.orders.slice().sort((a, b) => b.created_at - a.created_at), pro = billPro(), t = sec();
   return { ok: true, payments_available: M.billing !== 'closed', email: { address: M.account || 'demo@example.com', verified: billVerified(), mail_available: M.billing !== 'nomail' },
     wallet: { balance: billFmt(st.balance), auto_renew: st.autoRenew, monthly_price: billFmt(BILL_MONTHLY) }, catalog: BILL_SKUS.map((k) => ({ id: k[0], months: k[1], price: billFmt(k[2] * BILL_MICRO) })),
     plan: { code: pro ? 'pro' : 'free', expires_at: pro ? (M.planUntil > t ? M.planUntil : t + 30 * 86400) : null },
     orders: all.slice((page - 1) * per, page * per).map(billPublic), orders_total: all.length, orders_page: page, orders_per_page: per,
     ledger: st.ledger.slice().sort((a, b) => b.created_at - a.created_at).slice(0, 40).map(billLedgerOut), order_ttl: BILL_PAY, lease_ttl: BILL_LEASE };
-}));
+}
 route('POST', '/api/billing/checkout', billGate((c) => {
   const b = billJson(c), s = b.kind === 'plan' ? billSku(b.sku) : null;                          // 本机辅助服务先校验请求体 (lib/billing.sh 的 billing_body), 不合格的根本到不了云端
   if (!billKeyOk(b.request_key) || (b.kind === 'plan' ? !s : b.kind !== 'topup' || typeof b.amount !== 'string' || !/^[1-9][0-9]{0,3}$/.test(b.amount) || +b.amount < 4 || +b.amount > 1000)) throw E('E_INVALID', 'e.billInvalid');
@@ -3395,14 +3398,18 @@ async function selftest() {
     ck('billing=closed (default): payments_available:false, email verified, catalog of 7 terms, checkout -> E_PAYMENTS_UNAVAILABLE', b0.ok === true && b0.payments_available === false && b0.email.verified === true && b0.catalog.length === 7 && b0.orders.length === 0 && b0c.code === 'E_PAYMENTS_UNAVAILABLE');
     const b1 = await bl('unverified'), b2 = await bl('nomail'), b2s = jx(await api('POST', '/api/email/send', { body: '{}' })), b3 = await bl('pending'), b3c = jx(await api('POST', '/api/billing/checkout', { body: JSON.stringify({ kind: 'plan', sku: 'm1', request_key: 'k'.repeat(16) }) }));
     ck('billing=unverified / nomail / pending: unverified email (mail_available true / false, send -> E_MAIL_UNAVAILABLE), one unfinished invoice (checkout -> E_ORDER_PENDING)', b1.email.verified === false && b1.email.mail_available === true && b2.email.verified === false && b2.email.mail_available === false && b2s.code === 'E_MAIL_UNAVAILABLE' && b3.orders.length === 1 && b3.orders[0].status === 'pending' && b3c.code === 'E_ORDER_PENDING');
-    const b4 = jx(await (async () => { await ctl('billing=auth'); return api('GET', '/api/billing'); })()), b5 = jx(await (async () => { await ctl('billing=server'); return api('GET', '/api/billing'); })());
-    ck('billing=auth / server: the helper answers E_AUTH (cloud session ended) / E_SERVER_ERROR (cloud 5xx) with a translated error, HTTP 200 so the local dashboard stays unlocked', b4.ok === false && b4.code === 'E_AUTH' && !!b4.error && b5.ok === false && b5.code === 'E_SERVER_ERROR' && !!b5.error);
+    const b4 = jx(await (async () => { await ctl('billing=auth'); return api('GET', '/api/billing'); })()), b4p = jx(await api('GET', '/api/billing', { q: { orders_page: '0' } })), b5 = jx(await (async () => { await ctl('billing=server'); return api('GET', '/api/billing'); })());
+    ck('billing=auth / server: the helper answers E_AUTH (cloud session ended) / E_SERVER_ERROR (cloud 5xx) with a translated error, HTTP 200 so the local dashboard stays unlocked; a junk orders_page is refused locally first (E_INVALID, never sent to the cloud)', b4.ok === false && b4.code === 'E_AUTH' && !!b4.error && b5.ok === false && b5.code === 'E_SERVER_ERROR' && !!b5.error && b4p.ok === false && b4p.code === 'E_INVALID' && !!b4p.error, b4p);
     /* 付款时间 / 分页 / 下单限制 / 整数充值 / 自动续费 / 余额支付 (docs/BILLING_API.md) */
     const b3o = b3.orders[0];
     ck('billing=pending: the unfinished invoice is payable for 1 hour (pay_by in the future) while its amount stays leased for 24 hours (expires_at); order_ttl 3600, lease_ttl 86400, paging fields present', b3o.pay_by > sec() && b3o.pay_by <= sec() + 3600 && b3o.expires_at > b3o.pay_by && b3o.amount === '4.010000' && b3.order_ttl === 3600 && b3.lease_ttl === 86400 && b3.orders_total === 1 && b3.orders_page === 1 && b3.orders_per_page === 30, b3o);
-    const bo = await bl('orders'), bo3 = jx(await api('GET', '/api/billing', { q: { orders_page: '3', orders_per_page: '10' } })), boJunk = jx(await api('GET', '/api/billing', { q: { orders_page: 'x', orders_per_page: '99' } }));
-    ck('billing=orders: 23 orders newest first (the newest is pending but past pay_by, still leased), page 3 of 10 holds the last 3, junk paging falls back to page 1 / 30 per page, the newest ledger row matches the balance', bo.orders_total === 23 && bo.orders.length === 23 && bo.orders.every((o, i) => !i || bo.orders[i - 1].created_at >= o.created_at) && bo.orders[0].status === 'pending' && bo.orders[0].pay_by < sec() && bo.orders[0].expires_at > sec()
-      && bo.orders.some((o) => o.status === 'expired') && bo3.orders.length === 3 && bo3.orders_page === 3 && bo3.orders_per_page === 10 && bo3.orders_total === 23 && boJunk.orders_page === 1 && boJunk.orders_per_page === 30 && bo.ledger.length > 10 && bo.ledger[0].balance_after === bo.wallet.balance, [bo.orders_total, bo3.orders.length, bo.ledger.length]);
+    const bo = await bl('orders'), bo3 = jx(await api('GET', '/api/billing', { q: { orders_page: '3', orders_per_page: '10' } })), boEmpty = jx(await api('GET', '/api/billing', { q: { orders_page: '', orders_per_page: '' } }));
+    ck('billing=orders: 23 orders newest first (the newest is pending but past pay_by, still leased), page 3 of 10 holds the last 3, empty paging values mean the defaults (page 1 / 30 per page), the newest ledger row matches the balance', bo.orders_total === 23 && bo.orders.length === 23 && bo.orders.every((o, i) => !i || bo.orders[i - 1].created_at >= o.created_at) && bo.orders[0].status === 'pending' && bo.orders[0].pay_by < sec() && bo.orders[0].expires_at > sec()
+      && bo.orders.some((o) => o.status === 'expired') && bo3.orders.length === 3 && bo3.orders_page === 3 && bo3.orders_per_page === 10 && bo3.orders_total === 23 && boEmpty.ok === true && boEmpty.orders_page === 1 && boEmpty.orders_per_page === 30 && boEmpty.orders.length === 23 && bo.ledger.length > 10 && bo.ledger[0].balance_after === bo.wallet.balance, [bo.orders_total, bo3.orders.length, bo.ledger.length, boEmpty.code]);
+    /* 和 lib/api.sh 的 ep_billing / tests/billing-bridge.py 同一组不合法的分页值: 一律 E_INVALID, 不会按默认值返回第 1 页 */
+    const JUNK = ['orders_page=x&orders_per_page=99', 'orders_page=0', 'orders_page=1001', 'orders_page=-1', 'orders_page=01', 'orders_page=1.5', 'orders_page=abc', 'orders_page=2%3Bid', 'orders_page=%2e%2e', 'orders_per_page=4', 'orders_per_page=31', 'orders_per_page=05', 'orders_per_page=1e1', 'orders_page=2&orders_per_page=100'], boJunk = [];
+    for (const q of JUNK) boJunk.push(jx(await api('GET', '/api/billing?' + q)));
+    ck('orders paging is validated like the bridge and the cloud: a junk or out-of-range orders_page / orders_per_page (x, 0, 1001, -1, 01, 1.5, 4, 31, 05, 1e1 …) -> E_INVALID with a translated error, no orders', boJunk.length === JUNK.length && boJunk.every((x) => x.ok === false && x.code === 'E_INVALID' && !!x.error && !('orders' in x)), JUNK.filter((q, i) => boJunk[i].code !== 'E_INVALID'));
     const co = (body) => api('POST', '/api/billing/checkout', { body: JSON.stringify(Object.assign({ request_key: crypto.randomBytes(12).toString('hex') }, body)) }).then(jx);
     const tBad = [await co({ kind: 'topup', amount: '10.5' }), await co({ kind: 'topup', amount: '3' }), await co({ kind: 'topup', amount: '1001' }), await co({ kind: 'topup', amount: '020' }), await co({ kind: 'topup', amount: 20 })], tOk = await co({ kind: 'topup', amount: '20' });
     ck('top-ups are whole USDT 4..1000 as a string (10.5 / 3 / 1001 / 020 / a number -> E_INVALID); "20" creates a pending 20 USDT invoice; a second checkout inside its pay window -> E_ORDER_PENDING', tBad.every((x) => x.code === 'E_INVALID') && tOk.ok === true && tOk.order.kind === 'topup' && tOk.order.price === '20.000000' && tOk.order.amount === '20.000000' && tOk.order.status === 'pending' && (await co({ kind: 'plan', sku: 'm1' })).code === 'E_ORDER_PENDING', tBad.map((x) => x.code));

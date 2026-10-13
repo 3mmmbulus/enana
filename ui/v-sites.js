@@ -81,14 +81,18 @@
     /* 出口类型图例: 三种出口 (图标 + 名称, 路由颜色只在图标上) + 一个「!」说明三种的区别 */
     function lg(v, icon, nameKey) { return h('span', { class: 'sx-lg sx-lg-' + v }, ui.icon(icon, 15, 'ci'), h('span', null, L(nameKey))); }
     /* 误删 / 设错了: 一键把网站页的改动全部恢复为系统默认 (后台任务, 清掉之前先备份)。放在「添加自定义网站」旁边的「⋯」菜单里 (不和图例挤在一起);
-     * 菜单项没有「暂不可用」状态, 所以这里自己先检查辅助服务 */
+     * 菜单项没有「暂不可用」状态, 所以这里自己先检查辅助服务; 也没有忙碌状态, 所以用 resetting 记住「确认 -> 后台任务 -> 重新读取状态」还没结束:
+     * 这期间再选一次只提示稍等, 不会再开第二个恢复任务 (第二个什么也不会改, 却要再备份一次, 占掉一份只保留 3 份的备份) */
+    var resetting = false;
     function resetAllSites() {
+      if (resetting) { ui.toast(t('sites.dm.busy'), 'warn'); return Promise.resolve(); }
       var why = TP.why.helper();
       if (why) { ui.toast(why, 'warn'); return Promise.resolve(); }
+      resetting = true;
       return ui.confirmDialog({ title: t('sites.resetAll.title'), message: t('sites.resetAll.msg'), detail: TP.tunDetail([t('sites.resetAll.detail')]), confirmText: t('sites.resetAll.go'), danger: true }).then(function (ok) {
         if (!ok) return;
         return TP.jobs.runInDock(t('sites.resetAll.title'), function () { return TP.helper('POST', '/api/sites/reset'); }).then(function () { return TP.loadState(); });
-      });
+      }).then(function () { resetting = false; }, function (e) { resetting = false; throw e; });
     }
     el.more = ui.ibtn('more', L('common.more'), { cls: 'sx-more' });
     ui.menu(el.more, function () { return [{ label: t('sites.resetAll.btn'), desc: t('sites.resetAll.menuDesc'), icon: 'refresh', danger: true, onClick: resetAllSites }]; }, { label: t('common.more'), place: 'bottom-end' });

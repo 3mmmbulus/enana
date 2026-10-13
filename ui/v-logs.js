@@ -698,14 +698,15 @@
     el.liveSw = h('input', { type: 'checkbox', role: 'switch', 'aria-label': L('logs.live.aria') });
     el.liveSw.addEventListener('change', function () { setLive(el.liveSw.checked); });
     el.liveWrap = h('label', { class: 'log-live', title: L('logs.live.tip') }, h('span', { class: 'sw' }, el.liveSw, h('span', { class: 'sw-ui' })), h('span', { class: 'log-live-t' }, L('logs.live')));
-    /* 不常用的三个 (导出 / 日志设置 / 清除) 收进「更多」菜单, 工具栏只留看日志用的控件; 「清除」在菜单里标成危险项, 确认弹窗里的按钮仍然带小锁 (要再次输入登录密码) */
+    /* 不常用的三个 (导出 / 日志设置 / 清除) 收进「更多」菜单, 工具栏只留看日志用的控件; 「清除」在菜单里标成危险项,
+     * 入口和确认弹窗里的按钮都带小锁 (要再次输入登录密码; 以前工具栏按钮用 TP.sudo.mark, 菜单项没有按钮可标, 就把同一个小锁放进菜单项的文字里) */
     el.more = ui.btn(L('common.more'), { icon: 'more', cls: 'log-more' });
     ui.menu(el.more, function () {
       return [
         { label: t('common.export'), desc: t('logs.export.tip'), icon: 'download', onClick: openExport },
         { label: t('logs.settings.btn'), icon: 'settings', onClick: function () { return LG.openSettings(); } },
         { sep: true },
-        { label: t('logs.clear.btn'), desc: t('logs.clear.menuDesc'), icon: 'delete', danger: true, onClick: clearFromMenu }
+        { label: TP.sudo && TP.sudo.icon ? [t('logs.clear.btn'), TP.sudo.icon()] : t('logs.clear.btn'), desc: t('logs.clear.menuDesc'), icon: 'delete', danger: true, onClick: clearFromMenu }
       ];
     }, { label: t('common.more'), place: 'bottom-end' });
 

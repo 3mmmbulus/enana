@@ -10,8 +10,8 @@
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, I = window.I18N, t = I.t, L = I.L;
   var B = TP.billing = {}, data = null, error = null, pending = null, loadedAt = 0, epoch = 0;
   var busyKeys = {}, ordering = false, keys = {}, mounts = [], emailMounts = [], dialogs = [], resendUntil = 0;   // busyKeys: 按操作区分 (只转圈被点的那个按钮), 不再是全局标志
-  var PER_PAGE = 10, LEDGER_FIRST = 10, RECOMMENDED = 'y1', PRESETS = [10, 20, 50, 100], TOPUP_MIN = 4, TOPUP_MAX = 1000;
-  var ordersPage = 1, firstOrders = [], ledgerAll = false, payWatch = 0, seq = 0;   // firstOrders: 最近一次读到的第 1 页订单 (待付款的订单只可能在这一页: 24 小时内最多 5 个订单)
+  var PER_PAGE = 10, NEWEST = 5, LEDGER_FIRST = 10, RECOMMENDED = 'y1', PRESETS = [10, 20, 50, 100], TOPUP_MIN = 4, TOPUP_MAX = 1000;   // NEWEST: 24 小时内最多 5 个订单, 还能付款的订单 (1 小时内创建) 一定在最新的 5 个里
+  var ordersPage = 1, firstOrders = [], ledgerAll = false, payWatch = 0, seq = 0;   // firstOrders: 最近一次读到的最新订单 (第 1 页; 在看别的页时是另外读的最新 NEWEST 个), 待付款的订单只可能在这里: 24 小时内最多 5 个订单
   var labels = { m1: 'billing.term.m1', m3: 'billing.term.m3', m6: 'billing.term.m6', y1: 'billing.term.y1', y2: 'billing.term.y2', y3: 'billing.term.y3', y5: 'billing.term.y5' };
   var ST_KIND = { pending: 'info', overdue: 'warn', paid: 'ok', activated: 'ok', manual: 'warn', credited_late: 'warn', expired: 'neutral', cancelled: 'neutral' };
   function micro(v) { if (typeof v !== 'string' || !/^\d{1,7}\.\d{6}$/.test(v)) return NaN; return Number(v.replace('.', '')); }
@@ -83,8 +83,9 @@
   }
   function anyBusy() { return Object.keys(busyKeys).length > 0; }
   function walk(fn) { function w(n) { if (!n) return; fn(n); Array.prototype.forEach.call(n.children || [], w); } mounts.concat(emailMounts).forEach(w); }
-  /* 只更新带这个 key 的按钮的转圈状态, 不重建列表 (重建会让同一卡片上所有按钮一起闪) */
-  function setBusy(bk, on) { walk(function (n) { if (n._busyKey === bk) ui.actionBusy(n, on); }); }
+  /* 只更新带这个 key 的按钮的转圈状态, 不重建列表 (重建会让同一卡片上所有按钮一起闪)。
+   * 被点的那个按钮 ui.act 已经标成忙碌 (结束时它自己恢复): 不能再标一次, 第二次会把「已禁用」当成原来的状态记下, 请求失败后按钮就一直是灰的 */
+  function setBusy(bk, on) { walk(function (n) { if (n._busyKey === bk && !(on && n._busy)) ui.actionBusy(n, on); }); }
   /* 重画后把焦点放回刚才点的那个按钮 (翻页时键盘用户不会丢失位置) */
   function refocus(key) { var hit = null; walk(function (n) { if (!hit && n._focusKey === key) hit = n; }); if (hit && typeof hit.focus === 'function') { try { hit.focus({ preventScroll: true }); } catch (e) { /* 忽略 */ } } }
   function redraw() { mounts.forEach(render); emailMounts.forEach(renderEmail); dialogs.forEach(function (d) { if (d._sync) d._sync(); }); TP.emit('billing', data); }
@@ -94,13 +95,16 @@
     if (pending) return pending;
     if (!force && data && Date.now() - loadedAt < 60000) return Promise.resolve(data);
     var mine = epoch, page = ordersPage;
-    pending = TP.helper('GET', '/api/billing', { q: { orders_page: page, orders_per_page: PER_PAGE }, timeout: 15000 }).then(function (r) {
+    /* 正在看第 2 页以后: 另外读一次最新的 NEWEST 个订单, 「有未完成的订单」提示和付款按钮的限制不能停在以前读到的第 1 页上 (订单可能已在别处付款 / 取消) */
+    var newest = page !== 1 && paged(data) ? TP.helper('GET', '/api/billing', { q: { orders_page: 1, orders_per_page: NEWEST }, timeout: 15000 }) : null;
+    pending = Promise.all([TP.helper('GET', '/api/billing', { q: { orders_page: page, orders_per_page: PER_PAGE }, timeout: 15000 }), newest]).then(function (rs) {
+      var r = rs[0], one = rs[1];
       if (mine !== epoch) return null;
-      if (!r || !r.email || !r.wallet || !Array.isArray(r.catalog) || !Array.isArray(r.orders) || !Array.isArray(r.ledger)) throw TP.mkErr('api', t('error.generic'));
+      if (!r || !r.email || !r.wallet || !Array.isArray(r.catalog) || !Array.isArray(r.orders) || !Array.isArray(r.ledger) || (one && !Array.isArray(one.orders))) throw TP.mkErr('api', t('error.generic'));
       var justVerified = !!(data && data.email && data.email.verified === false && r.email.verified === true);
       /* 旧的云端不认分页参数 (没有 orders_total): 返回最近 30 个订单, 在本机分页 */
       if (!paged(r)) firstOrders = r.orders;
-      else { if (page === ordersPage) ordersPage = r.orders_page; if (r.orders_page === 1) firstOrders = r.orders; }
+      else { if (page === ordersPage) ordersPage = r.orders_page; if (r.orders_page === 1) firstOrders = r.orders; else if (one) firstOrders = one.orders; }
       data = r; error = null; loadedAt = Date.now(); redraw();
       if (justVerified) TP.plan.load(true);                                   // 刚验证完邮箱: 套餐里「官方线路」的原因从 verify 变成可用, 不用等缓存过期
       return r;
@@ -381,7 +385,7 @@
     root.appendChild(h('p', null, ui.badge(L(data.email.verified ? 'billing.emailVerified' : 'billing.emailUnverified'), data.email.verified ? 'ok' : 'warn'), ' ' + data.email.address));
     if (data.email.verified) return;
     var cooldown = resendUntil > Date.now();
-    var reason = !canUse() ? TP.why.helper() || t('why.locked') : busyKeys.email ? t('common.loading') : !data.email.mail_available ? t('billing.mailUnavailable') : cooldown ? t('billing.resendWait') : '';
+    var reason = !canUse() ? TP.why.helper() || t('why.locked') : !data.email.mail_available ? t('billing.mailUnavailable') : cooldown ? t('billing.resendWait') : '';   // 发送中只转圈 (busy key 'email'), 不当成「不可用」的原因: 否则中途重画过、请求又失败时按钮会一直不可用
     root.appendChild(button(L('billing.sendVerification'), async function () {
       if (reason) return;
       var r = await write('email/send', {}, undefined, 'email');
@@ -396,7 +400,7 @@
   /* ================= 付款订单: 买什么 → 二维码 → 完整金额 (小数尾数标红) → 收款地址 (首尾各 6 位标红) → 倒计时 → 状态 ================= */
   B.openOrder = function (order) {
     if (!order || !/^[a-z0-9]{15}$/.test(order.id) || typeof order.amount !== 'string' || !/^\d+\.\d{6}$/.test(order.amount) || !/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(order.address)) return;
-    var mine = epoch, timer = 0, tick = 0, closed = false, busy = false, failures = 0, current = order, revision = 0, recheckUntil = 0, note = '', sig = '', cdEl = null;
+    var mine = epoch, timer = 0, tick = 0, closed = false, busy = false, poll = null, failures = 0, current = order, revision = 0, recheckUntil = 0, note = '', sig = '', cdEl = null;   // busy: 「再次核实」进行中 (按钮上看得到, 算进 state()); poll: 后台轮询进行中 (看不到, 不算)
     var body = h('div', { class: 'billing-invoice' }), dlg;
     function live() { return current.status === 'pending' || current.status === 'manual'; }
     function schedule() { clearTimeout(timer); timer = 0; if (!closed && live()) timer = setTimeout(refresh, document.hidden ? 15000 : Math.min(30000, failures ? 5000 * failures : 3000)); }
@@ -453,6 +457,8 @@
       if (closed || busy || mine !== epoch || recheckUntil > Date.now()) return;
       busy = true; paint(note);
       try {
+        if (poll) await poll;                                                   // 后台轮询正在进行: 等它回来再核实, 这次点击不会丢
+        if (closed || mine !== epoch || !canRecheck()) return;                 // 轮询发现订单已经付款 / 关闭: 不用再核实 (finally 会重画)
         var r = await TP.helper('POST', '/api/billing/order/recheck', { body: JSON.stringify({ id: current.id }), timeout: 12000 });
         if (closed || mine !== epoch) return;
         if (r && r.order && r.order.id === current.id && r.order.amount === current.amount && r.order.address === current.address) current = r.order;
@@ -461,20 +467,24 @@
       } catch (e) { if (!closed && mine === epoch) { if (e && e.code === 'E_RATE_LIMITED') recheckUntil = Date.now() + 30000; ui.toast(msg(e), 'err'); } }
       finally { busy = false; if (!closed && mine === epoch) { paint(); schedule(); } }
     }
-    async function refresh() {
-      if (closed || busy || mine !== epoch || S.locked || anyBusy()) { schedule(); return; }
-      if (document.hidden) { schedule(); return; }
-      busy = true;
+    /* 后台轮询 (每 3 秒): 进行中只记在 poll 上, 不算进 state() —— 轮询本身不改变弹窗里的任何东西, 所以不重画, 按钮也不变灰 / 转圈 */
+    function refresh() {
+      if (poll) return poll;
+      if (closed || busy || mine !== epoch || S.locked || anyBusy() || document.hidden) { schedule(); return Promise.resolve(); }
+      var done = function () { poll = null; schedule(); };
+      poll = pollOnce().then(done, done);
+      return poll;
+    }
+    async function pollOnce() {
       var version = revision;
       try {
         var r = await TP.helper('GET', '/api/billing/order', { q: { id: current.id }, timeout: 12000 });
         if (closed || mine !== epoch || version !== revision) return;
         if (!r.order || r.order.id !== current.id || r.order.amount !== current.amount || r.order.address !== current.address) throw TP.mkErr('api', t('error.generic'));
         var previous = current.status; current = r.order; failures = 0;
-        if (previous === 'pending' && current.status !== 'pending') { ordersPage = 1; await B.load(true); TP.plan.load(true); }
-        busy = false; if (note || state() !== sig) paint();                      // 没有变化就不重建 (每 3 秒重建会让键盘焦点从底部按钮上丢掉, 读屏也会反复播报状态)
-      } catch (e) { failures++; if (!closed && mine === epoch) { busy = false; paint(msg(e)); } }
-      finally { busy = false; schedule(); }
+        if (previous === 'pending' && current.status !== 'pending') { ordersPage = 1; await B.load(true); TP.plan.load(true); if (closed || mine !== epoch) return; }
+        if (note || state() !== sig) paint();                                    // 没有变化就不重建 (每 3 秒重建会让键盘焦点从底部按钮上丢掉, 读屏也会反复播报状态)
+      } catch (e) { failures++; if (!closed && mine === epoch) paint(msg(e)); }
     }
     dlg = ui.modal({ title: t('billing.invoice'), icon: 'pro', body: body, size: 'md', onClose: function () { stop(); dialogs = dialogs.filter(function (d) { return d !== dlg; }); } });
     dialogs.push(dlg); paint(); schedule();

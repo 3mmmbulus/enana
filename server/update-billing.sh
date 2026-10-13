@@ -8,8 +8,10 @@
 # What it does, in order, and what it refuses:
 #   * refuses unless it runs as root, billing is already deployed (hooks + migration 1790000003), PocketBase runs as
 #     the service user and is healthy now, node >= 18 and python3 are present, every staged file exists, the staged
-#     hooks and migrations parse, and no installed billing migration differs from the staged one (an applied
-#     migration is never rewritten);
+#     hooks and migrations parse, no installed billing migration differs from the staged one (an applied migration
+#     is never rewritten) and, when something would be installed, the backup filesystem has room for a copy of the
+#     data directory and the migrations plus a margin (10 % + 256 MiB), so that the copy can never fill the disk
+#     under the service it restarts;
 #   * --check validates all of that and prints what would change; it changes nothing;
 #   * takes the lock shared with deploy-billing.sh and update-official.sh and backs up the billing hooks it replaces
 #     and the whole pb_migrations directory (/var/backups/enana/releases/billing-update-<UTC time>-<pid>, mode 700);
@@ -19,11 +21,17 @@
 #   * installs enana_billing.pb.js, enana_billing.js, enana_billing_domain.js and the billing migrations
 #     (1790000004_billing_lease.js, 1790000006_billing_amount.js) as 644 root:root through a temp file + mv, runs
 #     `pocketbase migrate up` as the service user, checks the migrated schema offline (read-only), starts PocketBase,
-#     waits for /api/health, checks that the billing routes are served (401 without a session, never 404/5xx), starts
-#     the payments scanner again if it was running, and checks that every other running service, the nginx/systemd
-#     files and the scanner's state are unchanged;
-#   * on ANY failure after the first change it restores the hooks, the migrations directory and the data directory
-#     from the backup, starts PocketBase (and the scanner, if it was running) again and exits non-zero.
+#     waits for /api/health, checks that the billing routes are served (401 without a session, never 404/5xx) and
+#     that every other running service and the nginx/systemd files are unchanged; only then, as the last step, it
+#     starts the payments scanner again (if it was running) and checks that it is back;
+#   * on ANY failure after the first change it stops the scanner first (it may already have been started again),
+#     then PocketBase, restores the hooks from the backup, starts PocketBase (and the scanner, if it was running)
+#     again and exits non-zero. The data directory and the migrations directory are restored from the copy, together,
+#     only when PocketBase has not been started on the migrated database yet. From that start on the live database is
+#     kept with its migration files: it may hold orders, sign-ups, sessions and settled receipts that a restore would
+#     delete (the scanner would never send those receipts again), and the previous hooks run on it (the new migration
+#     only widens a bound).
+#     A data copy that failed half-way (a full disk) is removed from the backup.
 #     Nothing is committed until all checks passed.
 # It never reads or writes /etc/enana/billing.json (the receiving switch), never touches nginx, the website, the
 # scanner files or the downloads, and prints no secret (only file names, counts, HTTP codes and the backup path).
@@ -116,9 +124,21 @@ for f in "${mig_files[@]}"; do
   fi
 done
 
+# The backup takes a full copy of the data directory (earlier backups are never pruned). Refuse before anything is
+# stopped unless the backup filesystem has room for it plus a margin, so that the copy cannot fill the disk under the
+# service it restarts. The margin also leaves PocketBase room to write once it runs again.
+if [ ${#changed[@]} -gt 0 ]; then
+  space_dir=$backups; while [ ! -d "$space_dir" ]; do space_dir=$(dirname "$space_dir"); done
+  need_kb=$({ du -sk "$data" "$migs" 2>/dev/null || true; } | awk '{s += $1} END {print s + 0}')
+  free_kb=$({ df -Pk "$space_dir" 2>/dev/null || true; } | awk 'NR == 2 {print $4}')
+  margin_kb=$(( need_kb / 10 + 262144 ))
+  [ "$need_kb" -gt 0 ] && [[ $free_kb =~ ^[0-9]+$ ]] || die "cannot measure the size of $data or the free space under $space_dir; nothing was changed."
+  [ "$free_kb" -ge $(( need_kb + margin_kb )) ] || die "not enough free space for the backup under $space_dir: $free_kb KiB free, the copy of $data and $migs needs $need_kb KiB plus a $margin_kb KiB margin. Free space (earlier backups are under $backups/releases) and run again; nothing was changed."
+fi
+
 if [ "$mode" = check ]; then
   if [ ${#changed[@]} -eq 0 ]; then note 'Check passed: the billing files are already up to date; nothing would be restarted.'
-  else note "Check passed: ${#changed[@]} file(s) would be installed; $payments (if running) and $unit would be stopped, the database backed up and migrated, and both started again. Nothing was changed."; fi
+  else note "Check passed: ${#changed[@]} file(s) would be installed; $payments (if running) and $unit would be stopped, the database backed up ($need_kb KiB; $free_kb KiB free under $space_dir) and migrated, PocketBase started and checked, and the scanner started again last. Nothing was changed."; fi
   exit 0
 fi
 if [ ${#changed[@]} -eq 0 ]; then
@@ -148,7 +168,7 @@ snapshot_services > "$backup/services.before"
 snapshot_configs > "$backup/configs.before"
 pay_before=$(systemctl is-active "$payments" 2>/dev/null || true)
 
-pay_stopped=0; stopped=0; database_saved=0; committed=0
+pay_stopped=0; stopped=0; database_saved=0; served=0; committed=0
 restore_hooks() {
   local f state
   while read -r f state; do
@@ -157,22 +177,46 @@ restore_hooks() {
   rm -f "$hooks"/.enana_billing*.new
 }
 rollback() {
-  local rc=$?
+  local rc=$? pay_down=1 pb_down=1 what
   trap - EXIT
   set +e                             # attempt every restore step even if one of them fails
   [ "$rc" != 0 ] || rc=1
   if [ "$committed" = 0 ] && { [ "$stopped" = 1 ] || [ "$pay_stopped" = 1 ]; }; then
     echo "update-billing: FAILED (exit $rc); restoring the previous state." >&2
+    # The scanner first, before anything is put back: its start is the last step, so it may be running again, and no
+    # receipt may be settled into files or a database that are being restored.
+    if [ "$pay_stopped" = 1 ]; then systemctl stop "$payments" 9>&- || pay_down=0; fi
     if [ "$stopped" = 1 ]; then
-      systemctl stop "$unit" 9>&- || true
-      if [ "$database_saved" = 1 ]; then
+      systemctl stop "$unit" 9>&- || pb_down=0
+      if [ "$database_saved" = 0 ]; then
+        # The copy failed (typically a full disk) before anything was installed. A partial copy must not stay behind:
+        # PocketBase would come back on a disk that the backup filled.
+        what='the previous hooks, migrations and database (nothing had been installed yet)'
+        if [ -n "$backup" ] && [ -e "$backup/pb_data" ]; then
+          if rm -rf "$backup/pb_data"; then echo "Removed the incomplete database copy from $backup." >&2
+          else echo "COULD NOT REMOVE THE INCOMPLETE DATABASE COPY $backup/pb_data; remove it to free the disk." >&2; fi
+        fi
+      else
         restore_hooks
-        rm -rf "$migs" && cp -a "$backup/pb_migrations" "$migs"
-        [ -z "$data" ] || [ ! -d "$backup/pb_data" ] || { rm -rf "$data" && cp -a "$backup/pb_data" "$data"; }
+        # The migrations directory goes back only together with the database, so that every migration the database
+        # records as applied always has its file.
+        if [ "$served" = 1 ]; then
+          # PocketBase was started on the migrated database: it may have taken orders, sign-ups, sessions and settled
+          # receipts since. Replacing it with the copy would delete them (an order lost this way frees its address and
+          # amount for another user; a lost receipt is never sent again by the scanner). The previous hooks run on
+          # the migrated database (the new migration only widens a bound), and its migration files stay installed.
+          what="the previous hooks on the migrated database (its migration files stay installed). The database was kept, because PocketBase served on it after the update; never restore the copy taken before the update ($backup/pb_data) over it"
+        elif [ "$pay_down" = 1 ] && [ "$pb_down" = 1 ] && [ -n "$data" ] && [ -d "$backup/pb_data" ]; then
+          rm -rf "$migs" && cp -a "$backup/pb_migrations" "$migs"
+          rm -rf "$data" && cp -a "$backup/pb_data" "$data"
+          what='the previous hooks, migrations and database'
+        else
+          what="the previous hooks only. THE DATABASE AND MIGRATIONS WERE NOT RESTORED because $payments or $unit did not stop; the copy taken before the update is $backup/pb_data"
+        fi
       fi
       systemctl start "$unit" 9>&- || true
-      if wait_healthy; then echo "Rolled back. $unit is healthy again with the previous hooks, migrations and database. Backup: $backup" >&2
-      else echo "ROLLED BACK BUT $unit IS NOT HEALTHY. Inspect: journalctl -u $unit -n 80; backup: $backup" >&2; fi
+      if wait_healthy; then echo "Rolled back. $unit is healthy again with $what. Backup: $backup" >&2
+      else echo "ROLLED BACK BUT $unit IS NOT HEALTHY ($what). Inspect: journalctl -u $unit -n 80; backup: $backup" >&2; fi
     fi
     if [ "$pay_stopped" = 1 ]; then
       systemctl start "$payments" 9>&- || true
@@ -187,7 +231,7 @@ trap rollback EXIT
 # The flags are set first: if a stop fails half-way, the rollback still starts the service again.
 if [ "$pay_before" = active ]; then pay_stopped=1; systemctl stop "$payments" 9>&-; note "Stopped $payments for the update."; fi
 stopped=1; systemctl stop "$unit" 9>&-
-cp -a "$data" "$backup/pb_data"
+cp -a "$data" "$backup/pb_data"    # a failure here (a full disk) makes the rollback remove the partial copy
 database_saved=1
 
 for rel in "${changed[@]}"; do
@@ -213,6 +257,9 @@ assert 'idx_order_quote' not in (row[1] or ''), 'the old permanent (address, amo
 print('Schema checked: amounts up to 1000.999 USDT, 24-hour leases, no permanent (address, amount) index.')
 PY
 
+# From the start on PocketBase may serve requests on the migrated database, and a rollback keeps that database (see
+# rollback). The flag is set first: a start that fails half-way may already have served.
+served=1
 systemctl start "$unit" 9>&-      # the lock descriptor must not leak into anything the start spawns
 wait_healthy || { echo "$unit did not become healthy after the start." >&2; exit 1; }
 
@@ -226,11 +273,16 @@ done
 c=$(http_code "$api/api/enana/admin/billing/manual"); case $c in 401|403) ;; *) echo "the billing operator route answered HTTP ${c:-none}; the new hooks did not load." >&2; exit 1 ;; esac
 c=$(http_code "$api/api/enana/v1/plan"); [ "$c" = 401 ] || { echo "the existing plan route answered HTTP ${c:-none} (expected 401)." >&2; exit 1; }
 
-if [ "$pay_stopped" = 1 ]; then systemctl start "$payments" 9>&-; fi
+# Every check that can still fail runs before the scanner is started again, so that its start is the last step.
 snapshot_services > "$backup/services.after"
 snapshot_configs > "$backup/configs.after"
 cmp -s "$backup/services.before" "$backup/services.after" || { echo 'another running service changed during the update.' >&2; exit 1; }
 cmp -s "$backup/configs.before" "$backup/configs.after" || { echo 'an nginx/systemd file changed during the update.' >&2; exit 1; }
+
+# The last step: the scanner settles receipts again (it rereads the receive history, so transfers made during the
+# update are settled now). If it does not come back, the rollback stops it before restoring anything and keeps the
+# database it may already have written to.
+if [ "$pay_stopped" = 1 ]; then systemctl start "$payments" 9>&-; fi
 pay_after=$(systemctl is-active "$payments" 2>/dev/null || true)
 [ "$pay_before" = "$pay_after" ] || { echo "$payments changed state ($pay_before -> $pay_after)." >&2; exit 1; }
 
