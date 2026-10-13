@@ -194,8 +194,10 @@
     hd.acct = TP.byId('acct-btn'); hd.acctAv = TP.byId('acct-av'); hd.acctT = TP.byId('acct-t'); hd.acctDot = TP.byId('acct-dot');
     hd.acct.insertBefore(ui.icon('chevron-down', 14, 'acct-chev'), hd.acctDot);
     ui.menu(hd.acct, function () {
+      function tab(id) { return function () { if (TP.settingsTab) TP.settingsTab(id); else TP.go('settings'); }; }     // 邮箱 -> 设置 · 账号与设备; 会员 -> 设置 · 会员
       var items = [
-        { label: TP.auth.label(), icon: 'account', onClick: function () { TP.go('settings'); } },
+        { label: TP.auth.label(), icon: 'account', onClick: tab('account') },
+        { label: t('plan.menu'), icon: 'pro', onClick: tab('plan') },
         { label: t('user.settings'), icon: 'nav-settings', onClick: function () { TP.go('settings'); } }
       ];
       if (S.update.available) items.push({ label: t('upd.ind.new', { v: S.update.latest }), icon: 'update', onClick: function () { TP.updates.openDialog(); } });

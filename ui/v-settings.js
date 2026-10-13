@@ -331,12 +331,12 @@
     el.btnOut = ui.btn(L('set.acc.logout'), { icon: 'logout', kind: 'soft-bad' }); ui.act(el.btnOut, function () { return TP.auth.logout('logout'); });
     var c = card('account', 'account', L('set.acc.title'), L('set.acc.sub'), 'settings.account');
     c.appendChild(row(L('set.acc.signedIn'), el.accWho)); c.appendChild(el.accNote);
+    if (TP.billing) c.appendChild(TP.billing.mountEmail());              // 邮箱是否已验证 (+ 发送验证邮件): 只在这里, 会员页的说明里有「去验证邮箱」跳过来
     /* 无操作多久后需要重新输入密码 (默认 3 天, 1 分钟 ~ 30 天; 偏好 lock.idleMin 会同步到其它电脑) */
     el.lockSel = h('select', { class: 'sel', 'aria-label': L('set.lock.title') });
     TP.CFG.LOCK_IDLE_PRESETS.forEach(function (m) { el.lockSel.appendChild(TP.opt(String(m), TP.auth.idleLabel(m) + (m === TP.CFG.LOCK_IDLE_DEFAULT_MIN ? t('set.lock.default') : ''))); });
     ui.selectAct(el.lockSel, function () { return String(TP.lockIdleMin()); }, function (v) { TP.prefs.set('lock.idleMin', +v); });
     c.appendChild(row(L('set.lock.title'), el.lockSel)); c.appendChild(h('p', { class: 'hint sm' }, L('set.lock.hint')));
-    if (TP.billing) c.appendChild(TP.billing.mountEmail());
     c.appendChild(h('div', { class: 'row wrap set-btns' }, el.btnPw, el.btnSwitch, el.btnOut));
     c.appendChild(h('p', { class: 'hint sudo-hint' }, ui.icon('lock', 14, 'ci'), h('span', null, L('set.acc.sudoNote'), hl('settings.sudo'))));
     return c;
@@ -432,12 +432,15 @@
   }
 
   /* ================= 套餐权益 + 服务端确认的订单 / 余额 ================= */
+  /* 卡片顺序: 套餐状态 (renderPlan) → 购买 / 充值 / 余额 / 订单 / 余额明细 (billing.js) → 功能清单 (renderPlan, 放在购买区之后) */
   function planCard() {
     el.planBox = h('div', { class: 'plan' });
+    el.planFeats = h('div', { class: 'plan-fbox' });
     el.planRefresh = ui.ibtn('refresh', L('plan.refresh'), { size: 16 });
-    ui.act(el.planRefresh, function () { return TP.plan.load(true); });
+    ui.act(el.planRefresh, function () { return Promise.all([TP.plan.load(true), TP.billing ? TP.billing.load(true) : null]); });      // 一个刷新按钮: 套餐和订单 / 余额一起重新读取
     var c = h('section', { class: 'card set-card', id: 'set-plan' }, h('div', { class: 'card-h' }, ui.icon('pro', 20, 'ci'), h('h2', null, L('plan.title'), hl('settings.plan')), h('span', { class: 'muted sm' }, L('plan.sub')), el.planRefresh), el.planBox);
     if (TP.billing) c.appendChild(TP.billing.mount());
+    c.appendChild(el.planFeats);
     return c;
   }
   function renderPlan() {
@@ -446,8 +449,8 @@
     ui.avail(el.planRefresh, why);
     var sig = JSON.stringify(d || 0) + I.lang;
     if (el.planBox._sig === sig) return;
-    el.planBox._sig = sig; TP.clear(el.planBox);
-    if (!d) { el.planBox.appendChild(S.locked ? h('p', { class: 'muted' }, t('why.locked')) : ui.skeleton(5)); return; }
+    el.planBox._sig = sig; TP.clear(el.planBox); TP.clear(el.planFeats);
+    if (!d) { el.planBox.appendChild(S.locked ? h('p', { class: 'muted' }, t('why.locked')) : ui.skeleton(3)); return; }
     var pro = TP.plan.isPro(), exp = d.expires_at ? +d.expires_at : 0, now = Math.floor(Date.now() / 1000), left = exp ? Math.ceil((exp - now) / 86400) : 0;
     var head = h('div', { class: 'plan-h' },
       h('span', { class: 'plan-ic' + (pro ? ' pro' : '') }, ui.icon(pro ? 'pro' : 'success', 22)),
@@ -456,7 +459,6 @@
     el.planBox.appendChild(head);
     var lim = d.limits || {}, rows = [];
     if (lim.devices_per_platform) rows.push(row(t('plan.limit.devices'), t('plan.limit.devicesVal', { n: lim.devices_per_platform })));
-    if (d.checked) rows.push(row(t('plan.checked'), TP.fmt.rel(d.checked)));
     var of = d.official || {};
     rows.push(row(t('plan.official'), of.available ? t('plan.official.on', { n: of.nodes || 0 }) : t('plan.official.off')));
     rows.forEach(function (r) { el.planBox.appendChild(r); });
@@ -472,7 +474,7 @@
       var b = ui.btn(L('plan.f.more'), { sm: true, kind: 'ghost', icon: 'help-i' }); ui.act(b, function () { TP.plan.explain(k); });
       list.appendChild(h('li', { class: 'plan-f' }, h('span', { class: 'plan-fn' }, f.pro ? ui.icon('pro', 15, 'ci pro-ic') : ui.icon('check', 15, 'ci'), h('span', null, TP.plan.name(k))), h('span', { class: 'plan-fb' }, ui.badge(f.pro ? L('plan.pro') : L('plan.tier.free'), f.pro ? 'pro' : 'neutral'), st, b)));
     });
-    if (keys.length) { el.planBox.appendChild(h('h3', { class: 'plan-fh' }, t('plan.features'), hl('plan.features'))); el.planBox.appendChild(list); }
+    if (keys.length) { el.planFeats.appendChild(h('h3', { class: 'plan-fh' }, t('plan.features'), hl('plan.features'))); el.planFeats.appendChild(list); }
     if (!TP.billing) el.planBox.appendChild(h('p', { class: 'muted sm' }, t('plan.upgradeSoon')));
   }
 
