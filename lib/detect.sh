@@ -130,7 +130,10 @@ port_state() { # 端口 标签 -> free 空闲 · own 本程序在用 (监听者�
     if [ "$gone" = 1 ]; then continue; fi
     # 监听者里有本程序自己的核心就算 own, 即使别的程序另外绑了 *:端口 或 [::]:端口 (例如开了「允许局域网」的 Clash): 本程序和系统代理只用 127.0.0.1:端口,
     # macOS 把那里的连接交给绑得更具体的本程序。换了端口, 系统代理就会留在旧端口上 (2.3.23 服务在运行时从不换端口); 只有本程序不在其中才算 foreign
-    if [ "$own" = 1 ]; then echo own; else echo foreign; fi
+    if [ "$own" = 1 ]; then echo own; return 0; fi
+    # TUN 的 root 核心在 127.0.0.1:端口 上监听, 普通账户的 lsof 看不见它, 看得见的只是另外绑了 *:端口 之类的别的程序: 说不清是不是共用, 就照实说没能确认、
+    # 不换端口 (和 2.3.23 一样; 换了的话系统代理留在旧端口上, 验证一步还会误报绑定失败)。用户自己的核心看得见, 它不在监听者里才是真的被占用 (仍然换端口)
+    if [ "$lbl" = "$LABEL" ] && enhanced_loaded; then echo unseen; else echo foreign; fi
     return 0
   done
   [ "$running" = 1 ] && echo unseen || echo foreign

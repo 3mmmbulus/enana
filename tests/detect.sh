@@ -320,6 +320,20 @@ echo "== 3. 端口归属 (pick_ports): enana 自己在用的保持不变 (升级
   eq "两个外部监听者、没有本程序: 换端口" "$([ "$PORT" = 39700 ] && echo same || echo moved)" "moved"
   nomut "3k"
 )
+(
+  # 增强模式: root 核心在 127.0.0.1:端口 上 (普通账户的 lsof 看不见), 看得见的只有另外绑了 *:端口 的别的程序 (例如开了「允许局域网」的 Clash): 说不清是不是
+  # 共用 → 照实说没能确认, 端口不变 (以前当成被占用换了端口, 系统代理留在旧端口上, 验证一步还误报绑定失败)
+  c=$(mkcase); enter "$c"
+  printf '200 /usr/local/bin/otherapp\n' > "$FAKE_PS"; printf '39700 200 *\n' > "$FAKE_LSOF"
+  export FAKE_TUN_PID=300 FAKE_BUSY=39700
+  pick_ports > "$c/out" 2>&1
+  eq "增强模式 + 看得见的别的监听者: 代理端口保持不变" "$PORT" "39700"
+  eq "列为没能确认的端口, 不算验证过" "$UNSEEN_PORTS:$PORTS_VERIFIED" "39700:0"
+  hasnt "没有换端口的提示" "$(cat "$c/out")" "已被其它程序占用"
+  st_verify > "$c/out2" 2>&1
+  hasnt "验证一步不误报绑定失败" "$(cat "$c/out2")" "被别的程序占用"
+  nomut "3l"
+)
 
 echo "== 4. 安装前检查 (st_preflight): 运行中的外部进程 / 已加载的 launchd 任务 / tun 模式下的外部默认路由才询问; 其余只是信息; 回车 = 取消"
 (
