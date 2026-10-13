@@ -41,7 +41,8 @@
  *   sync=reset                    云端同步恢复初始状态: 未开启, 云端有数据 (版本 7), 本机版本 6 且有未上传的改动 (--first-run 时本机版本 0)
  *   syncremote=none|exists|newer  云端没有数据 / 有且不比本机新 / 比本机新 (推送会冲突)     synckey=ok|bad   密钥场景: bad = 拉取时 E_SYNC_KEY, 要带 old_password=oldpass1234
  *   syncoffline=0|1               同步时 enana.cc 不可达 (GET /api/sync 的 online=false; 推送 / 拉取 / 清除 -> E_ACCOUNT_UNREACHABLE)
- *   billing=closed|open|unverified|nomail|pending|auth|server   会员付款页 (GET /api/billing 等): closed (默认, 和线上一致: 服务器关闭收款) / open / unverified (邮箱未验证) / nomail (未验证且服务器发不出验证邮件) / pending (有未完成的订单) / auth (云端会话失效 E_AUTH) / server (云端 5xx E_SERVER_ERROR)
+ *   billing=closed|open|unverified|nomail|pending|orders|limit|auth|server   会员付款页 (GET /api/billing 等): closed (默认, 和线上一致: 服务器关闭收款) / open / unverified (邮箱未验证) / nomail (未验证且服务器发不出验证邮件) / pending (有一笔还在 1 小时付款时间内的订单) / orders (23 个历史订单, 可以翻页) / limit (24 小时内已有 5 个订单, 下单 -> E_ORDER_LIMIT) / auth (云端会话失效 E_AUTH) / server (云端 5xx E_SERVER_ERROR)
+ *   balance=N                     钱包余额 (USDT, 最多 6 位小数; 写在 billing= 之后): 测余额支付 / 自动续费的「余额不足」(< 4) 和「立即扣款」
  *   plan=soon|free|pro|expired|verify 套餐 (GET /api/plan; verify = Pro 但邮箱未验证, 官方线路 reason "verify"): soon (默认) = 免费版, 官方线路「即将推出」; free = 免费版, Pro 功能已上线但需要升级; pro = 专业版 (30 天后到期, 设备上限 5, 服务器列表多出 2 个 official:true 的官方节点); expired = 订阅已过期 (reason "expired", 官方节点消失)
  *   prefs=reset|bump              偏好设置 (GET / POST /api/prefs): reset = 清空 (version 0); bump = 模拟「另一台设备同步来了改动」: version +1, 并写入 "ui.fromOtherDevice": true (state.prefs_version 随之变化)
  *   sudottl=N                     步骤验证令牌 (X-Enana-Sudo) 的有效期, 真实秒数 (默认 300; 设成 1-2 来测「过期后重新弹出密码框」)       sudo=clear   让所有步骤验证令牌立刻失效
@@ -120,7 +121,7 @@ const HELP = [
   '  &lock=reset&locksec=N&expire=1&update=on|off|fail&failnext=/api/x&speedlast=seed&env=bad&tick=N&newapp=Name&reset=1',
   '  &vps=reset&sync=reset&syncremote=none|exists|newer&synckey=ok|bad&syncoffline=0|1&devices=free|full|reset&kickme=1&notice=text',
   '  &stats=normal|short|empty (traffic statistics history: 41 days / 2 days / none)&statsfail=1 (next /api/stats fails once)',
-  '  &plan=soon|free|pro|expired|verify&billing=closed|open|unverified|nomail|pending|auth|server&prefs=reset|bump&sudottl=N (seconds)&sudo=clear&icons=progressive|all|none&vpsport=open|closed&kickme=1|password',
+  '  &plan=soon|free|pro|expired|verify&billing=closed|open|unverified|nomail|pending|orders|limit|auth|server&balance=N (wallet USDT)&prefs=reset|bump&sudottl=N (seconds)&sudo=clear&icons=progressive|all|none&vpsport=open|closed&kickme=1|password',
   'Sudo (step-up password): POST /api/auth/verify -> X-Enana-Sudo for servers/delete, sub/delete, servers/secret, sub/url, logs/clear, devices/kick, sync/clear, export (403 E_SUDO_REQUIRED without it)',
   'Magic VPS hosts (probe/provision): 203.0.113.10 20 30 31 40 50 51 60-65 70 (70 fails with E_VPS_VERIFY until vpsport=open; see the file header)',
   'Magic app inspect inputs: /Applications/Cursor.app /Applications/Slack.app (exists) /usr/local/bin/mytool (unsigned bin) /opt/homebrew/bin/node /etc/hosts /private/var/root/secret.app; names: cursor (1 hit) code (5) zzz (none)',
@@ -247,6 +248,8 @@ const S = {
   'e.billServer': ['enana.cc 服务器返回了错误，这次操作可能已生效也可能没有，请先刷新并查看订单和余额', 'The enana.cc server returned an error. The request may or may not have gone through: refresh and check your orders and balance first'],
   'e.billUnverified': ['请先验证账号邮箱', 'Verify your account email first'], 'e.billClosed': ['收款暂未开放', 'Receiving payments is not open yet'], 'e.billPending': ['已有待付款订单', 'You already have a pending invoice'],
   'e.billNotFound': ['找不到这笔订单', 'Invoice not found'], 'e.billBalance': ['余额不足', 'Insufficient funds'], 'e.billNoMail': ['验证邮件暂时无法发送', 'Verification mail could not be sent'],
+  'e.billInvalid': ['付款参数无效', 'Invalid payment details'], 'e.billConflict': ['此操作编号已用于其他订单', 'This request key was used for another order'], 'e.billExpired': ['订单已过期', 'This order has expired'],
+  'e.billLimit': ['24 小时内最多创建 {n} 个订单，请稍后再试', 'At most {n} orders can be created in 24 hours; try again later'], 'e.billRate': ['请求过于频繁，请稍后再试', 'Too many requests; try again shortly'], 'e.billCapacity': ['目前无法分配付款金额，请稍后重试', 'No payment amount is available right now; retry later'],
   'plan.free': ['免费版', 'Free'], 'plan.pro': ['专业版', 'Pro'],
   'notice.pwChanged': ['你的登录密码已在另一台设备上修改, 请用新密码重新登录, 代理已关闭', 'Your password was changed on another device. Sign in again with the new password; the proxy was turned off.'],
   /* 新增: 网站域名 (也用于 DNS 自定义解析) */
@@ -1083,7 +1086,7 @@ route('POST', '/api/prefs', (c) => {
   return { ok: true, version: M.prefs.version };
 });
 
-/* ---- 会员 / 套餐 (GET /api/plan; ctl plan=soon (默认) | free | pro | expired) ---- */
+/* ---- 会员 / 套餐 (GET /api/plan; ctl plan=soon (默认) | free | pro | expired | verify; 余额支付 / 自动续费扣款后是 pro, 到期时间 M.planUntil 按购买的月数累加) ---- */
 const OFFICIAL_NODES = [{ tag: '官方-东京', type: 'vless', server: '', port: 0, role: 'auto', sub: '', official: true }, { tag: '官方-新加坡', type: 'vless', server: '', port: 0, role: 'auto', sub: '', official: true }];     // 官方节点的地址 / 端口不返回给界面 (lib/api.sh 的 servers_json); 保留前缀 官方-
 function applyPlan() {                                                     // 套餐 -> 官方线路: pro 时服务器列表多出 2 个 official:true 的节点 (进核心配置), 其它套餐 (含过期) 没有
   M.servers = M.servers.filter((s) => !s.official); M.applied = M.applied.filter((s) => !s.official);
@@ -1094,35 +1097,127 @@ route('GET', '/api/plan', (c) => {
   const p = M.plan, pro = p === 'pro' || p === 'verify', exp = p === 'expired', t = sec(), free = { enabled: true, tier: 'free' };
   const gated = () => (pro ? { enabled: true, tier: 'pro' } : { enabled: false, tier: 'pro', reason: exp ? 'expired' : 'upgrade', coming_soon: p === 'soon' });
   const official = p === 'verify' ? { enabled: false, tier: 'pro', reason: 'verify' } : gated();               // verify: Pro, official routes are live, but the account email is not verified yet
-  return { ok: true, plan: { code: pro ? 'pro' : 'free', title: tr(c.lang, pro ? 'plan.pro' : 'plan.free') }, expires_at: pro ? t + 30 * 86400 : exp ? t - 2 * 86400 : null, checked: t - 120, limits: { devices_per_platform: devLimit() },
+  return { ok: true, plan: { code: pro ? 'pro' : 'free', title: tr(c.lang, pro ? 'plan.pro' : 'plan.free') }, expires_at: pro ? (M.planUntil > t ? M.planUntil : t + 30 * 86400) : exp ? t - 2 * 86400 : null, checked: t - 120, limits: { devices_per_platform: devLimit() },
     features: { core: free, sync: free, vps_deploy: free, custom_dns: free, official_proxy: official, unlimited_devices: gated(), priority_support: gated() }, official: { available: p === 'pro', nodes: p === 'pro' ? OFFICIAL_NODES.length : 0 } };
 });
 
-/* ---- 会员付款页 (GET /api/billing 等; ctl billing=closed (默认) | open | unverified | nomail | pending | auth | server) ----
- * 对照 lib/billing.sh + lib/api.sh 的 ep_billing: 云端自己的错误码 (E_PAYMENTS_UNAVAILABLE ...) 原样透传; 本机辅助服务自己的 E_AUTH (云端会话失效) / E_SERVER_ERROR (云端 5xx) 带翻译后的 error。
+/* ---- 会员付款页 (GET /api/billing 等; ctl billing=closed (默认) | open | unverified | nomail | pending | orders | limit | auth | server, balance=<USDT>) ----
+ * 对照 lib/billing.sh + lib/api.sh 的 ep_billing 和 docs/BILLING_API.md: 云端自己的错误码 (E_PAYMENTS_UNAVAILABLE ...) 原样透传; 本机辅助服务自己的 E_AUTH (云端会话失效) / E_SERVER_ERROR (云端 5xx) 带翻译后的 error。
  * closed = 服务器关闭收款 (payments_available:false, 付款按钮置灰并有常驻说明); unverified = 邮箱未验证且能发邮件; nomail = 邮箱未验证且服务器发不出验证邮件;
- * pending = 有一笔未完成的订单; auth = 云端会话已失效 (所有请求 E_AUTH); server = 云端返回 5xx (所有请求 E_SERVER_ERROR)。 */
+ * pending = 有一笔还在付款时间内的订单; orders = 23 个历史订单 (最新的是一笔已过付款时间、金额仍保留的订单) + 对应的余额明细; limit = 24 小时内已有 5 个订单 (下单 -> E_ORDER_LIMIT);
+ * auth = 云端会话已失效 (所有请求 E_AUTH); server = 云端返回 5xx (所有请求 E_SERVER_ERROR)。切换 billing= 会重建订单 / 余额 (balance=<n> 写在同一个请求里时在它之后生效)。
+ * 订单: pay_by = 创建后 1 小时 (付款时间, 过了就可以再下单), expires_at = 24 小时 (金额保留期, 过了显示 expired); 金额先用整数价, 已被未付款的订单占用时才加尾数:
+ *   +0.1 … +0.9, 再 +0.01 … +0.99 (跳过 +0.10, +0.20 …), 再 +0.001 … +0.999 (跳过 0.01 的整数倍), 最多三位小数, 都用完 -> E_QUOTE_CAPACITY。收款地址只有一个演示用的 TRC20 地址。
+ * 24 小时内 (滚动) 最多 5 个订单, 任何类型、任何状态都算, 幂等重放 (同一个 request_key) 不算 -> E_ORDER_LIMIT {limit:5, retry_after:最早那个订单满 24 小时还差的秒数}。
+ * 充值只收 4–1000 的整数 USDT (字符串 /^[1-9][0-9]{0,3}$/), 其它 -> E_INVALID。分页: orders_page (1-1000, 默认 1) / orders_per_page (5-30, 默认 30), 不合法的值按默认处理;
+ * 返回 orders_total / orders_page / orders_per_page, orders 是这一页 (最新的在前)。自动续费: 开启时套餐不是 Pro 且余额够 4 USDT 就立刻扣款续 1 个月 (charged), needs_topup = 开启且余额 < 4。
+ * 余额支付 / 自动续费扣款成功会把套餐变成 pro (同 ctl plan=pro, 到期时间按购买的月数累加; ctl plan= 会清掉)。 */
 const BILL_SKUS = [['m1', 1, 4], ['m3', 3, 10], ['m6', 6, 19], ['y1', 12, 35], ['y2', 24, 56], ['y3', 36, 72], ['y5', 60, 100]];
-const billOrder = (status) => ({ id: 'abcdefghijklmno', kind: 'plan', sku: 'm1', price: '4.000000', amount: '4.000037', network: 'TRC20', currency: 'USDT', address: 'TMiyPt3gfLQNJRPqUzGke9EJWhhyoHR8RU', status: status || 'pending', created_at: sec() - 60, expires_at: sec() + 1740, paid_at: null, event_key: null });
+const BILL_ADDR = 'TMiyPt3gfLQNJRPqUzGke9EJWhhyoHR8RU', BILL_MICRO = 1000000, BILL_MONTHLY = 4 * BILL_MICRO, BILL_PAY = 3600, BILL_LEASE = 86400, BILL_LIMIT = 5;
+const BILL_TAILS = (() => { const a = [0]; for (let k = 1; k <= 9; k++) a.push(k * 100000); for (let k = 1; k <= 99; k++) if (k % 10) a.push(k * 10000); for (let k = 1; k <= 999; k++) if (k % 10) a.push(k * 1000); return a; })();   // 整数价 + 999 个尾数
+const billFmt = (n) => (n < 0 ? '-' : '') + Math.floor(Math.abs(n) / BILL_MICRO) + '.' + String(Math.abs(n) % BILL_MICRO).padStart(6, '0');
+const billMicro = (v) => { const p = String(v).split('.'); return Number(p[0]) * BILL_MICRO + Number(((p[1] || '') + '000000').slice(0, 6)); };
+const billSku = (id) => BILL_SKUS.filter((k) => k[0] === id)[0] || null;
+const billPro = () => M.plan === 'pro' || M.plan === 'verify';
+const billId = (st) => 'mk' + (++st.seq).toString(36).padStart(13, '0');
+const billTx = (i) => crypto.createHash('sha256').update('enana-mock-tx-' + i).digest('hex');
+const billLedgerAdd = (st, entry, delta, kind, sku, at, end) => { st.balance += delta; st.ledger.push({ id: 'lg' + (++st.seq).toString(36).padStart(13, '0'), entry, kind, delta, balance_after: st.balance, sku: sku || '', created_at: at, expires_after: end || null }); };
+function billSeed(mode) {
+  const st = { orders: [], ledger: [], balance: 0, autoRenew: false, seq: 0 }, t = sec();
+  const add = (o) => { const r = Object.assign({ address: BILL_ADDR, months: 0, sku: '', paid_at: null, tx_hash: null, event_key: null, recheck_at: null, request_key: '' }, o); r.pay_by = r.created_at + BILL_PAY; r.expires_at = r.created_at + BILL_LEASE; st.orders.push(r); return r; };
+  if (mode === 'pending') add({ id: 'abcdefghijklmno', kind: 'plan', sku: 'm1', months: 1, price: 4 * BILL_MICRO, amount: 4 * BILL_MICRO + 10000, status: 'pending', created_at: t - 60 });     // 还剩 59 分钟可以付款; 金额带两位小数的尾数 (4.01)
+  if (mode === 'limit') for (let i = 0; i < BILL_LIMIT; i++) add({ id: billId(st), kind: 'plan', sku: 'y1', months: 12, price: 35 * BILL_MICRO, amount: 35 * BILL_MICRO + BILL_TAILS[i], status: 'cancelled', created_at: t - 74400 + i * 3600 });   // 最早的在 20 小时 40 分钟前: retry_after = 12000 秒
+  if (mode === 'orders') {
+    const PAT = [['plan', 'y1', 'paid'], ['topup', 20, 'paid'], ['plan', 'm1', 'cancelled'], ['plan', 'm3', 'pending'], ['topup', 50, 'credited_late'], ['plan', 'm6', 'paid'], ['plan', 'm1', 'manual'], ['topup', 10, 'pending']];
+    for (let i = 22; i >= 0; i--) {                                         // 从最早的开始建 (余额明细按时间累加); i = 0 是最新的
+      const p = i === 0 ? ['plan', 'y1', 'pending'] : i === 1 ? ['plan', 'm1', 'cancelled'] : PAT[i % PAT.length], at = t - (i === 0 ? 7200 : i === 1 ? 72000 : 93600 + (i - 2) * 208800);
+      const s = p[0] === 'plan' ? billSku(p[1]) : null, price = s ? s[2] * BILL_MICRO : p[1] * BILL_MICRO, tail = i % 3 === 0 ? BILL_TAILS[1 + (i * 37) % 40] : 0;   // 有的带一位 / 两位小数的尾数
+      const o = add({ id: billId(st), kind: p[0], sku: s ? s[0] : '', months: s ? s[1] : 0, price, amount: price + tail, status: p[2], created_at: at });
+      if (p[2] === 'paid' || p[2] === 'credited_late' || p[2] === 'manual') { o.tx_hash = billTx(i); o.event_key = o.tx_hash + ':0'; }
+      if (p[2] === 'paid' || p[2] === 'credited_late') {
+        o.paid_at = at + 420; billLedgerAdd(st, 'deposit:' + o.event_key, o.amount, 'deposit', '', o.paid_at);
+        if (p[2] === 'paid' && s) billLedgerAdd(st, 'plan:' + o.id, -price, 'plan_purchase', s[0], o.paid_at + 1, o.paid_at + s[1] * 30 * 86400);
+      }
+      if (i % 9 === 4 && st.balance >= BILL_MONTHLY) billLedgerAdd(st, 'renew:' + i, -BILL_MONTHLY, 'auto_renew', 'm1', at + 86400, at + 31 * 86400);
+    }
+  }
+  return st;
+}
+const BS = () => M.bill || (M.bill = billSeed(M.billing));             // reset (ctl reset=1) 清空 M 之后按当前场景重新生成
+const billPublic = (o) => ({ id: o.id, kind: o.kind, sku: o.sku, price: billFmt(o.price), amount: billFmt(o.amount), network: 'TRC20', currency: 'USDT', address: o.address, status: o.status === 'pending' && o.expires_at <= sec() ? 'expired' : o.status,
+  created_at: o.created_at, pay_by: o.pay_by, expires_at: o.expires_at, paid_at: o.paid_at, tx_hash: o.tx_hash, event_key: o.event_key, recheck_at: o.recheck_at });
+const billLedgerOut = (r) => ({ id: r.id, kind: r.kind, delta: billFmt(r.delta), balance_after: billFmt(r.balance_after), sku: r.sku, created_at: r.created_at, expires_after: r.expires_after });
+function billGrant(months) {                                              // 开通 / 延长 Pro (余额支付与自动续费共用; 月数按 30 天算)
+  const t = sec(), start = billPro() && M.planUntil > t ? M.planUntil : t;
+  M.planUntil = start + months * 30 * 86400;
+  if (!billPro()) { M.plan = 'pro'; applyPlan(); }
+  return M.planUntil;
+}
+function billJson(c) { let b = null; try { b = JSON.parse(c.body || ''); } catch (e) { b = null; } if (!b || typeof b !== 'object' || Array.isArray(b)) throw E('E_INVALID', 'e.billInvalid'); return b; }
+const billKeyOk = (k) => typeof k === 'string' && /^[A-Za-z0-9_-]{16,80}$/.test(k);
 const billGate = (fn) => (c) => {
   if (M.billing === 'auth') throw E('E_AUTH', 'e.billAuth');
   if (M.billing === 'server') throw E('E_SERVER_ERROR', 'e.billServer');
   return fn(c);
 };
 const billVerified = () => M.billing !== 'unverified' && M.billing !== 'nomail';
-route('GET', '/api/billing', billGate(() => ({ ok: true, payments_available: M.billing !== 'closed', email: { address: M.account || 'demo@example.com', verified: billVerified(), mail_available: M.billing !== 'nomail' },
-  wallet: { balance: '0.000000', auto_renew: false, monthly_price: '4.000000' }, catalog: BILL_SKUS.map((k) => ({ id: k[0], months: k[1], price: k[2] + '.000000' })), plan: { code: M.plan === 'pro' ? 'pro' : 'free', expires_at: null },
-  orders: M.billing === 'pending' ? [billOrder()] : [], ledger: [], order_ttl: 1800 })));
-route('POST', '/api/billing/checkout', billGate(() => {
-  if (!billVerified()) throw E('E_EMAIL_UNVERIFIED', 'e.billUnverified');
-  if (M.billing === 'closed') throw E('E_PAYMENTS_UNAVAILABLE', 'e.billClosed');
-  if (M.billing === 'pending') throw E('E_ORDER_PENDING', 'e.billPending');
-  M.billing = 'pending'; return { ok: true, order: billOrder() };
+route('GET', '/api/billing', billGate((c) => {
+  const st = BS(), num = (k, lo, hi, d) => { const v = c.q.get(k); return v !== null && /^[1-9][0-9]{0,3}$/.test(v) && +v >= lo && +v <= hi ? +v : d; };
+  const per = num('orders_per_page', 5, 30, 30), page = num('orders_page', 1, 1000, 1), all = st.orders.slice().sort((a, b) => b.created_at - a.created_at), pro = billPro(), t = sec();
+  return { ok: true, payments_available: M.billing !== 'closed', email: { address: M.account || 'demo@example.com', verified: billVerified(), mail_available: M.billing !== 'nomail' },
+    wallet: { balance: billFmt(st.balance), auto_renew: st.autoRenew, monthly_price: billFmt(BILL_MONTHLY) }, catalog: BILL_SKUS.map((k) => ({ id: k[0], months: k[1], price: billFmt(k[2] * BILL_MICRO) })),
+    plan: { code: pro ? 'pro' : 'free', expires_at: pro ? (M.planUntil > t ? M.planUntil : t + 30 * 86400) : null },
+    orders: all.slice((page - 1) * per, page * per).map(billPublic), orders_total: all.length, orders_page: page, orders_per_page: per,
+    ledger: st.ledger.slice().sort((a, b) => b.created_at - a.created_at).slice(0, 40).map(billLedgerOut), order_ttl: BILL_PAY, lease_ttl: BILL_LEASE };
 }));
-route('GET', '/api/billing/order', billGate((c) => { if (c.p('id') !== 'abcdefghijklmno') throw E('E_NOT_FOUND', 'e.billNotFound'); return { ok: true, order: billOrder(M.billing === 'pending' ? 'pending' : 'cancelled') }; }));
-route('POST', '/api/billing/cancel', billGate(() => { M.billing = 'open'; return { ok: true, order: billOrder('cancelled') }; }));
-route('POST', '/api/billing/purchase', billGate(() => { if (!billVerified()) throw E('E_EMAIL_UNVERIFIED', 'e.billUnverified'); throw E('E_BALANCE', 'e.billBalance'); }));
-route('POST', '/api/billing/auto-renew', billGate(() => { if (!billVerified()) throw E('E_EMAIL_UNVERIFIED', 'e.billUnverified'); return { ok: true, auto_renew: true }; }));
+route('POST', '/api/billing/checkout', billGate((c) => {
+  const b = billJson(c), s = b.kind === 'plan' ? billSku(b.sku) : null;                          // 本机辅助服务先校验请求体 (lib/billing.sh 的 billing_body), 不合格的根本到不了云端
+  if (!billKeyOk(b.request_key) || (b.kind === 'plan' ? !s : b.kind !== 'topup' || typeof b.amount !== 'string' || !/^[1-9][0-9]{0,3}$/.test(b.amount) || +b.amount < 4 || +b.amount > 1000)) throw E('E_INVALID', 'e.billInvalid');
+  if (!billVerified()) throw E('E_EMAIL_UNVERIFIED', 'e.billUnverified');
+  const st = BS(), t = sec(), kind = b.kind, sku = s ? s[0] : '', price = s ? s[2] * BILL_MICRO : +b.amount * BILL_MICRO, old = st.orders.filter((o) => o.request_key === b.request_key)[0];
+  if (old) { if (old.kind !== kind || old.sku !== sku || old.price !== price) throw E('E_REQUEST_CONFLICT', 'e.billConflict'); return { ok: true, order: billPublic(old) }; }     // 幂等重放: 原样返回, 不算进下单次数
+  if (M.billing === 'closed') throw E('E_PAYMENTS_UNAVAILABLE', 'e.billClosed');
+  if (st.orders.some((o) => o.status === 'pending' && o.pay_by > t)) throw E('E_ORDER_PENDING', 'e.billPending');
+  const recent = st.orders.filter((o) => o.created_at > t - 86400);
+  if (recent.length >= BILL_LIMIT || M.billing === 'limit') {
+    const oldest = recent.length ? Math.min.apply(null, recent.map((o) => o.created_at)) : t - 74400;
+    throw E('E_ORDER_LIMIT', 'e.billLimit', { n: BILL_LIMIT }, { limit: BILL_LIMIT, retry_after: Math.max(1, Math.min(86400, oldest + 86400 - t)) });      // 云端是 HTTP 429; 本机辅助服务和其它云端错误一样回 200 + ok:false
+  }
+  const tail = BILL_TAILS.filter((x) => !st.orders.some((o) => o.address === BILL_ADDR && o.amount === price + x && o.expires_at > t && o.status !== 'paid' && o.status !== 'activated'))[0];   // 已付款的订单立即释放金额, 其它的保留 24 小时
+  if (tail === undefined) throw E('E_QUOTE_CAPACITY', 'e.billCapacity');
+  const amount = price + tail;
+  const o = { id: billId(st), kind, sku, months: s ? s[1] : 0, price, amount, address: BILL_ADDR, status: 'pending', created_at: t, pay_by: t + BILL_PAY, expires_at: t + BILL_LEASE, paid_at: null, tx_hash: null, event_key: null, recheck_at: null, request_key: b.request_key };
+  st.orders.push(o); return { ok: true, order: billPublic(o) };
+}));
+const billFind = (id) => { if (typeof id !== 'string' || !/^[a-z0-9]{15}$/.test(id)) throw E('E_INVALID', 'e.billInvalid'); const o = BS().orders.filter((x) => x.id === id)[0]; if (!o) throw E('E_NOT_FOUND', 'e.billNotFound'); return o; };
+route('GET', '/api/billing/order', billGate((c) => ({ ok: true, order: billPublic(billFind(c.p('id'))) })));
+route('POST', '/api/billing/cancel', billGate((c) => { const o = billFind(billJson(c).id); if (o.status === 'pending') o.status = 'cancelled'; return { ok: true, order: billPublic(o) }; }));
+route('POST', '/api/billing/order/recheck', billGate((c) => {
+  const o = billFind(billJson(c).id), t = sec();
+  if (o.status !== 'pending' && o.status !== 'manual') throw E('E_INVALID', 'e.billInvalid');
+  if (o.expires_at <= t) throw E('E_EXPIRED', 'e.billExpired');
+  if (o.recheck_at && o.recheck_at > t - 30) throw E('E_RATE_LIMITED', 'e.billRate');          // 同一笔订单 30 秒内只能核实一次
+  o.recheck_at = t; return { ok: true, order: billPublic(o) };
+}));
+route('POST', '/api/billing/purchase', billGate((c) => {
+  const b = billJson(c), s = billSku(b.sku);
+  if (!billKeyOk(b.request_key) || !s) throw E('E_INVALID', 'e.billInvalid');
+  if (!billVerified()) throw E('E_EMAIL_UNVERIFIED', 'e.billUnverified');
+  const st = BS(), entry = 'purchase:' + b.request_key, old = st.ledger.filter((r) => r.entry === entry)[0];
+  if (old) { if (old.sku !== s[0]) throw E('E_REQUEST_CONFLICT', 'e.billConflict'); return { ok: true, expires_at: old.expires_after }; }
+  if (st.balance < s[2] * BILL_MICRO) throw E('E_BALANCE', 'e.billBalance');
+  const end = billGrant(s[1]); billLedgerAdd(st, entry, -s[2] * BILL_MICRO, 'plan_purchase', s[0], sec(), end);
+  return { ok: true, expires_at: end };
+}));
+route('POST', '/api/billing/auto-renew', billGate((c) => {
+  const b = billJson(c);
+  if (typeof b.enabled !== 'boolean') throw E('E_INVALID', 'e.billInvalid');
+  if (!billVerified()) throw E('E_EMAIL_UNVERIFIED', 'e.billUnverified');
+  const st = BS(); let charged = false;
+  st.autoRenew = b.enabled;
+  if (b.enabled && !billPro() && st.balance >= BILL_MONTHLY) { const end = billGrant(1); billLedgerAdd(st, 'renew:' + st.seq, -BILL_MONTHLY, 'auto_renew', 'm1', sec(), end); charged = true; }     // 现在不是 Pro: 立刻续 1 个月
+  return { ok: true, auto_renew: b.enabled, charged, balance: billFmt(st.balance), monthly_price: billFmt(BILL_MONTHLY), needs_topup: b.enabled && st.balance < BILL_MONTHLY };
+}));
 route('GET', '/api/email/status', billGate(() => ({ ok: true, email: M.account || 'demo@example.com', verified: billVerified(), mail_available: M.billing !== 'nomail' })));
 route('POST', '/api/email/send', billGate(() => { if (billVerified()) return { ok: true, verified: true }; if (M.billing === 'nomail') throw E('E_MAIL_UNAVAILABLE', 'e.billNoMail'); return { ok: true, sent: true, retry_after: 60 }; }));
 
@@ -2574,8 +2669,9 @@ async function mockCtl(req, res, u) {
   if (q.has('notice')) M.notice = g('notice') ? { text: g('notice').slice(0, 300) } : null;
   sw('vps', ['reset'], () => { M.vps = []; M.vpsPending = []; });
   sw('vpsport', ['open', 'closed'], (v) => { M.vpsOpen = v === 'open'; });                     // 203.0.113.70 部署: closed (默认) = 验证连通失败 E_VPS_VERIFY, open = 成功
-  sw('plan', ['soon', 'free', 'pro', 'expired', 'verify'], (v) => { M.plan = v; applyPlan(); });          // 套餐: soon (默认, 官方线路即将推出) / free / pro (多出 2 个官方节点) / expired / verify (Pro, 但邮箱未验证)
-  sw('billing', ['closed', 'open', 'unverified', 'nomail', 'pending', 'auth', 'server'], (v) => { M.billing = v; });       // 会员付款页: closed (默认, 和线上一致: 服务器关闭收款) / open / unverified / nomail / pending / auth / server
+  sw('plan', ['soon', 'free', 'pro', 'expired', 'verify'], (v) => { M.plan = v; M.planUntil = 0; applyPlan(); });          // 套餐: soon (默认, 官方线路即将推出) / free / pro (多出 2 个官方节点) / expired / verify (Pro, 但邮箱未验证)
+  sw('billing', ['closed', 'open', 'unverified', 'nomail', 'pending', 'orders', 'limit', 'auth', 'server'], (v) => { M.billing = v; M.bill = billSeed(v); });       // 会员付款页 (见 billSeed): closed (默认, 和线上一致: 服务器关闭收款) / open / unverified / nomail / pending / orders / limit / auth / server; 订单和余额随之重建
+  if (q.has('balance')) { if (/^\d{1,7}(\.\d{1,6})?$/.test(g('balance'))) BS().balance = billMicro(g('balance')); else warn.push('balance=' + g('balance')); }      // 钱包余额 (USDT), 在 billing= 之后生效
   if (q.has('prefs')) {                                                    // prefs=reset: 清空 (version 0); prefs=bump: 模拟另一台设备同步来的改动 (version + 1, 并写入 "ui.fromOtherDevice": true)
     const v = g('prefs');
     if (v === 'reset') M.prefs = { obj: {}, version: 0, updated: 0 };
@@ -2600,7 +2696,7 @@ async function mockCtl(req, res, u) {
     devices: Object.keys(M.devices).reduce((o, e) => { o[maskEmail(e)] = M.devices[e].filter((d) => d.online).map((d) => d.uid); return o; }, {}), notice: M.notice ? noticeText('en') : '',
     vps: M.vps.length, sync: { enabled: M.sync.enabled, remote: M.sync.remote.exists ? (M.sync.remote.version > M.sync.local.version ? 'newer' : 'exists') : 'none', key: M.sync.keyBad ? 'bad' : 'ok', offline: M.sync.offline, dirty: M.sync.local.dirty }, autoUpdate: M.autoUpdate,
     update: M.upd.fail ? 'fail' : M.upd.on ? 'on' : 'off', failnext: M.failNext.concat(M.failJob ? ['1'] : []), failNext: M.failJob, speedlast: M.speed.last ? M.speed.last.id : 'none', servers: M.servers.length, firstRun: M.servers.length === 0,
-    stats: M.stats, version: M.upd.cur, core: M.upd.coreCur, lang: M.langSet || 'zh', fast: FAST, split: SPLIT, plan: M.plan, prefs: { version: M.prefs.version, keys: Object.keys(M.prefs.obj).length }, sudo: { tokens: Object.keys(M.sudo).length, ttl: M.sudoTtl },
+    stats: M.stats, version: M.upd.cur, core: M.upd.coreCur, lang: M.langSet || 'zh', fast: FAST, split: SPLIT, plan: M.plan, billing: M.billing, balance: billFmt(BS().balance), prefs: { version: M.prefs.version, keys: Object.keys(M.prefs.obj).length }, sudo: { tokens: Object.keys(M.sudo).length, ttl: M.sudoTtl },
     icons: M.icons, vpsport: M.vpsOpen ? 'open' : 'closed', warnings: warn });
 }
 async function mockEntry(req, res, u) {
@@ -3301,7 +3397,32 @@ async function selftest() {
     ck('billing=unverified / nomail / pending: unverified email (mail_available true / false, send -> E_MAIL_UNAVAILABLE), one unfinished invoice (checkout -> E_ORDER_PENDING)', b1.email.verified === false && b1.email.mail_available === true && b2.email.verified === false && b2.email.mail_available === false && b2s.code === 'E_MAIL_UNAVAILABLE' && b3.orders.length === 1 && b3.orders[0].status === 'pending' && b3c.code === 'E_ORDER_PENDING');
     const b4 = jx(await (async () => { await ctl('billing=auth'); return api('GET', '/api/billing'); })()), b5 = jx(await (async () => { await ctl('billing=server'); return api('GET', '/api/billing'); })());
     ck('billing=auth / server: the helper answers E_AUTH (cloud session ended) / E_SERVER_ERROR (cloud 5xx) with a translated error, HTTP 200 so the local dashboard stays unlocked', b4.ok === false && b4.code === 'E_AUTH' && !!b4.error && b5.ok === false && b5.code === 'E_SERVER_ERROR' && !!b5.error);
-    await ctl('billing=closed');
+    /* 付款时间 / 分页 / 下单限制 / 整数充值 / 自动续费 / 余额支付 (docs/BILLING_API.md) */
+    const b3o = b3.orders[0];
+    ck('billing=pending: the unfinished invoice is payable for 1 hour (pay_by in the future) while its amount stays leased for 24 hours (expires_at); order_ttl 3600, lease_ttl 86400, paging fields present', b3o.pay_by > sec() && b3o.pay_by <= sec() + 3600 && b3o.expires_at > b3o.pay_by && b3o.amount === '4.010000' && b3.order_ttl === 3600 && b3.lease_ttl === 86400 && b3.orders_total === 1 && b3.orders_page === 1 && b3.orders_per_page === 30, b3o);
+    const bo = await bl('orders'), bo3 = jx(await api('GET', '/api/billing', { q: { orders_page: '3', orders_per_page: '10' } })), boJunk = jx(await api('GET', '/api/billing', { q: { orders_page: 'x', orders_per_page: '99' } }));
+    ck('billing=orders: 23 orders newest first (the newest is pending but past pay_by, still leased), page 3 of 10 holds the last 3, junk paging falls back to page 1 / 30 per page, the newest ledger row matches the balance', bo.orders_total === 23 && bo.orders.length === 23 && bo.orders.every((o, i) => !i || bo.orders[i - 1].created_at >= o.created_at) && bo.orders[0].status === 'pending' && bo.orders[0].pay_by < sec() && bo.orders[0].expires_at > sec()
+      && bo.orders.some((o) => o.status === 'expired') && bo3.orders.length === 3 && bo3.orders_page === 3 && bo3.orders_per_page === 10 && bo3.orders_total === 23 && boJunk.orders_page === 1 && boJunk.orders_per_page === 30 && bo.ledger.length > 10 && bo.ledger[0].balance_after === bo.wallet.balance, [bo.orders_total, bo3.orders.length, bo.ledger.length]);
+    const co = (body) => api('POST', '/api/billing/checkout', { body: JSON.stringify(Object.assign({ request_key: crypto.randomBytes(12).toString('hex') }, body)) }).then(jx);
+    const tBad = [await co({ kind: 'topup', amount: '10.5' }), await co({ kind: 'topup', amount: '3' }), await co({ kind: 'topup', amount: '1001' }), await co({ kind: 'topup', amount: '020' }), await co({ kind: 'topup', amount: 20 })], tOk = await co({ kind: 'topup', amount: '20' });
+    ck('top-ups are whole USDT 4..1000 as a string (10.5 / 3 / 1001 / 020 / a number -> E_INVALID); "20" creates a pending 20 USDT invoice; a second checkout inside its pay window -> E_ORDER_PENDING', tBad.every((x) => x.code === 'E_INVALID') && tOk.ok === true && tOk.order.kind === 'topup' && tOk.order.price === '20.000000' && tOk.order.amount === '20.000000' && tOk.order.status === 'pending' && (await co({ kind: 'plan', sku: 'm1' })).code === 'E_ORDER_PENDING', tBad.map((x) => x.code));
+    const bLim = await bl('limit'), lim = await co({ kind: 'plan', sku: 'm1' });
+    ck('billing=limit: 5 orders in the last 24 hours -> checkout answers E_ORDER_LIMIT with limit 5 and retry_after = seconds until the oldest is 24 hours old', bLim.orders_total === 5 && lim.ok === false && lim.code === 'E_ORDER_LIMIT' && lim.limit === 5 && Number.isInteger(lim.retry_after) && lim.retry_after > 11900 && lim.retry_after <= 12000 && !!lim.error, lim);
+    await ctl('billing=open'); const RK = 'r'.repeat(20), first = await co({ kind: 'plan', sku: 'm1', request_key: RK }), replay = await co({ kind: 'plan', sku: 'm1', request_key: RK }), made = [];
+    const cancel = (id) => api('POST', '/api/billing/cancel', { body: JSON.stringify({ id }) }).then(jx);
+    if (first.order) { made.push(first.order.id); await cancel(first.order.id); }
+    for (let i = 0; i < 4; i++) { const x = await co({ kind: 'plan', sku: 'm1' }); if (x.order) { made.push(x.order.id); await cancel(x.order.id); } }
+    const sixth = await co({ kind: 'plan', sku: 'm1' }), bOpen = jx(await api('GET', '/api/billing'));
+    ck('order limit: an idempotent replay returns the same invoice and is not counted, cancelled orders count, the 6th order in 24 hours -> E_ORDER_LIMIT; while 4 is still leased the next amounts get tails 4.1, 4.2, 4.3, 4.4', !!first.order && replay.order && replay.order.id === first.order.id && made.length === 5 && sixth.code === 'E_ORDER_LIMIT' && sixth.retry_after >= 86390
+      && bOpen.orders_total === 5 && bOpen.orders.map((o) => o.amount).sort().join() === '4.000000,4.100000,4.200000,4.300000,4.400000' && bOpen.orders.every((o) => o.status === 'cancelled'), bOpen.orders.map((o) => o.amount));
+    const renew = () => api('POST', '/api/billing/auto-renew', { body: '{"enabled":true}' }).then(jx);
+    await ctl('plan=soon&billing=open&balance=2'); const ar0 = await renew(); await ctl('balance=10'); const ar1 = await renew(), arPlan = jx(await api('GET', '/api/plan')), arB = jx(await api('GET', '/api/billing'));
+    ck('auto-renew: with 2 USDT -> enabled, charged:false, needs_topup:true; with 10 USDT on a free plan -> charged:true, 6 USDT left, Pro now, ledger row auto_renew -4', ar0.ok === true && ar0.auto_renew === true && ar0.charged === false && ar0.needs_topup === true && ar0.balance === '2.000000' && ar0.monthly_price === '4.000000'
+      && ar1.charged === true && ar1.needs_topup === false && ar1.balance === '6.000000' && arPlan.plan.code === 'pro' && arB.plan.code === 'pro' && arB.wallet.auto_renew === true && arB.ledger[0].kind === 'auto_renew' && arB.ledger[0].delta === '-4.000000', [ar0, ar1]);
+    await ctl('plan=soon&billing=open&balance=12'); const buy = (sku, k) => api('POST', '/api/billing/purchase', { body: JSON.stringify({ sku, request_key: k.repeat(16) }) }).then(jx);
+    const pu0 = await buy('y1', 'p'), pu1 = await buy('m3', 'q'), pu2 = await buy('m3', 'q'), puB = jx(await api('GET', '/api/billing'));
+    ck('purchase from balance: 35 USDT with 12 -> E_BALANCE; 10 USDT for 3 months -> ok with expires_at about 90 days ahead and 2 USDT left; the same request key again is a replay (no second charge)', pu0.code === 'E_BALANCE' && pu1.ok === true && pu1.expires_at > sec() + 89 * 86400 && pu2.ok === true && pu2.expires_at === pu1.expires_at && puB.wallet.balance === '2.000000' && puB.plan.code === 'pro', [pu0, pu1, puB.wallet]);
+    await ctl('plan=soon&billing=closed&balance=0');
 
     /* 步骤验证 (sudo) */
     const WL = [['POST', '/api/servers/delete', { form: { tag: 'no-such' } }], ['POST', '/api/sub/delete', { form: { name: 'no-such' } }], ['GET', '/api/servers/secret', {}], ['GET', '/api/sub/url', {}], ['POST', '/api/logs/clear', { form: { type: 'bogus' } }],
