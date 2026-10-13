@@ -117,7 +117,7 @@ section[id]{scroll-margin-top:16px}   /* 区块自带 72px 上边距, 跳转后�
 .steps li::before{content:counter(step);display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:var(--pri);color:var(--pri-fg);font-weight:700;margin-bottom:14px}
 
 /* 价格 */
-.plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:16px;max-width:880px}
+.plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:16px}
 .plan{display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:26px}
 .plan-pro{border-color:var(--pri);box-shadow:var(--shadow)}
 .plan h3{font-size:18px;margin:0 0 6px}
@@ -131,7 +131,6 @@ section[id]{scroll-margin-top:16px}   /* 区块自带 72px 上边距, 跳转后�
 
 /* 安装 */
 .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:var(--shadow)}
-.install{max-width:880px}
 .install-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
 .install-head h2{font-size:clamp(22px,3vw,28px)}
 .cmd-block{margin-top:2px}
@@ -148,7 +147,7 @@ section[id]{scroll-margin-top:16px}   /* 区块自带 72px 上边距, 跳转后�
 code.inline{font:.92em var(--mono);background:var(--code-bg);border:1px solid var(--line);border-radius:5px;padding:0 5px;overflow-wrap:anywhere}
 
 /* 常见问题 */
-.faq details{max-width:880px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin:0 0 10px}
+.faq details{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin:0 0 10px}
 .faq summary{cursor:pointer;font-weight:600}
 .faq details p{margin:.6em 0 0;color:var(--muted);font-size:15px}
 
