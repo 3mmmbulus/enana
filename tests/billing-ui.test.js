@@ -168,6 +168,11 @@ test('turning on auto-renewal with less than a month of balance explains that no
  run=switchOf(root).click();await press(f.modals[3],'billing.renewAnyway');await run;
  assert.deepEqual(JSON.parse(posts(f)[0][2].body),{enabled:true});assert.ok(f.toasts.some(x=>x[0]==='billing.renewWaiting{"price":"5"}'&&x[1]==='warn'),'enabled; renews once the balance is enough');
 });
+test('a whole amount has no decimal tail to highlight, so the note does not mention red decimals',async()=>{
+ const whole={...invoice,amount:'4.000000'};const f=fixture(async()=>({ok:true,order:whole}));f.B.openOrder(whole);const d=f.modals[0],kids=d.body.children;
+ assert.equal(textOf(kids.find(n=>cls(n)==='hint warn')),'billing.exactNoteWhole');assert.deepEqual(byClass(d.body,'amt-tail'),[],'nothing to highlight');
+ assert.ok(textOf(kids.find(n=>cls(n)==='billing-exact')).includes('4'),'the amount is still shown');
+});
 test('top-up takes whole USDT 4..1000 in a proper field with inline validation and preset chips',async()=>{
  const f=fixture(async(m)=>m==='GET'?status():{ok:true,order:{...invoice,kind:'topup',sku:'',price:'20.000000',amount:'20.100000'}});const root=f.B.mount();await f.B.load(true);
  await find(root,'billing.topup').click();const d=f.modals[0],input=flatten(d.body).find(n=>n.tag==='input'),msg=byClass(d.body,'billing-tu-msg')[0];

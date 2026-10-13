@@ -31,8 +31,8 @@ const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return{p
 (async()=>{
  const u=TP.ui, b=u.btn('Save');let count=0,d=deferred();u.act(b,()=>{count++;return d.promise;});
  b.fire('click');b.fire('click');await tick();assert.equal(count,1);assert(b.disabled);assert.equal(b.getAttribute('aria-busy'),'true');assert.equal(b.textContent,'common.loading');
- d.resolve();await tick();assert(!b.disabled);assert.equal(b.textContent,'Save');
- const f=u.btn('Fail');u.act(f,()=>Promise.reject(new Error('expected')));f.fire('click');await tick();assert(!f.disabled);assert.equal(f.textContent,'Fail');
+ d.resolve();await tick();assert(!b.disabled);assert.equal(b.textContent,'Save');assert.equal(b._iconEl,null,'a button without an icon must not keep the busy spinner');
+ const f=u.btn('Fail');u.act(f,()=>Promise.reject(new Error('expected')));f.fire('click');await tick();assert(!f.disabled);assert.equal(f.textContent,'Fail');assert.equal(f._iconEl,null,'a failed action must not leave the busy spinner on a button that had no icon');
  let cur='system';d=deferred();const sel=new Element('select');u.selectAct(sel,()=>cur,async want=>{count++;await d.promise;cur=want;});sel.value='tun';sel.fire('change');sel.value='system';sel.fire('change');await tick();assert(sel.disabled);assert.equal(count,2);d.resolve();await tick();assert(!sel.disabled);assert.equal(sel.value,'tun');
  d=deferred();let segCount=0;const seg=u.seg('Mode',[{v:'one',label:'One'},{v:'two',label:'Two'}],async v=>{segCount++;seg.set(v);await d.promise;});seg.set('one');seg.inputs.two.checked=true;seg.inputs.two.fire('change');seg.inputs.two.fire('change');await tick();assert.equal(segCount,1);assert(Object.values(seg.inputs).every(x=>x.disabled));assert.equal(seg.el.getAttribute('aria-busy'),'true');d.resolve();await tick();assert(Object.values(seg.inputs).every(x=>!x.disabled));
  const m=u.modal({title:'Export',actions:[{id:'export',label:'Export',keep:true,onClick:async()=>{count++;await d.promise;return false;}},{id:'cancel',label:'Cancel',cancel:true}]});

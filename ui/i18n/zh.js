@@ -55,6 +55,7 @@
     "billing.verifyNote": "打开邮件中的官方验证链接并确认，然后刷新状态。",
     "billing.invoice": "USDT 付款订单",
     "billing.exactNote": "只支持 TRON（TRC20）网络的 USDT。请转入下方的完整金额，红色的小数部分不能省略。",
+    "billing.exactNoteWhole": "只支持 TRON（TRC20）网络的 USDT。请按下方的完整金额转账。",
     "billing.invoiceClosed": "此订单已关闭或超过付款期限，请勿再向此订单转账。",
     "billing.exactAmount": "完整付款金额",
     "billing.address": "TRON（TRC20）收款地址",

@@ -417,7 +417,7 @@
       else if (!pay) body.appendChild(h('p', { class: 'hint warn' }, L(st === 'pending' ? 'billing.overdueNote' : 'billing.invoiceClosed')));
       if (pay) {
         var qr = qrBlock(a); if (qr) body.appendChild(qr);
-        body.appendChild(h('p', { class: 'hint warn' }, L('billing.exactNote')));
+        body.appendChild(h('p', { class: 'hint warn' }, L(dot < 0 ? 'billing.exactNoteWhole' : 'billing.exactNote')));      // 整数金额没有要标红的小数
       }
       /* 复制的就是显示的那串数字 (去掉多余的 0), 和钱包里要填的一致 */
       var copyReason = pay ? '' : t('billing.invoiceClosed');

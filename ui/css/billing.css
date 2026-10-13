@@ -72,3 +72,5 @@
 .dlg-a .billing-cancel { margin-right:auto }
 @media(max-width:500px) { .billing-exact { align-items:stretch; flex-direction:column } .billing-exact-v { flex:none } }
 @media (pointer:coarse) { .billing-sw { min-height:44px } .billing-term { min-height:56px } }
+/* 订单 / 余额明细表格很窄, 不需要 .tbl-wrap 里固定首列和操作列 (固定列自带白底, 会把斑马纹切成一段一段的) */
+@media (min-width:760px){.tbl-wrap .tbl.rt.billing-tbl th:first-child,.tbl-wrap .tbl.rt.billing-tbl td:first-child,.tbl-wrap .tbl.rt.billing-tbl th.c-act,.tbl-wrap .tbl.rt.billing-tbl td.c-act{position:static;box-shadow:none}.tbl-wrap .tbl.rt.billing-tbl td:first-child,.tbl-wrap .tbl.rt.billing-tbl td.c-act{background:transparent}}

@@ -55,6 +55,7 @@
     "billing.verifyNote": "Open the official verification link in your email, confirm it, then refresh your status.",
     "billing.invoice": "USDT payment invoice",
     "billing.exactNote": "Only USDT on the TRON (TRC20) network. Send the complete amount below and keep the decimals shown in red.",
+    "billing.exactNoteWhole": "Only USDT on the TRON (TRC20) network. Send exactly the amount below.",
     "billing.invoiceClosed": "This invoice is closed or past its deadline. Do not transfer funds to it.",
     "billing.exactAmount": "Exact payment amount",
     "billing.address": "TRON (TRC20) receive address",
