@@ -69,10 +69,8 @@
   /* ================= 构建 ================= */
   V.init = function (root) {
     readPrefs();
-    /* 规则如何生效: 一行标题 + 「!」, 4 步流程在说明弹窗里 */
-    var how = h('div', { class: 'sx-how' }, h('b', null, L('sites.how.title')), h('span', { class: 'muted sm' }, L('sites.how.sub')), help('how'));
 
-    /* 顶部标签 (来源) + 搜索 + 添加 */
+    /* 顶部标签 (来源) + 搜索 + 添加 + 「⋯」(恢复网站默认) */
     tabsCtl = ui.tabs(L('sites.tab.aria'), TABS.map(function (k) { return { id: k, label: L('sites.tab.' + k), icon: k === 'catalog' ? 'library' : k === 'mine' ? 'user' : 'scan-search', count: 0 }; }), function (id) { setTab(id, true); });
     tabsCtl.set(tab);
     el.q = h('input', { class: 'inp', type: 'search', placeholder: L('sites.search'), 'aria-label': L('sites.search'), autocomplete: 'off', on: { input: function () { flt.q = el.q.value.trim().toLowerCase(); nav = flt.q ? '' : String(TP.prefs.get(navKey(), '') || ''); if (pgC) pgC.setPage(1); V.render(); } } });
@@ -80,19 +78,22 @@
     ui.act(el.addBtn, function () { return openAddSite(); });
     el.count = h('span', { class: 'muted sm' });
 
-    /* 出口类型图例: 三种策略各一个「!」 */
-    function lg(v, icon, nameKey) { return h('span', { class: 'sx-lg sx-lg-' + v }, ui.icon(icon, 15, 'ci'), h('span', null, L(nameKey)), help(v)); }
-    /* 误删 / 设错了: 一键把网站页的改动全部恢复为系统默认 (后台任务, 清掉之前先备份) */
+    /* 出口类型图例: 三种出口 (图标 + 名称, 路由颜色只在图标上) + 一个「!」说明三种的区别 */
+    function lg(v, icon, nameKey) { return h('span', { class: 'sx-lg sx-lg-' + v }, ui.icon(icon, 15, 'ci'), h('span', null, L(nameKey))); }
+    /* 误删 / 设错了: 一键把网站页的改动全部恢复为系统默认 (后台任务, 清掉之前先备份)。放在「添加自定义网站」旁边的「⋯」菜单里 (不和图例挤在一起);
+     * 菜单项没有「暂不可用」状态, 所以这里自己先检查辅助服务 */
     function resetAllSites() {
+      var why = TP.why.helper();
+      if (why) { ui.toast(why, 'warn'); return Promise.resolve(); }
       return ui.confirmDialog({ title: t('sites.resetAll.title'), message: t('sites.resetAll.msg'), detail: TP.tunDetail([t('sites.resetAll.detail')]), confirmText: t('sites.resetAll.go'), danger: true }).then(function (ok) {
         if (!ok) return;
         return TP.jobs.runInDock(t('sites.resetAll.title'), function () { return TP.helper('POST', '/api/sites/reset'); }).then(function () { return TP.loadState(); });
       });
     }
-    el.resetAll = ui.btn(L('sites.resetAll.btn'), { sm: true, icon: 'refresh', cls: 'soft-bad' });
-    ui.act(el.resetAll, resetAllSites);
+    el.more = ui.ibtn('more', L('common.more'), { cls: 'sx-more' });
+    ui.menu(el.more, function () { return [{ label: t('sites.resetAll.btn'), desc: t('sites.resetAll.menuDesc'), icon: 'refresh', danger: true, onClick: resetAllSites }]; }, { label: t('common.more'), place: 'bottom-end' });
     el.legend = h('div', { class: 'sx-legend', role: 'group', 'aria-label': L('sites.legend') },
-      h('span', { class: 'muted sm' }, L('sites.legend')), lg('pin', 'pin', 'name.policy.PIN'), lg('auto', 'auto', 'name.policy.Global'), lg('direct', 'direct', 'name.policy.direct'), el.resetAll);
+      lg('pin', 'pin', 'name.policy.PIN'), lg('auto', 'auto', 'name.policy.Global'), lg('direct', 'direct', 'name.policy.direct'), help('legend'));
 
     /* 左侧二级导航 (按标签重建) */
     el.nav = h('nav', { class: 'sx-nav', 'aria-label': L('sites.nav.aria') });
@@ -107,21 +108,20 @@
     el.autoBar = h('div', { class: 'hint sx-autobar', role: 'status', hidden: true });
     el.cList = h('div', { class: 'rows' });
     el.cEmpty = ui.emptyBox();
-    el.cCnt = h('span', { class: 'muted sm' });
+    el.cSkel = ui.skeleton(3); el.cSkel.hidden = true;                             // 状态还没读到时的占位 (不要先闪一下「还没有添加」)
     pgC = ui.pager(PG_CUSTOM, { def: 10 });
     pgC.onChange(renderCustom);
     el.cardTitle = h('h3'); el.cardSub = h('span', { class: 'muted sm' });
-    el.customCard = h('section', { class: 'card sx-pgcard' }, h('div', { class: 'card-h' }, el.cardTitle, el.cCnt, el.cardSub), el.cList, el.cEmpty.el, pgC.el);
+    el.customCard = h('section', { class: 'card sx-pgcard' }, h('div', { class: 'card-h' }, el.cardTitle, el.cardSub), el.cList, el.cSkel, el.cEmpty.el, pgC.el);      // 个数只在工具栏里显示一次
     el.paneCustom = h('div', { class: 'sx-pane' }, el.autoBar, el.customCard);
 
     el.empty = ui.emptyBox();
     el.main = h('div', { class: 'sx-main' }, el.paneCatalog, el.paneCustom, el.empty.el);
     el.layout = h('div', { class: 'sx-layout' }, el.nav, el.main);
 
-    root.appendChild(h('div', { class: 'intro' }, h('p', { class: 'muted' }, L('sites.intro'), help('page'))));
+    root.appendChild(h('div', { class: 'intro' }, h('p', { class: 'muted' }, L('sites.intro'), help('page'), help('how'))));      // 第二个「!」: 规则如何生效 (先匹配到的先生效)
     root.appendChild(TP.proxyNote());
-    root.appendChild(how);
-    root.appendChild(h('div', { class: 'sx-top' }, h('div', { class: 'sx-tabs' }, tabsCtl.el, help('tabs')), h('div', { class: 'toolbar sx-tb' }, el.q, el.addBtn, el.count)));
+    root.appendChild(h('div', { class: 'sx-top' }, h('div', { class: 'sx-tabs' }, tabsCtl.el, help('tabs')), h('div', { class: 'toolbar sx-tb' }, el.q, el.addBtn, el.more, el.count)));
     root.appendChild(el.legend);
     root.appendChild(el.layout);
 
@@ -167,8 +167,16 @@
     }
     return out;
   }
+  /* 窄屏的二级导航是一行可以横向滚动的标签: 选中的那个不在可见范围里时, 把它滚到中间 (只滚这一行自己, 不会带着整个页面上下跳) */
+  function revealTab(bar, b) {
+    if (!bar || !b || bar.scrollWidth <= bar.clientWidth + 1) return;
+    try {
+      var r = b.getBoundingClientRect(), s = bar.getBoundingClientRect();
+      if (r.left < s.left || r.right > s.right) bar.scrollLeft += (r.left - s.left) - (s.width - r.width) / 2;
+    } catch (e) { /* 忽略 */ }
+  }
   function renderNav() {
-    var items = navItems(), compact = window.matchMedia('(max-width:760px)').matches, sig = compact + '|' + tab + '|' + I.lang + '|' + items.map(function (x) { return x.id; }).join(',');
+    var items = navItems(), compact = window.matchMedia('(max-width:759px)').matches, sig = compact + '|' + tab + '|' + I.lang + '|' + items.map(function (x) { return x.id; }).join(',');
     if (tab === 'catalog' && !flt.q && !nav && TP.prefs.get(navKey(), null) === null && items.length > 2) nav = items[1].id;
     if (!items.some(function (x) { return x.id === nav; })) nav = '';
     if (el.nav._sig !== sig) {
@@ -179,6 +187,8 @@
     }
     items.forEach(function (x) { navCtl.count(x.id, x.count); });
     navCtl.set(nav);
+    var rv = sig + '|' + nav;                                                         // 只在选中项 / 导航本身变了的时候滚一次 (用户自己横向滑过的位置不会被每次刷新拉回来)
+    if (compact && el.nav._rv !== rv && navCtl.el.offsetParent !== null) { el.nav._rv = rv; revealTab(navCtl.el, navCtl.btn(nav)); }
   }
 
   function renderPane() {
@@ -435,8 +445,10 @@
       row._sel.setAttribute('aria-label', t('sites.custom.stateAria', { host: o.value }));
       row._del.setAttribute('aria-label', t('sites.custom.delAria', { host: o.value })); row._del.title = t('sites.custom.delAria', { host: o.value }); row._del._tip = row._del.title;
     });
-    setText(el.cCnt, all.length ? t('sites.custom.count', { n: all.length }) : '');
-    if (!all.length) {
+    var waiting = !S.state && !noH;                                                   // 状态还没读到: 显示占位, 不要先闪一下「还没有添加」
+    el.cSkel.hidden = !waiting;
+    if (waiting) el.cEmpty.hide();
+    else if (!all.length) {
       var filtered = !!(flt.q || nav);
       el.cEmpty.show(filtered ? { icon: 'search', text: t('sites.empty.noMatch'), hint: t('sites.empty.noMatchHint') }
         : isAuto ? { icon: 'scan-search', text: t('sites.auto.empty'), hint: t(autoOn() ? 'sites.auto.emptyHintOn' : 'sites.auto.emptyHint') }

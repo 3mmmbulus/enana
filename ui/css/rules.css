@@ -5,6 +5,9 @@
 .rl-hp{display:inline-flex;align-items:center;max-width:100%;min-width:0}
 .rl-upd{margin-right:auto}
 .rl-chips{display:flex;flex-wrap:wrap;gap:6px}
+.rl-sortbox{display:none;align-items:center;gap:2px}                 /* 排序下拉: 只在表头藏起来的时候 (≤ 1260px) 出现, 见下面 */
+.rl-sortbox .sel{max-width:100%}
+.rl-sortdir[data-dir=desc] svg{transform:rotate(180deg)}
 .rl-card{overflow:hidden}
 .rl-wrap{overflow-x:auto}
 
@@ -47,6 +50,7 @@
 
 /* ===== 窄一点的窗口 (内容区放不下 5 列): 每行变成两行的网格; 手机上再变成卡片 ===== */
 @media (max-width:1260px){
+  .rl-sortbox{display:inline-flex}
   .rl-tbl thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
   .rl-tbl thead .help-i,.rl-tbl thead .th-sort{visibility:hidden}   /* 表头被藏起来了: 里面的「!」和排序按钮不能留在键盘焦点里 (这个说明在「添加规则集链接」里也能打开) */
   .rl-tbl,.rl-tbl tbody{display:block}
@@ -60,7 +64,7 @@
   .rl-c-src{grid-area:src}
   .rl-c-st{grid-area:st}
 }
-@media (max-width:760px){
+@media (max-width:759px){
   .rl-tbl tbody tr{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"sw name act" "sw tag tag" "sw src src" "sw st st";gap:4px 12px;padding:11px 13px}
   .rl-c-src .rl-src{flex-direction:row;flex-wrap:wrap;align-items:center}
   .rl-c-src[data-l]:not([data-l=""])::before,.rl-c-st[data-l]:not([data-l=""])::before{content:attr(data-l);display:block;font-size:var(--fs-11);color:var(--muted);line-height:1.3}

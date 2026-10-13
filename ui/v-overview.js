@@ -32,7 +32,7 @@
       return h('span', { class: 'lg lg-' + k }, h('i'), L(RT[k].name));
     }));
     var chartCard = h('section', { class: 'card' },
-      h('div', { class: 'card-h' }, h('h3', null, L('ov.chart.title'), ui.help('overview.speed')), h('span', { class: 'muted sm' }, L('ov.chart.sub')), TP.monitorSwitch(), legend),
+      h('div', { class: 'card-h' }, h('h3', null, L('ov.chart.title'), ui.help('overview.speed')), h('span', { class: 'muted sm' }, L('ov.chart.sub')), h('span', { class: 'card-h-a' }, TP.monitorSwitch(), legend)),      // 监控开关和图例一起靠右
       h('div', { class: 'chart-wrap' }, el.cv, el.paused, el.wait));
 
     /* 下载测速 */
@@ -490,7 +490,7 @@
       var fold = ui.btn(t('ov.wiz.collapse'), { sm: true, kind: 'ghost', icon: 'chevron-up' }); fold.setAttribute('aria-expanded', 'true');
       fold.addEventListener('click', function () { TP.prefs.set('ui.welcome', 'peek'); renderWizard(); });
       return h('section', { class: 'card wiz' },
-        h('div', { class: 'card-h' }, h('h2', null, t('ov.wiz.title'), ui.help('overview.welcome')), h('span', { class: 'muted sm' }, t('ov.wiz.pct', { pct: pct })), fold, close),
+        h('div', { class: 'card-h' }, h('h2', null, t('ov.wiz.title'), ui.help('overview.welcome')), h('span', { class: 'muted sm' }, t('ov.wiz.pct', { pct: pct })), h('span', { class: 'card-h-a' }, fold, close)),      // 「收起」和「稍后再说」一起靠右
         h('p', { class: 'muted' }, t('ov.wiz.intro')),
         bar.el, list);
     });

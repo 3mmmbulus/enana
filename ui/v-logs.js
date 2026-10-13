@@ -1,6 +1,7 @@
 /* enana · v-logs.js — 日志页 (操作记录 / 网站访问 / 代理日志) + 日志设置 (保留时长 / 三种日志各自的开关 / 占用空间)
  *
- * 日志页 (view id: logs): 页内标签 + 日期选择 + 搜索 (服务端, 防抖 300 ms) + 筛选 (全部 / 直连 / 代理 / 失败 ...) + 实时刷新 + 导出 (一个按钮, 二次弹窗选内容和时间范围) + 清除… + 日志设置;
+ * 日志页 (view id: logs): 页内标签 + 工具栏 (日期选择 · 搜索 (服务端, 防抖 300 ms) · 筛选 (全部 / 直连 / 代理 / 失败 ...) · 刷新 · 实时) + 「更多」菜单 (导出 (二次弹窗选内容和时间范围) / 日志设置 / 清除…);
+ *   菜单项没有「暂不可用」状态, 每个菜单项的处理函数自己先检查能不能做 (辅助服务 / 有没有日志), 不能做就提示原因;
  *   列表按页浏览, 点一行 (或时间按钮) 打开详情弹窗 (可用 ‹ › 在本页的各条之间切换, 可复制)。
  *   网站访问: 每条连接 = 时间 · 网站 (失败时带失败类型) · 应用 (图标) · 线路 · 出口 (直连时写「为什么直连」); 上面一行汇总 (直连 / 代理 / 失败 + 直连原因分布 + 失败最多的网站)。
  *   GET  /api/logs?type&day&q&limit&offset&f -> {total, days[], rows[], summary}  (新→旧; f = 筛选: ops error | access direct proxy error | proxy warn error)
@@ -76,7 +77,6 @@
   }
   function qkey(k) { return [day, T[k].q, T[k].f, PG[k].page(), PG[k].size()].join('|'); }
   function str(v) { return v == null ? '' : String(v); }
-  function withHelp(node, topic) { return h('span', { class: 'log-hp' }, node, ui.help(topic)); }
   function setPage(k, n) { quiet++; try { PG[k].setPage(n); } finally { quiet--; } }                 // 程序自己翻页 (不触发读取)
   /* 用户翻页以后, 如果工具栏已经滚出了屏幕, 滚回来, 这样新一页是从头开始看的 */
   function toTop(node) {
@@ -423,7 +423,7 @@
   V.render = render;
 
   function renderToolbar() {
-    var k = cur, tb = T[k], why = TP.why.helper(), sig = I.lang + '|' + days.join(','), ph = t('logs.search.' + k);
+    var k = cur, sig = I.lang + '|' + days.join(','), ph = t('logs.search.' + k);
     if (el.day._sig !== sig) {
       el.day._sig = sig; TP.clear(el.day);
       if (days.length) days.forEach(function (d) { el.day.appendChild(TP.opt(d, fmt.day(d))); });
@@ -432,8 +432,7 @@
     if (days.length && el.day.value !== day) el.day.value = day;
     ui.avail(el.day, days.length ? '' : t('logs.day.noneWhy'));
     if (el.q.placeholder !== ph) { el.q.placeholder = ph; el.q.setAttribute('aria-label', ph); }
-    // 导出按钮不因辅助服务没运行而灰掉: openExport 会立刻提示原因, 不会打开一个卡住的弹窗
-    ui.avail(el.clr, why || (tb.loaded && !days.length ? t('logs.clear.nothing') : ''));
+    // 导出 / 清除在「更多」菜单里: 打开时 (openExport / clearFromMenu) 才检查能不能做, 不能做就提示原因, 不会打开一个卡住的弹窗
     el.liveWrap.hidden = k === 'ops';                                                           // 操作记录不会「实时」滚动, 不显示这个开关
   }
 
@@ -623,6 +622,12 @@
 
   /* 清除: 选范围 -> 危险确认 (说清楚删什么、不能撤销) -> POST (需要再次输入登录密码: 密码框由 TP.helper 弹出, 取消 = 安静地回到这个对话框) -> 提示释放的空间 -> 重新加载
    * 注意: 「网站访问」是从代理日志里归并出来的, 两者共用同一批文件, 清除其中一个就是清除两个 (后端 logs_clear 的行为)。 */
+  /* 「更多」菜单里的「清除日志…」: 菜单项不能显示「暂不可用」, 所以先在这里检查 (辅助服务不可用 / 还没有任何日志) 并说明原因 */
+  function clearFromMenu() {
+    var tb = T[cur], why = TP.why.helper() || (tb.loaded && !days.length ? t('logs.clear.nothing') : '');
+    if (why) { ui.toast(why, 'warn'); return Promise.resolve(); }
+    return openClear();
+  }
   function openClear() {
     var why = TP.why.helper();
     if (why) { ui.toast(why, 'warn'); return Promise.resolve(); }
@@ -650,7 +655,7 @@
     }));
     api = ui.modal({
       title: t('logs.clear.title'), icon: 'delete', iconKind: 'bad', size: 'md',
-      body: h('div', { class: 'log-clear' }, h('p', { class: 'muted' }, t('logs.clear.intro')), group, note),
+      body: h('div', { class: 'log-clear' }, h('p', { class: 'muted' }, t('logs.clear.intro'), ui.help(HT.clear)), group, note),     // 「!」(清除会删掉什么) 从工具栏挪到了这里
       actions: [
         { label: t('common.cancel'), cancel: true },
         { label: t('logs.clear.go'), kind: 'danger', icon: 'delete', id: 'go', onClick: async function (a) {
@@ -693,10 +698,16 @@
     el.liveSw = h('input', { type: 'checkbox', role: 'switch', 'aria-label': L('logs.live.aria') });
     el.liveSw.addEventListener('change', function () { setLive(el.liveSw.checked); });
     el.liveWrap = h('label', { class: 'log-live', title: L('logs.live.tip') }, h('span', { class: 'sw' }, el.liveSw, h('span', { class: 'sw-ui' })), h('span', { class: 'log-live-t' }, L('logs.live')));
-    el.exp = ui.btn(L('common.export'), { icon: 'download', title: L('logs.export.tip') }); ui.act(el.exp, openExport);
-    el.clr = ui.btn(L('logs.clear.btn'), { icon: 'delete', cls: 'soft-bad' }); ui.act(el.clr, openClear);
-    if (TP.sudo && TP.sudo.mark) TP.sudo.mark(el.clr);
-    el.set = ui.btn(L('logs.settings.btn'), { icon: 'settings' }); ui.act(el.set, function () { return LG.openSettings(); });
+    /* 不常用的三个 (导出 / 日志设置 / 清除) 收进「更多」菜单, 工具栏只留看日志用的控件; 「清除」在菜单里标成危险项, 确认弹窗里的按钮仍然带小锁 (要再次输入登录密码) */
+    el.more = ui.btn(L('common.more'), { icon: 'more', cls: 'log-more' });
+    ui.menu(el.more, function () {
+      return [
+        { label: t('common.export'), desc: t('logs.export.tip'), icon: 'download', onClick: openExport },
+        { label: t('logs.settings.btn'), icon: 'settings', onClick: function () { return LG.openSettings(); } },
+        { sep: true },
+        { label: t('logs.clear.btn'), desc: t('logs.clear.menuDesc'), icon: 'delete', danger: true, onClick: clearFromMenu }
+      ];
+    }, { label: t('common.more'), place: 'bottom-end' });
 
     el.noticeTxt = h('span');
     el.noticeBtn = ui.btn(L('logs.accOff.action'), { sm: true, icon: 'settings' }); ui.act(el.noticeBtn, function () { return LG.openSettings(); });
@@ -729,12 +740,11 @@
     el.filt = h('div', { class: 'log-filt' }, TYPES.map(function (k) { return segs[k].el; }));
     el.panel = h('div', { class: 'log-panel', role: 'tabpanel' }, el.notice, el.flow, el.info, el.sumx, el.sum, h('section', { class: 'card flush log-card' }, el.head, el.list, el.empty.el, el.pgBox), el.capNote);
     el.foot = h('p', { class: 'muted sm log-foot' });
-    el.bar = h('div', { class: 'toolbar log-bar' }, el.day, el.q, el.refresh, el.liveWrap, el.exp, withHelp(el.clr, HT.clear), el.set);
+    el.bar = h('div', { class: 'toolbar log-bar' }, el.day, el.q, el.filt, el.refresh, el.liveWrap, el.more);
 
     root.appendChild(h('div', { class: 'intro' }, h('p', { class: 'muted' }, L('logs.intro'), ' ', ui.help(HT.page))));
     root.appendChild(h('div', { class: 'log-tabs' }, tabsCtl.el, ui.help(HT.tabs)));
     root.appendChild(el.bar);
-    root.appendChild(el.filt);
     root.appendChild(el.panel);
     root.appendChild(el.foot);
 

@@ -2,7 +2,7 @@
  * 只用主题变量, 深色主题自动适配; 小于 14px 的字号一律用 var(--fs-*) (窄屏 / 触屏统一抬到 14px) */
 
 /* ===== 通用: 控件和它的「!」说明不拆开换行 ===== */
-.cn-hp,.log-hp{display:inline-flex;align-items:center;max-width:100%;min-width:0}
+.cn-hp{display:inline-flex;align-items:center;max-width:100%;min-width:0}
 .log-tabs{display:flex;align-items:center;flex-wrap:wrap;gap:2px 4px}
 .log-tabs .subtabs{flex:0 1 auto}
 @media (max-width:480px){ .log-tabs .subtab{padding-left:8px;padding-right:8px} }       /* 窄屏: 三个标签 + 「!」放在一行 */
@@ -10,7 +10,7 @@
 
 /* ===== 工具栏 / 说明 ===== */
 .log-day{min-width:210px;max-width:100%}
-.log-panel>*+*{margin-top:10px}
+.log-panel>*+*{margin-top:var(--gap)}
 .log-notice{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;margin:0}
 .log-sum{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;margin:0 2px}
 .log-cap{margin:0 2px}
@@ -94,8 +94,9 @@
 .log-node.is-na{color:var(--muted)}
 
 /* ===== 筛选 / 实时 / 汇总 ===== */
-.log-filt{margin:8px 0 0}
+.log-filt{display:inline-flex;min-width:0;max-width:100%}                  /* 筛选在工具栏里 (日期 · 搜索 · 筛选 · 刷新 · 实时 · 更多) */
 .log-filt .seg{flex-wrap:wrap}
+.log-more{margin-left:auto}                                                /* 「更多」(导出 / 日志设置 / 清除) 靠右 */
 .log-live{display:inline-flex;align-items:center;gap:7px;cursor:pointer;font-size:var(--fs-13);color:var(--muted)}
 .log-live-t{white-space:nowrap}
 .log-sumx{display:flex;flex-direction:column;gap:6px;margin:0 2px}
@@ -104,8 +105,6 @@
 .log-tf{appearance:none;-webkit-appearance:none;display:inline-flex;align-items:baseline;gap:2px;max-width:100%;margin:0;padding:1px 9px;border:1px solid var(--line2);border-radius:99px;background:var(--surface);color:var(--text);font:inherit;font-size:var(--fs-12-5);cursor:pointer;overflow-wrap:anywhere;text-align:left}
 .log-tf:hover{border-color:var(--pri);color:var(--pri)}
 .log-tf i{font-style:normal;color:var(--err);font-variant-numeric:tabular-nums}
-.hint.info{display:flex;align-items:flex-start;gap:8px;border-left-color:var(--info);background:var(--surface2)}
-.hint.info .ci{flex:none;margin-top:2px;color:var(--info)}
 
 /* ===== 导出对话框 / 保留时长 ===== */
 .log-opts.pri .log-opt.on{border-color:var(--pri);background:var(--pri-bg)}
@@ -116,7 +115,7 @@
 .log-unit{min-width:5.5em}
 
 /* ===== 手机宽度: 行变成卡片 ===== */
-@media (max-width:760px){
+@media (max-width:759px){
   .log-head{display:none}
   .log-row{padding:9px 12px;row-gap:3px;column-gap:10px;align-items:center}
   .log-c:empty,.log-c.is-na{display:none}
@@ -128,6 +127,7 @@
   .log-proxy{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"t . lv" "msg msg msg"}
   .log-host{font-weight:600}
   .log-day{flex:1 1 100%}
+  .log-filt{flex:1 1 100%}
   .log-filt .seg{width:100%}
 }
 
@@ -155,6 +155,7 @@
 .cn-bar{align-items:center}
 @media (min-width:760px){ .cn-bar>.cn-hp:last-child{margin-left:auto} }       /* 监控开关靠右 (放不下时单独一行, 也靠右) */
 .cn-sort{max-width:100%}
+@media (min-width:760px){ .cn-sort{display:none} }                  /* 宽屏用列头排序; 窄屏表格变成卡片 (没有列头) 时才用这个下拉 */
 .cn-row{cursor:pointer}
 .cn-row .acts{flex-wrap:nowrap}
 .conn-tbl th .help-i{margin-left:4px}
