@@ -131,6 +131,7 @@ section[id]{scroll-margin-top:16px}   /* 区块自带 72px 上边距, 跳转后�
 
 /* 安装 */
 .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:var(--shadow)}
+.install{width:100%}
 .install-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
 .install-head h2{font-size:clamp(22px,3vw,28px)}
 .cmd-block{margin-top:2px}

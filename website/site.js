@@ -1,5 +1,5 @@
 /* enana.cc 首页脚本: 中英文切换、按访问者的系统先显示对应的安装命令、复制按钮。
- * 不发任何网络请求; 文字只通过 textContent / setAttribute 写进页面 (没有 innerHTML)。
+ * 不发任何网络请求; 文字只通过 textContent / setAttribute 写进页面 (从不把字符串当 HTML 解析)。
  * DICT.zh 必须和 index.html 里的静态中文逐字一致 (tests/website-check.py 会检查)。 */
 (function () {
   'use strict'
