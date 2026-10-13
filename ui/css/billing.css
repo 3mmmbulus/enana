@@ -1,24 +1,76 @@
-.billing { display:grid; gap:16px; margin-top:20px }
-.billing p,.billing h3,.billing-invoice p { margin:0 }
-.billing-catalog { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px }
-.billing-price { display:flex; flex-direction:column; gap:10px; border:1px solid var(--line); border-radius:12px; padding:16px }
-.billing-price strong { font-size:22px }
-.billing-wallet { justify-content:space-between; gap:10px }
-.billing-history { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--line) }
+/* enana · billing.css — 设置 → 会员: 操作行 / 钱包行 / 订单与余额明细 / 购买弹窗 / 充值弹窗 / 付款订单
+ * 按钮一律靠左, 用固定的小间距 (8px), 不用 space-between 把按钮撑开。 */
+.billing { display:grid; gap:14px; margin-top:14px }
+.billing p,.billing h3,.billing-invoice p,.billing-pick p,.billing-topup p { margin:0 }
 .billing-email { margin-top:12px }
 .billing-notices { display:grid; gap:8px }
 .billing-notices:empty { display:none }
 .billing .billing-notice { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; margin:0 }
 .billing .billing-notice p { flex:1 1 260px; min-width:0; line-height:1.5 }
 .billing .billing-notice.info { border-left:3px solid var(--info) }
-.billing-invoice { display:grid; gap:16px }
-.billing-exact { display:flex; align-items:center; justify-content:space-between; gap:12px }
-.billing-exact label { display:grid; gap:8px; min-width:0 }
-.billing-exact code { font-size:16px; overflow-wrap:anywhere; user-select:all }
-@media(max-width:760px) { .billing-catalog { grid-template-columns:repeat(2,minmax(0,1fr)) } }
-@media(max-width:500px) { .billing-exact { align-items:stretch; flex-direction:column }.billing-price strong{font-size:20px} }
-@media(max-width:380px) { .billing-catalog { grid-template-columns:minmax(0,1fr) } }
 
-/* 收款二维码: 白底 + 静区, 深色模式下也能扫码 */
-.billing-qr { background: #fff; padding: 12px; border-radius: 8px; width: fit-content; margin: 8px 0; }
-.billing-qr svg { display: block; width: 200px; height: 200px; }
+/* 购买会员 / 续费会员 · 充值余额 */
+.billing-acts { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-start; gap:8px }
+
+/* 余额 + 按月自动续费 (开关样式的按钮, role=switch) */
+.billing-wallet { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-start; gap:8px 16px; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--surface2) }
+.billing-wallet strong { font-size:15px }
+.billing-sw { display:inline-flex; align-items:center; gap:8px; margin:0; padding:2px 0; border:0; background:none; color:var(--text); font:inherit; cursor:pointer }
+.billing-sw .sw { pointer-events:none }
+.billing-sw[aria-checked=true] .sw-ui { background:var(--ok-s) }
+.billing-sw[aria-checked=true] .sw-ui::after { transform:translateX(16px) }
+.billing-sw:focus-visible { outline:none }
+.billing-sw:focus-visible .sw-ui { outline:2px solid var(--pri); outline-offset:2px }
+.billing-sw.unavail { cursor:not-allowed }
+.billing-sw.unavail .sw-ui { opacity:.5 }
+.billing-sw.is-busy { opacity:.6; cursor:progress }
+
+/* 最近订单 / 余额明细 (沿用 .tbl.rt: 窄屏变成卡片) */
+.billing .billing-h { margin:0 0 8px; font-size:15px }
+.billing-tbl td.num,.billing-tbl th.num { text-align:right; white-space:nowrap }
+.billing-tbl td.plus { color:var(--ok) }
+.billing-tbl td.c-act { text-align:right; white-space:nowrap }
+.billing-pg { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-start; gap:8px; margin-top:8px }
+.billing-more { margin-top:8px }
+
+/* 购买弹窗: 期限 (单选卡片) + 付款方式 */
+.billing-pick { display:grid; gap:14px }
+.billing-terms { display:grid; gap:8px }
+.billing-term { display:flex; align-items:center; gap:10px; padding:9px 12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); cursor:pointer }
+.billing-term:hover { border-color:var(--line2) }
+.billing-term.on { border-color:var(--pri); background:var(--pri-bg) }
+.billing-term input { flex:none; margin:0; accent-color:var(--pri) }
+.bt-main { display:grid; gap:2px; flex:1 1 auto; min-width:0 }
+.bt-name { display:flex; flex-wrap:wrap; align-items:center; gap:6px }
+.bt-side { display:grid; justify-items:end; gap:4px; flex:none; text-align:right }
+.bt-side strong { font-size:15px; white-space:nowrap }
+.billing-pay { display:grid; gap:8px; justify-items:start }
+.billing-pay-l { font-size:var(--fs-12-5); color:var(--muted) }
+.billing-pay>p { justify-self:stretch }
+
+/* 充值余额 */
+.billing-topup { display:grid; gap:10px }
+.billing-chips { display:flex; flex-wrap:wrap; gap:8px }
+.billing-chip.on { color:var(--pri); border-color:var(--pri); background:var(--pri-bg) }
+.billing-tu-msg.bad { color:var(--err) }
+
+/* 付款订单: 二维码居中在最前; 金额的小数尾数、地址的首尾各 6 位用醒目的红色 */
+.billing-invoice { display:grid; gap:14px }
+.billing-inv-what { display:grid; gap:2px }
+.billing-inv-what b { font-size:15px }
+.billing-qr { background:#fff; padding:12px; border-radius:8px; width:fit-content; justify-self:center; margin:0 }
+.billing-qr svg { display:block; width:200px; height:200px }
+.billing-exact { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; padding:10px 12px; border:1px solid var(--line); border-radius:10px }
+.billing-exact-v { display:grid; gap:4px; min-width:0; flex:1 1 220px }
+.billing-exact-l { font-size:var(--fs-12-5); color:var(--muted) }
+.billing-exact code { font-size:17px; overflow-wrap:anywhere; user-select:all }
+.billing-amt { font-weight:600 }
+.amt-tail,.addr-hl { color:var(--err); font-weight:700 }
+.billing-cd { font-weight:600 }
+.billing-inv-st { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px }
+.billing-inv-st p { flex:1 1 200px; min-width:0 }
+.dlg-a .billing-cancel { margin-right:auto }
+@media(max-width:500px) { .billing-exact { align-items:stretch; flex-direction:column } .billing-exact-v { flex:none } }
+@media (pointer:coarse) { .billing-sw { min-height:44px } .billing-term { min-height:56px } }
+/* 订单 / 余额明细表格很窄, 不需要 .tbl-wrap 里固定首列和操作列 (固定列自带白底, 会把斑马纹切成一段一段的) */
+@media (min-width:760px){.tbl-wrap .tbl.rt.billing-tbl th:first-child,.tbl-wrap .tbl.rt.billing-tbl td:first-child,.tbl-wrap .tbl.rt.billing-tbl th.c-act,.tbl-wrap .tbl.rt.billing-tbl td.c-act{position:static;box-shadow:none}.tbl-wrap .tbl.rt.billing-tbl td:first-child,.tbl-wrap .tbl.rt.billing-tbl td.c-act{background:transparent}}

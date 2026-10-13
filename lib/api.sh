@@ -422,10 +422,23 @@ ep_plan() {
 }
 
 ep_billing() {
-  local op=$1 route=$2 verb=$3 body='' result id tmp
+  local op=$1 route=$2 verb=$3 body='' result id tmp k v pq=''
   if [ "$op" = order ]; then
     id=$(qp id); printf '%s' "$id" | LC_ALL=C grep -Eq '^[a-z0-9]{15}$' || fail "订单编号无效" E_INVALID
     route="$route?id=$id"
+  elif [ "$op" = status ]; then
+    # 订单分页 (可选): orders_page 1-1000 (默认 1), orders_per_page 5-30 (默认 30); 空值等于没写 (和云端一样), 其它不合法的值一律拒绝。
+    # 只转发这两个校验过的参数, 其它查询参数一律不转发。都不写时和以前完全一样 (云端默认第 1 页、每页 30 个)。
+    for k in orders_page orders_per_page; do
+      v=$(qp "$k"); [ -n "$v" ] || continue
+      case $k:$v in
+        orders_page:[1-9]|orders_page:[1-9][0-9]|orders_page:[1-9][0-9][0-9]|orders_page:1000) ;;
+        orders_per_page:[5-9]|orders_per_page:[12][0-9]|orders_per_page:30) ;;
+        *) fail "参数无效" E_INVALID ;;
+      esac
+      pq="$pq${pq:+&}$k=$v"
+    done
+    [ -z "$pq" ] || route="$route?$pq"
   elif [ "$verb" = POST ]; then
     # Resend has no arbitrary recipient: the cloud sends to this account only.
     if [ "$op" = email-send ] && [ ! -s "$BODY" ]; then body='{}'

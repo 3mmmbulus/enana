@@ -53,7 +53,7 @@
     var up = ui.btn(L(verify ? 'plan.verifyGo' : canBuy ? 'plan.upgradeGo' : 'plan.upgrade'), { kind: 'primary', icon: 'pro' });
     /* 这个按钮在弹窗里: 先关掉弹窗再切换到「会员」页, 否则页面在弹窗后面变了、弹窗还盖在上面, 看起来像按钮没反应 */
     ui.act(up, function () {
-      if (canBuy) { if (dlg) dlg.close('upgrade'); TP.settingsTab(verify ? 'account' : 'plan'); return; }       // 邮箱验证在「账号」页 (也在「会员」页)
+      if (canBuy) { if (dlg) dlg.close('upgrade'); TP.settingsTab(verify ? 'account' : 'plan'); return; }       // 邮箱验证在「账号与设备」页 (会员页只有说明和「去验证邮箱」)
       ui.toast(t('plan.upgradeSoon'), 'warn', 4200);
     });
     var body = h('div', { class: 'plan-ex' },

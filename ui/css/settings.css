@@ -1,10 +1,9 @@
 /* enana · settings.css — 设置页: 标签页 / 套餐卡片 / 修改密码 */
-.set-intro{margin:0 0 8px}
-.set-intro p{margin:0}
-.set-tabs{margin:0 0 14px;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:thin;padding-bottom:3px}
-.set-tabs .subtabs{display:inline-flex;flex-wrap:nowrap;max-width:none}
+.set-tabs{display:flex;align-items:center;gap:2px;margin:0 0 14px;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:thin;padding-bottom:3px}      /* 标签 + 「!」一行; 放不下时横向滚动 (选中的标签由 v-settings.js 滚到看得见的地方) */
+.set-tabs .subtabs{display:inline-flex;flex:none;flex-wrap:nowrap;max-width:none}
 .set-tabs .subtab{flex:none}
-.set-panel>.card+.card{margin-top:14px}
+.set-copy{margin:10px 0 0}
+.set-panel>.card+.card{margin-top:var(--gap)}
 .set-panel[hidden]{display:none}
 .set-svc{font-weight:600}
 .sudo-hint{display:flex;align-items:flex-start;gap:6px;margin:12px 0 0}

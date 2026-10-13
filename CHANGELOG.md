@@ -1,5 +1,33 @@
 # Changelog / 更新日志
 
+## 2.3.25 (2026-10-13)
+
+### 中文
+- **购买会员更简单:** 7 张价格卡片收进一个「购买会员」按钮: 先选期限 (显示每月均价和优惠, 默认推荐 12 个月), 再选 USDT 付款或余额支付; 余额不够时余额支付不可选, 并给出「充值余额」。
+- **充值余额:** 只收 4–1000 的整数 USDT, 提供 10 / 20 / 50 / 100 快捷金额, 输错时在输入框下方直接说明。
+- **付款订单更清楚:** 写明买的是什么和订单号; 二维码居中; 收款地址的前 6 位和后 6 位标红, 复制后的提示里也会重复, 方便核对; 金额的小数尾数标红, 复制的就是显示的金额; 只保留一个付款倒计时, 过了付款时间会提示不要再转账。
+- **付款金额规则:** 同一价格的收款地址都被占用时, 金额先加 1 位小数 (例如 35.1), 用完才用 2 位, 最多 3 位; 以前一开始就是 2 位小数。
+- **防止滥用:** 每个账号 24 小时内最多创建 5 个订单 (取消的也算), 超出时会告诉你几点之后可以再下单。
+- **按月自动续费:** 余额不够一个月时先说明不会扣款, 可以先充值或仍然开启; 开启后会提示这次是否已经续费。开关直接显示当前状态。
+- **订单列表:** 「最近订单」改成表格, 每页 10 条; 余额明细显示带正负号的金额。待付款订单只在 1 小时付款期内拦住新订单 (以前要等 24 小时)。
+- **其它页面更简洁:** 应用列表每个应用只保留一个模式选择 (直连 / 跟随规则 / 固定出口 / 自动线路); 网站、服务器、日志页把不常用的操作收进「⋯」菜单; DNS 页把当前设置和测试解析放到最上面; 只在需要时才显示提示条; 修正按钮挤在一起、间距不齐。
+- **用词统一:** 接管方式统一叫「轻量模式（系统代理）」和「增强模式（TUN）」; 界面里的「PIN」改为「固定出口」; 头像菜单新增「会员」入口; 去掉每页底部的页脚 (版权和链接移到「设置 → 关于」)。
+- **官网改版:** enana.cc 重新设计为完整的产品页 (功能、适用人群、价格、安装、常见问题), 适配手机和深色模式。
+- **其它修复:** 按钮在操作失败后不再残留转圈图标; 订单很多时, 服务器不再可能把正在使用的付款金额再分给别人, 也不会漏掉正在付款的订单。
+
+### English
+- **Simpler membership purchase:** the 7 price cards are now one "Buy membership" button: pick a term (with the monthly average and saving; 12 months is recommended), then pay with USDT or from your balance; balance payment is unavailable with a "Top up" shortcut when the balance is too low.
+- **Top-ups:** whole USDT from 4 to 1000 only, with 10 / 20 / 50 / 100 shortcuts and inline validation under the field.
+- **Clearer invoices:** they say what is being bought and show the order number; the QR code is centred; the first and last 6 characters of the receiving address are shown in red and repeated in the copy toast so you can check them; the decimal tail of the amount is red and the copy button copies exactly what is shown; one countdown, and a clear warning not to pay once the payment time is over.
+- **Amount rule:** when every receiving address already holds the same price, the amount first gets 1 decimal (e.g. 35.1), then 2, and at most 3; before, it started with 2 decimals.
+- **Abuse limit:** each account can create at most 5 orders in 24 hours (cancelled ones count); after that you are told when you can order again.
+- **Monthly auto-renew:** with less than a month of balance you are told nothing will be charged, and can top up first or enable it anyway; afterwards a message says whether a month was renewed. The switch shows its state.
+- **Orders:** recent orders are a table with 10 per page, and balance history shows signed amounts. A pending order blocks new orders only during its 1-hour payment window (before: 24 hours).
+- **Calmer pages:** each app keeps one mode choice (direct / follow rules / fixed exit / automatic); Sites, Servers and Logs move rarely used actions into a "⋯" menu; DNS puts the current settings and the lookup test at the top; notices appear only when they matter; crowded and uneven buttons are fixed.
+- **Consistent wording:** capture modes are "Lightweight (system proxy)" and "Enhanced (TUN)"; "PIN" is now "fixed exit"; the account menu has a "Membership" item; the footer under every page is gone (copyright and links are in Settings → About).
+- **New website:** enana.cc is a full product page (features, who it is for, pricing, install, FAQ) that works on phones and in dark mode.
+- **Other fixes:** buttons no longer keep a spinning icon after a failed action; with many orders, the server can no longer hand an amount that is in use to someone else or miss the order being paid.
+
 ## 2.3.24 (2026-10-13)
 
 ### 中文

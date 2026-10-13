@@ -111,7 +111,11 @@
     el._busy = !!busy; el.disabled = busy || !!el._wasDisabled || !!el._renderBusy;
     el.classList.toggle('is-busy', busy || !!el._renderBusy);
     if (busy || el._renderBusy) el.setAttribute('aria-busy', 'true'); else el.removeAttribute('aria-busy');
-    if (!busy && el._label && el._label.textContent === t('common.loading')) ui.setBtn(el, el._busyLabel, el._busyIcon);
+    if (!busy && el._label && el._label.textContent === t('common.loading')) {
+      ui.setBtn(el, el._busyLabel, el._busyIcon);
+      // 原来没有图标的按钮: 去掉忙碌时加上的转圈图标 (否则失败之后它一直留在按钮上)
+      if (!el._busyIcon && el._iconEl) { if (el._iconEl.parentNode === el) el.removeChild(el._iconEl); el._iconEl = null; el._iconName = null; }
+    }
   };
   ui.act = function (el, handler) {
     el.addEventListener('click', function (ev) {

@@ -2,7 +2,8 @@
  * 固定出口不是全局的一个开关: 不同的应用 / 网站 / 服务可以走不同的固定出口。这里的「默认固定出口」只是「跟随默认」的项目走的那一个 ——
  * 换默认 / 删除固定出口 / 把它改成别的角色之前, 都会先列出谁会换出口 IP, 让用户选择去向 (exits.js 的事前检查), 不会悄悄换 IP。
  * 添加·导入服务器是弹窗 (v-import.js, TP.imp.open); 每个会改变状态的操作都先 confirmDialog; 暂时不能用的按钮显示原因而不是失灵。
- * 服务器表: 列头 (名称 / 类型 / 地址 / 角色 / 延迟) 可以点击排序 (ui.sorter, 先排序再分页); 工具栏的排序下拉保留 (没点列头时照旧, 用下拉框会取消列头排序)。 */
+ * 服务器表: 列头 (名称 / 类型 / 地址 / 角色 / 延迟) 可以点击排序 (ui.sorter, 先排序再分页); 工具栏的排序下拉只在窄屏出现 (表格变成卡片、没有列头的时候; 用下拉框会取消列头排序)。
+ * 每一行最右边是一个「⋯」图标按钮 (和点名称一样打开详情弹窗); 详情弹窗里: 常用操作 (设为固定出口 / 设为自动线路 / 测速) 在徽标下面, 底部只有 删除 (最左) · 显示凭据 · 关闭。 */
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, setText = TP.setText, I = window.I18N, t = I.t, L = I.L;
@@ -28,7 +29,7 @@
     ui.selectAct(el.pinSel, function () { return (S.proxies.PIN && S.proxies.PIN.now) || ''; }, function (want) { return switchTo('PIN', want); });
     el.pinInfo = h('div', { class: 'muted sm' });
     el.pinFollow = h('div', { class: 'muted sm srv-follow' });                       // 谁在跟随默认固定出口 (数据来自 GET /api/exits)
-    el.pinView = h('button', { class: 'link-b sm', type: 'button' }, L('servers.pin.view')); el.pinView.addEventListener('click', function () { pickTab('exits'); });
+    el.pinView = ui.btn(L('servers.pin.view'), { sm: true, kind: 'ghost', icon: 'arrow-right' }); el.pinView.addEventListener('click', function () { pickTab('exits'); });
     el.pinOrphan = h('div', { class: 'hint warn srv-orphan', hidden: true });         // 有项目指定的出口已经不是固定出口 (孤儿)
     el.autoSel = h('select', { class: 'sel', 'aria-label': L('servers.auto.aria') });
     ui.selectAct(el.autoSel, function () { return (S.proxies.Global && S.proxies.Global.now) || ''; }, function (want) { return switchTo('Global', want); });
@@ -55,9 +56,9 @@
     ui.act(el.addBtn, function () { return TP.imp.open('import'); });
     el.testBtn = ui.btn(L('servers.test.all'), { icon: 'speed' });
     ui.act(el.testBtn, function () { if (!servers().length) { TP.imp.open('import'); return; } return testAll(); });
-    el.stopBtn = ui.btn(L('servers.test.stop'), { sm: true, icon: 'stop' }); el.stopBtn.hidden = true;
+    el.stopBtn = ui.btn(L('servers.test.stop'), { icon: 'stop' }); el.stopBtn.hidden = true;
     ui.act(el.stopBtn, function () { test.stop = true; });
-    el.sort = h('select', { class: 'sel', 'aria-label': L('servers.sort.aria'), on: { change: function () {
+    el.sort = h('select', { class: 'sel srv-sort', 'aria-label': L('servers.sort.aria'), on: { change: function () {
       sortKey = el.sort.value; TP.prefs.set('servers.sort', sortKey);
       if (so && so.state()) so.set(''); else renderTable();              // 用了下拉框: 取消列头排序 (so.set 会同步下拉框并重画)
     } } },
@@ -66,7 +67,7 @@
     el.tBar = ui.bar(); el.tMsg = h('span', { class: 'muted sm', 'aria-live': 'polite' });
     el.tBox = h('div', { class: 'testbar', hidden: true }, el.tBar.el, el.tMsg);
     el.sort.value = sortKey;
-    panels.nodes.appendChild(h('div', { class: 'toolbar' }, el.addBtn, el.testBtn, el.stopBtn, el.sort, el.count, ui.help('servers.nodes')));
+    panels.nodes.appendChild(h('div', { class: 'toolbar' }, el.addBtn, el.testBtn, el.stopBtn, el.sort, ui.help('servers.nodes'), el.count));      // 个数放最后才会靠右 (.toolbar>.muted:last-child)
     panels.nodes.appendChild(el.tBox);
 
     /* 服务器表 */
@@ -103,8 +104,9 @@
     /* 订阅 */
     el.subs = h('div', { class: 'rows' });
     el.subsEmpty = ui.emptyBox();
+    el.subsSkel = ui.skeleton(3); el.subsSkel.hidden = true;
     panels.subs.appendChild(h('section', { class: 'card' },
-      h('div', { class: 'card-h' }, h('h3', null, L('servers.subs.title'), ui.help('servers.subs')), h('span', { class: 'muted sm' }, L('servers.subs.sub'))), el.subs, el.subsEmpty.el));
+      h('div', { class: 'card-h' }, h('h3', null, L('servers.subs.title'), ui.help('servers.subs')), h('span', { class: 'muted sm' }, L('servers.subs.sub'))), el.subs, el.subsSkel, el.subsEmpty.el));
 
     /* 我的服务器 (SSH 一键部署过的 VPS 记录, 不含任何密码 / 私钥) — 由 v-vps.js 提供, 缺失时整块省略 */
     if (TP.vps && TP.vps.listCard) { try { panels.vps.appendChild(TP.vps.listCard()); } catch (e) { console.error('[vps.listCard]', e); } }
@@ -224,7 +226,7 @@
     r.type = h('span', { class: 'chip' }); r.addr = h('span', { class: 'mono sm' });
     r.role = h('select', { class: 'sel sm' }, ROLES.map(function (k) { return TP.opt(k, TP.name.role(k)); }));
     r.lat = h('span', { class: 'lat' });
-    r.bInfo = ui.btn(t('servers.col.act'), { sm: true, icon: 'menu' });
+    r.bInfo = ui.ibtn('more', t('servers.col.act'));                     // 只有图标 (每一行都写「操作」两个字太占地方); 名称写进 aria-label / title (updateRow)
     tr = h('tr', null,
       td('', 'c-name', h('div', { class: 'c-name-in' }, r.name, r.badges)),
       td('servers.col.type', 'c-type', r.type), td('servers.col.addr', 'c-addr', r.addr), td('servers.col.role', 'c-role', r.role), td('servers.col.lat', 'c-lat', r.lat),
@@ -264,7 +266,6 @@
     setText(r.lat, !inP ? '—' : !d ? '—' : d.ms > 0 ? d.ms + ' ms' : t('common.timeout'));
     TP.setCls(r.lat, 'lat ' + (!d || !inP ? '' : d.ms < 0 ? 'bad' : d.ms < 150 ? 'good' : d.ms < 400 ? 'mid' : 'bad'));
     // Keep the table compact; the dialog owns all node actions and their guards.
-    ui.setBtn(r.bInfo, t('servers.col.act'), 'menu');
     setTip(r.bInfo, t('servers.row.actionsOf', { tag: s.tag }));
     tr.classList.toggle('is-off', role === 'off'); tr.classList.toggle('is-busy', busy);
   }
@@ -361,9 +362,10 @@
   /* ================= 订阅 ================= */
   function findSub(name) { return ((S.state && S.state.subs) || []).filter(function (x) { return x.name === name; })[0]; }
   function renderSubs() {
-    var subs = (S.state && S.state.subs) || [], why = TP.why.helper();
+    var subs = (S.state && S.state.subs) || [], why = TP.why.helper(), waiting = !S.state && !TP.noHelper();
     ui.syncList(el.subs, subs, function (x) { return x.name; }, makeSub, function (row, x) { updateSub(row, x, why); });
-    if (subs.length) el.subsEmpty.hide();
+    el.subsSkel.hidden = !waiting;                                         // 状态还没读到: 占位, 不要先闪一下「没有订阅」
+    if (subs.length || waiting) el.subsEmpty.hide();
     else el.subsEmpty.show({ icon: 'link', text: t('servers.subs.empty'), hint: t('servers.subs.emptyHint'), action: TP.noHelper() ? null : { label: t('servers.subs.add'), icon: 'plus', fn: function () { return TP.imp.open('import'); } } });
   }
   function makeSub() {
@@ -472,7 +474,26 @@
   function kvr(label, value) { return h('div', { class: 'kv-row' }, h('span', { class: 'kv-k' }, label), h('span', { class: 'kv-v' }, value)); }
   function openNode(tag) {
     if (nodeDlg) return;
-    var box = h('div', { class: 'nd' }), secret = null, timer = 0, dm = null;
+    var top = h('div', { class: 'nd-top' }), info = h('div', { class: 'nd-info' }), secret = null, timer = 0, dm = null;
+    /* 常用操作: 徽标下面一排小按钮 (只建一次; render 每次只改它们的「暂不可用」状态, 每秒刷新时键盘焦点不会丢)。底部只留 删除 (最左) · 显示凭据 · 关闭 */
+    var bPin = ui.btn(t('servers.row.usePin'), { sm: true, icon: 'pin' }), bAuto = ui.btn(t('servers.row.useAuto'), { sm: true, icon: 'auto' }), bTest = ui.btn(t('servers.nd.test'), { sm: true, icon: 'speed' });
+    /* 这三个在正文里, ui.act 只锁住被点的那一个: 运行期间 (还有底部的「显示凭据」运行期间) 用 dm.setBusy 锁住整个弹窗 (删除 / 显示凭据 / 关闭 / ✕ / ESC / 点遮罩都不可用),
+     * 另外两个也不能点 —— 和它们以前作为底部操作时一样 (例如切换固定出口还没完成时, 不能先打开「删除」, 否则删除前的影响检查用的是切换之前的状态) */
+    var acting = 0;
+    function syncActs() {
+      if (dm) dm.setBusy(acting > 0);
+      [bPin, bAuto, bTest].forEach(function (b) { if (!b._busy) b.disabled = acting > 0; });
+    }
+    function locked(fn) {
+      return async function () {
+        acting++; syncActs();
+        try { return await fn(); } finally { acting--; syncActs(); }
+      };
+    }
+    ui.act(bPin, locked(async function () { await switchTo('PIN', tag); render(); }));
+    ui.act(bAuto, locked(async function () { await switchTo('Global', tag); render(); }));
+    ui.act(bTest, locked(function () { return testOne(tag).then(function () { render(); }); }));
+    var box = h('div', { class: 'nd' }, top, h('div', { class: 'nd-acts', role: 'group', 'aria-label': t('servers.col.act') }, bPin, bAuto, bTest), info);
     function cur() { return servers().filter(function (x) { return x.tag === tag; })[0]; }
     function stopTimer() { clearInterval(timer); timer = 0; }
     function hideSecret() { secret = null; stopTimer(); render(); }
@@ -481,29 +502,29 @@
       if (!s) { if (dm) dm.close('gone'); return; }
       var P = S.proxies, isPin = !!(P.PIN && P.PIN.now === s.tag), isGl = !!(P.Global && P.Global.now === s.tag), d = TP.delayOf(s.tag), inP = !!P[s.tag];
       dm.setTitle(s.tag);
-      TP.clear(box);
+      TP.clear(top); TP.clear(info);
       var bd = h('div', { class: 'badges nd-badges' });
       bd.appendChild(h('span', { class: 'badge ' + (s.role === 'pin' ? 'pin' : s.role === 'auto' ? 'auto' : 'neutral') }, TP.name.role(s.role)));
       if (s.official) bd.appendChild(ui.badge(t('servers.badge.official'), 'pro', 'pro'));
       if (isPin) bd.appendChild(ui.badge(t('servers.badge.pin'), 'info'));
       if (isGl) bd.appendChild(ui.badge(TP.globalPinned() ? t('servers.badge.autoPinned') : t('servers.badge.autoUse'), 'ok'));
       if (s.sub) bd.appendChild(ui.badge(t('servers.badge.sub', { name: s.sub }), 'neutral', 'link'));
-      box.appendChild(bd);
-      box.appendChild(kvr(t('servers.col.type'), h('span', { class: 'chip' }, s.type)));
-      box.appendChild(kvr(t('servers.col.addr'), h('span', { class: 'mono' }, s.server ? s.server + ':' + s.port : '—')));
-      box.appendChild(kvr(t('servers.col.role'), TP.name.role(s.role)));
+      top.appendChild(bd);
+      info.appendChild(kvr(t('servers.col.type'), h('span', { class: 'chip' }, s.type)));
+      info.appendChild(kvr(t('servers.col.addr'), h('span', { class: 'mono' }, s.server ? s.server + ':' + s.port : '—')));
+      info.appendChild(kvr(t('servers.col.role'), TP.name.role(s.role)));
       var lat = h('span', { class: 'lat ' + (!d || !inP ? '' : d.ms < 0 ? 'bad' : d.ms < 150 ? 'good' : d.ms < 400 ? 'mid' : 'bad') }, !inP || !d ? '—' : d.ms > 0 ? d.ms + ' ms' : t('common.timeout'));
-      box.appendChild(kvr(t('servers.col.lat'), lat));
-      box.appendChild(h('div', { class: 'nd-sec' },
+      info.appendChild(kvr(t('servers.col.lat'), lat));
+      info.appendChild(h('div', { class: 'nd-sec' },
         h('div', { class: 'nd-sec-h' }, ui.icon('lock', 15, 'ci'), h('b', null, t('servers.nd.cred')), ui.help('servers.reveal')),
         secret ? secretView() : h('p', { class: 'muted sm' }, t(s.official ? 'servers.secret.official' : 'servers.nd.credHint'))));
       var why = TP.why.helper(), clashWhy = TP.why.clash(), busy = !!pendingDel[s.tag];
       var inPin = !!(P.PIN && P.PIN.all && P.PIN.all.indexOf(s.tag) >= 0);
       var inGl = !!(P.Global && P.Global.all && P.Global.all.indexOf(s.tag) >= 0);
-      ui.avail(dm.getBtn('test'), clashWhy || (!inP ? t('servers.row.notRouted') : '') || (test.running ? t('servers.test.runningShort') : ''));
-      ui.avail(dm.getBtn('pin'), clashWhy || (isPin ? t('servers.row.isPin') : !inPin ? t('servers.row.notInPin') : ''),
+      ui.avail(bTest, clashWhy || (!inP ? t('servers.row.notRouted') : '') || (test.running ? t('servers.test.runningShort') : ''));
+      ui.avail(bPin, clashWhy || (isPin ? t('servers.row.isPin') : !inPin ? t('servers.row.notInPin') : ''),
         !inPin && !clashWhy ? { label: t('servers.row.makePinRole'), fn: function () { return askRole(cur(), 'pin'); } } : null);
-      ui.avail(dm.getBtn('auto'), clashWhy || (isGl ? t('servers.row.isAuto') : !inGl ? t('servers.row.notInAuto') : ''),
+      ui.avail(bAuto, clashWhy || (isGl ? t('servers.row.isAuto') : !inGl ? t('servers.row.notInAuto') : ''),
         !inGl && !clashWhy ? { label: t('servers.row.makeAutoRole'), fn: function () { return askRole(cur(), 'auto'); } } : null);
       ui.avail(dm.getBtn('rev'), why || (s.official ? t('servers.secret.official') : '') || (s.derived ? t('servers.row.derived') : ''));
       ui.avail(dm.getBtn('del'), why || (s.official ? t('servers.row.officialDel') : '') || (s.derived ? t('servers.row.derived') : '') || (busy ? t('servers.row.busy') : ''));
@@ -532,11 +553,8 @@
       title: s0.tag, icon: 'server', size: 'md', cls: 'nddlg', body: box,
       onClose: function () { secret = null; stopTimer(); nodeDlg = null; },
       actions: [
-        { label: t('servers.row.usePin'), icon: 'pin', id: 'pin', keep: true, onClick: async function () { await switchTo('PIN', tag); render(); return false; } },
-        { label: t('servers.row.useAuto'), icon: 'auto', id: 'auto', keep: true, onClick: async function () { await switchTo('Global', tag); render(); return false; } },
-        { label: t('servers.nd.test'), icon: 'speed', id: 'test', keep: true, onClick: function () { return testOne(tag).then(function () { render(); return false; }); } },
-        { label: t('servers.nd.reveal'), icon: 'eye', id: 'rev', keep: true, onClick: reveal, unavail: s0.official ? { reason: t('servers.secret.official') } : null },
-        { label: t('common.delete'), kind: 'danger', icon: 'delete', id: 'del', keep: true, unavail: s0.official ? { reason: t('servers.row.officialDel') } : null, onClick: function () { var s = cur(); dm.close('del'); return del(s).then(function () { return false; }); } },
+        { label: t('common.delete'), kind: 'soft-bad', icon: 'delete', id: 'del', cls: 'nd-del', keep: true, unavail: s0.official ? { reason: t('servers.row.officialDel') } : null, onClick: function () { var s = cur(); dm.close('del'); return del(s).then(function () { return false; }); } },
+        { label: t('servers.nd.reveal'), icon: 'eye', id: 'rev', keep: true, onClick: locked(reveal), unavail: s0.official ? { reason: t('servers.secret.official') } : null },
         { label: t('common.close'), cancel: true, autofocus: true }
       ]
     });

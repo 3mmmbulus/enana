@@ -2,9 +2,9 @@ name: Cloud billing foundation
 on:
   push:
     branches: [main]
-    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'lib/plan.sh', 'lib/official.*', 'lib/servers.sh', 'lib/config.sh', 'tests/mock-account.py', 'ui/billing.js', 'ui/plan.js', 'tests/billing-*', 'tests/official-*', 'tests/update-official.sh', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
+    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'lib/plan.sh', 'lib/official.*', 'lib/servers.sh', 'lib/config.sh', 'tests/mock-account.py', 'ui/billing.js', 'ui/plan.js', 'tests/billing-*', 'tests/official-*', 'tests/update-official.sh', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml, 'ui/i18n/**', 'ui/css/billing.css', 'ui/v-settings.js', 'ui/app.js', 'tools/mock-server.js', 'server/update-billing.sh', 'tests/update-billing.sh', 'website/**', 'tests/website-*', 'tools/deploy-website.sh']
   pull_request:
-    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'lib/plan.sh', 'lib/official.*', 'lib/servers.sh', 'lib/config.sh', 'tests/mock-account.py', 'ui/billing.js', 'ui/plan.js', 'tests/billing-*', 'tests/official-*', 'tests/update-official.sh', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml]
+    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'lib/plan.sh', 'lib/official.*', 'lib/servers.sh', 'lib/config.sh', 'tests/mock-account.py', 'ui/billing.js', 'ui/plan.js', 'tests/billing-*', 'tests/official-*', 'tests/update-official.sh', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml, 'ui/i18n/**', 'ui/css/billing.css', 'ui/v-settings.js', 'ui/app.js', 'tools/mock-server.js', 'server/update-billing.sh', 'tests/update-billing.sh', 'website/**', 'tests/website-*', 'tools/deploy-website.sh']
   workflow_dispatch:
 permissions:
   contents: read
@@ -40,5 +40,15 @@ jobs:
           python3 -m py_compile server/update-nginx.py
           bash -n server/deploy-prefs.sh
           python3 -m py_compile server/update-nginx-prefs.py
+          bash -n server/update-billing.sh
+          bash -n tests/update-billing.sh
+          bash -n tools/deploy-website.sh
+          python3 -m py_compile tests/website-check.py
       - name: Check the official-hooks update script (fake host, rollback paths, no secrets printed)
         run: bash tests/update-official.sh
+      - name: Check the billing update script (fake host, migration, database backup, rollback paths, no secrets printed)
+        run: bash tests/update-billing.sh
+      - name: Check the public website (static wording, hooks, install commands, SEO, copy buttons)
+        run: |
+          python3 tests/website-check.py
+          node tests/website-copy.test.js

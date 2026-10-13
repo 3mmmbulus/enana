@@ -121,6 +121,7 @@ PB_BIN=/absolute/path/to/pocketbase node --test \
   tests/email-verification-ui.test.js tests/billing-ui.test.js \
   tests/billing-plan-ui.test.js tests/billing-smtp-admin.test.js
 python3 tests/billing-bridge.py && python3 tests/official-bridge.py
+bash tests/update-official.sh && bash tests/update-billing.sh   # Linux, root or passwordless sudo: fake host
 ```
 
 `tests/official-pocketbase.test.js` starts a local HTTPS server that plays the third-party
@@ -173,6 +174,62 @@ installs `enana-payments.service`. It checks other service PIDs, other shared
 configuration and all download/signed-content files remain unchanged. A failure
 restores the enana snapshot; financial migration rollback never deletes rows.
 Do not use this initial deployment script to overwrite a running paid service.
+
+### Update billing on a running host (`update-billing.sh`)
+
+New billing hooks or billing migrations (for example 2.3.25: tails of up to three decimals, at most 5 orders per
+account in 24 hours, orders paging, the extended auto-renew answer and migration `1790000006_billing_amount.js`)
+go to a host where `deploy-billing.sh` already ran through `update-billing.sh`. On a fresh host run it right after
+the initial deployment, which installs only migration 1790000003. Put the checked-out repository on the server
+(below it is `/root/enana-stage`) and, as root:
+
+```sh
+S=/root/enana-stage
+bash $S/server/update-billing.sh --check $S   # validate and list what would change; changes nothing
+bash $S/server/update-billing.sh $S           # back up, stop, migrate, start, verify; rolls back by itself on any failure
+```
+
+The install refuses unless billing is deployed, PocketBase runs as `enana` and is healthy, node >= 18 and python3
+exist, every staged file exists and parses, no installed billing migration differs from the staged one (an applied
+migration is never rewritten) and the filesystem of `/var/backups/enana` has room for a copy of `pb_data` and
+`pb_migrations` plus a margin of 10 % + 256 MiB (`--check` reports both numbers). Backups are never pruned, so on a
+small disk remove old `/var/backups/enana/releases/*` directories you no longer need before an update; the refusal
+comes before anything is stopped. It then takes `deploy-billing.sh`'s lock and backs up the three billing hooks and
+the whole `pb_migrations` directory; stops `enana-payments.service` (when it runs, so that no receipt is settled
+into a database a rollback could replace) and `enana-pocketbase.service`; copies the stopped `pb_data` (all of it
+under `/var/backups/enana/releases/billing-update-<UTC time>-<pid>`, mode 700); installs `enana_billing.pb.js`,
+`enana_billing.js`, `enana_billing_domain.js`, `1790000004_billing_lease.js` (only if missing) and
+`1790000006_billing_amount.js` as 644 root:root through a temp file; runs `pocketbase migrate up` as `enana`; checks
+the migrated schema read-only before anything is served; starts PocketBase, waits for `/api/health`, checks that the
+billing routes answer 401 without a session (404 or 5xx means the hooks did not load) and that every other running
+service and the nginx/systemd files are unchanged; and only then, as the last step, starts the scanner again and
+checks that it is back.
+
+Any failure after the first change stops the scanner first (it may already be running again), then PocketBase,
+restores the hooks, starts PocketBase (and the scanner) again and exits non-zero; the backup directory is kept.
+Whether the database (and with it the migrations directory) is restored depends on how far the update got:
+
+- before PocketBase was started on the migrated database (copy, install, migration or schema check failed), the
+  stopped copy and the previous migrations directory are put back: nothing but the migration has written to the
+  migrated database yet;
+- from that start on, the migrated database is **kept**. PocketBase may have taken orders, sign-ups and sessions,
+  and the scanner may have settled receipts; putting the copy back would delete them (a lost order frees its address
+  and amount for another user, and a lost receipt is never sent again because the scanner remembers it as seen).
+  The previous hooks run on the migrated database, since `1790000006_billing_amount.js` only widens a bound, and the
+  installed migration files stay in place so that every migration the database records has its file; a later
+  run of `update-billing.sh` installs on it without applying the migration again. Never restore the copy from the
+  backup over a database PocketBase has served on;
+- if the copy of `pb_data` itself fails (a full disk), the incomplete copy is removed from the backup so that
+  PocketBase does not come back on a full disk.
+
+A run with nothing to change restarts nothing. It never reads or writes `/etc/enana/billing.json`, never touches
+nginx (the allow-list already covers every billing route; paging is a query string on `billing`), the website, the
+scanner files or the downloads, and prints no secret. PocketBase is down for a few seconds plus the time it takes to
+copy `pb_data`; the scanner rereads the receive history, so transfers made meanwhile are settled when it is back.
+`tests/update-billing.sh` exercises all of this against a fake host (Linux, root or passwordless sudo).
+
+Since 2.3.25 the server accepts whole-USDT top-ups only (4–1000); an older dashboard that sends a decimal top-up gets
+`E_INVALID` ("invalid payment details") and nothing is created.
 
 Gmail SMTP must be configured and real receipt acceptance validated before a
 complete Pro release can enable receiving. Never enable payments as a substitute

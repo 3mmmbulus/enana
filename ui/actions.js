@@ -279,19 +279,16 @@
     return h('label', { class: 'tgl', title: L('mon.title') }, h('span', { class: 'sw' }, inp, h('span', { class: 'sw-ui' })), h('span', null, L('mon.label')));
   };
 
-  /* 应用 / 网站页顶部的小提示: 代理总开关关闭时提醒「这些设置在代理开启后才生效」; 开启后说明当前模式下这些设置怎么起作用 (自己随状态显示 / 隐藏) */
+  /* 应用 / 网站页顶部的小提示, 只在需要注意时出现 (自己随状态显示 / 隐藏):
+   * 代理总开关关闭时提醒「这些设置在代理开启后才生效」; 全局代理时说明这些设置的作用变了。默认的自动模式下什么都不显示 (说明在页面的「!」里) */
   TP.proxyNote = function () {
     var off = h('p', { class: 'hint warn proxy-note', hidden: true }, ui.icon('power', 15, 'ci'), h('span', null, L('proxy.pageNote')));
-    var mi = ui.icon('auto', 15, 'ci'), mt = h('span'), mode = h('p', { class: 'hint proxy-note pmode-hint', hidden: true }, mi, mt);
-    var box = h('div', { class: 'proxy-notes' }, off, mode), icon = 'auto';
+    var mode = h('p', { class: 'hint proxy-note pmode-hint', hidden: true }, ui.icon('globe', 15, 'ci'), h('span', null, L('pmode.hint.global')));
+    var box = h('div', { class: 'proxy-notes', hidden: true }, off, mode);
     var upd = function () {
       var m = A.proxyMode(), o = A.proxyOn();
-      off.hidden = o !== false; mode.hidden = !m || o === false;
-      if (m) {
-        setText(mt, t('pmode.hint.' + m));
-        var want = m === 'global' ? 'globe' : 'auto';
-        if (want !== icon) { icon = want; var n = ui.icon(want, 15, 'ci'); mode.replaceChild(n, mode.firstChild); }
-      }
+      off.hidden = o !== false; mode.hidden = o === false || m !== 'global';
+      box.hidden = off.hidden && mode.hidden;                                 // 两条都不显示时整块收起 (不留空白)
     };
     TP.on('proxy', upd); TP.on('state', upd); TP.on('lang', upd); upd();
     return box;

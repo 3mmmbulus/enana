@@ -1,5 +1,6 @@
 /* enana · v-apps.js — 应用页
- * · 每个应用的覆盖开关 (跟随规则 / 直连 / 固定出口 / 自动线路) + 新应用提示条; 所有状态变化都先经过 confirmDialog, 不可用的控件用 aria-disabled + 提示原因
+ * · 每个应用一个路由方式下拉 (直连 / 跟随规则 / 固定出口 / 自动线路; 2.3.25 起没有单独的开关, 直连就是以前的「关」) + 新应用提示条 (只在有新应用时出现);
+ *   所有状态变化都先经过 confirmDialog, 不可用的控件用 aria-disabled + 提示原因
  * · 真实应用图标: GET /api/apps 的 icon (相对路径 "appicons/X.png" 或 ""); 没有图标 / 加载失败时用字母头像; 后台提取图标期间轮询新图标
  * · 添加自定义软件: 两步弹窗 (输入路径或名称 -> POST /api/apps/inspect -> 确认结果并选路由方式 -> 最后确认 -> POST /api/apps/custom -> 任务); 自定义软件可删除
  * · 新应用: 打开「应用」页就算已知晓 —— 导航上的数字立刻消失 (后端的新标记同时确认掉), 但这一次访问里这些应用仍然高亮, 方便处理; 下次进来就不再是新的了, 但识别时间在 7 天内的应用仍排在最前 (「新应用」分组, 按识别时间新的在前)
@@ -7,7 +8,7 @@
  *   指定的出口已经不是固定出口 = 孤儿, 在这一行醒目标出 (规则集里暂时退回默认), 总览和批量改派在服务器页「出口分配」(exits.js)
  * · 列表分页 (ui.pager) + 分组标题; 分类筛选 / 搜索记在 TP.prefs (apps.group / apps.q)
  * · 2.3.8: 每个应用显示「安装 / 识别时间」(GET /api/apps 的 installed / seen) 和「今日流量」(GET /api/stats/apps?range=today, 页面开着时每 30 秒刷新);
- *   「操作」列每行都有按钮 (详情 + 保持关闭 / 删除); 所有列头可点击排序 (ui.sorter, 记在 prefs sort.apps; 排序时不分组), 工具栏也有排序下拉 (窄屏没有列头时用);
+ *   「操作」列每行都有按钮 (详情 + 保持直连 / 删除); 所有列头可点击排序 (ui.sorter, 记在 prefs sort.apps; 排序时不分组); 列表窄 (没有列头) 时列表顶上换成一条排序栏 (排序下拉 + 方向 + 模式说明);
  *   「详情」弹窗: 路径 / 类型 / 分类 / 安装与识别时间 / 今日流量 / 当前与推荐设置, 可以直接采用推荐设置或跳到该应用的访问记录 */
 (function () {
   'use strict';
@@ -22,7 +23,8 @@
   var ackTimer = 0;
   var AT = { map: {}, at: 0, busy: false, ok: false };                     // 今日流量: map[应用名] = {up, down}
   var so = null;                                                           // 列头排序 (ui.sorter)
-  var MODE_RANK = { follow: 0, pin: 1, auto: 2, direct: 3 };
+  var MODES = ['direct', 'follow', 'pin', 'auto'], MODE_RANK = { direct: 0, follow: 1, pin: 2, auto: 3 };      // 下拉里的顺序 = 按「模式」排序的顺序 (升序时直连在前, 和以前按「状态」升序一样)
+  var MODE_KEY = { direct: 'apps.opt.direct', follow: 'name.app.follow', pin: 'apps.opt.pin', auto: 'apps.opt.auto' };
   function isNew(a) { return a.flag === 'new' || !!VN[a.name]; }
 
   function list() { return (S.apps && S.apps.apps) || []; }
@@ -141,11 +143,11 @@
   /* ================= 构建 ================= */
   V.init = function (root) {
     readPrefs();
-    /* 新应用提示条 (一直显示; 没有新应用时两个按钮隐藏) */
+    /* 新应用提示条 (只在有新应用时显示; 导航上的数字已经提示了有没有新应用) */
     el.barT = h('b'); el.barD = h('div', { class: 'sm' });
     el.adopt = ui.btn(L('apps.adopt'), { kind: 'primary', icon: 'check' }); ui.act(el.adopt, adopt);
     el.keep = ui.btn(L('apps.keepOff'), { icon: 'ban' }); ui.act(el.keep, keepAll);
-    el.bar = h('section', { class: 'banner info newbar' }, h('span', { class: 'banner-ic' }, ui.icon('ai', 22)),
+    el.bar = h('section', { class: 'banner info newbar', hidden: true }, h('span', { class: 'banner-ic' }, ui.icon('ai', 22)),
       h('div', { class: 'banner-b' }, h('div', { class: 'apps-bart' }, el.barT, hl('apps.new')), el.barD),
       h('div', { class: 'banner-a' }, el.adopt, el.keep));
     /* 待应用的变化 (后台扫描发现, 应用需要管理员授权, 所以没有自动开始): 按钮走确认 + 手动扫描 (授权框由系统弹出) */
@@ -162,25 +164,30 @@
     el.list = h('div', { class: 'apps-list' });
     pg = ui.pager('apps.list', { sizes: [10, 20, 50], def: 20 });          // i18n-ignore
     pg.onChange(function () { V.render(); });
+    /* 2.3.25 去掉了「状态」列 (开关): 以前按「状态」排序的偏好改记成按「模式」排序 (方向不变; 升序同样是直连在前) */
+    var oldSort = String(TP.prefs.get('sort.apps', '') || '');                                                     // i18n-ignore (偏好键)
+    if (/^state:(asc|desc)$/.test(oldSort)) TP.prefs.set('sort.apps', 'mode:' + oldSort.slice(6));                 // i18n-ignore (偏好键)
+    var byMode = { type: 'num', get: function (a) { return MODE_RANK[a.state || 'follow']; } };
     so = ui.sorter('apps', {
       name: { get: function (a) { return a.name; } }, path: { get: function (a) { return a.path; } },
       time: { type: 'num', get: whenOf }, traffic: { type: 'num', get: trafficOf },
-      state: { type: 'num', get: function (a) { return (a.state || 'follow') === 'direct' ? 0 : 1; } },
-      mode: { type: 'num', get: function (a) { return MODE_RANK[a.state || 'follow']; } }
-    }, { onChange: function () { toFirstPage(); syncSort(); V.render(); } });
+      mode: byMode, state: byMode                                          // state: 旧版本 (或别的设备同步来) 的排序偏好, 读到时马上改成 mode
+    }, { onChange: function (s) { if (s && s.key === 'state') { so.set('mode', s.dir); return; } toFirstPage(); syncSort(); V.render(); } });
     el.colh = h('div', { class: 'apps-colh' });
     el.colh.appendChild(h('span', { class: 'h-name' })); so.attach(el.colh.lastChild, 'name', function () { return t('apps.col.name'); });
     el.colh.appendChild(h('span', { class: 'h-path' })); so.attach(el.colh.lastChild, 'path', function () { return t('apps.col.path'); });
     el.colh.appendChild(h('span', { class: 'h-time' })); so.attach(el.colh.lastChild, 'time', function () { return t('apps.col.time'); });
     el.colh.appendChild(h('span', { class: 'h-traffic' })); so.attach(el.colh.lastChild, 'traffic', function () { return t('apps.col.traffic'); });
-    el.colh.appendChild(h('span', { class: 'h-state' })); so.attach(el.colh.lastChild, 'state', function () { return t('apps.col.state'); });
     el.colh.appendChild(h('span', { class: 'h-mode' })); so.attach(el.colh.lastChild, 'mode', function () { return t('apps.col.mode'); });
+    el.colh.lastChild.appendChild(hl('apps.policy'));                      // 路由方式的说明放在「模式」列头上 (排序按钮外面)
     el.colh.appendChild(h('span', { class: 'h-act' }, L('apps.col.act')));
     el.sortSel = h('select', { class: 'sel apps-sortsel', 'aria-label': L('apps.sort.aria'), on: { change: function () { so.set(el.sortSel.value, (so.state() || {}).dir); } } },
-      [['', 'apps.sort.group'], ['name', 'apps.col.name'], ['time', 'apps.sort.time'], ['traffic', 'apps.sort.traffic'], ['state', 'apps.col.state'], ['mode', 'apps.col.mode'], ['path', 'apps.col.path']].map(function (o) { var op = TP.opt(o[0], t(o[1])); op._k = o[1]; return op; }));
+      [['', 'apps.sort.group'], ['name', 'apps.col.name'], ['time', 'apps.sort.time'], ['traffic', 'apps.sort.traffic'], ['mode', 'apps.col.mode'], ['path', 'apps.col.path']].map(function (o) { var op = TP.opt(o[0], t(o[1])); op._k = o[1]; return op; }));
     el.sortDir = ui.ibtn('chevron-up', L('apps.sort.dir'), { size: 16, cls: 'apps-sortdir' });
-    el.sortDir.addEventListener('click', function () { var s = so.state(); if (s) so.set(s.key, s.dir === 'asc' ? 'desc' : 'asc'); });   // 列头: 列表够宽时才显示 (css/apps.css)
-    el.box = h('div', { class: 'apps-box' }, el.colh, el.list, pg.el);
+    el.sortDir.addEventListener('click', function () { var s = so.state(); if (s) so.set(s.key, s.dir === 'asc' ? 'desc' : 'asc'); });
+    /* 列表窄的时候 (堆叠样式, 没有列头): 列表顶上一条排序栏 = 排序下拉 + 方向 + 「模式」的说明; 列头出现时它自己隐藏 (css/apps.css 的容器查询) */
+    el.sortBar = h('div', { class: 'apps-sortbar' }, h('span', { class: 'apps-sortbox' }, el.sortSel, el.sortDir), h('span', { class: 'apps-sortbar-m muted sm' }, L('apps.col.mode'), hl('apps.policy')));
+    el.box = h('div', { class: 'apps-box' }, el.sortBar, el.colh, el.list, pg.el);
     el.empty = ui.emptyBox();
 
     root.appendChild(h('div', { class: 'intro' }, h('p', { class: 'muted' }, L('apps.intro'), hl('apps.page'))));
@@ -191,12 +198,11 @@
       if (S.state && S.state.proxy && S.state.proxy.network_mode === 'tun') { TP.settingsTab('proxy'); return; }
       return TP.actions.setNetworkMode('tun');
     });
-    el.capture = h('section', { class: 'hint warn', hidden: true }, el.captureText, el.captureBtn);
+    el.capture = h('section', { class: 'hint warn apps-capture', hidden: true }, el.captureText, el.captureBtn);
     root.appendChild(el.capture);
     root.appendChild(el.bar);
     root.appendChild(el.pend);
-    root.appendChild(h('div', { class: 'toolbar apps-tb' }, el.q, el.g, h('span', { class: 'apps-sortbox' }, el.sortSel, el.sortDir), el.scan, el.addBtn,
-      h('span', { class: 'apps-tb-r' }, h('span', { class: 'apps-opts muted sm' }, L('apps.opts'), hl('apps.policy')), el.count)));
+    root.appendChild(h('div', { class: 'toolbar apps-tb' }, el.q, el.g, el.scan, el.addBtn, el.count));      // 个数靠右 (.toolbar>.muted:last-child)
     root.appendChild(el.box);
     root.appendChild(el.empty.el);
 
@@ -235,7 +241,7 @@
     if (!so || !el.sortSel) return;
     var s = so.state();
     Array.prototype.forEach.call(el.sortSel.options, function (op) { var lb = t(op._k); if (op.textContent !== lb) op.textContent = lb; });
-    el.sortSel.value = s ? s.key : '';
+    el.sortSel.value = s ? (s.key === 'state' ? 'mode' : s.key) : '';
     el.sortDir.hidden = !s;
     if (s) { var lb2 = t(s.dir === 'asc' ? 'apps.sort.toDesc' : 'apps.sort.toAsc'); el.sortDir.setAttribute('aria-label', lb2); el.sortDir.title = lb2; el.sortDir.setAttribute('data-dir', s.dir); }
   }
@@ -281,10 +287,9 @@
   function renderBar() {
     renderPending();
     var news = list().filter(isNew), n = news.length, recN = news.filter(function (a) { return a.rec; }).length, why = TP.why.helper();
-    setText(el.barT, t(n ? 'apps.new.title' : 'apps.new.none', { n: n })); setText(el.barD, t(n ? 'apps.new.text' : 'apps.new.noneSub'));
-    el.bar.classList.toggle('has-new', n > 0);
-    el.adopt.hidden = el.keep.hidden = !n;   // 没有新应用: 两个按钮都隐藏 (以前是两个一样的「没有新应用」)
+    el.bar.hidden = !n;                      // 没有新应用: 整条不显示 (导航上的数字已经说明了有没有新应用)
     if (!n) return;
+    setText(el.barT, t('apps.new.title', { n: n })); setText(el.barD, t('apps.new.text'));
     if (!recN) { ui.setBtn(el.adopt, t('apps.noRec')); ui.avail(el.adopt, t('apps.noRecReason')); } else { ui.setBtn(el.adopt, t('apps.adopt')); ui.avail(el.adopt, why); }
     ui.setBtn(el.keep, t('apps.keepOff')); ui.avail(el.keep, why);
   }
@@ -389,9 +394,7 @@
     r.rec = h('button', { class: 'chip rec', type: 'button', hidden: true });
     r.grp = h('span', { class: 'chip', hidden: true });
     r.path = h('div', { class: 'muted sm apps-p' });
-    r.sw = h('input', { type: 'checkbox', role: 'switch' });
-    r.stT = h('span', { class: 'apps-stt' });                              // 「状态」列的文字 (已开启 / 已关闭); 窄屏的堆叠样式里不显示
-    r.sel = h('select', { class: 'sel sm apps-sel' }, TP.opt('follow', t('name.app.follow')), TP.opt('pin', t('apps.opt.pin')), TP.opt('auto', t('apps.opt.auto')), TP.opt('direct', t('apps.opt.direct')));
+    r.sel = h('select', { class: 'sel sm apps-sel' }, MODES.map(function (m) { return TP.opt(m, t(MODE_KEY[m])); }));      // 唯一的控件: 直连 / 跟随规则 / 固定出口 / 自动线路 (左边一条路由颜色, css/apps.css)
     r.tg = h('select', { class: 'sel sm apps-tg', hidden: true });                       // 状态是「固定出口」时: 显示走哪一个 (有 2 个以上固定出口时可以指定; 只有 1 个时只读)
     r.tgGone = h('span', { class: 'chip warn apps-tg-gone', hidden: true });              // 指定的出口已经不是固定出口 / 根本没有固定出口: 醒目地说明现在实际走哪里
     r.tHelp = hl('apps.terminal'); r.tHelp.hidden = true;
@@ -403,9 +406,8 @@
     var row = h('div', { class: 'apps-row', role: 'group' },
       r.ic,
       h('div', { class: 'apps-main' }, h('div', { class: 'apps-t' }, r.name, r.badge, r.cus, r.cusHelp, r.kind, r.tHelp, r.rec, r.grp), r.path, r.tm, r.tr),
-      h('div', { class: 'apps-c' }, h('div', { class: 'apps-st' }, h('label', { class: 'sw' }, r.sw, h('span', { class: 'sw-ui' })), r.stT), h('div', { class: 'apps-md' }, r.sel, r.tg, r.tgGone), h('div', { class: 'apps-act' }, r.info, r.ack, r.del)));
+      h('div', { class: 'apps-c' }, h('div', { class: 'apps-md' }, r.sel, r.tg, r.tgGone), h('div', { class: 'apps-act' }, r.info, r.ack, r.del)));
     row._r = r;
-    ui.switchAct(r.sw, function () { return (row._a.state || 'follow') !== 'direct'; }, function (want) { return askState(row, want ? 'follow' : 'direct'); });
     ui.selectAct(r.sel, function () { return row._a.state || 'follow'; }, function (want) { return askState(row, want); });
     ui.selectAct(r.tg, function () { return tgOf(row._a); }, function (want) { return askTarget(row, want); });
     ui.act(r.rec, function () { return askState(row, row._a.rec); });
@@ -415,11 +417,10 @@
     return row;
   }
   function update(row, a, why) {
-    var r = row._r, st = a.state || 'follow', on = st !== 'direct', nw = isNew(a), cus = !!a.custom;
+    var r = row._r, st = a.state || 'follow', nw = isNew(a), cus = !!a.custom;
     row._a = a;
     paintIc(r.ic, a.name, a.icon);
-    var optLabels = { follow: t('name.app.follow'), pin: t('apps.opt.pin'), auto: t('apps.opt.auto'), direct: t('apps.opt.direct') };
-    Array.prototype.forEach.call(r.sel.options, function (o) { var s = optLabels[o.value]; if (o.textContent !== s) o.textContent = s; });
+    Array.prototype.forEach.call(r.sel.options, function (o) { var s = t(MODE_KEY[o.value]); if (o.textContent !== s) o.textContent = s; });
     setText(r.name, a.name); setAttr(row, 'aria-label', a.name);
     r.badge.hidden = !nw; r.ack.hidden = !nw;
     r.grp.hidden = !isTop(a); if (!r.grp.hidden) setText(r.grp, groupName(groupOf(a)));       // 「新应用」分组里的应用都显示分类
@@ -431,21 +432,18 @@
     r.tr.classList.toggle('is-zero', !(ttl > 0)); r.tr.title = tv ? t('apps.tr.detail', { down: TP.fmt.bytes(tv.down), up: TP.fmt.bytes(tv.up) }) : t('apps.tr.none');
     setText(r.path, a.path || ''); r.path.hidden = !a.path; r.path.classList.toggle('is-wrap', cus);   // 自定义软件的路径整行显示出来 (不靠提示框)
     if (cus || !a.path) r.path.removeAttribute('title'); else r.path.title = a.path;
-    if (r.sw.checked !== on) r.sw.checked = on;
-    setText(r.stT, t(on ? 'apps.st.on' : 'apps.st.off'));
     if (r.sel.value !== st) r.sel.value = st;
     paintTarget(r, a, st, why);
     r.tHelp.hidden = !isTerm(a);
     setAttr(row, 'data-st', st);
-    ui.avail(r.sw, why); ui.avail(r.sel, why); ui.avail(r.ack, why); ui.avail(r.rec, why); ui.avail(r.del, why);
+    ui.avail(r.sel, why); ui.avail(r.ack, why); ui.avail(r.rec, why); ui.avail(r.del, why);
     setAttr(r.info, 'aria-label', t('apps.info.aria', { name: a.name }));
-    setAttr(r.sw, 'aria-label', t('apps.row.sw', { name: a.name, state: TP.name.app(st) }));
     setAttr(r.sel, 'aria-label', t('apps.row.sel', { name: a.name }));
     setAttr(r.del, 'aria-label', t('apps.cu.delAria', { name: a.name }));
     var showRec = a.rec && a.rec !== st;
     r.rec.hidden = !showRec;
     if (showRec) { setText(r.rec, t('apps.rec', { state: TP.name.app(a.rec) })); if (!r.rec._un) r.rec.title = t('apps.recTitle'); }
-    row.classList.toggle('is-new', nw); row.classList.toggle('is-off', !on);
+    row.classList.toggle('is-new', nw); row.classList.toggle('is-off', st === 'direct');      // 直连: 图标变灰 (和下拉左边的灰条一起表示「不走代理」)
   }
 
   /* ---------- 固定出口: 默认 / 在固定出口里自动选 / 指定某一个 ---------- */

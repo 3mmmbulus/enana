@@ -194,8 +194,10 @@
     hd.acct = TP.byId('acct-btn'); hd.acctAv = TP.byId('acct-av'); hd.acctT = TP.byId('acct-t'); hd.acctDot = TP.byId('acct-dot');
     hd.acct.insertBefore(ui.icon('chevron-down', 14, 'acct-chev'), hd.acctDot);
     ui.menu(hd.acct, function () {
+      function tab(id) { return function () { if (TP.settingsTab) TP.settingsTab(id); else TP.go('settings'); }; }     // 邮箱 -> 设置 · 账号与设备; 会员 -> 设置 · 会员
       var items = [
-        { label: TP.auth.label(), icon: 'account', onClick: function () { TP.go('settings'); } },
+        { label: TP.auth.label(), icon: 'account', onClick: tab('account') },
+        { label: t('plan.menu'), icon: 'pro', onClick: tab('plan') },
         { label: t('user.settings'), icon: 'nav-settings', onClick: function () { TP.go('settings'); } }
       ];
       if (S.update.available) items.push({ label: t('upd.ind.new', { v: S.update.latest }), icon: 'update', onClick: function () { TP.updates.openDialog(); } });
@@ -283,13 +285,8 @@
     });
   }
 
-  /* ================= 页脚 / 图标栏状态下键盘焦点的提示 / 弹窗里的输入框不被软键盘挡住 ================= */
-  function renderFoot() {
-    var f = TP.byId('foot'); if (!f) return;
-    var v = TP.updates.version(), l = h('span', { class: 'foot-l' }, I.rich('foot.text', { cmd: h('code', null, 'enana') }), v ? ' · enana v' + v : '');
-    var site = h('a', { class: 'foot-site', href: TP.auth.url('account_url'), target: '_blank', rel: 'noopener noreferrer', title: t('site.title') }, ui.icon('globe', 14, 'ci'), h('span', null, t('site.name')), ui.icon('external-link', 13, 'ci'));
-    TP.clear(f); f.appendChild(l); f.appendChild(h('span', { class: 'foot-r' }, site, h('span', { class: 'foot-copy' }, t('foot.copy', { year: new Date().getFullYear() }))));      // 固定在底部: enana 官网链接 + 版权
-  }
+  /* ================= 图标栏状态下键盘焦点的提示 / 弹窗里的输入框不被软键盘挡住 =================
+   * (2.3.25 起没有常驻页脚: 版本在侧栏和「设置 → 关于」里, 官网 / 项目主页链接和版权在「设置 → 关于」) */
   function setupTips() {
     var tip = h('div', { id: 'navtip', class: 'navtip', role: 'tooltip', hidden: true }); document.body.appendChild(tip);
     var side = TP.byId('side');
@@ -315,7 +312,6 @@
     I.init();
     await TP.loadEnv();
     buildNav(); buildHeader(); setupTips();
-    renderFoot(); TP.on('lang', renderFoot); TP.on('update', renderFoot); TP.on('state', renderFoot);
     NAV.forEach(function (n) {
       var id = n[0], V = TP.V[id];
       try { if (V && V.init) V.init(panels[id]); else throw new Error('module missing'); }

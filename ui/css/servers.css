@@ -4,6 +4,8 @@
 .link-b:focus-visible{outline:2px solid var(--pri);outline-offset:2px;border-radius:3px}
 .nddlg .nd>*+*{margin-top:10px}
 .nd-badges{margin-bottom:6px}
+.nd-acts{display:flex;flex-wrap:wrap;gap:8px}                       /* 常用操作: 徽标下面一排小按钮 */
+.nddlg .dlg-a .nd-del{margin-right:auto}                            /* 删除单独放在底部最左边, 不挨着「关闭」 */
 .nd-sec{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
 .nd-sec-h{display:flex;align-items:center;gap:6px;margin-bottom:6px}
 .nd-sec-h .ci{color:var(--warn)}
@@ -23,6 +25,7 @@
 }
 
 .tbl .c-role .sel{width:100%;max-width:190px}
+@media (min-width:760px){ .srv-sort{display:none} }                 /* 宽屏有可以点的列头, 不再重复一个排序下拉; 窄屏表格变成卡片 (没有列头) 时才用它 */
 @media (pointer:coarse){
   .link-b{display:inline-flex;align-items:center;min-height:44px}
 }
@@ -52,7 +55,6 @@ button.exg-more{cursor:pointer;color:var(--pri);border-color:var(--pri);backgrou
 .exg-imp-t{font-weight:600;font-size:var(--fs-13)}
 .exg-rh{display:block;margin-top:2px}
 .exg-ack{margin-top:4px}
-.exg-dlg .hint .ci,.srv-orphan .ci{margin-right:6px;vertical-align:-2px;flex:none}
 .srv-follow-r{align-items:center;gap:4px 10px;margin-top:2px}
 .srv-orphan{display:flex;align-items:center;gap:6px;margin-top:8px}
 @media (max-width:759px){

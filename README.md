@@ -1,6 +1,6 @@
 # enana
 
-**一条命令装好代理环境,其余全部在浏览器仪表盘里完成。** · *One command sets up the proxy environment; everything else happens in a browser dashboard.*
+**AI 与开发者的网络加速工具:一条命令安装,其余全部在浏览器仪表盘里完成。** · *Network acceleration for AI services and developer tools: one command installs it; everything else happens in a browser dashboard.*
 
 基于 [sing-box](https://github.com/SagerNet/sing-box)。终端只做一件事 —— 安装环境;服务器、订阅、应用和网站的分流、DNS、测速、同步……全部在本机的仪表盘里。
 本仓库是**本地客户端**(安装器、控制台命令、本地辅助服务、仪表盘界面),不含任何服务器地址、密码、订阅链接或节点 —— 这些都由你在仪表盘里填写,只保存在你的电脑上。
@@ -70,7 +70,7 @@ Pro 已可正式购买。价格、支付确认和服务器私有配置见 [账�
 
 TUN 核心需要管理员授权。macOS 后台使用系统授权弹窗, 终端使用 sudo; Windows 使用 UAC 和管理员保护的 SYSTEM 计划任务; 可取消, 失败则恢复原配置与服务。核心、规则和证书复制到 root 拥有的 `/Library/Application Support/enana-<UID>`, Windows 使用 `%ProgramData%\enana\<SID>` 的独立保护快照, 普通仪表盘不以管理员身份运行。不安装 sudoers 规则。更改规则、节点或证书时需要再次授权更新该快照; 切回轻量模式/停止增强服务也需要授权。启动会验证 IPv4/IPv6 路由属于该核心的 TUN, 而不只检查 mixed 端口。
 
-本机 `localhost`、`127.0.0.0/8`、`::1`、局域网/私网/链路本地地址在系统路由和核心规则中排除; OAuth localhost 回调保留直连。`route.auto_detect_interface` 让核心出口绑定默认网络接口, 防止出口重新进入 TUN。与其他 VPN 共用时需检查诊断中的路由归属, 无法建立正确路由会回滚。
+本机 `localhost`、`127.0.0.0/8`、`::1`、局域网/私网/链路本地地址在系统路由和核心规则中排除; OAuth localhost 回调保留直连。`route.auto_detect_interface` 让核心出口绑定默认网络接口, 防止出口重新进入 TUN。与其他使用虚拟网卡的软件共用时需检查诊断中的路由归属, 无法建立正确路由会回滚。
 
 **PIN 的范围**: 已被接管且识别为该应用的公网 TCP/UDP 使用所选固定出口; 本机与局域网是例外。DNS 控制请求遵循 DNS 页策略; 系统共享服务发出的请求、无法归属到应用的进程和非 TCP/UDP 协议不能声称自动继承该应用 PIN。固定池不会失败后漂移到自动池, 但无节点时原有行为仍是直连, 节点供应商也可能改变公网 IP。Gemini、Claude、ChatGPT 需要设为 PIN 才适用, 没有任何针对 Gemini OAuth 的域名补丁。
 
@@ -96,7 +96,7 @@ TUN 核心需要管理员授权。macOS 后台使用系统授权弹窗, 终端�
 ### 三条线路
 
 - **固定出口**:AI(Claude / ChatGPT / Gemini …)、账号类 App(TikTok / Telegram …)走它。只含你指定的服务器,**故障时不会漂移到别的国家 IP**(避免账号风控)。
-- **自动线路**:Google、YouTube、X 等被封锁的网站。在「自动池」里选最快的节点,**只有别的节点比当前节点快 50 ms 以上才会切换**,避免来回跳。
+- **自动线路**:Google、YouTube、X 等由规则分配到自动池的网站。在「自动池」里选最快的节点,**只有别的节点比当前节点快 50 ms 以上才会切换**,避免来回跳。
 - **直连**:国内网站(社区规则集 `geosite-cn` / `geoip-cn`)、Apple、局域网。
 
 没配置任何服务器时所有流量直连,不会因为空配置断网。
@@ -164,7 +164,7 @@ bash tests/get-test.sh [发布目录]    # 一行安装命令 (get.sh) 的整条
 
 ## English summary
 
-**enana** installs a [sing-box](https://github.com/SagerNet/sing-box) proxy environment with one command and gives you a local browser dashboard for everything else (per-app / per-site routing, DNS, speed tests, traffic statistics, sync, one-click SSH provisioning of your own VPS). Install on macOS:
+**enana** sets up a [sing-box](https://github.com/SagerNet/sing-box) based network environment with one command and gives you a local browser dashboard for everything else (per-app / per-site routing, DNS, speed tests, traffic statistics, sync, one-click SSH provisioning of your own VPS). Install on macOS:
 
 ```bash
 curl -fsSL https://install.enana.cc | bash

@@ -20,12 +20,15 @@ class BillingBridge(unittest.TestCase):
         r = self.body('checkout', {'kind': 'plan', 'sku': 'm1', 'request_key': 'a'*32, 'price': 0, 'address': 'attacker', 'provider_key': 'secret'})
         self.assertEqual(r.returncode, 0)
         self.assertEqual(json.loads(r.stdout), {'kind':'plan','sku':'m1','request_key':'a'*32})
-        r = self.body('checkout', {'kind':'topup','amount':'4.000037','request_key':'a'*32})
-        self.assertEqual(json.loads(r.stdout)['amount'], '4.000037')
+        for value in ['4', '10', '999', '1000']:   # top-ups are whole USDT, 4..1000; the cloud adds any decimals itself
+            r = self.body('checkout', {'kind':'topup','amount':value,'request_key':'a'*32,'address':'attacker'})
+            self.assertEqual(r.returncode, 0, value)
+            self.assertEqual(json.loads(r.stdout), {'kind':'topup','amount':value,'request_key':'a'*32})
 
     def test_malformed_amount_keys_sku_and_boolean_rejected(self):
-        for value in ['4.0000007','1e6','4;echo unsafe','-4',{},'4\n']:
-            self.assertNotEqual(self.body('checkout', {'kind':'topup','amount':value,'request_key':'a'*32}).returncode, 0)
+        for value in ['4.0000007','1e6','4;echo unsafe','-4',{},'4\n',
+                      '4.000037','4.5','4.0','10.01','3','0','1001','9999','10000','04','+4',' 10','10 ','',None,True,[10]]:
+            self.assertNotEqual(self.body('checkout', {'kind':'topup','amount':value,'request_key':'a'*32}).returncode, 0, repr(value))
         self.assertNotEqual(self.body('purchase', {'sku':'y99','request_key':'a'*32}).returncode, 0)
         self.assertNotEqual(self.body('auto-renew', {'enabled':'false'}).returncode, 0)
         self.assertEqual(json.loads(self.body('auto-renew', {'enabled':False}).stdout), {'enabled':False})
@@ -74,6 +77,26 @@ class BillingBridge(unittest.TestCase):
         r=self.response(200,'{"ok":true,"wallet":{"balance":"4.000037"}}')
         self.assertEqual(json.loads(r.stdout)['wallet']['balance'],'4.000037')
 
+    def test_order_limit_relays_only_validated_integers(self):
+        # E_ORDER_LIMIT is the one error whose extra fields reach the dashboard: limit and retry_after, integers in range, nothing else.
+        r=self.response(429,'{"ok":false,"code":"E_ORDER_LIMIT","limit":5,"retry_after":3600,"message":"private","user":"u1","address":"T1"}')
+        self.assertEqual(r.returncode,0); self.assertEqual(json.loads(r.stdout),{'ok':False,'code':'E_ORDER_LIMIT','limit':5,'retry_after':3600})
+        for limit,retry in [(1,1),(5,86400),(1000,59)]:
+            r=self.response(429,json.dumps({'ok':False,'code':'E_ORDER_LIMIT','limit':limit,'retry_after':retry}))
+            self.assertEqual(json.loads(r.stdout),{'ok':False,'code':'E_ORDER_LIMIT','limit':limit,'retry_after':retry},(limit,retry))
+        # Out of range or junk values are dropped; the code (and any valid field) is still relayed.
+        for bad in ['0','-1','86401','1.5','1e9','1000000','true','null','"3600; rm -rf /"','"soon"','[60]','{"s":60}']:
+            r=self.response(429,'{"ok":false,"code":"E_ORDER_LIMIT","limit":5,"retry_after":%s}'%bad)
+            self.assertEqual(r.returncode,0,bad); self.assertEqual(json.loads(r.stdout),{'ok':False,'code':'E_ORDER_LIMIT','limit':5},bad)
+        for bad in ['0','1001','-5','2.5','false','"5 or more"','{}']:
+            r=self.response(429,'{"ok":false,"code":"E_ORDER_LIMIT","limit":%s,"retry_after":60}'%bad)
+            self.assertEqual(json.loads(r.stdout),{'ok':False,'code':'E_ORDER_LIMIT','retry_after':60},bad)
+        r=self.response(429,'{"ok":false,"code":"E_ORDER_LIMIT"}')
+        self.assertEqual(json.loads(r.stdout),{'ok':False,'code':'E_ORDER_LIMIT'})
+        # Every other error code keeps the strict {ok, code} filter, even when it carries the same fields.
+        r=self.response(409,'{"ok":false,"code":"E_ORDER_PENDING","limit":5,"retry_after":60}')
+        self.assertEqual(json.loads(r.stdout),{'ok':False,'code':'E_ORDER_PENDING'})
+
     def test_actual_cgi_auth_routes_and_cloud_identity(self):
         calls=[]; mode={'status':200,'payload':{'ok':True,'wallet':{'balance':'4.000037'}}}
         class Cloud(http.server.BaseHTTPRequestHandler):
@@ -110,6 +133,28 @@ class BillingBridge(unittest.TestCase):
                     r=cgi('/api/billing'); self.assertEqual(r['ok'],False); self.assertEqual(r['code'],code); self.assertTrue(r['error'])
                 mode['status']=200; mode['payload']={'ok':True,'wallet':{'balance':'4.000037'}}
                 self.assertEqual(cgi('/api/billing')['wallet']['balance'],'4.000037')
+                # Orders paging: only the two validated parameters reach the cloud; an empty value is the same as leaving it out.
+                for query,forwarded in [('orders_page=2&orders_per_page=10','?orders_page=2&orders_per_page=10'),
+                                        ('orders_per_page=30&orders_page=1000','?orders_page=1000&orders_per_page=30'),
+                                        ('orders_per_page=5','?orders_per_page=5'),('orders_page=1','?orders_page=1'),
+                                        ('orders_page=3&id=x&provider_key=y&orders_page_x=9&address=T1','?orders_page=3'),
+                                        ('foo=bar&orders_page=&orders_per_page=','')]:
+                    self.assertEqual(cgi('/api/billing?'+query)['wallet']['balance'],'4.000037',query)
+                    self.assertEqual(calls[-1][0],'/api/enana/v1/billing'+forwarded,query)
+                sent=len(calls)
+                for query in ['orders_page=0','orders_page=1001','orders_page=-1','orders_page=01','orders_page=1.5','orders_page=abc',
+                              'orders_page=2%3Bid','orders_page=2%26provider_key%3Dx','orders_page=%2e%2e','orders_per_page=4','orders_per_page=31',
+                              'orders_per_page=05','orders_per_page=1e1','orders_page=2&orders_per_page=100']:
+                    r=cgi('/api/billing?'+query); self.assertEqual((r['ok'],r['code']),(False,'E_INVALID'),query); self.assertTrue(r['error'],query)
+                self.assertEqual(len(calls),sent,'an out-of-range or junk page is refused locally and never sent')
+                # The order limit reaches the dashboard with its two integers; a top-up with decimals never leaves the computer.
+                mode['status']=429; mode['payload']={'ok':False,'code':'E_ORDER_LIMIT','limit':5,'retry_after':3600,'message':'private'}
+                self.assertEqual(cgi('/api/billing/checkout',{'kind':'topup','amount':'10','request_key':'b'*32}),{'ok':False,'code':'E_ORDER_LIMIT','limit':5,'retry_after':3600})
+                self.assertEqual(json.loads(calls[-1][3]),{'kind':'topup','amount':'10','request_key':'b'*32})
+                sent=len(calls)
+                self.assertEqual(cgi('/api/billing/checkout',{'kind':'topup','amount':'10.5','request_key':'b'*32})['code'],'E_INVALID')
+                self.assertEqual(len(calls),sent)
+                mode['status']=200; mode['payload']={'ok':True,'wallet':{'balance':'4.000037'}}
         finally: server.shutdown();server.server_close();thread.join()
 
 if __name__ == '__main__': unittest.main()
