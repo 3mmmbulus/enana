@@ -358,7 +358,7 @@ speed_abort() { # 收到 TERM: 杀掉探测子进程, 恢复选择器, 结束
 
 # speed_run <id>  (后台任务 `enana _job speedtest <id>`)
 speed_run() {
-  local id=$1 d mode spd tf rf rid rname n kind url rng kbps total=0 nodes_n=0 ipf
+  local id=$1 d mode spd tf rf rid rname n kind url rng kbps total=0 nodes_n=0 ipf r
   speed_id_ok "$id" || return 1
   d=$(speed_dir); [ -f "$d/$id.sel" ] || return 1
   mode=$(sed -n 's/^mode=//p' "$d/$id.sel"); spd=$(sed -n 's/^speed=//p' "$d/$id.sel")
@@ -427,8 +427,9 @@ speed_run() {
   fi
   speed_route_select direct 2>/dev/null || true
   speed_ip_refine "$id"
-  if [ -f "$d/$id.stop" ]; then speed_finish "$id" stopped "已停止"; else speed_finish "$id" done "测速完成"; fi
-  oplog "${OP_WHO:-terminal}" "测速" "$mode · $nodes_n 个节点" ok 2>/dev/null || true
+  if [ -f "$d/$id.stop" ]; then speed_finish "$id" stopped "已停止"; r=cancelled; else speed_finish "$id" done "测速完成"; r=ok; fi
+  # 操作记录: 只记模式和节点数 (测速目标不记); 它会切换测速选择器, 所以要留痕
+  oplog "${OP_WHO:-terminal}" "测速" "$(kv mode "$mode" nodes "$nodes_n")" "$r" 2>/dev/null || true
 }
 
 # 用探测结果修正 IP 状态: 每条线路只看「与它相关」的目标 (直连看国内/运营商, 节点看海外), 失败/受限占比高 -> limited/blocked

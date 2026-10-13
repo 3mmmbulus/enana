@@ -165,7 +165,8 @@
       h('p', { class: 'cfm-m' }, t('exits.def.msg', { from: from, to: to })),
       impactBlock(t('exits.def.followers'), pl.follow, pl.dns),
       riskNote(pl.risk),
-      box);
+      box,
+      TP.tunNote() ? h('p', { class: 'muted sm' }, TP.tunNote()) : null);          // 换默认出口会改配置: 增强模式下可能要管理员授权
     var dm = ui.modal({
       title: t('exits.def.title'), icon: 'pin', iconKind: 'warn', size: 'md', body: body,
       actions: [{ label: t('common.cancel'), cancel: true, autofocus: true }, { label: t('exits.def.go'), kind: 'primary', icon: 'check', id: 'go', value: 'go' }]
@@ -288,7 +289,7 @@
       h('label', { class: 'fld' }, h('span', { class: 'fld-l' }, t('exits.move.dest')), sel),
       kinds.length > 1 ? h('label', { class: 'fld' }, h('span', { class: 'fld-l' }, t('exits.move.kind')), ksel) : null,
       riskNote(X.riskCount(l)),
-      h('p', { class: 'muted sm' }, t('exits.move.note')));
+      h('p', { class: 'muted sm' }, t('exits.move.note')), TP.tunNote() ? h('p', { class: 'muted sm' }, TP.tunNote()) : null);
     var dm = ui.modal({
       title: t('exits.move.title'), icon: 'pin', iconKind: 'pri', size: 'md', body: body,
       actions: [{ label: t('common.cancel'), cancel: true }, { label: t('exits.move.go'), kind: 'primary', icon: 'check', id: 'go', value: 'go' }]
@@ -314,7 +315,7 @@
     async function freezeNow() {
       var m = X.model(S.exits), tag = m.def;
       if (!tag || !m.follow.n) return;
-      var ok = await ui.confirmDialog({ title: t('exits.freeze.title'), message: t('exits.freeze.msg', { tag: tag, n: m.follow.n }), detail: [t('exits.freeze.d1', { tag: tag }), t('exits.freeze.d2')], confirmText: t('exits.freeze.go') });
+      var ok = await ui.confirmDialog({ title: t('exits.freeze.title'), message: t('exits.freeze.msg', { tag: tag, n: m.follow.n }), detail: TP.tunDetail([t('exits.freeze.d1', { tag: tag }), t('exits.freeze.d2')]), confirmText: t('exits.freeze.go') });
       if (!ok) return;
       var r = await X.freeze(t('exits.job.freezeAt', { tag: tag }));
       ui.toast(X.movedText(r), 'ok', 3200);

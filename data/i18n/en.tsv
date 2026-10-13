@@ -31,6 +31,15 @@ sing-box 核心 · 来源	sing-box core · source
 发现旧版安装目录 *, 但 * 已存在, 没有自动迁移 (需要的话请手动复制 servers.jsonl 等文件)	Found an old installation directory *, but * already exists, so nothing was migrated automatically (copy servers.jsonl and other files by hand if you need them)
 已从 v1 迁移你的服务器配置 (无需重新输入, 在仪表盘「服务器」页可见)	Migrated your server configuration from v1 (no need to enter it again; see the dashboard’s Servers page)
 
+# --- install.sh · program files (install_files)
+原来的程序文件没有改动	The previous program files were not changed
+无法创建临时目录 *	Could not create the temporary directory *
+复制 */ 失败	Copying */ failed
+复制后 */ 的文件数不对 (* / *)	Wrong file count after copying */ (* / *)
+VERSION 文件缺失或格式不对	The VERSION file is missing or malformed
+无法挪开旧的 */	Could not move the old */ aside
+无法换入新的 */	Could not move the new */ into place
+
 # --- install.sh · install steps
 检查环境	Check the environment
 macOS * 较旧: 官方 sing-box 1.14 可能无法在此运行 (Intel 会自动尝试兼容包)	macOS * is quite old: the official sing-box 1.14 may not run here (on Intel, a compatibility build is tried automatically)
@@ -41,6 +50,20 @@ macOS * 较旧: 官方 sing-box 1.14 可能无法在此运行 (Intel 会自动�
 网络服务「*」已有其它系统代理设置, 继续会覆盖 (原设置已备份到 */proxy-backup.txt)	Network service “*” already has other system proxy settings, and continuing will overwrite them (the originals are backed up to */proxy-backup.txt)
 继续?	Continue?
 已取消	Canceled
+发现外部 sing-box: 程序 * 个 · launchd 任务 * 个 · 运行中的进程 * 个 · 配置目录 * 个	Found an external sing-box: * program(s) · * launchd job(s) · * running process(es) · * config folder(s)
+默认路由经过别的 TUN 网卡 (*): 其它 VPN / 代理软件可能与增强模式冲突	The default route goes through another TUN interface (*); other VPN or proxy software may conflict with Enhanced mode
+清单已写入 */foreign-inventory.txt (只含名称、路径、进程号, 不含配置内容)	Inventory written to */foreign-inventory.txt (names, paths and process IDs only; no configuration contents)
+继续? (外部程序不会被关闭或修改)	Continue? (external programs will not be stopped or changed)
+非交互模式: 照常继续安装; 外部程序没有被关闭、卸载或修改	Non-interactive mode: continuing with the installation; external programs were not stopped, removed or changed
+发现外部 sing-box 文件 (未运行, 仅供参考): 程序 * 个 · launchd 配置 * 个 · 配置目录 * 个	External sing-box files found (not running, for reference only): * program(s) · * launchd config(s) · * config folder(s)
+默认路由经过别的 TUN 网卡 (*) (VPN / 代理软件; 系统代理模式不受影响, 只有增强模式才可能冲突)	The default route goes through another TUN interface (*) (VPN or proxy software; System Proxy mode is not affected, only Enhanced mode can conflict)
+本地端口 * 有人在用, 没能确认是谁 (普通账户看不到 root 核心的监听者), 沿用不变	Local port(s) * are in use, but the holder could not be confirmed (an ordinary account cannot see the listeners of the root core); kept as they are
+没能确认本地端口 * 的占用情况, 沿用不变	Could not confirm whether local port * is in use; kept as it is
+非交互模式: 没有覆盖它们, 本次跳过系统代理设置 (运行 enana on 会替换现有设置, 原设置已备份到 */proxy-backup.txt)	Non-interactive mode: the existing settings were not overwritten, so system proxy setup is skipped this time (enana on replaces the existing settings; they are backed up to */proxy-backup.txt)
+代理端口 * 被别的程序占用: enana 没能绑定它, 代理没有生效 (运行 enana doctor 查看占用的程序)	Proxy port * is used by another program: enana could not bind it, so the proxy is not working (run enana doctor to see which program holds it)
+检测到外部代理内核	External proxy core detected
+跳过系统代理设置	System proxy setup skipped
+代理端口绑定失败	Proxy port bind failed
 安装 sing-box 核心 (代理引擎)	Install the sing-box core (the proxy engine)
 已安装 sing-box *, 无需重装	sing-box * is already installed, no need to reinstall
 sing-box * 安装完成	sing-box * installed
@@ -211,6 +234,7 @@ enana * — 代理环境控制台 (服务器/订阅/应用/网站请在仪表盘
   enana env            打印终端代理变量 (命令行工具不读系统代理): eval "$(enana env)"	  enana env            Print the terminal proxy variables (command-line tools don’t read the system proxy): eval "$(enana env)"
   enana uninstall      卸载 (--keep-data 保留数据目录)	  enana uninstall      Uninstall (--keep-data keeps the data directory)
 选项: --yes 全部采用推荐值 · --force 强制重装环境 · --quiet 静默 · --lang zh|en 指定语言	Options: --yes accept all recommended settings · --force force a reinstall · --quiet quiet mode · --lang zh|en set the language
+  注意: --yes / --upgrade 不会覆盖别人设置的系统代理 (跳过这一步, 需要时运行 enana on); 交互安装时回车 = 取消 (外部代理的提醒与系统代理的询问默认都是 n)	  Note: --yes / --upgrade do not overwrite system proxy settings made by another program (that step is skipped; run enana on when needed); in interactive installs, Enter cancels (the external-proxy warning and the system-proxy question both default to n)
 配置已应用	Configuration applied
 配置无效	Invalid configuration
 
@@ -304,6 +328,10 @@ GitHub 不通: 将依次尝试镜像; 也可手动下载安装包 (SINGBOX_TGZ=�
 参数无效	Invalid parameter
 代理服务没有运行, 启动也失败了 (运行 enana doctor 查看原因)	The proxy service isn’t running and couldn’t be started (run enana doctor to see why)
 关闭代理	Turn proxy off
+启动代理服务	Start the proxy service
+代理已开启	The proxy is on
+代理模式已切换	The proxy mode was changed
+已取消管理员授权, 代理没有开启	Administrator authorization was cancelled, so the proxy was not turned on
 密码在 enana.cc 管理: 请到网站的账号页修改	Passwords are managed on enana.cc — change yours on the website’s account page
 
 # --- lib/api.sh · devices, proxy mode, statistics (lib/session.sh too)
@@ -396,6 +424,8 @@ DNS 设置无效	Invalid DNS settings
 另一个配置任务正在运行, 请稍后重试	Another configuration task is running — please try again shortly
 配置未通过校验, 已撤销本次更改*	The configuration didn’t pass validation, so the change was rolled back*
 新配置无法启动, 已撤销本次更改并恢复原配置	The new configuration couldn’t start, so the change was rolled back and your previous configuration restored
+已取消管理员授权, 已撤销本次更改	Administrator authorization was cancelled, so the change was rolled back
+需要管理员授权才能应用 (后台任务不弹授权框), 已撤销本次更改	Applying this needs administrator authorization, and background tasks never show the authorization dialog, so the change was rolled back
 名称、链接或策略不合法 (链接必须是 http/https 的 .srs 规则集)	The name, link or policy isn’t valid (the link must point to an http/https .srs rule set)
 已经有同名的规则集	A rule set with that name already exists
 规则集下载失败或不是有效的 .srs 文件	The rule set couldn’t be downloaded or isn’t a valid .srs file
@@ -882,6 +912,8 @@ Enhanced/TUN 需要 sing-box 1.12 或更新版本	Enhanced/TUN requires sing-box
 核心令牌尚未更新; Enhanced/TUN 需要管理员授权, 运行 enana doctor 查看原因	The core token has not been updated; Enhanced/TUN requires administrator authorization. Run enana doctor for details
 新版本未就绪, 已回退	New version not ready; rolled back
 新版本未能启动, 已回退到 *	New version failed to start; rolled back to *
+已取消管理员授权, 已回退	Administrator authorization cancelled; rolled back
+已取消管理员授权, 保持原版本 *	Administrator authorization was cancelled; keeping the previous version *
 新版本试运行失败, 已回退	New version failed its trial run; rolled back
 新版本试运行失败, 保持原版本 *	New version failed its trial run; keeping the previous version *
 Enhanced/TUN: 保留现有系统代理设置	Enhanced/TUN: preserving existing System Proxy settings
@@ -924,7 +956,8 @@ macOS 没有允许 enana 弹出授权窗口。请在「系统设置 → 隐私�
 没有经过验证的兼容版本可升级, 保持 sing-box *	No verified compatible version is available to upgrade to; keeping sing-box *
 已经是兼容的最新版本 sing-box *	Already on the latest compatible version, sing-box *
 Windows 更新失败, 已保留当前版本 (详情见 api.log)	The Windows update failed; the current version was kept (see api.log for details)
-没能删除系统代理助手, 可以手动删除: sudo rm -f * *	Could not remove the system proxy helper; you can delete it manually: sudo rm -f * *
+没能删除系统代理助手, 可以手动删除: sudo /bin/rm -f *	Could not remove the system proxy helper; you can delete it manually: sudo /bin/rm -f *
+系统代理的恢复记录无效 (已挪到 proxy-state.json.invalid): 只清除 enana 自己的系统代理设置, 原来的设置无法还原	The system proxy restore record is invalid (moved to proxy-state.json.invalid): only enana's own system proxy settings are cleared; the previous settings cannot be restored
 没有登录, 或者不是 macOS	Not signed in, or not macOS
 先登录账号 (enana 里按 1 打开仪表盘)	Sign in first (press 1 in enana to open the dashboard)
 已上传诊断摘要 (enana diag-preview 可以看到传了什么)	Diagnostics summary uploaded (enana diag-preview shows what was sent)
@@ -993,3 +1026,26 @@ IP 查询 (本机出口 IP)	IP lookup (this computer's exit IP)
 规则集目录整理失败 (磁盘满或没有写权限?), 已保留现有配置	The rule-set folder could not be reorganised (disk full or no write permission?); the current configuration was kept
 核心没有起来, 已先关闭系统代理 (应用不再连接已停止的代理); 若仍无法上网, 运行 enana doctor 查看原因	The core did not start, so the system proxy was turned off first (apps no longer connect to the stopped proxy); if the network is still down, run enana doctor to see why
 核心没有起来, 系统代理也没能自动关闭 (需要管理员授权), 请在仪表盘概览里关闭系统代理; 运行 enana doctor 查看原因	The core did not start and the system proxy could not be turned off automatically (administrator permission is needed); turn off the system proxy from the dashboard Overview; run enana doctor to see why
+TUN 需要官方的、钉死版本号的核心: 请运行 enana upgrade, 或改用系统代理模式	TUN needs the official pinned core: run enana upgrade, or switch to system proxy mode
+核心在校验之后被改动过: 请运行 enana upgrade	The core changed after it was verified: run enana upgrade
+TUN 没有启动: *	TUN did not start: *
+# --- TUN core re-pin on upgrade (install.sh upgrade_core_plan / st_core / st_config, lib/fetch.sh) and config_tun_refused reasons (lib/config.sh); the more specific patterns come first
+TUN 需要官方的、钉死版本号的核心: 将重新下载 sing-box * 并校验 SHA-256	TUN needs the official pinned core: sing-box * will be downloaded again and its SHA-256 verified
+TUN 需要官方的、钉死版本号的核心, 但没能下载到 sing-box *	TUN needs the official pinned core, but sing-box * could not be downloaded
+已保留当前版本, 原来的核心没有改动; 检查网络后重试, 或者先改用系统代理模式 (enana network-mode system) 再更新	The current version was kept and the existing core was left unchanged; check your network and try again, or switch to system proxy mode first (enana network-mode system) and then update
+sing-box * 没有钉死的 SHA-256, 没有下载 (只接受钉死的官方包)	sing-box * has no pinned SHA-256, so it was not downloaded (only the pinned official package is accepted)
+TUN 没有启动, 新配置没有应用	TUN did not start; the new configuration was not applied
+TUN 没有启动 (*), 代理没有开启	TUN did not start (*); the proxy was not turned on
+已保留当前版本, 没有升级	The current version was kept; nothing was upgraded
+已取消管理员授权, 新配置没有应用	Administrator authorization was cancelled, so the new configuration was not applied
+TUN 没有启动 (*): 请运行 enana upgrade, 或改用系统代理模式; 旧的 TUN 仍在运行	TUN did not start (*): run enana upgrade, or switch to system proxy mode; the old TUN is still running
+TUN 没有启动 (*): 请运行 enana upgrade, 或改用系统代理模式	TUN did not start (*): run enana upgrade, or switch to system proxy mode
+TUN 没有启动 (*): 请运行 enana upgrade; 旧的 TUN 仍在运行	TUN did not start (*): run enana upgrade; the old TUN is still running
+TUN 没有启动 (*): 请运行 enana upgrade	TUN did not start (*): run enana upgrade
+TUN 没有启动 (*): 原因: *; 旧的 TUN 仍在运行	TUN did not start (*): reason: *; the old TUN is still running
+TUN 没有启动 (*): 原因: *	TUN did not start (*): reason: *
+TUN 没有启动 (*): *	TUN did not start (*): *
+请运行 enana upgrade, 或改用系统代理模式	run enana upgrade, or switch to system proxy mode
+请运行 enana upgrade	run enana upgrade
+原因: *	reason: *
+*; 旧的 TUN 仍在运行	*; the old TUN is still running

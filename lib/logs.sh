@@ -118,10 +118,28 @@ logs_purge() {
       rm -f "$tmp"
     fi
   done
+  for f in "$H"/api.log.[0-9]; do                  # api.log 的历史代 (见下面 logs_rotate_api) 也按保留期删
+    [ -f "$f" ] || continue
+    if [ -n "$(find "$f" -maxdepth 0 -mmin +$((hours * 60)) 2>/dev/null)" ]; then sz=$(file_size "$f" 2>/dev/null || echo 0); freed=$((freed + sz)); rm -f "$f"; fi
+  done
   echo "$freed"
 }
 
-logs_maintain() { logs_rotate; logs_compress; logs_purge >/dev/null; }
+# api.log (辅助服务的标准错误 + 后台任务的输出) 超过 5 MB 就切开: 保留三代 api.log.1 .. api.log.3。和 logs_rotate 一样先复制再清空 (服务以追加方式写它, 不能换文件名)
+API_LOG_MAX=5242880
+logs_rotate_api() {
+  local f="$H/api.log" sz
+  [ -f "$f" ] || return 0
+  sz=$(file_size "$f" 2>/dev/null || echo 0)
+  [ "${sz:-0}" -gt "$API_LOG_MAX" ] || return 0
+  rm -f "$f.3"
+  if [ -f "$f.2" ]; then mv -f "$f.2" "$f.3"; fi
+  if [ -f "$f.1" ]; then mv -f "$f.1" "$f.2"; fi
+  if cp "$f" "$f.1"; then : > "$f"; fi
+  return 0
+}
+
+logs_maintain() { logs_rotate; logs_rotate_api; logs_compress; logs_purge >/dev/null; }
 
 logs_tick() { # 由 enana tick 每分钟调用一次; 每小时真正做一次 (切分 + 压缩 + 按保留期清理), 所以 12 小时的保留期也准
   local last=0 f="$H/.logs.last"
@@ -257,13 +275,66 @@ BUNDLE_FORMAT=1
 
 _b_mask_user() { sed -E 's#/Users/[^/ ,"]+#/Users/<user>#g; s#[A-Za-z]:\\*Users\\*[^\\"]+#C:\\Users\\<user>#g; s#user: (root|_[A-Za-z0-9_]+)#user:@@K@@\1#g; s#user: [A-Za-z0-9._-]+#user: <user>#g; s#user:@@K@@#user: #g'; }   # Windows: C:\Users\<name> (JSON 行里是 \\ 也一样)
 
-_b_mask_host() { # stdin 每行一个地址 -> 打码: 1.2.3.4 -> 1.2.*.*   a.b.example.com -> a***.example.com   IPv6 -> 前两段:*
-  awk '{ h = $0
-    if (h ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) { split(h, p, "."); print p[1] "." p[2] ".*.*" }
-    else if (index(h, ":") > 0) { n = split(h, p, ":"); print p[1] ":" p[2] ":*" }
-    else if (h == "") print ""
-    else { n = split(h, p, "."); if (n <= 2) print substr(h, 1, 1) "***"; else { s = substr(p[1], 1, 1) "***"; for (i = 2; i <= n; i++) s = s "." p[i]; print s } } }'
+# 打码的 awk 函数库 (地址 / URL / 文字共用; mask1 与 _b_mask_host 同一规则: 1.2.3.4 -> 1.2.*.* · a.b.example.com -> a***.example.com · IPv6 -> 前两段:*)
+_B_TEXT_AWK='
+function mask1(h,   n, p, s, i) {
+  if (h ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) { split(h, p, "."); return p[1] "." p[2] ".*.*" }
+  if (index(h, ":") > 0) { split(h, p, ":"); return p[1] ":" p[2] ":*" }
+  if (h == "") return ""
+  n = split(h, p, "."); if (n <= 2) return substr(h, 1, 1) "***"
+  s = substr(p[1], 1, 1) "***"; for (i = 2; i <= n; i++) s = s "." p[i]; return s
 }
+function ip4s(s,   out, t, pre, rest) {          # 文字里的 IPv4 (前后不能紧挨着数字, 免得误伤 1.2.3.4.5 这类版本号; 句末的句号不算)
+  out = ""
+  while (match(s, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
+    pre = substr(s, 1, RSTART - 1); t = substr(s, RSTART, RLENGTH); rest = substr(s, RSTART + RLENGTH); s = rest
+    if (pre ~ /[0-9]\.?$/ || rest ~ /^[0-9]/ || rest ~ /^\.[0-9]/) out = out pre t; else out = out pre mask1(t)
+  }
+  return out s
+}
+function ip6s(s,   out, t, u, c, pre, rest) {    # 文字里的 IPv6: 至少两个冒号, 且有 :: 或至少四个冒号 (所以 10:00:00 这样的时刻不算); 「标签:」的冒号不算地址的一部分
+  out = ""
+  while (match(s, /[0-9A-Fa-f]*:[0-9A-Fa-f:]*/)) {
+    pre = substr(s, 1, RSTART - 1); t = substr(s, RSTART, RLENGTH); rest = substr(s, RSTART + RLENGTH); s = rest
+    if (substr(t, 1, 1) == ":" && substr(t, 2, 1) != ":") { pre = pre ":"; t = substr(t, 2) }
+    u = t; c = gsub(/:/, ":", u)
+    if (c < 2 || (index(t, "::") == 0 && c < 4)) out = out pre t; else out = out pre mask1(t)
+  }
+  return out s
+}
+function lit(s, a, b,   out, i) {                # 字面替换 (服务器地址 / 标签; 不当正则)
+  out = ""
+  while ((i = index(s, a)) > 0) { out = out substr(s, 1, i - 1) b; s = substr(s, i + length(a)) }
+  return out s
+}
+function redact(s,   out, a, e, h) {             # URL: 用户名 / 密码 (最后一个 @ 之前) 去掉; 路径 / 查询串 / 片段换成 /<path>; IP 形式的主机同 mask1; 域名保留
+  out = ""
+  while (match(s, /:\/\/[^| \t]+/)) {
+    out = out substr(s, 1, RSTART - 1) "://"
+    a = substr(s, RSTART + 3, RLENGTH - 3); s = substr(s, RSTART + RLENGTH)
+    if (match(a, /[\/?#]/)) a = substr(a, 1, RSTART - 1)
+    for (e = length(a); e >= 1; e--) if (substr(a, e, 1) == "@") { a = substr(a, e + 1); break }
+    if (substr(a, 1, 1) == "[") { e = index(a, "]"); if (e > 0) a = "[" mask1(substr(a, 2, e - 2)) substr(a, e) }
+    else if (match(a, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) { h = substr(a, 1, RLENGTH); a = mask1(h) substr(a, RLENGTH + 1) }
+    out = out a "/<path>"
+  }
+  return out s
+}
+function hostmask(d,   o, t, v, k, p, pre, lead) {   # 操作记录详情里的 host=<地址>[:端口]: 地址打码 (同 mask1), 端口保留
+  o = ""
+  while (match(d, /(^|[ ])host=[^ "]+/)) {
+    pre = substr(d, 1, RSTART - 1); t = substr(d, RSTART, RLENGTH); d = substr(d, RSTART + RLENGTH)
+    k = index(t, "host="); lead = substr(t, 1, k + 4); v = substr(t, k + 5); p = ""
+    if (v !~ /:.*:/ && match(v, /:[0-9]+$/)) { p = substr(v, RSTART); v = substr(v, 1, RSTART - 1) }
+    o = o pre lead mask1(v) p
+  }
+  return o d
+}
+'
+_b_mask_host() { # stdin 每行一个地址 -> 打码 (见 _B_TEXT_AWK 的 mask1)
+  awk "$_B_TEXT_AWK"' { print mask1($0) }'
+}
+_b_scrub_text() { LC_ALL=C awk "$_B_TEXT_AWK"'{ print ip6s(ip4s($0)) }'; }      # 文字 (标准输入) 里的 IP 打码
 
 _b_sec() { # <名称> <格式 kv|tsv|raw|text> <函数> [参数…]  一个分区: 先生成到临时文件, 再写「@@SECTION 名称 format=… rows=N」和内容
   local name=$1 fmt=$2; shift 2
@@ -321,12 +392,40 @@ _b_env() {
   return 0
 }
 
+_b_env_masked() { _b_env | _b_mask_user; }      # 整个分区过一遍用户名打码: 核心配置检查的报错里会有 ~/.enana/… 的路径
 _b_helperlogs() { # 辅助服务日志里最近的错误 (macOS 和 Windows 都导出; Windows 的 worker.log 是 JSON 行, 启动 / 核心就绪 / 失败事件也在里面)
   local p
-  for p in api.log tick.log check.log worker.log launcher.log; do
+  # api.log 整段 (最后 200 行) 放在 apilog 分区, 见 _b_apilog; 这里不再重复抽取
+  for p in tick.log check.log worker.log launcher.log; do
     [ -s "$H/$p" ] && tail -n 40 "$H/$p" 2>/dev/null | grep -iE 'error|fail|fatal|warn|denied|worker\.start|core\.ready' | tail -n 8 | _b_mask_user | sed "s/^/helperlog.$p: /"
   done
+  [ "${BUNDLE_OPS:-0}" = 1 ] && _b_update_failed      # 它来自操作记录: 只在导出了操作记录的时候才写
   return 0
+}
+_b_apilog() { # [起始时间|空] api.log 最后 200 行 (先上一代 api.log.1): 只留导出时间范围内的行 (没时间的行跟随前一行); 服务器标签 → <server>, 其余打码同 _B_TEXT_AWK
+  local since=${1:-} lst
+  lst=$(mktemp) || return 1
+  srv_list | while IFS=$'\t' read -r tag _ host _; do
+    [ -n "$tag" ] && printf '%s\t%s\t%s\n' "${#tag}" "$tag" '<server>'
+    [ -n "$host" ] && printf '%s\t%s\t%s\n' "${#host}" "$host" "$(printf '%s\n' "$host" | _b_mask_host)"
+  done | sort -t "$(printf '\t')" -k1,1nr > "$lst"            # 长的先替换 (主机名里可能含标签)
+  { tail -n 2000 "$H/api.log.1" 2>/dev/null; tail -n 2000 "$H/api.log" 2>/dev/null; } |
+    LC_ALL=C awk -v s="$since" -v lst="$lst" "$_B_TEXT_AWK"'
+      BEGIN { keep = (s == ""); n = 0; while ((getline ln < lst) > 0) { m = split(ln, kv, "\t"); if (m >= 3) { n++; fr[n] = kv[2]; to[n] = kv[3] } }; close(lst) }
+      /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9]/ { keep = (s == "" || substr($0, 1, 19) >= s) }
+      keep { l = $0; for (i = 1; i <= n; i++) l = lit(l, fr[i], to[i]); print redact(ip6s(ip4s(l))) }' |
+    tail -n 200 | _b_mask_user
+  rm -f "$lst"
+}
+_b_update_failed() { # 最近一次「更新 enana」的结果: 只看操作记录, 从新到旧找到最近的一条; 失败 → 时间 + 详情; 成功或从没更新过 → none
+  local d hit=''
+  for d in $(ls -1 "$LOGS" 2>/dev/null | sed -nE 's/^ops-([0-9]{4}-[0-9]{2}-[0-9]{2})\.log(\.gz)?$/\1/p' | sort -ur); do
+    hit=$(_logs_stream ops "$d" | awk -F'\t' '$3 == "更新 enana"' | tail -n 1)
+    [ -n "$hit" ] && break
+  done
+  if [ -n "$hit" ] && [ "$(printf '%s\n' "$hit" | cut -f5)" = error ]; then
+    printf '%s\n' "$hit" | awk -F'\t' '{ printf "update.last_failed.ts=%s\nupdate.last_failed.detail=%s\n", $1, $4 }' | _b_mask_user | _b_scrub_text
+  else printf 'update.last_failed=none\n'; fi
 }
 
 _b_pinfacts() { # 「固定出口」是不是真的存在: 没有任何服务器的 role 是 pin 时, 选了「固定出口」的应用 / 服务全部直连 (verdict 的 pin-empty 读这里; *_names 只在本机导出里, 上传摘要时会去掉)
@@ -394,10 +493,15 @@ _b_policy() { # 当前生效的策略: 代理模式 / 每个选择器当前选�
     case $f in
       custom-apps.tsv) cut -d'|' -f1,2 "$H/$f" ;;
       overrides.tsv) awk -F'|' '$1 == "site" || $4 != "def"' "$H/$f" ;;          # 没动过的应用默认值 (def) 在 apps 分区里, 这里只列网站和你设置过 / 新发现的应用
+      custom-rulesets.tsv|dns.conf) _b_url_redact < "$H/$f" ;;                  # 自定义规则集 / 自定义 DNS 的地址可能带着令牌, host 之后的部分不导出
+      hosts.tsv) _b_hosts_mask < "$H/$f" ;;                                      # 域名|IP: IP 打码, 和服务器地址同样处理
       *) cat "$H/$f" ;;
     esac
   done
 }
+_b_url_redact() { LC_ALL=C awk "$_B_TEXT_AWK"'{ print redact($0) }'; }      # 地址: 用户名 / 密码去掉; host 之后的路径 / 查询串换成 /<path>; IP 形式的主机打码 (同 _b_mask_host)
+_b_hosts_mask() { local d ip; while IFS='|' read -r d ip || [ -n "$d" ]; do printf '%s|%s\n' "$d" "$(printf '%s\n' "$ip" | _b_mask_host)"; done; }
+_b_policy_masked() { _b_policy | _b_mask_user; }      # 整个分区再过一遍用户名打码 (路径里可能有 /Users/<名字>)
 
 _b_servers() { # tag type host(打码) port role sub
   printf 'tag\ttype\thost\tport\trole\tsub\n'
@@ -407,7 +511,7 @@ _b_servers() { # tag type host(打码) port role sub
 _b_apps() { # 已识别的应用 + 当前设置
   [ -s "$H/.apps.now" ] || apps_installed > "$H/.apps.now"
   printf 'name\tstate\tflag\ttarget\tknown\trec\tgroup\tpath\n'
-  apps_json | perl -MJSON::PP -e 'local $/; my $l = eval { decode_json(<STDIN>) } || []; for my $a (@$l) { my $p = $a->{path} // ""; $p =~ s{/Users/[^/]+}{/Users/<user>}; print join("\t", map { $_ // "" } @$a{qw(name state flag target)}, ($a->{known} ? "yes" : "no"), @$a{qw(rec group)}, $p), "\n" }'
+  apps_json | perl -MJSON::PP -e 'local $/; my $l = eval { decode_json(<STDIN>) } || []; for my $a (@$l) { my $p = $a->{path} // ""; $p =~ s{/Users/[^/]+}{/Users/<user>}; print join("\t", map { $_ // "" } @$a{qw(name state flag target)}, ($a->{known} ? "yes" : "no"), @$a{qw(rec group)}, $p), "\n" }' | _b_mask_user
 }
 
 _b_probe() { # <名称> <经过 proxy|direct> <地址> [curl 参数…]
@@ -457,7 +561,7 @@ _b_days() { # <小时数|all> -> 要读取的日期 (旧→新)
 _b_ops() { # <起始时间|空> <日期…>
   local since=$1 d; shift
   printf 'ts\twho\taction\tdetail\tresult\n'
-  for d in "$@"; do _logs_stream ops "$d"; done | LC_ALL=C awk -v s="$since" 'BEGIN { FS = "\t" } { if (s == "" || substr($0, 1, 19) >= s) print }' | _b_mask_user
+  for d in "$@"; do _logs_stream ops "$d"; done | LC_ALL=C awk -v s="$since" "$_B_TEXT_AWK"'BEGIN { FS = OFS = "\t" } { if (s == "" || substr($0, 1, 19) >= s) { $4 = hostmask($4); print } }' | _b_mask_user
 }
 _b_access() { # <起始时间|空> <日期…>
   local since=$1; shift
@@ -487,7 +591,7 @@ logs_bundle() {
   printf '#generated=%s tz=%s app=enana version=%s\n' "$(date '+%F %T')" "$(date +%z)" "$VERSION"
   printf '#range since="%s" hours=%s days=%s\n' "${since:-beginning}" "$hours" "${dlist:-none}"
   # macOS bash 3.2 misparses unparenthesized case patterns inside quoted $().
-  case ",$secs," in *,snapshot,*) declared="$declared,verdict,env,config,policy,servers,apps,probes,live,health_summary,outages,health" ;; esac
+  case ",$secs," in *,snapshot,*) declared="$declared,verdict,env,config,policy,servers,apps,probes,live,health_summary,outages,health,apilog" ;; esac
   case ",$secs," in *,ops,*) declared="$declared,ops" ;; esac
   case ",$secs," in *,access,*) declared="$declared,access" ;; esac
   case ",$secs," in *,proxy,*) declared="$declared,proxy" ;; esac
@@ -496,23 +600,25 @@ logs_bundle() {
   printf '%s\n' '#privacy=不含任何密码 / 令牌 / 服务器凭据; 服务器地址和系统用户名已打码; 但包含访问过的域名和应用名, 请只发给你信任的人。'
   printf '%s\n' '#route-reasons=出口名 direct-mode(代理总开关关闭) direct-lan(本机/局域网) direct-site(你把该网站设为直连) direct-app(你把该应用设为直连/关) direct-cn(国内规则) direct(策略选了直连) 都是直连; 其它名字是代理服务器节点。'
   _b_gen meta kv _b_meta
+  BUNDLE_OPS=0; case ",$secs," in *,ops,*) BUNDLE_OPS=1 ;; esac
   case ",$secs," in *,snapshot,*)
-    _b_gen env kv _b_env
+    _b_gen env kv _b_env_masked
     _b_gen config text _b_config
-    _b_gen policy text _b_policy
+    _b_gen policy text _b_policy_masked
     _b_gen servers tsv _b_servers
     _b_gen apps tsv _b_apps
     _b_gen probes tsv _b_probes
     _b_gen live tsv _b_live
     _b_gen health tsv _b_health "$since"
     _b_gen health_summary tsv _b_health_summary "$since" "$hours"
-    _b_gen outages tsv _b_health_outages "$since" ;; esac
+    _b_gen outages tsv _b_health_outages "$since"
+    _b_gen apilog raw _b_apilog "$since" ;; esac
   # shellcheck disable=SC2086
   case ",$secs," in *,ops,*) _b_gen ops tsv _b_ops "$since" $days ;; esac
   case ",$secs," in *,access,*) _b_gen access tsv _b_access "$since" $days ;; esac
   # 自动判定读 meta / env / health, 以及用户选了导出的 ops / access (没选的分区不会被拿来分析)
   case ",$secs," in *,snapshot,*) _b_gen verdict kv _b_verdict "$since" ;; esac
-  _b_emit meta verdict env config policy servers apps probes live health_summary outages health ops access
+  _b_emit meta verdict env config policy servers apps probes live health_summary outages health apilog ops access
   # shellcheck disable=SC2086
   case ",$secs," in *,proxy,*) _b_sec proxy raw _b_proxy "$since" $days ;; esac      # 最大的一个分区: 直接流式输出
   printf '@@END\n'

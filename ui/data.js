@@ -88,11 +88,10 @@
   async function readApps(scan, background) {
     if (scan) { S.scanning = true; TP.emit('scanning', true); }
     try {
-      var r = scan ? await TP.helper('POST', '/api/apps/scan') : await TP.helper('GET', '/api/apps');
+      var r = scan ? await TP.helper('POST', '/api/apps/scan', background ? { q: { background: 1 } } : undefined) : await TP.helper('GET', '/api/apps');
       if (r.job) {
         if (background) {
-          // Automatic discovery may apply new app rules, but is not a user
-          // switching capture modes. Follow it without a card/success toast.
+          // 后台开的应用任务是真的在应用配置: 顶栏要显示「正在应用配置」 (只读任务才用 quiet). 没有变化时后端根本不开任务, 所以这里只会是真正的应用
           await TP.jobs.follow(r.job, null);
           if (TP.afterApply) TP.afterApply();
         } else {

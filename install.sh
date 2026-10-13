@@ -14,7 +14,7 @@ set -u
 _p="${BASH_SOURCE[0]}"
 while [ -L "$_p" ]; do _l=$(readlink "$_p"); case $_l in /*) _p=$_l ;; *) _p=$(dirname "$_p")/$_l ;; esac; done
 _d=$(cd "$(dirname "$_p")" && pwd -P)
-. "$_d/lib/common.sh"
+. "$_d/lib/common.sh" || { printf 'enana: 无法加载 %s/lib/common.sh, 程序文件不完整, 请重新运行安装\nenana: cannot load %s/lib/common.sh (incomplete program files), run the installer again\n' "$_d" "$_d" >&2; exit 1; }
 init_paths "$_p"
 for _f in i18n jobs servers apps autosites sites fetch os enhanced auth device session cloud dns logs health update config ops exits speed stats prefs snapshot plan official sync vps diag menu detect console; do . "$LIB/$_f.sh"; done
 [ "$ENANA_PLATFORM" != windows ] || . "$LIB/enhanced-windows.sh"
@@ -54,6 +54,8 @@ build_menu() {
   menu_reset
   menu_add lang     "界面语言 / Language" choice "$LANG_UI" 'zh:中文|en:English' "终端与仪表盘共用的界面语言 (安装后也可在仪表盘「设置」里改) / Used by the terminal and the dashboard"
   if [ "$REC_core" = skip ]; then menu_add core "sing-box 核心 (已安装 $(core_version))" choice skip 'skip:已就绪' "$WHY_core" 1
+  # 为 TUN 重新钉死核心 (upgrade_core_plan 设了 CORE_PINNED_ONLY): 只有官方钉死的下载能用, Homebrew / 本地安装包装上了 TUN 也会拒绝, 所以不给选
+  elif [ "${CORE_PINNED_ONLY:-0}" = 1 ]; then menu_add core "sing-box 核心 · 来源" choice chain 'chain:GitHub 官方包(多线路+校验)' "$WHY_core" 1
   else menu_add core "sing-box 核心 · 来源" choice "$REC_core" "$core_opts" "$WHY_core"; fi
   menu_add rules    "社区规则集 (国内直连 / 海外分流 / AI)" toggle "$REC_rules" '' "$WHY_rules"
   menu_add dash     "仪表盘 + 本地辅助服务" toggle 1 '' "必装: 服务器、订阅、应用、网站的设置与监控都在仪表盘里完成" 1
@@ -71,10 +73,31 @@ restore_on_fail() { # EXIT 陷阱: 配置阶段失败时还原
   [ "$1" = 0 ] || { restore_program; info "已还原到升级前的程序文件, 代理配置没有改变" "Restored the previous program files; the proxy configuration was not changed"; }
 }
 
+# lib / data 的替换: 先整棵复制到 $H 旁边的临时目录, 核对文件数与 VERSION, 再换上 (旧目录先挪开, 正在运行的 API 不会读到写了一半的目录)
+_program_tree_fail() { # <暂存目录> <旧目录> <阶段: 0 复制 / 1 挪开旧目录 / 2 换入新目录> <原因>: 把挪开的旧目录换回原位, 清掉临时目录, 退出
+  local d
+  if [ "$3" = 2 ]; then rm -rf "$H/lib" "$H/data"; fi     # 阶段 2: 旧目录都已挪开, $H 里只剩刚换入的新目录
+  for d in lib data; do [ ! -e "$2/$d" ] || mv "$2/$d" "$H/$d"; done
+  rm -rf "$1" "$2"
+  die "$4" "原来的程序文件没有改动"
+}
+program_tree_replace() {
+  local st="$H.stage.$$" old="$H.old.$$" d a b
+  rm -rf "$st" "$old"; mkdir -p "$st" "$old" || die "无法创建临时目录 $st" "原来的程序文件没有改动"
+  for d in lib data; do
+    cp -R "$SRC/$d" "$st/$d" || _program_tree_fail "$st" "$old" 0 "复制 $d/ 失败"
+    a=$(find "$SRC/$d" ! -type d | wc -l | tr -d ' '); b=$(find "$st/$d" ! -type d | wc -l | tr -d ' ')
+    [ "$a" -gt 0 ] && [ "$a" = "$b" ] || _program_tree_fail "$st" "$old" 0 "复制后 $d/ 的文件数不对 ($b / $a)"
+  done
+  grep -Eq '^[0-9]+\.[0-9]+' "$SRC/VERSION" 2>/dev/null || _program_tree_fail "$st" "$old" 0 "VERSION 文件缺失或格式不对"
+  for d in lib data; do [ ! -e "$H/$d" ] || mv "$H/$d" "$old/$d" || _program_tree_fail "$st" "$old" 1 "无法挪开旧的 $d/"; done
+  for d in lib data; do mv "$st/$d" "$H/$d" || _program_tree_fail "$st" "$old" 2 "无法换入新的 $d/"; done
+  rm -rf "$st" "$old"
+}
 install_files() { # 把程序文件复制到 $H (源码目录与 $H 相同时跳过)
   mkdir -p "$H" "$H/ui" "$H/certs"; chmod 700 "$H"
   if [ "$SRC" != "$H" ]; then
-    rm -rf "$H/lib" "$H/data"; cp -R "$SRC/lib" "$H/lib"; cp -R "$SRC/data" "$H/data"
+    program_tree_replace
     cp -R "$SRC/ui/." "$H/ui/"
     [ ! -d "$SRC/windows" ] || { mkdir -p "$H/windows"; cp -R "$SRC/windows/." "$H/windows/"; }
     # 原子替换 (N4): 升级时正在运行的 get.sh 就是这个文件, 原地 cp 会让 bash 读到错位的新内容; 写临时文件再 mv 则旧进程不受影响
@@ -125,19 +148,22 @@ port_random() { # 随机空闲端口 (20000-59999), 避开 $1 里已经选了的
   done
   return 1
 }
-pick_ports() {
-  local spec name lbl cur new used=" $PORT $UI_PORT $API_PORT $SPEED_PORT "
+pick_ports() { # 本地端口: 空闲或只有本程序在用 → 保持不变 (升级不换端口); 被别的程序占着 → 换一个随机的空闲端口并写进设置; 有人在用但看不到是谁 → 保持不变, 记入 UNSEEN_PORTS
+  local spec name lbl cur new st bad=0 unseen='' used=" $PORT $UI_PORT $API_PORT $SPEED_PORT "
   for spec in "PORT:$LABEL" "UI_PORT:$LABEL" "API_PORT:$LABEL_API" "SPEED_PORT:$LABEL"; do
     name=${spec%%:*}; lbl=${spec#*:}; cur=${!name}
-    # A root TUN core owns the same ports but has no GUI LaunchAgent.
-    # Treating it as foreign silently changes ports during an upgrade.
-    [ "$lbl" != "$LABEL" ] || ! os_service_loaded || continue
-    os_label_loaded "$lbl" && continue
-    port_busy "$cur" || continue
-    new=$(port_random "$used") || die "找不到空闲的本地端口" "请先关闭一些占用端口的程序, 再重新运行安装命令"
-    warn "本地端口 $cur 已被其它程序占用, 已自动改用 $new"
-    printf -v "$name" '%s' "$new"; export "$name"; settings_set "$name" "$new"; used="$used$new "
+    st=$(port_state "$cur" "$lbl")
+    case $st in
+      free|own) ;;
+      unseen) unseen="$unseen${unseen:+ / }$cur" ;;
+      foreign) new=$(port_random "$used") || die "找不到空闲的本地端口" "请先关闭一些占用端口的程序, 再重新运行安装命令"
+         warn "本地端口 $cur 已被其它程序占用, 已自动改用 $new"
+         printf -v "$name" '%s' "$new"; export "$name"; settings_set "$name" "$new"; used="$used$new " ;;
+      *) bad=1; warn "没能确认本地端口 $cur 的占用情况, 沿用不变" ;;
+    esac
   done
+  UNSEEN_PORTS=$unseen
+  if [ -n "$unseen" ] || [ "$bad" = 1 ]; then PORTS_VERIFIED=0; else PORTS_VERIFIED=1; fi
   set_ui_url
 }
 
@@ -146,24 +172,69 @@ st_preflight() {
   [ "$MACOS_MAJOR" -ge 12 ] || warn "macOS $MACOS 较旧: 官方 sing-box 1.14 可能无法在此运行 (Intel 会自动尝试兼容包)"
   ok "macOS $MACOS · $ARCH"
   mkdir -p "$H"
+  foreign_check
   pick_ports
-  ok "本地端口 $PORT / $UI_PORT / $API_PORT / $SPEED_PORT 可用"
-  if [ "$SEL_sysproxy" = 1 ]; then
+  if [ -n "$UNSEEN_PORTS" ]; then info "本地端口 $UNSEEN_PORTS 有人在用, 没能确认是谁 (普通账户看不到 root 核心的监听者), 沿用不变"
+  elif [ "$PORTS_VERIFIED" = 1 ]; then ok "本地端口 $PORT / $UI_PORT / $API_PORT / $SPEED_PORT 可用"; fi
+  # 端口被别的程序占着、换了端口时, 指向旧端口 (127.0.0.1) 的系统代理同样算别人的设置: enana 没有记录哪个系统代理是自己设置的, 而这时它多半属于正占着
+  # 这个端口的程序 (例如 Clash 也默认用 7890)。和其它代理设置一样先备份, 交互安装时询问 (默认「否」), 非交互时跳过; 升级不动系统代理 (和 2.3.23 一样)。
+  # TUN 模式下 st_sysproxy 保留现有的系统代理设置, 不会覆盖什么, 所以不为它备份、提醒或询问 (否则回车 = 取消会为一个不做事的步骤取消整次安装)
+  if [ "$SEL_sysproxy" = 1 ] && [ "${NETWORK_MODE:-system}" != tun ]; then
     local foreign; foreign=$(os_sysproxy_foreign | paste -sd, -)
     if [ -n "$foreign" ]; then
       os_sysproxy_backup
       warn "网络服务「$foreign」已有其它系统代理设置, 继续会覆盖 (原设置已备份到 $H/proxy-backup.txt)"
-      confirm "继续?" y || die "已取消"
+      if _noninteractive; then
+        warn "非交互模式: 没有覆盖它们, 本次跳过系统代理设置 (运行 enana on 会替换现有设置, 原设置已备份到 $H/proxy-backup.txt)"
+        oplog "${OP_WHO:-terminal}" "跳过系统代理设置" "$(kv services "$foreign")" ok
+        SEL_sysproxy=0; STEPS=$((STEPS - 1))
+      else
+        confirm "继续?" n || die "已取消"
+      fi
     fi
   fi
+}
+
+# 升级时核心要不要重新下载 (cmd_install 的升级分支调用; tests/enhanced.sh 取这段函数的原文测试) -> REC_core / WHY_core, 重新钉死时还设置 SINGBOX_VERSION / CORE_PINNED_ONLY
+#   · 核心比本版本固定的 CORE_PIN 旧: 下载 CORE_PIN (和以前一样)
+#   · TUN 模式, 而现在的核心不能交给 root 运行 (core_tun_ok: 来源没有记成官方钉死的, 或者校验之后被改动过): 重新下载并钉死。2.3.23 及更早的版本从来不记录核心来源,
+#     不重新下载的话, 新版本的 TUN 预检必然拒绝 (preflight-core-unpinned), 配置那一步失败, 程序文件被还原 —— 每次更新都这样失败, enana upgrade 也救不了 (旧版本不记来源)。
+#     下载现在这一版 (随程序发布的 core-pins.conf 或验过签的兼容清单里有这台电脑的构建的 SHA-256 时), 否则下载 CORE_PIN; 只接受钉死的下载 (CORE_PINNED_ONLY, 见 lib/fetch.sh 的 core_install)
+#   · 其它情况 (系统代理模式, 或者核心已经是钉死的、没有被改动过): 不重装
+upgrade_core_plan() {
+  local cur nm
+  [ "$ST_core" = 1 ] || return 0
+  cur=$(core_version)
+  if version_gt "$CORE_PIN" "$cur"; then REC_core=chain; WHY_core="本版本要求 sing-box $CORE_PIN, 将升级核心"; return 0; fi
+  REC_core=skip
+  if [ "${NETWORK_MODE:-system}" != tun ] || core_tun_ok; then return 0; fi
+  SINGBOX_VERSION=$CORE_PIN
+  for nm in $(core_names); do
+    if [ -n "$(core_pin_sha "$cur" "$nm")" ]; then SINGBOX_VERSION=$cur; break; fi
+  done
+  CORE_PINNED_ONLY=1; REC_core=chain
+  WHY_core="TUN 需要官方的、钉死版本号的核心: 将重新下载 sing-box $SINGBOX_VERSION 并校验 SHA-256"
+}
+
+# 重新执行安装命令 (没有 --upgrade; cmd_install 调用, tests/enhanced.sh 取这段函数的原文测试): 已装的核心照旧不动 (REC_core=skip), 只有 TUN 用不了它
+# (core_tun_ok: 来源没有记成官方钉死的, 或者校验之后被改动过) 时和升级一样重新钉死 —— 否则 st_config 里 TUN 必然拒绝, 整次安装撤销, 提示的 enana upgrade 又是旧版本的
+reinstall_core_plan() {
+  [ "$REC_core" = skip ] && [ "${NETWORK_MODE:-system}" = tun ] && ! core_tun_ok || return 0
+  upgrade_core_plan
 }
 
 st_core() {
   step "安装 sing-box 核心 (代理引擎)"
   if [ "$SEL_core" = skip ] && [ -z "$FORCE" ]; then ok "已安装 sing-box $(core_version), 无需重装"; return 0; fi
+  [ "${CORE_PINNED_ONLY:-0}" != 1 ] || info "$WHY_core"            # 为 TUN 重新钉死核心 (upgrade_core_plan): 说明为什么要重新下载
   info "正在下载 sing-box 核心, 可能需要 1–2 分钟…"
   [ "$SEL_core" = skip ] && SEL_core=chain
   core_install "$SEL_core"; local rc=$?
+  # 为 TUN 重新钉死核心, 却没有下载到钉死的官方包 (返回 1): 停在这里。程序文件还没有替换 (st_config 才换), 当前版本和原来的核心都原样保留;
+  # TUN 只能用钉死的官方核心, 所以不能改用 Homebrew 硬装上去。下载了但不能运行 (返回 2) 照常用下面那条提示
+  if [ "$rc" = 1 ] && [ "${CORE_PINNED_ONLY:-0}" = 1 ]; then
+    die "TUN 需要官方的、钉死版本号的核心, 但没能下载到 sing-box ${SINGBOX_VERSION:-$CORE_PIN}" "已保留当前版本, 原来的核心没有改动; 检查网络后重试, 或者先改用系统代理模式 (enana network-mode system) 再更新"
+  fi
   case $rc in
     0) ok "sing-box $(core_version) 安装完成" ;;
     2) die "sing-box 已下载但无法在这台 Mac 上运行" "你的系统是 macOS $MACOS ($ARCH); 请把这行信息反馈出来, 或升级系统" ;;
@@ -193,10 +264,15 @@ st_config() {
   [ "$SB_MAJOR" -gt 1 ] || [ "$SB_MINOR" -ge 12 ] || warn "sing-box $(core_version) 偏旧, 建议 enana upgrade"
   if lock_take; then apps_scan >/dev/null 2>&1 || true; lock_drop; fi     # 识别已安装的应用 (升级时顺便修好 2.1.0 留下的「浏览器被设成直连」); 这之后才装的应用才算「新应用」
   local rc
+  ENHANCED_ADMIN_ERR=''                       # 管理员框这一次的结果 (见 lib/enhanced.sh 的 enhanced_admin), 和 op_txn 一样从头记
   if op_lock; then apply_config; rc=$?; op_unlock; else apply_config; rc=$?; fi      # 和仪表盘里的配置任务排队: 两边同时改 config.json 会让社区规则集被临时停用
   case $rc in
     0) ;;
-    3) die "新配置没能让代理核心启动, 已回滚到原来的配置" "日志: $H/sing-box.log   $(tail -n 3 "$H/sing-box.log" 2>/dev/null | tr '\n' ' ')" ;;
+    # 3 + cancelled = TUN 用户在升级时取消了管理员密码框: root 什么都没运行, 原来的 TUN 照常接管, 不是「核心没能启动」。EXIT 陷阱照常还原程序文件
+    3) if [ "${ENHANCED_ADMIN_ERR:-}" = cancelled ]; then die "已取消管理员授权, 新配置没有应用" "已保留当前版本, 没有升级"; fi
+       die "新配置没能让代理核心启动, 已回滚到原来的配置" "日志: $H/sing-box.log   $(tail -n 3 "$H/sing-box.log" 2>/dev/null | tr '\n' ' ')" ;;
+    # 5 = TUN 被拒绝 (root 什么都没改动, 原来的配置放回去了, 流量接管方式不变; 见 lib/config.sh 的 config_tun_refused): 原因在 TXN_ERR 里, 和配置校验无关。EXIT 陷阱照常还原程序文件
+    5) die "${TXN_ERR:-TUN 没有启动, 新配置没有应用}" "已保留当前版本, 没有升级" ;;
     *) die "生成的配置没有通过 sing-box 校验" "$(head -c 400 "$H/check.log" 2>/dev/null | tr '\n' ' ') — 请把这段信息反馈出来" ;;
   esac
   ok "配置已生成并通过 sing-box 校验 (服务器 $(srv_count) 台 · 目录 $(catalog_list | wc -l | tr -d ' ') 项)"
@@ -239,6 +315,10 @@ st_shortcut() {
 st_verify() {
   step "验证"
   local code
+  if [ "$(port_state "$PORT" "$LABEL")" = foreign ]; then    # 启动之后端口仍被别的程序占着: sing-box 没能绑定它, 代理实际没有生效
+    warn "代理端口 $PORT 被别的程序占用: enana 没能绑定它, 代理没有生效 (运行 enana doctor 查看占用的程序)"
+    oplog "${OP_WHO:-terminal}" "代理端口绑定失败" "$(kv port "$PORT")" error
+  fi
   os_service_running && ok "代理服务运行中" || warn "代理服务没有运行"
   code=$(curl -s -o /dev/null -m 6 --noproxy '*' -w '%{http_code}' "$UI_URL" || true)
   [ "$code" = 200 ] && ok "仪表盘可访问" || warn "仪表盘暂时打不开 (HTTP ${code:-无响应})"
@@ -263,12 +343,12 @@ cmd_install() {
   [ -n "$UPGRADE" ] || print_detection
   recommend
   [ -n "$FORCE" ] && [ "$REC_core" = skip ] && REC_core=chain
-  if [ -n "$UPGRADE" ]; then                   # 升级: 沿用已有选择, 不动系统代理 / 不弹菜单; 核心低于本版固定版本时才重装
+  if [ -n "$UPGRADE" ]; then                   # 升级: 沿用已有选择, 不动系统代理 / 不弹菜单; 核心低于本版固定版本, 或者 TUN 用不了现在的核心时才重装 (upgrade_core_plan)
     REC_sysproxy=0
-    if [ "$ST_core" = 1 ]; then
-      if version_gt "$CORE_PIN" "$(core_version)"; then REC_core=chain; WHY_core="本版本要求 sing-box $CORE_PIN, 将升级核心"; else REC_core=skip; fi
-    fi
+    upgrade_core_plan
     [ "$ST_rules" = 1 ] && REC_rules=0
+  else
+    reinstall_core_plan
   fi
   build_menu
   if menu_interactive; then pf '\n%s选择要安装的内容%s (已按识别结果给出推荐; 用键盘修改):\n\n' "$B" "$N"; elif [ -z "$UPGRADE" ]; then pf '\n%s非交互模式: 按识别结果的推荐设置安装%s\n' "$B" "$N"; fi
@@ -395,7 +475,8 @@ cmd_content() { # 拉取并应用云端内容 (登录后下发的服务目录 / 
   info "内容来源: $(cloud_status_json | sed -n 's/.*"source":"\([a-z]*\)".*/\1/p') · 序号 $(cloud_seq) $(cloud_version)"
 }
 cmd_tick() { # 每分钟一次 (launchd): 流量统计采样; 每 ~2 分钟一次登录会话心跳; 自动识别打不开的网站; 每小时一次日志切分 + 清理
-  local last=0
+  # 全部是后台: 绝不弹管理员框 (APPS_BG_JOB=1, 见 lib/config.sh 的 apply_config) —— 心跳换令牌、云端自动同步、官方线路、自动识别网站在 TUN 下要授权的变化都先撤销 / 推迟
+  local last=0 APPS_BG_JOB=1
   stats_collect
   health_tick || true                          # 连接健康记录: 每分钟探测服务器端口 + 记录状态变化, 每 ~5 分钟经代理访问关键站点 (见 lib/health.sh); 排在心跳之前, 状态时间点才准
   [ -f "$H/.hb.last" ] && IFS= read -r last < "$H/.hb.last"
@@ -514,6 +595,7 @@ $(_t "  enana open           打开仪表盘")
 $(_t "  enana env            打印终端代理变量 (命令行工具不读系统代理): eval \"\$(enana env)\"")
 $(_t "  enana uninstall      完整卸载 (删除全部本机数据)")
 $(_t "选项: --yes 全部采用推荐值 · --force 强制重装环境 · --quiet 静默 · --lang zh|en 指定语言")
+$(_t "  注意: --yes / --upgrade 不会覆盖别人设置的系统代理 (跳过这一步, 需要时运行 enana on); 交互安装时回车 = 取消 (外部代理的提醒与系统代理的询问默认都是 n)")
 EOF
 }
 

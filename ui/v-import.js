@@ -45,29 +45,12 @@
   function allTags() { return TP.servers().map(function (s) { return s.tag; }); }
   imp.busy = function () { return !!(cur && (cur.st.phase === 'working' || cur.st.phase === 'committing')); };
 
-  /* ---------- 导入器给出的原因 / 警告是中文原文: 用中文词典里的模板反查, 再换成当前语言 ---------- */
-  var reasonIdx = null;
-  function buildReasonIdx() {
-    var d = I.dict('zh'), out = [];
-    Object.keys(d).forEach(function (k) {
-      if (k.indexOf('import.reason.') !== 0 && k.indexOf('import.warn.') !== 0) return;
-      var names = [], src = String(d[k]).replace(/[.*+?^$()|[\]\\]/g, '\\$&').replace(/\{(\w+)\}/g, function (m, n) { names.push(n); return '(.*)'; });
-      out.push({ key: k, names: names, re: new RegExp('^' + src + '$') });
-    });
-    return out;
-  }
-  function importerText(raw) {
-    raw = String(raw == null ? '' : raw);
-    if (!reasonIdx) reasonIdx = buildReasonIdx();
-    var i, m, vars, j, zhUnknown = I.dict('zh')['import.word.unknown'];
-    for (i = 0; i < reasonIdx.length; i++) {
-      m = reasonIdx[i].re.exec(raw);
-      if (!m) continue;
-      vars = {};
-      for (j = 0; j < reasonIdx[i].names.length; j++) vars[reasonIdx[i].names[j]] = m[j + 1] === zhUnknown ? t('import.word.unknown') : m[j + 1];
-      return t(reasonIdx[i].key, vars);
-    }
-    return raw;
+  /* ---------- 导入器给出的原因 / 警告是词典键 (import.reason.* / import.warn.*) + 占位符 vars: 直接翻译; 没写的占位符 (例如协议类型) 显示为「未知」 ---------- */
+  function importerText(key, vars) {
+    if (!key) return '';
+    var v = {}, k;
+    for (k in (vars || {})) v[k] = vars[k] == null || vars[k] === '' ? t('import.word.unknown') : vars[k];
+    return t(key, v);
   }
   imp.reasonText = importerText;
 
@@ -397,7 +380,7 @@
     }
     function skippedBlock(list) {
       var ul = h('ul', { class: 'skip-list' });
-      list.slice(0, 300).forEach(function (s) { ul.appendChild(h('li', null, h('b', null, s.name || t('imp.noName')), h('span', { class: 'muted' }, ' — ' + importerText(s.reason)))); });
+      list.slice(0, 300).forEach(function (s) { ul.appendChild(h('li', null, h('b', null, s.name || (s.line ? t('imp.line', { n: s.line }) : t('imp.noName'))), h('span', { class: 'muted' }, ' — ' + importerText(s.reason, s.vars)))); });
       if (list.length > 300) ul.appendChild(h('li', { class: 'muted' }, t('imp.moreN', { n: list.length - 300 })));
       return h('div', { class: 'skipped' }, ui.detailsBtn(t('imp.skipped', { n: list.length }), t('imp.skipped', { n: list.length }), function () { return ul; }));
     }
@@ -579,7 +562,7 @@
       });
       lines.push(t('imp.cf.roles', { pin: cnt.pin, auto: cnt.auto, dl: cnt.dl, off: cnt.off }));
       lines.push(t('imp.cf.apply'));
-      var ok = await ui.confirmDialog({ title: t('imp.cf.title'), message: t('imp.cf.msg', { n: total }), detail: lines, confirmText: t('imp.cf.go') });
+      var ok = await ui.confirmDialog({ title: t('imp.cf.title'), message: t('imp.cf.msg', { n: total }), detail: TP.tunDetail(lines), confirmText: t('imp.cf.go') });
       if (!ok) return;
       el.errBox.hidden = true;
       var r = await runCommit(groups);
@@ -739,12 +722,12 @@
 
       var link = buildLink(f), res = TPImporter.parse(link, { role: f.role, existingTags: allTags() }), pem = f.pem;
       link = '';
-      if (!res.servers.length) { mErr(res.skipped[0] ? importerText(res.skipped[0].reason) : t('imp.man.err.build')); return; }
+      if (!res.servers.length) { mErr(res.skipped[0] ? importerText(res.skipped[0].reason, res.skipped[0].vars) : t('imp.man.err.build')); return; }
       var sv = res.servers[0]; sv.role = f.role; sv.sel = true;
       var summary = [t('imp.man.cf.type', { type: ty.label }), t('imp.man.cf.addr', { addr: hostPart(f.host) + ':' + f.port }), t('imp.man.cf.role', { role: TP.name.role(f.role) })];
       if (pem) summary.push(t('imp.man.cf.cert'));
       summary.push(t('imp.cf.apply'));
-      var ok = await ui.confirmDialog({ title: t('imp.man.cf.title'), message: t('imp.man.cf.msg', { tag: sv.outbound.tag }), detail: summary, confirmText: t('imp.cf.go') });
+      var ok = await ui.confirmDialog({ title: t('imp.man.cf.title'), message: t('imp.man.cf.msg', { tag: sv.outbound.tag }), detail: TP.tunDetail(summary), confirmText: t('imp.cf.go') });
       f = null;
       if (!ok) return;                                                    // 取消: 表单保持原样, 用户可以继续修改
       ['secret', 'secret2', 'user', 'pem', 'host', 'name', 'sni', 'port'].forEach(function (k) { mf[k].value = ''; });       // 确认后立即清空输入框

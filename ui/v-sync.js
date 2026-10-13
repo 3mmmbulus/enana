@@ -470,7 +470,7 @@
         h('div', { class: 'syn-choices', role: 'group', 'aria-label': t('sync.conf.choices') },
           choice('download-cloud', '', 'sync.conf.cloud.t', 'sync.conf.cloud.d', async function () {
             var ok = await ui.confirmDialog({ title: t('sync.conf.cloud.confirmTitle'), message: t('sync.conf.cloud.confirmMsg', { brief: brief(d.remote) }),
-              detail: [t('sync.res.rep.d2'), d.local.dirty ? t('sync.res.rep.dDirty') : '', t('sync.res.d.safe'), t('sync.res.d.rollback')], confirmText: t('sync.conf.cloud.go'), danger: true });
+              detail: TP.tunDetail([t('sync.res.rep.d2'), d.local.dirty ? t('sync.res.rep.dDirty') : '', t('sync.res.d.safe'), t('sync.res.d.rollback')]), confirmText: t('sync.conf.cloud.go'), danger: true });
             if (!ok || st.closed) return;
             var res = await runPullIn(api, st, 'replace', {});
             if (res.ok) { afterPull(); ui.toast(t('sync.pull.done'), 'ok'); }
@@ -515,7 +515,7 @@
           if (rep && d.local.dirty) det.push(t('sync.res.rep.dDirty'));
           det.push(t('sync.res.d.safe')); det.push(t('sync.res.d.rollback'));
           ok = await ui.confirmDialog({ title: t(rep ? 'sync.res.confirmTitleRep' : 'sync.res.confirmTitleMrg'), message: t(rep ? 'sync.res.confirmMsgRep' : 'sync.res.confirmMsgMrg', { brief: brief(rm) }),
-            detail: det, confirmText: t(rep ? 'sync.res.goRep' : 'sync.res.goMrg'), danger: rep });
+            detail: TP.tunDetail(det), confirmText: t(rep ? 'sync.res.goRep' : 'sync.res.goMrg'), danger: rep });
           if (!ok || st.closed) return false;
           res = await runPullIn(a, st, mode, {});
           if (res.ok) { afterPull(); ui.toast(t('sync.pull.done'), 'ok'); }
@@ -587,7 +587,7 @@
     if (localN) lines.push(t('sync.first.localNote', { n: fmt.num(localN) }));                             // 开启同步会把这台电脑现有的服务器也加入同步清单 (实话实说)
     lines.push(t('sync.offer.later'));
     ok = await ui.confirmDialog({
-      title: t('sync.offer.title'), message: t('sync.first.msg', { device: devName(rm), when: fmt.rel(rm.updated) }), detail: lines,
+      title: t('sync.offer.title'), message: t('sync.first.msg', { device: devName(rm), when: fmt.rel(rm.updated) }), detail: TP.tunDetail(lines),
       confirmText: t('sync.offer.go'), cancelText: t('sync.offer.no'), confirmIcon: 'download-cloud'
     });
     if (!ok) return;                                                                                       // 不同步: 什么都不做

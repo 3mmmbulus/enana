@@ -682,7 +682,7 @@
   async function delHost(x) {
     var ok = await ui.confirmDialog({
       title: t('dns.hs.del.title'), message: t('dns.hs.del.msg', { domain: x.domain, ip: x.ip }),
-      detail: [t('dns.hs.del.d1', { domain: x.domain }), t('dns.hs.del.d2')], confirmText: t('dns.hs.del.go'), danger: true
+      detail: TP.tunDetail([t('dns.hs.del.d1', { domain: x.domain }), t('dns.hs.del.d2')]), confirmText: t('dns.hs.del.go'), danger: true
     });
     if (!ok) return;
     var at = Array.prototype.findIndex.call(el.hsBody.children, function (tr) { return tr.getAttribute('data-d') === x.domain; });
@@ -692,7 +692,7 @@
     var n = D ? D.hosts.length : 0, ok;
     if (!n) { ui.toast(t('dns.hs.clear.none'), 'warn'); return; }
     ok = await ui.confirmDialog({
-      title: t('dns.hs.clr.title'), message: t('dns.hs.clr.msg', { n: n }), detail: [t('dns.hs.clr.d1'), t('dns.hs.clr.d2')],
+      title: t('dns.hs.clr.title'), message: t('dns.hs.clr.msg', { n: n }), detail: TP.tunDetail([t('dns.hs.clr.d1'), t('dns.hs.clr.d2')]),
       confirmText: t('dns.hs.clr.go', { n: n }), danger: true
     });
     if (!ok) return;
@@ -998,7 +998,7 @@
       var leakOff = base.leak_guard && !ch.cur.leak_guard, adsOn = !base.ads_block && ch.cur.ads_block, detail = ch.lines.slice();
       if (leakOff) detail.push(t('dns.cfm.leakOff'));
       if (adsOn) detail.push(t('dns.cfm.adsOn'));
-      var ok = await ui.confirmDialog({ title: t('dns.cfm.title'), message: t('dns.cfm.msg', { n: ch.n }), detail: detail, confirmText: t('dns.cfm.go'), kind: leakOff || adsOn ? 'warning' : 'primary' });      // 琥珀 = 谨慎 (关防泄漏 / 开屏蔽广告)
+      var ok = await ui.confirmDialog({ title: t('dns.cfm.title'), message: t('dns.cfm.msg', { n: ch.n }), detail: TP.tunDetail(detail), confirmText: t('dns.cfm.go'), kind: leakOff || adsOn ? 'warning' : 'primary' });      // 琥珀 = 谨慎 (关防泄漏 / 开屏蔽广告)
       if (!ok) return false;
       return apply(ch.form);
     }

@@ -94,7 +94,8 @@ official_apply() { # <候选文件|-> 内容和现有的逐字节相同 = 什么
     # 上次就是这一份被配置校验拒绝的: 一天之内不再重试 (否则每个周期都会重新生成配置、重启核心)
     if [ -n "$bad" ] && [ "$bad" = "$sum" ] && [ $(( now_ - ${badat:-0} )) -lt 86400 ]; then return 1; fi
   fi
-  if [ "${NETWORK_MODE:-system}" = tun ] && [ "${OP_WHO:-auto}" = auto ]; then
+  # 后台 (tick / 每日维护开的任务) 不弹授权框: TUN 模式, 或者系统代理模式下根守护进程还加载着 (应用时要停它), 都推迟到用户自己操作时
+  if { [ "${NETWORK_MODE:-system}" = tun ] || enhanced_loaded; } && { [ "${OP_WHO:-auto}" = auto ] || [ "${APPS_BG_JOB:-0}" = 1 ]; }; then
     official_state_set deferred=1; oplog auto "官方线路更新待应用" "$(kv mode tun note "applies when the dashboard is open; TUN changes need administrator authorization")" ok
     return 0
   fi
@@ -103,7 +104,8 @@ official_apply() { # <候选文件|-> 内容和现有的逐字节相同 = 什么
     rm -f "$H/official.jsonl.prev"           # op_txn 的备份里还有被替换 / 被移除的节点: 成功之后不再留着凭据副本
     official_state_set deferred=0 bad= bad_at=; return 0
   fi
-  [ -z "$sum" ] || official_state_set bad="$sum" bad_at="$now_"
+  # 管理员框被取消不说明这份线路有问题: 不记成「坏的」(否则一天之内都不再试)
+  [ -z "$sum" ] || [ "${ENHANCED_ADMIN_ERR:-}" = cancelled ] || official_state_set bad="$sum" bad_at="$now_"
   return 1
 }
 

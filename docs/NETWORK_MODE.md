@@ -18,7 +18,9 @@ Gemini 自身日志在 12:58:45 接受浏览器回调并开始交换 authorizati
 
 ## 实现与验证范围
 
-System Proxy 默认不变。Enhanced/TUN 是显式选择, 包含双栈捕获、DNS hijack、进程匹配、系统路由私网排除、默认接口出口绑定。root launchdaemon 使用 root 拥有的核心/规则快照; 用户授权后安装。启动检查实际 utun 地址与 IPv4/IPv6 路由。失败在 root helper 内恢复快照, 上层事务恢复设置。切换时通过控制 API 保存并恢复 Selector 选项, 避免丢失已选 PIN 出口。应用 PIN 使用独立进程规则集, 优先于网站指定的其他 PIN 出口; 浏览器 Direct/Auto/PIN 则作为网站策略之后的兜底。
+System Proxy 默认不变。Enhanced/TUN 是显式选择, 包含双栈捕获、DNS hijack、进程匹配、系统路由私网排除、默认接口出口绑定。root launchdaemon 使用 root 拥有的核心/规则快照; 用户授权后安装。enana 在弹出管理员框之前只接受记录为官方 SHA-256 钉死版本的核心 (`core-provenance`, 来源不明的直接拒绝, 不弹框; 升级前装的核心用 `enana upgrade` 重新下载这一版即可记下来源)。root 脚本本身没有内置允许的核心摘要列表: 它只核对 enana 交给它的核心字节与摘要一致, 所以「只装钉死版本」这条保证的执行点是 enana 这一侧。每个文件由 root 只读一次、按字节核对摘要, 核对不过就整体拒绝 (什么都不改)。被拒绝 (S2: 预检拒绝或 root 拒绝) 时一律保留流量接管方式, 放回原来的配置, 撤销本次更改并报告原因, 不再重试 TUN: 从 System Proxy 切到 TUN 被拒绝, 撤销之后仍是 System Proxy 并显示原因; 本来就是 TUN 的操作 (规则开关、DNS、策略、退出账号、更新规则等) 保持 TUN。以前根守护进程没有在运行时会悄悄改回系统代理模式还报告成功, 用户不知道 TUN 被拒绝了, 现在不再这样。后台流程从不弹管理员框 (`APPS_BG_JOB=1`): 界面的自动扫描、每分钟的 tick (自动识别网站、云端自动同步、心跳被下线后换令牌、官方线路) 和每日维护里, 要动根守护进程的变化都被撤销; 只重启用户自己的核心 (系统代理模式) 照常进行。应用扫描的变化记成「待应用」; 自动识别没加上的网站 24 小时内不再试; 云端自动拉取没应用成功的同一个版本 24 小时内不再重试 (仪表盘里手动拉取不受限); 官方线路记成待应用; 换令牌留给下一次经过授权的应用。启动检查实际 utun 地址与 IPv4/IPv6 路由。失败在 root helper 内恢复快照, 上层事务恢复设置。切换时通过控制 API 保存并恢复 Selector 选项, 避免丢失已选 PIN 出口。应用 PIN 使用独立进程规则集, 优先于网站指定的其他 PIN 出口; 浏览器 Direct/Auto/PIN 则作为网站策略之后的兜底。
+
+打开代理总开关 (`POST /api/proxy`) 时如果核心没在运行要先启动它; 启动要管理员授权 (TUN, 或者根守护进程还加载着) 时不在请求里等密码框 (仪表盘 25 秒就会报告失败), 而是交给后台任务 `proxy`, 仪表盘和切换流量接管方式一样在 dock 里跟着它走; 其它情况 (启动用户自己的核心、核心已经在运行) 仍是即时的热切换。
 
 固定出口分配 (`POST /api/exits/move|freeze`) 在 TUN 下同 `/api/override` 一样是后台任务: 只改 `rules/*/ovr-*.json` (纯路由数据), 经免密规则同步助手 (`lib/tunrules-helper.pl`) 同步到 root 快照, 核心热加载, 不重启、不要管理员密码; 助手一次最多同步 160 个规则集文件 (32 个固定出口 = 107 个), 旧助手上限 60 (16 个固定出口), 超过时退回完整安装并把助手换成新版。默认固定出口的选择存在 `$H/pin-default`, 核心 (重新) 启动后由 `proxy_sync_mode` 校正, 不改 `config.json`, 所以换默认出口不会触发 TUN 的完整重装。
 
@@ -29,6 +31,7 @@ System Proxy 默认不变。Enhanced/TUN 是显式选择, 包含双栈捕获、D
 - `tests/tun-service.sh`: 临时副本与假系统命令执行真实 helper 逻辑, 校验 bootstrap 失败/外部 VPN 路由冲突回滚、GUI 恢复及 symlink 拒绝。
 - `tests/ui-busy.test.js`: 实际组件回调的重复提交、忙碌状态、错误恢复、切换控件、弹窗按钮重建。
 - `tests/network-mode-ui.test.js`: 原生 App 的接管引导、明确选择有限 System 模式、取消管理员授权、TUN 未就绪及重试。
+- `tests/sysproxy-ui.test.js`: 总开关要先启动核心、而启动要管理员授权时, 跟着后台任务走 (成功 / 失败 / 切换模式)。
 - `tests/vps-probe.sh`: 真实 SSH 编排使用假 SSH, 验证暂时失败后恢复、三次上限、认证不重试、取消 / 超时清理子进程与凭据、启动失败和取消接口。
 - `tests/vps-ui.test.js`: 真实向导任务流程, 验证任务编号返回前取消、取消请求失败时已完成 / 未完成任务的恢复, 避免再次卡住。
 - `tests/run.sh` / `tests/units.sh`: 原有隔离端到端与单元回归。
@@ -112,15 +115,20 @@ TUN 的核心是 root 守护进程: 改核心、配置、规则库 (`.srs`)、�
 | 「重启 enana」每次都弹 | `os_service_restart` → `enhanced_start` 一律走完整安装 | 核心 / 配置 / 规则库指纹没变、且 root 助手可信时, 用助手的 `restart` 动作 (`launchctl kickstart -k`) 重启, 不弹; 否则走原来的完整安装。操作记录里的 `重启核心方式` 写明走了哪条路: `via=helper`, 或 `via=admin why=no-helper|changed|rejected|not-loaded|sync-failed` |
 | `enana update` / 每日维护 (订阅「自动更新」) 弹 | 指纹把每次都会重写的 `rules/.updated` 算进去了; 总开关 / 模式切换会改写磁盘配置里的 `default_mode`, 也让指纹对不上 | 指纹忽略隐藏文件 / `*.new` / `*.tmp`, 并把 `default_mode` 的值抹平后再算; 真的变了的 `.srs` / 配置 / 证书仍然触发完整安装 |
 | 订阅内容没变也重启核心 | 订阅刷新「删光再追加」, 有两个以上订阅或订阅后面有手动服务器时文件顺序变了, 生成的配置 (默认固定出口、自动线路顺序) 随之不同 | 刷新是就地合并 (见 `docs/API.md` 的 `servers/import`), 内容相同的刷新不改动 `servers.jsonl`; 多个订阅一次事务、一次应用; 订阅里用户固定的角色保留 |
-| 切到系统代理模式后, 每次启动 / 停止都弹 | 停止动作只看 plist 在不在 (停止后 plist 还在), 对已经停掉的守护进程也要授权 | 守护进程没加载、且不会自己回来 (launchd 里已禁用, 或本机记下了上一次成功的停止) 时直接跳过 |
+| 切到系统代理模式后, 每次启动 / 停止都弹 | 停止动作只看 plist 在不在 (停止后 plist 还在), 对已经停掉的守护进程也要授权 | 守护进程没加载、且不会自己回来 (launchd 里已禁用, 或本机记下了上一次成功的停止) 时直接跳过; 「已停止」的记录只在 root 停止成功、而且守护进程确实不在 launchd 里之后才写。反过来, 设置已经是系统代理、配置也没变, 但根守护进程还加载着 (切回没有完成) 时, `apply_config` 不再直接返回, 而是重启一次把它停掉; 用户核心的 plist 按系统代理写 (开机自启 / 崩溃重启), 即使这时设置里还是 TUN (失败事务的回滚中) |
+| 点了取消, 同一次点击又连着弹 (最多四次) | op_txn 回滚后的重新应用、apply_config 自己的回滚重启、root-copy-untrusted 的 inband 重试、升级核心失败后的重启都会再要授权 | 取消记在进程里 (`ENHANCED_PROMPT_CANCELLED`, 不导出): 同一个操作里 `enhanced_admin` / `os_admin_dialog` 不再弹框, 直接返回 7 (不是拒绝); 结果报告为「已取消管理员授权, 已撤销本次更改」, 操作记录写 `cancelled` |
+| 取消了一次规则集开关, 之后每次 TUN 应用都弹 | 下载下来的 `rules/<x>/<x>.srs` 留在磁盘上, 指纹把 `rules/*/*` 全部算进去 | 指纹只算配置里 `route.rule_set` 引用到的本地规则文件 (和 root 安装时 `check-config` 列出的是同一份); 证书照旧全部算, 策略规则集 (`ovr-*.json`) 照旧有自己的指纹 |
 
 **默认模式不会走错**: `default_mode` 只是核心「没有记住模式」时的起始模式。运行时的模式通过控制接口 (`PATCH /configs`) 推送, sing-box 把它存在 `cache.db` 里并在重启时恢复; enana 自己做的每一次重启 (应用配置、重启、升级核心、启动) 之后都会再 `proxy_sync_mode`。剩下的缺口是「推送时核心没在运行 + 缓存里也没有」, 所以完整安装会记下写进快照的模式 (`$H/.enhanced-mode`), 之后每次无变化的 `apply_config` 发现设置里的模式和它不一致就补同步一次, 核心确认之后才记下。
 
-**root 助手 (`/usr/local/libexec/enana/tunrules-<uid>`, 版本 3)** 现在有两个动作, 都只作用于这个用户自己的守护进程:
+**root 助手 (`/Library/PrivilegedHelperTools/com.enana.proxy/tunrules-<uid>`, 版本 3; 2.3.23 及更早版本在 `/usr/local/libexec/enana/`)** 现在有两个动作, 都只作用于这个用户自己的守护进程:
 
 - `sync`: 校验后写入 `rules/*/ovr-*.json` (应用 / 网站策略), 核心热加载。
 - `restart`: 只执行 `launchctl kickstart -k system/com.enana.proxy.tun.<uid>`。标签和 `launchctl` 路径是安装时由 root 脚本写死进助手的 (不是调用者给的), 助手不读任何参数 / 输入 / 环境变量; 有多余参数、标签不合规都会拒绝。威胁模型: 同一用户下的任何进程最多能让自己的 root 守护进程重启一次 (流量中断几秒), 得不到 root 权限, 也改不了任何文件; 助手文件归 root、别人不可写、不是符号链接、sudoers 规则经 `visudo -cf` 校验, 这些检查一条没放松。
-- 从旧版本升级后, 已安装的版本 1 助手不认识 `restart`, `enhanced_helper_ok` 判为不可用, 下一次完整安装 (升级本身会改变 `enhanced.sh` / `enhanced-root.sh` 的指纹, 反正要装一次) 用一次管理员授权换上版本 2。
+- 助手的可信判断只看字节 (`os_helper_trusted`): 安装到 root 目录的助手必须和 enana 此刻渲染出来的一模一样 (`enhanced_helper_render`, 与 root 脚本里的 `helper_render` 是同一段函数), 不再为了查版本而运行它。字节对不上、目录链 (助手所在的目录和上面两级: `…/com.enana.proxy`、`/Library/PrivilegedHelperTools`、`/Library`) 有组 / 其他人可写或者有 ACL, 或者 sudoers 规则不在, 都判为不可用; 下一次完整安装 (一次管理员授权) 换上新的。
+- 位置 (2.3.23 之后): 助手从 `/usr/local/libexec/enana/` 搬到 `/Library/PrivilegedHelperTools/com.enana.proxy/` (只有 root 能写, 包管理器从来不碰它; 老的 Homebrew 会把 `/usr/local` 改成用户可写, 那样的 Mac 上以前根本装不上助手, 早先装好的免密规则还指向一个用户能写的目录)。完整安装 (root 脚本的 d 步) 把助手装到新位置, 免密规则 `/etc/sudoers.d/enana-tunrules-<uid>` (文件名不变) 在同一步改写成新路径, 然后删掉旧位置的那一份 (旧目录是真目录才删; 空了连目录一起删)。缺的 `PrivilegedHelperTools` 和 `com.enana.proxy` 由 root 建成 `755` root:wheel, `/Library` 从来不建。还没完整安装过的 Mac 上, 旧位置的助手只要通过同样严格的检查 (旧位置的目录链 `/usr/local`、`/usr/local/libexec`、`/usr/local/libexec/enana`) 就照常用, `sync` / `restart` / `cleanup` 的 `sudo -n` 调用的都是判为可信的那一份 (先看新位置)。迁移的那次安装如果失败回滚, 指向旧位置的规则不放回去 (旧位置的助手已经删了)。删除 TUN 时两个位置的助手都删, 空了的 `com.enana.proxy` 也删, `PrivilegedHelperTools` 本身不删。
+- 停止 / 删除 TUN 只运行安装后留在 root 目录里的副本 `ROOT/bin/enhanced-root.sh` (root 所有、0700); 旧版本没有这个副本时, 才用一次性的 inband 形式 (脚本随命令带进去)。
+- 管理员命令全部是一行、以 `/usr/bin/env -i` 清空环境运行, 所有命令都用绝对路径; 每个传给 root 的数据文件 (脚本、配置、快照、助手模板) 都由 enana 只读一次、算摘要, root 按摘要核对后才写入。
 
 Windows 的 TUN 没有免密助手 (每次完整安装都是 UAC), 指纹的两个问题同样存在, 已用同一套规则修复; 策略规则集 (`ovr-*.json`) 在 Windows 上仍计入指纹。Windows 的 `stop` 本来就会跳过没有运行的任务。
 

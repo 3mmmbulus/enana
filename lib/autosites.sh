@@ -11,7 +11,7 @@
 #   $H/autosites.dismissed  每行一个域名: 你从自动识别里删掉的, 不再自动添加
 #   $H/.autosite.off        上次读到核心日志的位置 (inode 偏移)
 #   $H/.autosite.ev         最近 15 分钟的事件: 时间 类型(A 直连尝试/F 直连失败) 连接编号 域名 出口 失败类型 应用
-#   $H/.autosite.cool       验证没通过的域名和时间 (24 小时内不再试)
+#   $H/.autosite.cool       验证没通过 / 没能加上 (TUN 下要管理员授权, 后台不弹框) 的域名和时间 (24 小时内不再试)
 
 AUTOSITE_WIN=900                 # 统计窗口 (秒)
 AUTOSITE_MIN_FAILS=3
@@ -93,12 +93,15 @@ autosite_state() { # 加到哪一种: 有自动线路用自动线路, 否则固�
 }
 
 # 添加一个网站 (先加覆盖 -> 用代理访问验证 -> 通了保留, 不通撤销); 0 = 已添加  1 = 没通过验证 (已撤销)  2 = 其它原因没添加
+# TUN 模式要经过 op_txn 同步给 root 的核心: 这是每分钟的后台 tick, 绝不弹管理员框 (APPS_BG_JOB=1: 没有免密的规则同步助手时撤销, 见 apply_config);
+# 没加上 / 没撤销成功也记进 .autosite.cool, 24 小时内不再试这个域名 (否则下一分钟又试一次)
+autosite_cool() { printf '%s %s\n' "$1" "$(now)" >> "$H/.autosite.cool"; }
 autosite_add() { # <域名> <失败数> <尝试数> <失败类型> <应用> <示例主机> <出口名>
   local d=$1 nf=$2 na=$3 ec=$4 app=$5 host=$6 tg=$7 st code out ms
   ovr_valid site "$d" || return 2
   st=$(autosite_state)
   if [ "${NETWORK_MODE:-system}" = tun ]; then
-    op_txn "自动识别: 添加网站到代理" txn_override site "$d" "$st" '' >/dev/null 2>&1 || return 2
+    APPS_BG_JOB=1 OP_WHO=auto op_txn "自动识别: 添加网站到代理" txn_override site "$d" "$st" '' >/dev/null 2>&1 || { autosite_cool "$d"; return 2; }
   else
     lock_take || return 2
     ovr_set site "$d" "$st" ack ''; ovr_sync; lock_drop
@@ -114,9 +117,9 @@ autosite_add() { # <域名> <失败数> <尝试数> <失败类型> <应用> <示
        return 0 ;;
   esac
   if [ "${NETWORK_MODE:-system}" = tun ]; then
-    op_txn "自动识别: 撤销网站" txn_override site "$d" follow '' >/dev/null 2>&1 || return 2
+    APPS_BG_JOB=1 OP_WHO=auto op_txn "自动识别: 撤销网站" txn_override site "$d" follow '' >/dev/null 2>&1 || { autosite_cool "$d"; return 2; }
   else lock_take && { ovr_delete site "$d"; ovr_sync; lock_drop; }; fi
-  printf '%s %s\n' "$d" "$(now)" >> "$H/.autosite.cool"
+  autosite_cool "$d"
   oplog auto "自动识别: 放弃网站" "$(kv domain "$d" fails "$nf" attempts "$na" err "$ec" app "$app" was "$tg" verify "no response through proxy")" error
   return 1
 }

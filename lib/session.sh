@@ -67,7 +67,9 @@ session_local_end() { # <原因> [云端返回的 HTTP 状态码] [补充信息 
   proxy_set_enabled 0                                 # 被下线 / 离线过久: 关闭代理 (用户主动退出账号不关, 见 ep_logout)
   auth_logout_local
   mkdir -p "$H"; printf '%s\n' "$reason" > "$H/notice"
-  op_sync_secret
+  # 让核心换上新令牌。这是心跳 (后台), 不弹管理员框: TUN 下这一步要授权, 就先不换 (APPS_BG_JOB=1, 见 apply_config) —— 核心已经切到全部直连,
+  # 下一次经过授权的应用 (重新登录后的内容同步、用户的任何一次更改) 自然会带上新令牌
+  APPS_BG_JOB=1 op_sync_secret
 }
 
 # session_heartbeat: 0 = 在线 (或暂时连不上但还在宽限期内) · 1 = 会话已被撤销, 本机已自动退出登录

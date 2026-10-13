@@ -48,19 +48,9 @@ Assert-NoReparse $Stage
 if (!(Test-Path -LiteralPath $Stage -PathType Container)) { throw 'Missing snapshot' }
 if (Get-ChildItem -LiteralPath $Stage -Force -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'Snapshot contains a reparse point' }
 $j = Read-JsonFile (Join-Path $Stage 'config.json')
-if (!($j.inbounds | Where-Object {$_.type -eq 'tun'}) -or !$j.route.auto_detect_interface) { throw 'Not a TUN configuration' }
-if (($j.experimental.clash_api.external_controller -notmatch '^127\.0\.0\.1:\d+$') -or ($j.inbounds | Where-Object { $_.type -ne 'tun' -and $_.listen -ne '127.0.0.1' })) { throw 'Snapshot must only expose loopback listeners' }
-foreach ($r in $j.route.rule_set) { if ($r.type -ne 'local' -or !([IO.Path]::GetFullPath($r.path).StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase))) { throw 'Rule file escapes protected snapshot' } }
-function Assert-ConfigPaths($Object) {
-    if($null -eq $Object -or $Object -is [string] -or $Object.GetType().IsValueType){return}
-    if($Object -is [Array]){foreach($item in $Object){Assert-ConfigPaths $item};return}
-    foreach($property in $Object.PSObject.Properties){
-        if(($property.Name -in @('path','output') -or $property.Name.EndsWith('_path')) -and $property.Value -is [string]){
-            if(!([IO.Path]::GetFullPath($property.Value).StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase))){throw 'Config path escapes protected snapshot'}
-        }else{Assert-ConfigPaths $property.Value}
-    }
-}
-Assert-ConfigPaths $j
+# Listener, inbound, rule-set and file-path checks on a copy whose keys are
+# folded the way sing-box reads them (Assert-TunConfig in common.ps1).
+$null = Assert-TunConfig $j $root
 # Re-extract the pinned official archive instead of elevating a user-writable EXE.
 $arch = (Read-JsonFile (Join-Path $Stage 'snapshot.json')).arch
 if ($arch -notin @('amd64','arm64')) { throw 'Unsupported architecture' }
@@ -88,8 +78,7 @@ Copy-Item -LiteralPath "$Stage\config.json" -Destination "$next\config.json"
 Copy-Item -LiteralPath "$PSScriptRoot\tun.ps1" -Destination "$next\tun.ps1"
 Copy-Item -LiteralPath "$PSScriptRoot\common.ps1" -Destination "$next\common.ps1"
 if (Get-ChildItem -LiteralPath $next -Force -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'Copied snapshot contains a reparse point' }
-$j=Read-JsonFile "$next\config.json"; Assert-ConfigPaths $j
-if (!($j.inbounds | Where-Object {$_.type -eq 'tun'}) -or !$j.route.auto_detect_interface -or ($j.experimental.clash_api.external_controller -notmatch '^127\.0\.0\.1:\d+$') -or ($j.inbounds | Where-Object { $_.type -ne 'tun' -and $_.listen -ne '127.0.0.1' })) { throw 'Copied snapshot failed listener validation' }
+$j=Read-JsonFile "$next\config.json"; $null = Assert-TunConfig $j $root
 # Every inherited child ACL is reset after copying; no user-writable script is
 # installed as SYSTEM. The only command line is this protected supervisor.
 Get-ChildItem -LiteralPath $next -Recurse -Force | ForEach-Object {

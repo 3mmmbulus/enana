@@ -219,8 +219,25 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
 
 _apply_step() { [ "${APPLY_QUIET:-0}" = 1 ] || job_step $(( ${APPLY_BASE:-0} + $1 )) "$2" "$3"; }   # 任务里的步骤序号可整体后移 (前面还有别的步骤时); 静默模式不写进度
 
+config_tun_refused() { # TUN 安装被拒绝 (root 没有动任何东西; 这里不弹管理员框、不停根守护进程, 也从不自己改流量接管方式): 一律返回 5 (S2)。
+  # 原来的配置放回去, 原因写进 TXN_ERR; 调用方 (op_txn) 撤销本次更改并报告原因: 从系统代理切到 TUN 时撤销之后仍是系统代理, 本来就是 TUN 的操作
+  # (规则开关 / DNS / 策略 / 退出账号 / 更新规则 …) 保持 TUN。以前根守护进程没在跑时会悄悄改成系统代理还报告成功, 用户根本不知道 TUN 被拒绝了
+  local why=${ENHANCED_REFUSED_WHY:-refused} detail
+  case $why in
+    preflight-core-unpinned) detail='请运行 enana upgrade, 或改用系统代理模式' ;;
+    preflight-core-changed)  detail='请运行 enana upgrade' ;;
+    *)                       detail="原因: $why" ;;
+  esac
+  rm -f "$H/config.json.new"
+  [ ! -f "$H/config.json.bak" ] || cp -p "$H/config.json.bak" "$H/config.json"
+  if enhanced_loaded && os_service_running; then detail="$detail; 旧的 TUN 仍在运行"; fi      # 真的在运行 (只是加载着、已经退出的不算)
+  sysproxy_off_if_core_down
+  TXN_ERR="TUN 没有启动 ($why): $detail"; warn "$TXN_ERR"; return 5
+}
+
 # apply_config: 生成 -> sing-box check -> 与现行配置比较 -> 仅在有变化时替换并重启; 失败自动回滚
 # 返回: 0 成功/无变化  1 配置无效(详情 $H/check.log)  3 新配置启动失败(已回滚)
+#       5 TUN 被拒绝 (什么都没改, 原来的配置放回去了; 不会自己改成系统代理模式) 或者要管理员授权但这是后台任务 (APPS_BG_JOB): 原因在 TXN_ERR, 调用方撤销本次更改
 apply_config() {
   _apply_step 0 10 "生成配置"
   load_settings        # 生成配置前读最新的设置 (本进程启动之后别的进程可能改过, 例如代理总开关)
@@ -233,8 +250,12 @@ apply_config() {
     else return 1; fi
   fi
   if [ -f "$H/config.json" ] && cmp -s "$H/config.json" "$H/config.json.new"; then
-    if [ "${NETWORK_MODE:-system}" != tun ]; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi
-    if enhanced_loaded && [ "$(enhanced_fingerprint)" = "$(cat "$H/.enhanced-fingerprint" 2>/dev/null)" ]; then
+    # 系统代理模式, 配置没变: 什么都不做 —— 除非根守护进程还加载着 (切回系统代理没有完成 / 被打断过): 那就往下走重启, 由 os_service_restart 停掉它、
+    # 启动用户自己的核心; 以前直接返回, 设置写着系统代理, root 的 TUN 却一直在接管流量
+    # 后台任务 (APPS_BG_JOB) 停不了它 (要管理员授权), 配置又没变: 照旧什么都不做 (返回 0), 不算失败 —— 否则每次后台应用都撤销, 同步 / 官方线路还会记成失败
+    if [ "${NETWORK_MODE:-system}" != tun ]; then
+      if ! enhanced_loaded || [ "${APPS_BG_JOB:-0}" = 1 ]; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi
+    elif enhanced_loaded && [ "$(enhanced_fingerprint)" = "$(cat "$H/.enhanced-fingerprint" 2>/dev/null)" ]; then
       # 核心、配置、规则库都没变 (指纹不含 default_mode 和 rules/.updated 这类记账内容, 见 enhanced_fingerprint): 只有应用 / 网站的代理策略 (rules/*/ovr-*.json, 纯路由数据)
       # 可能变了。已经装过规则同步助手 (上一次管理员授权时顺带装的) 就免密同步到 root 快照, 核心自己热加载 —— 不重启, 也就不用再输入管理员密码。没有助手 /
       # 被拒绝就走下面的完整安装 (要管理员授权, 同时把助手装上)。总开关 / 模式只改了 default_mode 的话, 运行中的核心靠接口和缓存记住模式, 这里补一次同步即可。
@@ -244,13 +265,22 @@ apply_config() {
       oplog "${OP_WHO:-auto}" "同步策略规则" "$(kv mode tun via helper restart yes err "$(enhanced_helper_ok >/dev/null 2>&1 && echo rejected || echo no-helper)")" ok
     fi
   fi
+  # 后台任务 (APPS_BG_JOB=1: 界面的自动扫描、每分钟的 tick —— 自动识别网站 / 云端自动同步 / 心跳 —— 和每日维护): 从不弹管理员框、不改模式。
+  # 走到这里就要重启核心了: 只是重启用户自己的核心 (系统代理模式, 根守护进程没加载) 照常做; 要动根守护进程 (TUN, 或者系统代理模式下它还加载着) 就要授权:
+  # 撤销 (返回 5, 见 ops.sh 的 op_txn), 等用户自己操作时再授权 (应用的扫描把这组变化记成「待应用」, 由用户在「应用」里点击授权)
+  if [ "${APPS_BG_JOB:-0}" = 1 ] && { [ "${NETWORK_MODE:-system}" = tun ] || enhanced_loaded; }; then
+    rm -f "$H/config.json.new"; APPLY_CHANGED=0; TXN_ERR='需要管理员授权才能应用 (后台任务不弹授权框), 已撤销本次更改'; return 5
+  fi
   [ -f "$H/config.json" ] && cp -p "$H/config.json" "$H/config.json.bak"
   local previous_pid; previous_pid=$(os_service_pid)
   mv "$H/config.json.new" "$H/config.json"; APPLY_CHANGED=1
   if os_service_loaded || [ "${NETWORK_MODE:-system}" = tun ]; then
     _apply_step 2 60 "应用并重启"
     _apply_step 3 80 "等待服务就绪"
+    ENHANCED_REFUSED=0
     if ! os_service_restart || ! wait_port "$PORT" 15 || ! enhanced_ready; then
+      # TUN 安装被拒绝 (root 什么都没改动): 不再重试, 也不自己改成系统代理模式 —— 放回原来的配置, 返回 5, 由调用方撤销本次更改并报告原因 (S2, 见 config_tun_refused)
+      if [ "${ENHANCED_REFUSED:-0}" = 1 ]; then config_tun_refused; return $?; fi
       if [ -f "$H/config.json.bak" ]; then
         cp -p "$H/config.json.bak" "$H/config.json"
         # The privileged helper already restores its previous snapshot. An

@@ -144,13 +144,15 @@ _apps_mdfind() { # Spotlight 能找到、但不在上面这些目录里的应用
   [ "${ENANA_PLATFORM:-darwin}" != windows ] || return 0
   local c="$H/.apps.md" t p i=0
   [ "${ENANA_NO_MDFIND:-}" = 1 ] && return 0
-  if [ ! -s "$c" ] || [ -n "$(find "$c" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
+  # 后台扫描 (APPS_BG=1, 界面每分钟自动发起) 不等 Spotlight: 只用已有的缓存, 没有就跳过, 请求不会被它拖慢
+  if [ "${APPS_BG:-0}" != 1 ] && { [ ! -s "$c" ] || [ -n "$(find "$c" -maxdepth 0 -mmin +10 2>/dev/null)" ]; }; then
     t=$(mktemp); mdfind "kMDItemContentTypeTree == 'com.apple.application-bundle'" > "$t" 2>/dev/null & p=$!
     while kill -0 "$p" 2>/dev/null && [ "$i" -lt 40 ]; do sleep 0.25; i=$((i + 1)); done
     kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true
     LC_ALL=C grep -E '\.app$' "$t" | LC_ALL=C grep -Ev '\.app/|/DerivedData/|/Library/Developer/|/Library/Caches/|/node_modules/|/\.Trash/' \
       | LC_ALL=C grep -E "^(/Applications/|/System/Applications/|/System/Cryptexes/App/System/Applications/|/opt/homebrew/|/usr/local/|$HOME/Applications/)" > "$c.new"; mv "$c.new" "$c"; rm -f "$t"
   fi
+  [ -s "$c" ] || return 0
   LC_ALL=C awk -F/ '{ n = $NF; sub(/\.app$/, "", n); if (n != "" && substr(n,1,1) != ".") print n "\t" $0 }' "$c"
 }
 apps_installed() { # 每行: 名称<TAB>路径  (自动识别的 + 用户手动添加的自定义软件)
@@ -231,6 +233,86 @@ apps_scan() { # 新应用写入 overrides.tsv: 首次扫描 (或扫描范围扩�
   fi
   rm -f "$H/.apps.add"
   echo $((after - before))
+}
+
+_apps_rules_sum() { # ovr_sync 写的规则集文件 (rules/ovr-*/ovr-*.json) 的校验和: 扫描是否改动了规则集
+  find "$H/rules" -mindepth 2 -maxdepth 2 -name 'ovr-*.json' -exec cksum {} + 2>/dev/null | LC_ALL=C sort
+}
+APPS_BG_RETRY_SEC=86400     # 后台开的应用任务失败 (没有应用) 后, 同一组变化这段时间内不再由后台自动重开 (界面的「应用」按钮不受限制), 见 apps_scan_bg
+apps_pending_write() { # <新应用数> [名称 (| 分隔)]  记下待应用的变化 (界面显示「应用」卡片; 由 apps_pending_json 读出)
+  local f="$H/.apps-pending"
+  printf '%s|%s%s\n' "$(now)" "${1:-0}" "${2:+|$(_ja "$2")}" > "$f.tmp" && mv -f "$f.tmp" "$f"
+}
+apps_pending_clear() { rm -f "$H/.apps-pending"; }
+apps_pending_json() { # 待应用的变化: null 或 {"at":时间,"count":新应用数,"names":[…]}; 只有 TUN 模式会记下待应用 (系统代理模式下的扫描直接应用, 不会留下记录)
+  local l; l=$(head -n 1 "$H/.apps-pending" 2>/dev/null)
+  [ -n "$l" ] && [ "${NETWORK_MODE:-system}" = tun ] || { printf null; return; }
+  printf '%s\n' "$l" | LC_ALL=C awk -F'|' '{ printf "{\"at\":%d,\"count\":%d,\"names\":[", $1 + 0, $2 + 0; for (i = 3; i <= NF; i++) printf "%s\"%s\"", (i > 3 ? "," : ""), $i; printf "]}" }'
+}
+_apps_bg_undo() { # 试跑的还原: 覆盖层与版本记录回到试跑之前, 规则集按还原后的覆盖层重写。apps_scan_bg 的每个出口、以及信号和退出时都会调用 (幂等); 任何一步失败返回 1
+  local b=${APPS_BG_BAK:-} rc=0
+  [ -n "$b" ] || return 0
+  APPS_BG_BAK=''
+  cp -p "$b/overrides.tsv" "$H/overrides.tsv.new" && mv -f "$H/overrides.tsv.new" "$H/overrides.tsv" || rc=1
+  if [ -f "$b/apps.seen" ]; then cp -p "$b/apps.seen" "$H/apps.seen" || rc=1; else rm -f "$H/apps.seen"; fi
+  rm -f "$H/overrides.tsv.new"
+  ovr_sync >/dev/null 2>&1 || rc=1
+  return $rc
+}
+apps_bg_admin() { # 应用这次的变化要不要管理员授权 (0 = 不要, 1 = 要)。和 apply_config / os_service_restart 的快路径保持一致, 只看根服务记录的指纹 (lib/enhanced.sh)
+  if ! enhanced_loaded; then [ "${NETWORK_MODE:-system}" = tun ] && return 1; return 0; fi          # TUN 的根服务没装 / 没运行: 要授权装上; 系统代理模式不要
+  [ "${NETWORK_MODE:-system}" = tun ] || return 1                                                    # 系统代理模式却还开着根服务: 重启核心要授权
+  [ "${ENANA_PLATFORM:-darwin}" != windows ] || return 1                                             # Windows 没有免密的规则同步助手 (os_helper_trusted 只有 macOS 版): 一律要授权
+  [ "$(enhanced_fingerprint)" = "$(cat "$H/.enhanced-fingerprint" 2>/dev/null)" ] || return 1       # 核心 / 配置 / 其它数据变了: 完整安装
+  [ "$(enhanced_ovr_fingerprint)" = "$(cat "$H/.enhanced-ovr-fingerprint" 2>/dev/null)" ] && return 0   # 根快照已经是这份覆盖层: 不用同步, 也不用授权
+  enhanced_helper_ok                                                                                 # 只有规则数据变了: 信任的规则同步助手免密同步, 否则要授权
+}
+apps_scan_bg() { # 后台扫描 (界面每分钟自动发起, 只由 ep_apps_scan 调用). 先试跑一遍扫描, 然后不论结果如何都把覆盖层和版本记录还原, 只把结论交给调用方:
+  #   0 = 有变化, 应用不需要管理员授权 → 调用方开应用任务 (任务里照常扫描、写入、应用), 并记下这组变化 (.apps-bg-tried)
+  #   2 = 有变化, 但应用会弹管理员框; 或者这组变化 24 小时内已经由后台开过任务 (没有应用成功) → 不开任务, 记成待应用 (界面的「应用」按钮走确认和授权)
+  #   1 = 没有变化 (覆盖层一个字节都不动, 不写操作记录), 或者正在应用配置 (这次不扫)
+  #   3 = 还原没有成功 (覆盖层可能留有试跑的结果), 调用方什么也不做
+  # 变化的判断: 没有装根服务时比较规则集的前后校验和; 装着根服务时看 enhanced_ovr_fingerprint 与 .enhanced-ovr-fingerprint (根快照里的规则数据); 覆盖层字节有变也算有变化
+  local APPS_BG=1 bak before after added cand='' names='' changed=0 adm=1 tried tat recent=0 rc=1
+  if [ -d "$H/.apply.lock" ] && [ -z "$(find "$H/.apply.lock" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then return 1; fi
+  lock_take || return 1                                  # 和「确认 / 采纳」一样拿 .lock: 试跑期间别的请求不能改覆盖层
+  op_lock || { lock_drop; return 1; }
+  bak=$(mktemp -d) || { op_unlock; lock_drop; return 1; }
+  touch "$H/overrides.tsv"
+  if ! cp -p "$H/overrides.tsv" "$bak/overrides.tsv"; then rm -rf "$bak"; op_unlock; lock_drop; return 1; fi
+  [ -f "$H/apps.seen" ] && cp -p "$H/apps.seen" "$bak/apps.seen"
+  # 试跑从这里开始: 不论怎样结束 (正常返回, 或被信号结束), 覆盖层都要还原; 调用方原来的陷阱 (api.sh 的临时文件清理) 记在 $bak/traps, 最后原样恢复
+  trap -p EXIT INT TERM HUP > "$bak/traps"; APPS_BG_BAK=$bak
+  trap '_apps_bg_undo' EXIT; trap '_apps_bg_undo; exit 130' INT; trap '_apps_bg_undo; exit 143' TERM; trap '_apps_bg_undo; exit 129' HUP
+  before=$(_apps_rules_sum)
+  added=$( oplog() { :; }; apps_scan | tail -n 1 )       # 试跑: 操作记录只由真正的应用任务写; 输出的是新增的应用数
+  after=$(_apps_rules_sum)
+  if enhanced_loaded; then [ "$(enhanced_ovr_fingerprint)" = "$(cat "$H/.enhanced-ovr-fingerprint" 2>/dev/null)" ] || changed=1
+  elif [ "$before" != "$after" ]; then changed=1; fi
+  cmp -s "$bak/overrides.tsv" "$H/overrides.tsv" || changed=1
+  if [ "$changed" = 1 ]; then
+    cand=$({ cat "$H/overrides.tsv"; _apps_rules_sum; } | shasum -a 256 | awk '{print $1}')     # 这组变化的指纹: 候选覆盖层 + 候选规则集校验和
+    names=$(LC_ALL=C awk -F'|' -v f="$bak/overrides.tsv" 'BEGIN { while ((getline l < f) > 0) { split(l, a, "|"); if (a[1] == "app") old[a[2]] = 1 } }
+      $1 == "app" && !($2 in old) { print $2 }' "$H/overrides.tsv" | head -n 8 | paste -sd'|' -)
+    apps_bg_admin; adm=$?
+    tried=$(awk -F'\t' 'NR == 1 {print $1}' "$H/.apps-bg-tried" 2>/dev/null); tat=$(awk -F'\t' 'NR == 1 {print $2}' "$H/.apps-bg-tried" 2>/dev/null)
+    case $tat in ''|*[!0-9]*) ;; *) [ "$tried" = "$cand" ] && [ $(( $(now) - tat )) -lt "$APPS_BG_RETRY_SEC" ] && recent=1 ;; esac
+    if [ "$adm" = 0 ] && [ "$recent" = 0 ]; then rc=0; else rc=2; fi
+  else
+    rc=1
+  fi
+  if _apps_bg_undo; then
+    case $rc in
+      0) printf '%s\t%s\n' "$cand" "$(now)" > "$H/.apps-bg-tried"; apps_pending_clear ;;
+      2) apps_pending_write "$added" "$names" ;;
+      *) apps_pending_clear ;;
+    esac
+  else
+    rc=3; apps_pending_clear
+  fi
+  trap - EXIT INT TERM HUP; [ -s "$bak/traps" ] && . "$bak/traps"
+  rm -rf "$bak"; op_unlock; lock_drop
+  return $rc
 }
 
 apps_rerecommend() { # 云端下发了新的应用推荐 (或首次扫描时还没拿到): 把「首次扫描给的默认值 (def) 且仍是直连」的应用刷新成推荐值

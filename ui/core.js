@@ -267,7 +267,7 @@
   };
 
   /* Clash API (TP.cfg.clashBase; 为空 = 同源): 登录后带 Authorization: Bearer <令牌>。核心重启期间的失败是正常现象: 安静处理。 */
-  var clashFails = 0, applying = 0, graceUntil = 0;
+  var clashFails = 0, applying = 0, graceUntil = 0, graceTimer = 0, APPLY_GRACE_MS = 3000;
   function setClash(st) { if (S.clash !== st) { S.clash = st; TP.emit('clash', st); } }
   TP.isApplying = function () { return applying > 0 || Date.now() < graceUntil; };
   TP.clash = async function (method, path, body, o) {
@@ -336,7 +336,18 @@
       }
     } finally {
       jobsActive--;
-      if (!quiet) { applying--; graceUntil = Date.now() + 3000; TP.emit('applying', false); }
+      if (!quiet) {
+        applying--; graceUntil = Date.now() + APPLY_GRACE_MS; TP.emit('applying', false);
+        // 宽限期结束时再通知一次, 否则「正在应用配置…」会一直留到下一次状态变化; 只保留一个定时器 (连着的任务每次都重新计时)
+        clearTimeout(graceTimer);
+        graceTimer = setTimeout(function () {
+          graceTimer = 0;
+          if (applying !== 0) return;
+          TP.emit('applying', false);
+          // 核心的状态还停在「应用中」 (应用期间失败的请求记下的): 宽限期过了就重新探测一次, 不让它一直挂着
+          if (S.clash === 'applying') TP.clash('GET', '/version').catch(function () { /* 失败时 TP.clash 已经记下状态 */ });
+        }, APPLY_GRACE_MS);
+      }
     }
   };
   /* 在右下角 dock 里显示一个任务 (进度条 + 步骤): start() 返回 {job:"id"} 的 Promise */

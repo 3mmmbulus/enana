@@ -5,7 +5,8 @@
 # 永远不同步: SSH 密码 / 私钥, 令牌, 设备编号, 端口, 代理总开关, 开机自启 (快照白名单里没有它们)。
 # 密码在网站上 (或别的电脑上) 改了之后, 新密码派生的密钥解不开旧密文: 拉取时返回 E_SYNC_KEY, 让用户输入「旧密码」重试, 成功后用新密钥重新加密上传。
 #
-#   $H/sync.conf   ENABLED AUTO ACCOUNT BASE_VERSION SYNCED_HASH LAST_PULL LAST_PUSH CHECKED CONFLICT   (KEY=VALUE, 600)
+#   $H/sync.conf   ENABLED AUTO ACCOUNT BASE_VERSION SYNCED_HASH LAST_PULL LAST_PUSH CHECKED CONFLICT PULL_FAILED   (KEY=VALUE, 600)
+#                  PULL_FAILED = "<云端版本> <时间>": 自动同步拉取这个版本没有应用成功 (例如 TUN 下要管理员授权, 后台不弹框), 24 小时内不再自动重试它
 #   $H/sync.key    第 1 行 加密口令 (hex), 第 2 行 校验密钥 (hex)   (600)
 #   $H/sync.asked  每行一个账号 id: 这台电脑已经处理过这个账号的「第一次登录」 (之后登录不再问)     $H/sync.ask  账号 id: 这次登录要问「是否同步到这台电脑」 (只在第一次登录、还没做过选择时写入)
 #   BASE_VERSION = 本机内容所基于的云端版本 (推送 / 拉取成功后更新); SYNCED_HASH = 那一刻本机可同步内容的哈希 (和现在比较就知道有没有没上传的改动)
@@ -27,7 +28,7 @@ sync_local_has_data() { [ -s "$H/servers.sync" ] || [ -s "$H/subs.sync" ] || [ -
 sync_on_login() { # <账号 id> <密码>   (best-effort: 失败只是不能同步, 不影响登录)
   local id=$1 pw=$2
   [ -n "$id" ] || return 0
-  if [ "$(sync_get ACCOUNT)" != "$id" ]; then sync_set ENABLED ''; sync_set AUTO ''; sync_set BASE_VERSION 0; sync_set SYNCED_HASH ''; sync_set CONFLICT 0; sync_set ACCOUNT "$id"; fi
+  if [ "$(sync_get ACCOUNT)" != "$id" ]; then sync_set ENABLED ''; sync_set AUTO ''; sync_set BASE_VERSION 0; sync_set SYNCED_HASH ''; sync_set CONFLICT 0; sync_set PULL_FAILED ''; sync_set ACCOUNT "$id"; fi
   sync_key_derive "$id" "$pw" || true
   rm -f "$H/sync.ask"
   if ! sync_asked "$id"; then
@@ -209,7 +210,7 @@ sync_pull_job() { # <replace|merge> <用旧密码解的 0|1> <云端版本>
   local mode=${1:-replace} used_old=${2:-0} ver=${3:-0} h
   if op_txn "云端同步: 拉取 ($mode)" txn_sync_apply "$mode"; then
     if [ "$mode" = replace ]; then h=$(snap_hash); else h=$(/usr/bin/perl "$LIB/snapshot.pl" hashfile "$H/sync-incoming.json" 2>/dev/null || true); fi
-    sync_set BASE_VERSION "$ver"; sync_set SYNCED_HASH "$h"; sync_set LAST_PULL "$(now)"; sync_set CONFLICT 0; sync_remote_forget
+    sync_set BASE_VERSION "$ver"; sync_set SYNCED_HASH "$h"; sync_set LAST_PULL "$(now)"; sync_set CONFLICT 0; sync_set PULL_FAILED ''; sync_remote_forget
     rm -f "$H/sync-incoming.json"
     [ "$used_old" = 1 ] && { sync_push_core 1 >/dev/null 2>&1 || true; }       # 旧密码解开的: 用现在的密钥重新加密上传, 以后就不需要旧密码了
     return 0
@@ -218,8 +219,11 @@ sync_pull_job() { # <replace|merge> <用旧密码解的 0|1> <云端版本>
 }
 
 # ---------- 自动同步 (在 tick 里每 10 分钟检查一次): 本机有改动且云端没变 → 上传; 云端有新版本且本机没改动 → 拉取; 两边都变了 → 标记冲突, 让用户决定 ----------
+# 拉取是后台做的, 绝不弹管理员框: APPS_BG_JOB=1 让 TUN 下要授权的变化撤销 (见 lib/config.sh 的 apply_config)。没应用成功的云端版本记在 PULL_FAILED,
+# SYNC_PULL_RETRY_SEC 之内不再每 10 分钟重试同一个版本 (下载、解密、回滚都白做); 云端出了新版本照常再试。仪表盘里手动拉取 (要授权时会弹框) 不受影响
+SYNC_PULL_RETRY_SEC=86400
 sync_auto_tick() {
-  local last now_ lh nowh base dirty=0 rc
+  local last now_ lh nowh base dirty=0 rc failed
   sync_enabled && sync_auto && sync_have_key && auth_logged_in && [ -n "$(session_id)" ] || return 0
   now_=$(now); last=$(sync_get CHECKED)
   [ -f "$H/.sync-pending" ] && { rm -f "$H/.sync-pending"; last=0; }                  # 刚勾选了「保存到云端」: 不等 10 分钟, 这一分钟就同步
@@ -231,9 +235,13 @@ sync_auto_tick() {
   if [ "$R_EXISTS" = 1 ] && [ "$R_VERSION" -gt "$base" ]; then
     if [ -n "$lh" ] && [ "$dirty" = 1 ]; then sync_set CONFLICT 1; return 0; fi        # 两边都变了
     if [ -z "$lh" ] && sync_local_has_data; then sync_set CONFLICT 1; return 0; fi     # 这台电脑从没同步过但已经有自己的配置: 不能静默覆盖, 让用户选
-    if sync_open_remote; then OP_WHO=terminal sync_pull_job replace 0 "$SYNC_IN_VERSION" >/dev/null 2>&1 || true; fi
+    failed=$(sync_get PULL_FAILED)                                                       # "<版本> <时间>": 这个版本刚刚没应用成功, 先不重试
+    case ${failed#* } in ''|*[!0-9]*) ;; *) [ "${failed%% *}" = "$R_VERSION" ] && [ $(( now_ - ${failed#* } )) -lt "$SYNC_PULL_RETRY_SEC" ] && return 0 ;; esac
+    if sync_open_remote; then
+      APPS_BG_JOB=1 OP_WHO=terminal sync_pull_job replace 0 "$SYNC_IN_VERSION" >/dev/null 2>&1 || sync_set PULL_FAILED "$SYNC_IN_VERSION $now_"
+    fi
   elif [ "$dirty" = 1 ]; then
-    OP_WHO=terminal; sync_push_core 0 >/dev/null 2>&1; rc=$?
+    OP_WHO=terminal sync_push_core 0 >/dev/null 2>&1; rc=$?        # 前缀赋值: OP_WHO 不留给 tick 后面的步骤 (以前留下的 terminal 让官方线路在 TUN 下不再推迟, 直接要授权)
     [ "$rc" = 2 ] && sync_set CONFLICT 1
   fi
   return 0

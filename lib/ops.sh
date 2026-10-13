@@ -91,7 +91,7 @@ _txn_detail() { # <变更函数> <参数…>
 # op_txn <描述> <变更函数> [参数…]   变更函数失败时可把原因放进 TXN_ERR
 op_txn() {
   local desc=$1 fn=$2 rc line detail; shift 2
-  detail=$(_txn_detail "$fn" "$@"); TXN_ERR=''
+  detail=$(_txn_detail "$fn" "$@"); TXN_ERR=''; ENHANCED_ADMIN_ERR=''         # (管理员框这一次的结果, 见 lib/enhanced.sh 的 enhanced_admin)
   op_lock || { _txn_end fail "另一个配置任务正在运行, 请稍后重试"; return 1; }
   txn_backup
   if ! "$fn" "$@"; then
@@ -107,7 +107,19 @@ op_txn() {
        txn_restore; APPLY_QUIET=1 apply_config >/dev/null 2>&1 || true; op_unlock      # 撤销时不再写进度 (否则进度条会跳回「生成配置 10%」)
        oplog "${OP_WHO:-terminal}" "$desc" "$detail" error
        _txn_end fail "配置未通过校验, 已撤销本次更改${line:+: $line}" 1; return 1 ;;
-    *) txn_restore; APPLY_QUIET=1 apply_config >/dev/null 2>&1 || true; op_unlock
+    5) # TUN 安装被拒绝或需要管理员授权, 根服务没有被动到 (见 config.sh 的 config_tun_refused / apply_config): 撤销本次更改。
+       # 后台任务 (APPS_BG_JOB) 和回到系统代理时重新应用一次 (不会再弹框); 还是 TUN 时不重试, 免得又弹一次管理员框
+       txn_restore
+       # 重新应用带 APPS_BG_JOB=1: 系统代理模式下还加载着根守护进程时, 停它要授权 —— 这次的授权已经用过 (root 拒绝了), 不为撤销再弹一次框
+       if [ "${APPS_BG_JOB:-0}" = 1 ] || [ "${NETWORK_MODE:-system}" != tun ]; then APPS_BG_JOB=1 APPLY_QUIET=1 apply_config >/dev/null 2>&1 || true; fi
+       op_unlock
+       oplog "${OP_WHO:-terminal}" "$desc" "$detail" error
+       _txn_end fail "${TXN_ERR:-TUN 没有启动, 已撤销本次更改}" 5; return 1 ;;
+    *) txn_restore; APPLY_QUIET=1 apply_config >/dev/null 2>&1 || true; op_unlock      # 管理员框被取消的话, 这次重新应用不会再弹框 (ENHANCED_PROMPT_CANCELLED, 见 lib/enhanced.sh)
+       if [ "${ENHANCED_ADMIN_ERR:-}" = cancelled ]; then     # 这次的授权被用户取消了 (或者这个操作里早先取消过, 这次没有再问): 说成取消, 不是「新配置无法启动」
+         oplog "${OP_WHO:-terminal}" "$desc" "$detail" cancelled
+         _txn_end fail "已取消管理员授权, 已撤销本次更改" 3; return 1
+       fi
        oplog "${OP_WHO:-terminal}" "$desc" "$detail" error
        _txn_end fail "新配置无法启动, 已撤销本次更改并恢复原配置" 3; return 1 ;;
   esac
@@ -126,7 +138,7 @@ txn_apps_adopt() {
   if [ -n "${1:-}" ]; then f=$(mktemp); printf '%s\n' "$1" > "$f"; fi
   apps_adopt "$f"; [ -z "$f" ] || rm -f "$f"; return 0
 }
-txn_apps_scan() { apps_scan >/dev/null; }
+txn_apps_scan() { apps_scan >/dev/null; apps_pending_clear; }      # 任务开始应用了, 之前记下的待应用就不再需要 (失败了的话, 下一次后台扫描会重新记下)
 txn_autosites_clear() { autosite_remove_all >/dev/null; }
 txn_none()   { return 0; }
 txn_import() { # sub mode   (内容来自 $JOB_BODY; 订阅信息来自 TXN_* 变量)
@@ -369,6 +381,44 @@ op_sysproxy() { # on|off
   job_fail "$msg" 0; return 1
 }
 
+# 代理总开关 + 模式, 核心已经在运行之后的部分 (POST /api/proxy 和后台任务 proxy 共用): 改设置 (热切换), 打开总开关时让系统代理跟上, 写操作记录。
+# 结果放进 PROXY_SWITCH_JSON (响应的 JSON 片段, 不含花括号): "enabled":…,"mode":…[,"sysproxy":{…}]。不向标准输出打印任何东西 (辅助服务里那就是 HTTP 响应)
+proxy_switch() { # <on 0|1|''> <mode auto|global|''> <原来的 on> <原来的 mode>
+  local on=$1 mode=$2 was_on=$3 was_mode=$4 sp=''
+  [ -n "$mode" ] && proxy_set_mode "$mode"
+  [ -n "$on" ] && proxy_set_enabled "$on"
+  # 打开总开关时让系统代理一并指向 enana (System Proxy 接管方式): 浏览器和多数 App 只有走系统代理才会进入 enana, 以前总开关打开了却「没有效果」, 必须去终端输入 enana on。
+  #   已经指向 enana → 不用动 · 系统里正在用别的代理设置 (其它软件) → 不擅自覆盖, 交给用户在界面上确认 · 否则在后台任务里开启 (可能弹出 macOS 管理员密码窗口)
+  if [ "$on" = 1 ] && [ "${NETWORK_MODE:-system}" != tun ]; then
+    if os_sysproxy_ok; then sp='"sysproxy":{"state":"on"}'
+    elif [ -n "$(os_sysproxy_foreign 2>/dev/null)" ]; then sp='"sysproxy":{"state":"foreign"}'
+    else sp="\"sysproxy\":{\"state\":\"pending\",\"job\":\"$(job_spawn sysproxy '修改系统代理|确认结果' on)\"}"; fi
+  fi
+  oplog "${OP_WHO:-dashboard}" "$([ -n "$on" ] && { [ "$on" = 1 ] && echo 开启代理 || echo 关闭代理; } || echo 切换代理模式)" "$(kv enabled "${PROXY_ENABLED:-0}" mode "${PROXY_MODE:-auto}" was_enabled "$was_on" was_mode "$was_mode" sysproxy "$(printf '%s' "$sp" | sed -n 's/.*"state":"\([a-z]*\)".*/\1/p')")" ok
+  PROXY_SWITCH_JSON="\"enabled\":$([ "${PROXY_ENABLED:-0}" = 1 ] && echo true || echo false),\"mode\":\"${PROXY_MODE:-auto}\"${sp:+,$sp}"
+}
+# 代理总开关的后台任务: POST /api/proxy 要先启动核心, 而启动要管理员授权时 (TUN, 或者根守护进程还加载着) 交给它 —— 等管理员密码框的时候不能卡住 HTTP 请求
+# (仪表盘 25 秒就放弃, 报告失败)。仪表盘和切换流量接管方式一样跟着任务走; 任务的结果就是平时 /api/proxy 的响应 (enabled / mode / sysproxy)
+op_proxy() { # <on 0|1|''> <mode auto|global|''>
+  local on=${1:-} mode=${2:-} was_on=${PROXY_ENABLED:-0} was_mode=${PROXY_MODE:-auto}
+  case $on in ''|0|1) ;; *) job_fail "参数无效" 0; return 1 ;; esac
+  case $mode in ''|auto|global) ;; *) job_fail "代理模式无效" 0; return 1 ;; esac
+  op_lock || { job_fail "另一个配置任务正在运行, 请稍后重试" 0; return 1; }
+  job_step 0 20 "启动代理服务"
+  ENHANCED_ADMIN_ERR=''; ENHANCED_REFUSED=0; ENHANCED_REFUSED_WHY=''
+  if ! os_service_running && ! { os_service_start && wait_port "$PORT" 10 && enhanced_ready; }; then
+    op_unlock
+    if [ "${ENHANCED_ADMIN_ERR:-}" = cancelled ]; then job_fail "已取消管理员授权, 代理没有开启" 0
+    elif [ "${ENHANCED_REFUSED:-0}" = 1 ]; then job_fail "TUN 没有启动 (${ENHANCED_REFUSED_WHY:-refused}), 代理没有开启" 0      # 被拒绝的原因 (核心来源 / 配置检查 …) 带给用户
+    else job_fail "代理服务没有运行, 启动也失败了 (运行 enana doctor 查看原因)" 0; fi
+    return 1
+  fi
+  job_step 1 80 "$([ -n "$on" ] && echo 开启代理 || echo 切换代理模式)"
+  proxy_switch "$on" "$mode" "$was_on" "$was_mode"
+  op_unlock
+  job_ok "$([ "$on" = 1 ] && echo 代理已开启 || echo 代理模式已切换)" "{$PROXY_SWITCH_JSON}"
+}
+
 op_update_rules() { # 规则集 (本地规则集文件变化后 sing-box 自动重载, 无需重启)
   job_step 0 5 "准备"
   QUIET=1
@@ -477,9 +527,17 @@ core_upgrade_revive() {
   wait_port "$PORT" 15
 }
 
+# 核心的摘要和来源记录 (core_install 会改写它们): 替换之前存一份 .old, 回滚时和 sing-box.old 一起还原, 否则回滚后的核心会被 TUN 当成「被改动过」或「来源不明」
+core_meta_keep() { local f; for f in core-binary.sha256 core-provenance; do rm -f "$H/$f.old"; [ ! -f "$H/$f" ] || cp -p "$H/$f" "$H/$f.old" || return 1; done; }
+core_meta_restore() { local f; for f in core-binary.sha256 core-provenance; do if [ -f "$H/$f.old" ]; then mv -f "$H/$f.old" "$H/$f"; else rm -f "$H/$f"; fi; done; }
+core_meta_drop() { rm -f "$H/core-binary.sha256.old" "$H/core-provenance.old"; }
+
 # 升级核心: 先下载, 用新核心校验现有配置, 通过才替换, 否则回退
 op_core_upgrade() { # [版本|latest]  latest = 兼容清单里和当前 enana 兼容的最新核心 (没有清单就不升级); 写明版本号 = 照做 (有 SHA-256 才逐个校验)
-  local old new want=${1:-latest} was_up=0; old=$(core_version)
+  local old new want=${1:-latest} was_up=0 pinned_now=0; old=$(core_version)
+  # 和 TUN 预检同一个标准 (lib/enhanced.sh 的 core_tun_ok): 来源记成官方钉死的, 而且校验之后没有被改动过。只看来源的标签不够: 被改动过的核心照样标着 pinned
+  # Windows 不记核心来源 (TUN 安装时 tun.ps1 自己核对钉死的官方压缩包), core_tun_ok 在那里永远不过: 按已经钉死处理, 否则每次都重新下载同一版
+  if [ "${ENANA_PLATFORM:-darwin}" = windows ] || core_tun_ok; then pinned_now=1; fi
   job_step 0 10 "查询最新版本"
   if [ "$want" = latest ]; then
     core_manifest_refresh >/dev/null 2>&1 || true
@@ -488,64 +546,95 @@ op_core_upgrade() { # [版本|latest]  latest = 兼容清单里和当前 enana �
       oplog "${OP_WHO:-terminal}" "升级核心" "$(kv reason no-compatible-version current "$old")" error
       _txn_end fail "没有经过验证的兼容版本可升级, 保持 sing-box $old" 1; return 1
     fi
-    if [ -n "$old" ] && ! version_gt "$want" "$old"; then _txn_end ok "已经是兼容的最新版本 sing-box $old"; return 0; fi
+    # 同一版本, 但核心不能交给 TUN (升级前装的核心没有记下来源, 或者校验之后被改动过): 不算「已经最新」, 照常重新下载这一版, 把来源和摘要记下来
+    if [ -n "$old" ] && ! version_gt "$want" "$old" && [ "$pinned_now" = 1 ]; then _txn_end ok "已经是兼容的最新版本 sing-box $old"; return 0; fi
   fi
   wait_port "$PORT" 1 && was_up=1
   if [ -f "$SB" ] && ! cp "$SB" "$SB.old" 2>/dev/null; then _txn_end fail "无法备份当前核心, 保持原版本 $old" 1; return 1; fi
+  if ! core_meta_keep; then rm -f "$SB.old"; _txn_end fail "无法备份当前核心, 保持原版本 $old" 1; return 1; fi
   job_step 1 30 "下载并校验新核心"
   if ! SINGBOX_VERSION=$want core_install chain >/dev/null 2>&1; then
-    rm -f "$SB.old"; oplog "${OP_WHO:-terminal}" "升级核心" "$(kv reason download-failed from "$old" to "$want")" error
+    rm -f "$SB.old"; core_meta_restore; oplog "${OP_WHO:-terminal}" "升级核心" "$(kv reason download-failed from "$old" to "$want")" error
     if core_upgrade_revive "$was_up"; then _txn_end fail "升级失败, 保持原版本 $old" 1; else _txn_end fail "升级失败, 原版本 $old 没能自动启动, 请在 enana 里手动启动" 1; fi; return 1
   fi
   job_step 2 70 "用新核心校验现有配置"
   if "$SB" check -c "$H/config.json" >/dev/null 2>&1; then
     job_step 3 75 "在临时端口试运行新核心"
     if ! core_trial; then
-      mv "$SB.old" "$SB"; oplog "${OP_WHO:-terminal}" "升级核心" "新版本试运行失败, 已回退" error
+      mv "$SB.old" "$SB"; core_meta_restore; oplog "${OP_WHO:-terminal}" "升级核心" "新版本试运行失败, 已回退" error
       _txn_end fail "新版本试运行失败, 保持原版本 $old" 3; return 1
     fi
     job_step 4 85 "重启服务"
+    ENHANCED_ADMIN_ERR=''
     if ! os_service_restart || ! wait_port "$PORT" 15 || ! enhanced_ready; then
-      tun_residual_clean; mv "$SB.old" "$SB"; os_service_restart >/dev/null 2>&1 || true; wait_port "$PORT" 15 || true; tun_residual_clean; sysproxy_off_if_core_down
+      local cancelled=0; [ "${ENHANCED_ADMIN_ERR:-}" = cancelled ] && cancelled=1      # 管理员框被取消: 回退时的重启不会再弹框 (lib/enhanced.sh 的 ENHANCED_PROMPT_CANCELLED)
+      tun_residual_clean; mv "$SB.old" "$SB"; core_meta_restore; os_service_restart >/dev/null 2>&1 || true; wait_port "$PORT" 15 || true; tun_residual_clean; sysproxy_off_if_core_down
+      if [ "$cancelled" = 1 ]; then oplog "${OP_WHO:-terminal}" "升级核心" "已取消管理员授权, 已回退" cancelled; _txn_end fail "已取消管理员授权, 保持原版本 $old" 4; return 1; fi
       oplog "${OP_WHO:-terminal}" "升级核心" "新版本未就绪, 已回退" error
       _txn_end fail "新版本未能启动, 已回退到 $old" 4; return 1
     fi
-    rm -f "$SB.old"; proxy_sync_mode
+    rm -f "$SB.old"; core_meta_drop; proxy_sync_mode
     new=$(core_version); rm -f "$H/.core-version"; update_check force >/dev/null 2>&1 || true
     oplog "${OP_WHO:-terminal}" "升级核心" "$old → $new" ok; _txn_end ok "已升级到 sing-box $new"
   else
-    mv "$SB.old" "$SB"; oplog "${OP_WHO:-terminal}" "升级核心" "新版本无法加载当前配置, 已回退" error
+    mv "$SB.old" "$SB"; core_meta_restore; oplog "${OP_WHO:-terminal}" "升级核心" "新版本无法加载当前配置, 已回退" error
     if core_upgrade_revive "$was_up"; then _txn_end fail "新版本无法加载当前配置, 已回退到 $old" 2; else _txn_end fail "新版本无法加载当前配置, 原版本 $old 没能自动启动, 请在 enana 里手动启动" 2; fi; return 1
   fi
 }
 
+# get.sh 的错误输出 (die 打印的「✗」行等) 追加进 api.log, 每行加上日期时间 (这一次运行的行统一用运行结束的时刻); 标准输出是最后一条「✗」行的文字, 即失败原因
+_update_err_flush() { # <错误输出文件>
+  local ts l reason=''
+  ts=$(date '+%F %T')
+  while IFS= read -r l || [ -n "$l" ]; do
+    l=$(printf '%s' "$l" | sed $'s/\033\\[[0-9;]*m//g')
+    [ -n "$l" ] || continue
+    printf '%s %s\n' "$ts" "$l" >> "$H/api.log"
+    case $l in *✗*) reason=$(printf '%s' "$l" | sed 's/^[[:space:]]*✗[[:space:]]*//') ;; esac
+  done < "$1"
+  printf '%s' "$reason"
+}
 # 更新 enana 本体: 重新运行 get.sh 的升级流程 (下载 → 校验 SHA-256 → 替换文件 → 重新生成配置)
+# 错误输出按任务各写一个文件 (jobs/<任务编号>.get.err, 终端运行时用进程编号), 不会和别的更新混在一起; 进程中途被结束 (TERM / INT / HUP 也走正常退出) 时, 已经写进去的行在 EXIT 时补进 api.log
+_update_err_file() { printf '%s/jobs/%s.get.err' "$H" "${JOB_ID:-$$}"; }
 op_self_update() {
-  local rc line new
+  local rc line new reason idx=0 label='检查新版本' err stepf
+  err=$(_update_err_file); stepf="${err%.get.err}.get.step"
   job_step 0 5 "检查新版本"
   update_check force >/dev/null 2>&1 || true
   if ! update_has_new; then _txn_end ok "已经是最新版本 ($VERSION)"; return 0; fi
   [ -f "$H/get.sh" ] || { _txn_end fail "缺少升级脚本 get.sh, 请重新运行安装命令" 1; return 1; }
+  mkdir -p "$H/jobs"; : > "$err"; rm -f "$stepf"
+  trap 'exit 143' TERM INT HUP
+  trap '_update_err_flush "$(_update_err_file)" >/dev/null 2>&1; rm -f "$(_update_err_file)"' EXIT
   if [ "${ENANA_PLATFORM:-darwin}" = windows ]; then
     job_step 1 30 "下载并校验新版本"
-    if win_bridge self-update >> "$H/api.log" 2>&1; then
+    if win_bridge self-update > "$err" 2>&1; then
+      _update_err_flush "$err" >/dev/null; rm -f "$err"
       IFS= read -r new < "$H/VERSION"; _txn_end ok "已更新到 v$new"; return 0
-    else _txn_end fail "Windows 更新失败, 已保留当前版本 (详情见 api.log)" 2; return 1; fi
+    else _update_err_flush "$err" >/dev/null; rm -f "$err"; _txn_end fail "Windows 更新失败, 已保留当前版本 (详情见 api.log)" 1; return 1; fi
   fi
-  # get.sh 在 ENANA_PROGRESS=1 时打印「##job 步骤序号 百分比 文字」, 这里转成任务进度
-  ENANA_PROGRESS=1 ENANA_LANG="${I18N_LANG:-}" bash "$H/get.sh" --upgrade --yes 2>>"$H/api.log" | while IFS= read -r line; do
-    case $line in '##job '*) set -- ${line#\#\#job }; job_step "$1" "$2" "${line#\#\#job $1 $2 }" ;; esac
+  # get.sh 在 ENANA_PROGRESS=1 时打印「##job 步骤序号 百分比 文字」, 这里转成任务进度; 最后一个序号记下来, 失败就是停在这一步
+  ENANA_PROGRESS=1 ENANA_LANG="${I18N_LANG:-}" bash "$H/get.sh" --upgrade --yes 2>"$err" | while IFS= read -r line; do
+    case $line in '##job '*) set -- ${line#\#\#job }; printf '%s %s\n' "$1" "${line#\#\#job $1 $2 }" > "$stepf"; job_step "$1" "$2" "${line#\#\#job $1 $2 }" ;; esac
   done
   rc=${PIPESTATUS[0]}
+  if [ -f "$stepf" ]; then read -r idx label < "$stepf"; fi
+  case $idx in ''|*[!0-9]*) idx=0 ;; esac
+  reason=$(_update_err_flush "$err"); rm -f "$err" "$stepf"
   if [ "$rc" = 0 ]; then
     IFS= read -r new < "$H/VERSION" 2>/dev/null || new=$VERSION
     oplog "${OP_WHO:-terminal}" "更新 enana" "$VERSION → $new" ok; _txn_end ok "已更新到 v$new"
-  else oplog "${OP_WHO:-terminal}" "更新 enana" "失败" error; _txn_end fail "更新失败, 已保留当前版本 (详情见 $H/api.log)" 2; return 1; fi
+  else
+    oplog "${OP_WHO:-terminal}" "更新 enana" "$(kv from "$VERSION" step "$label" reason "$reason")" error
+    _txn_end fail "更新失败, 已保留当前版本 (详情见 $H/api.log)" "$idx"; return 1
+  fi
 }
 
 # 每天一次的维护 (launchd 触发): 日志按天切分/压缩/按保留期清理 · 检查更新 · 每 3 天更新规则集与订阅
+# 凌晨在后台运行, 没有人等着输密码: 绝不弹管理员框 (APPS_BG_JOB=1)。TUN 下要授权的变化 (云端内容 / 订阅 / 规则集) 先撤销, 用户下次操作或 enana update 时再授权应用
 op_maintain() {
-  local last=0
+  local last=0 APPS_BG_JOB=1
   logs_maintain; stats_purge
   update_check force >/dev/null 2>&1 || true
   auth_logged_in && op_txn "更新云端内容" txn_content >/dev/null 2>&1 || true            # 每天顺带检查一次云端内容更新 (没登录就跳过)
@@ -577,8 +666,10 @@ job_dispatch() {
     autosites-clear) op_txn "自动识别: 全部撤销" txn_autosites_clear ;;
     restart)        op_restart ;;
     sysproxy)       op_sysproxy "$@" ;;
+    proxy)          op_proxy "$@" ;;
     update-rules)   op_update_rules ;;
-    servers-import) TXN_INTERVAL=${3:-}; TXN_USED=${4:-}; TXN_TOTAL=${5:-}; TXN_EXPIRE=${6:-}; TXN_SAVE=${7:-}; op_txn "导入服务器" txn_import "${1:-}" "${2:-merge}" ;;
+    servers-import) trap 'rm -f "$JOB_BODY"' EXIT    # 粘贴的服务器数据可能带着凭据: 成功、失败、锁被占用都在进程结束时删掉 (成功时 txn_import 已经删了)
+      TXN_INTERVAL=${3:-}; TXN_USED=${4:-}; TXN_TOTAL=${5:-}; TXN_EXPIRE=${6:-}; TXN_SAVE=${7:-}; op_txn "导入服务器" txn_import "${1:-}" "${2:-merge}" ;;
     servers-delete) op_txn "删除服务器" txn_delete "$1" "${2:-}" "${3:-0}" "${4:-0}" ;;
     servers-role)   op_txn "修改服务器角色" txn_role "$1" "$2" "${3:-}" "${4:-0}" "${5:-0}" ;;
     exits-move)     op_exit_move "$@" ;;

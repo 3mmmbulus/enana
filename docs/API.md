@@ -55,7 +55,7 @@
 ### `POST /api/devices/kick` (需登录) 表单 `uid` → `{"ok":true}` 下线另一台设备 (不能下线自己; 前端先二次确认)。被下线的设备在 ≤ 2 分钟内自动退出登录并关闭代理。
 
 ### `POST /api/proxy` (需登录) 表单 `on=0|1` 和/或 `mode=auto|global` (至少给一个)
-代理总开关 + 代理模式 → `{"ok":true,"enabled":true,"mode":"auto"}`。`on=1` 时如果核心没在运行会先启动它 (最多等 10 秒, 失败 → `E_NOT_RUNNING`)。开启/关闭/切换模式都不重启核心 (热切换); `GET /api/state` 里的 `proxy.enabled` / `proxy.mode` 是当前状态。
+代理总开关 + 代理模式 → `{"ok":true,"enabled":true,"mode":"auto"}`。`on=1` 时如果核心没在运行会先启动它 (最多等 10 秒, 失败 → `E_NOT_RUNNING`)。启动要管理员授权时 (Enhanced/TUN, 或者系统代理模式下 TUN 的根守护进程还加载着 / 停它要授权) 不在请求里等密码框, 立刻返回 `{"ok":true,"job":"…"}` (后台任务 `proxy`, 步骤「启动代理服务 | 开启代理」或「启动代理服务 | 切换代理模式」); 任务的 `result` 就是平时的响应 (`enabled` / `mode` / `sysproxy`), 授权被取消时任务失败 (「已取消管理员授权, 代理没有开启」)。仪表盘和 `POST /api/network-mode` 一样跟着任务走。开启/关闭/切换模式都不重启核心 (热切换); `GET /api/state` 里的 `proxy.enabled` / `proxy.mode` 是当前状态。
 三种状态 (前端做成「总开关 + 模式」):
 - **关闭** (默认; 刚安装 / 刚登录 / 退出账号后): 全部直连, 不经过任何代理服务器。
 - **自动模式** `auto` (开启后的默认模式): 智能分流 —— 国内网站直连, 海外与受限网站按策略走「自动线路」(自动选最快节点) 或「固定出口」(AI/账号类服务), 你对应用/网站的设置全部生效。
@@ -151,12 +151,12 @@
 - 新应用 (`flag=new`): 浏览器 (声明能打开 http / https 链接的应用) 默认「跟随规则」, 其它新应用默认「关」(直连); 仪表盘打开「应用」页就算已知晓, 会 `POST /api/apps/ack?all=1` 把新标记确认掉, 导航上的数字随之消失。
 - 应用扫描范围: `/Applications` (含子目录)、`/System/Applications` (含 Utilities, 终端等系统应用)、`/System/Cryptexes/App/System/Applications` (Safari)、`/System/Library/CoreServices/Applications`、`~/Applications`, 再加 Spotlight 能找到的其它位置 (只收录 /Applications、/System/Applications、`~/Applications`、/opt/homebrew、/usr/local 下的顶层 .app, 不含应用内嵌的辅助程序)。
 
-`GET /api/state` → `{ok,version,prefs_version★,core,platform:{os,osver,arch},ports:{proxy,ui,api,speed★},env:{core,rules,service,sysproxy,shortcut (快捷命令的安装位置, 没装是 null),shortcut_cmd★ (在终端里直接可运行、打开控制台的完整命令: 装了快捷命令 = `enana`, 没装 = 脚本的完整路径),rules_updated,rules_missing[]},servers[],subs[],overrides[],first_run,`
+`GET /api/state` → `{ok,version,prefs_version★,core,platform:{os,osver,arch},ports:{proxy,ui,api,speed★},env:{core,rules,service,sysproxy,shortcut (快捷命令的安装位置, 没装是 null),shortcut_cmd★ (在终端里直接可运行、打开控制台的完整命令: 装了快捷命令 = `enana`, 没装 = 脚本的完整路径),rules_updated,rules_missing[],sysproxy_helper★ (macOS: 系统代理助手是否已安装, 只看文件在不在, 不 sudo; Windows 为 null)},servers[],subs[],overrides[],first_run,`
 `update★:{available,latest,checked},lang★,proxy★:{enabled,mode:"auto|global"},account★:{email}}`
 
 `servers[]` 的每一项是 `{tag,type,server,port,role,sub}`。**官方线路 (会员) 的节点**排在用户自己的服务器后面, 多一个 `"official":true`: `server` 为 `""`、`port` 为 `0` (界面不显示官方节点的地址), `role` 永远是 `auto` (只进「自动线路」池, 不能当固定出口)。它们保存在 `~/.enana/official.jsonl` (权限 600), **不在** `servers.jsonl`, 也不进配置快照 / 云端同步 / `GET /api/export`; 对它们 `GET /api/servers/secret`、`POST /api/servers/delete`、`POST /api/servers/role` 一律 `E_FORBIDDEN`。`first_run` 只看用户自己的服务器。官方节点的标签以保留前缀 `官方-` 开头: 用户导入的节点不能使用这个前缀 (安装端拒绝; 导入器会把别的订阅里的「官方-xx」改名为「官方 xx」)。
 
-`GET /api/apps` · `POST /api/apps/scan` · `POST /api/apps/adopt` (表单 `names` 可选: 换行分隔的应用名, 只处理这几个; 不带 = 所有 flag=new 的应用) · `POST /api/apps/ack?name=|all=1` · `POST /api/override?kind=&value=&state=[&target=]` ·
+`GET /api/apps` · `POST /api/apps/scan[?background=1]` (界面自动扫描带 `background=1`: TUN 下没有变化时不开任务、不写操作记录, 直接返回列表; 有变化但应用会要求管理员授权的, 也不开任务, 而是记为待应用 `pending`: `{at,count,names}`, 没有时为 `null`; `GET /api/apps` 与扫描的响应都带这个字段, 界面的「应用」按钮才会发起授权) · `POST /api/apps/adopt` (表单 `names` 可选: 换行分隔的应用名, 只处理这几个; 不带 = 所有 flag=new 的应用) · `POST /api/apps/ack?name=|all=1` · `POST /api/override?kind=&value=&state=[&target=]` ·
 `POST /api/servers/import?sub=&mode=merge|replace&save=0|1` (正文=JSONL; **save★**: 1 = 「保存到云端」, 这些节点 (和订阅) 进入云端同步清单, 第一次用时自动打开云端同步; 0 = 只留在本机; 不带 = 不改动, 例如订阅自动刷新) · `POST /api/servers/delete?tag=[&reassign=][&freeze=1][&accept_orphans=1]` · `POST /api/servers/role?tag=&role=pin|auto|off|dl[&reassign=][&freeze=1][&accept_orphans=1]` (删除 / 改角色的新参数见「出口分配」: 固定出口有人在用时必须先指明去向) ·
 `POST /api/cert?name=` · `POST /api/sub/fetch` · `POST /api/sub/save?name=&save=0|1` · `POST /api/sub/delete?name=[&accept_orphans=1]` · `POST /api/restart` — 形状不变 (订阅里有被使用的固定出口时的新参数见「出口分配」)。
 
@@ -494,7 +494,7 @@
 
 `POST /api/network-mode` 表单 `mode=system|tun` → `{ok:true,job}`。设置是本机独有, 不进入跨设备同步; 升级缺省 `system`。`GET /api/state` 与 `/api/settings` 的 `proxy` 增加 `network_mode`、`tun_ready`。
 
-TUN 使用管理员授权后的规则快照。此模式下 `/api/override`、`/api/exits/move`、`/api/exits/freeze`、`/api/apps/adopt`、`/api/apps/scan`、`/api/sites/auto/clear` 返回异步 `{ok:true,job}`, 前端必须等 job 完成再显示成功, 取消授权时事务撤销。System Proxy 下这些接口沿用立即响应/文件热加载。自动识别网站也必须先应用快照, 再验证实际连接; 不能把用户目录文件已更改当成 root 核心规则已生效。
+TUN 使用管理员授权后的规则快照。此模式下 `/api/override`、`/api/exits/move`、`/api/exits/freeze`、`/api/apps/adopt`、`/api/apps/scan` (界面自动扫描 `background=1` 且没有变化时除外, 直接返回列表)、`/api/sites/auto/clear` 返回异步 `{ok:true,job}`, 前端必须等 job 完成再显示成功, 取消授权时事务撤销。System Proxy 下这些接口沿用立即响应/文件热加载。自动识别网站也必须先应用快照, 再验证实际连接; 不能把用户目录文件已更改当成 root 核心规则已生效。
 
 访问记录新增 `capture:"mixed|tun"` (老记录可能为空)。
 

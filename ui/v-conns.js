@@ -400,7 +400,7 @@
           var tx = TP.txt.app(what, null, state);
           var okc = await ui.confirmDialog({
             title: t('conns.rr.confirmTitle'), message: t('conns.rr.confirmMsg', { what: what, state: TP.name.app(state) }),
-            detail: [tx.detail, kill.checked ? t('conns.rr.confirmKill', { n: g.n }) : ''].filter(Boolean), confirmText: t('conns.rr.confirmGo'), rememberKey: 'policy'
+            detail: TP.tunDetail([tx.detail, kill.checked ? t('conns.rr.confirmKill', { n: g.n }) : ''].filter(Boolean)), confirmText: t('conns.rr.confirmGo'), rememberKey: 'policy'
           });
           if (!okc) return false;
           await TP.override(target, value, state);

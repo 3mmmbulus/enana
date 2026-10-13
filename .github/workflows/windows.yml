@@ -26,6 +26,11 @@ jobs:
       - name: Check directory ACL in PowerShell Core
         shell: pwsh
         run: ./tests/windows-acl.ps1
+      - name: Check the elevated TUN config validator (Windows PowerShell 5.1)
+        run: ./tests/windows-tun-config.ps1
+      - name: Check the elevated TUN config validator (PowerShell 7)
+        shell: pwsh
+        run: ./tests/windows-tun-config.ps1
       - name: Remove protected orphaned snapshots without affecting other users
         run: ./tests/windows-snapshot-remove.ps1
       - name: Fetch the published Windows manifest and its signature

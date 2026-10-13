@@ -288,11 +288,11 @@ vps_probe_json() {
 }
 
 # 任务出错: 写进度 + 错误码 (前端从 job.result.code 取)
-vps_job_error() { # [步骤序号]   (VPS_RESULT_EXTRA: 以逗号开头的 JSON 片段, 并入失败结果; 用过就清空)
-  local extra=''
-  [ "$JOB_NAME" != vps-probe ] || extra=",\"attempt\":${VPS_ATTEMPT:-1},\"max_attempts\":${VPS_ATTEMPTS:-3}"
+vps_job_error() { # [步骤序号]   (VPS_RESULT_EXTRA: 以逗号开头的 JSON 片段, 并入失败结果; 用过就清空; 探测失败记成「探测服务器」, 一次探测一行)
+  local extra='' act='添加自己的服务器'
+  [ "$JOB_NAME" != vps-probe ] || { extra=",\"attempt\":${VPS_ATTEMPT:-1},\"max_attempts\":${VPS_ATTEMPTS:-3}"; act='探测服务器'; }
   extra="$extra${VPS_RESULT_EXTRA:-}"; VPS_RESULT_EXTRA=''
-  oplog "${OP_WHO:-dashboard}" "添加自己的服务器" "$(kv host "${V_HOST:-${P_HOST:-}}" code "${VPS_CODE:-}" reason "${VPS_REASON:-}" tcp "${VPS_TCP:-}")" error
+  oplog "${OP_WHO:-dashboard}" "$act" "$(kv host "${V_HOST:-${P_HOST:-}}" code "${VPS_CODE:-}" reason "${VPS_REASON:-}" tcp "${VPS_TCP:-}")" error
   job_write "$JOB_ID" "$JOB_NAME" error "${1:-0}" 100 "${VPS_ERR:-失败}" "{\"code\":\"${VPS_CODE:-E_VPS_VERIFY}\"$extra}"
 }
 
@@ -331,7 +331,6 @@ vps_probe_job() { # <凭据文件>
       0)
         if [ "$V_CONFIRM" = 1 ] && [ -z "$V_HOSTKEY" ]; then
           vps_check_cancel || { vps_job_error; return 1; }
-          oplog "${OP_WHO:-dashboard}" "探测服务器主机指纹" "$V_HOST" ok
           job_ok "请确认主机指纹" "{\"host\":\"$(jesc "$V_HOST")\",\"port\":$V_PORT,\"hostkey\":\"$(jesc "$VPS_HOSTKEY")\",\"need_confirm\":true}"; return 0
         fi
         : > "$VD/out"; : > "$VD/err"
@@ -342,7 +341,6 @@ vps_probe_job() { # <凭据文件>
     esac
     # Retry only transient connection failures, never rejected credentials or keys.
     if [ "$VPS_CODE" != E_SSH_UNREACHABLE ] || [ "$attempt" = 3 ]; then vps_job_error 1; return 1; fi
-    oplog "${OP_WHO:-dashboard}" "服务器检测重试" "$(kv host "$V_HOST:$V_PORT" attempt "$attempt" max 3 code "$VPS_CODE")" error
     retry_start=$(now)
     while [ $(( $(now) - retry_start )) -lt 2 ]; do
       vps_check_cancel || { vps_job_error; return 1; }
@@ -351,7 +349,7 @@ vps_probe_job() { # <凭据文件>
   done
   vps_check_cancel || { vps_job_error; return 1; }
   job_step 2 90 "整理结果"
-  oplog "${OP_WHO:-dashboard}" "探测服务器" "$V_HOST ($(vps_kv os_pretty))" ok
+  oplog "${OP_WHO:-dashboard}" "探测服务器" "$(kv host "$V_HOST" os "$(vps_kv os_pretty)")" ok      # 每次探测一行 (成功 ok / 失败 error); 导出时 host 打码
   job_ok "探测完成" "$(vps_probe_json)"
 }
 

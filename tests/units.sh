@@ -1,6 +1,7 @@
 #!/bin/bash
 # 单元测试 (几秒钟; 不需要 sing-box / 网络 / 管理员权限): 直接加载 lib/*.sh, 在临时目录里验证
 #   访问记录解析 (access.awk) · 自动识别的事件与候选 · 日志保留 (小时) · 三个日志开关 · 应用扫描与覆盖层 · 规则集拆分 · 诊断导出的格式与脱敏
+#   更新失败记在真正失败的步骤 · 原因取最后一条「✗」 · api.log 带时间与轮转 · 导出的 api.log 尾部与时间范围 · 任务文件只留最近的 (过一天的删) · 管理员重启的结果 · 导出的打码 (IP / URL 用户名 / host=) · 导入失败删掉粘贴的数据
 # 用法: bash tests/units.sh        (tests/run.sh 最后也会调用它)
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd -P); REPO=$(dirname "$HERE")
@@ -197,6 +198,67 @@ eq "云端推荐更新后: def+直连 → 推荐 (pin); ack (用户设置过) �
 printf 'app|New Known|direct|new|\napp|New Unknown|direct|new|\n' >> "$H/overrides.tsv"; printf 'New Known|follow|X\n' >> "$UW/apps.conf"
 apps_adopt
 eq "采用推荐: 已知 → 推荐值并确认 (ack), 未知保持关 (仍是 new)" "$(awk -F'|' '$2 ~ /^New / {print $2 "=" $3 "/" $4}' "$H/overrides.tsv" | sort | paste -sd, -)" "New Known=follow/ack,New Unknown=direct/new"
+# ---- 后台扫描 (TUN, 界面每分钟自动发起): 没有变化 → 保留结果、不写操作记录、返回 1 (不开应用任务); 覆盖层或规则集会变 → 覆盖层还原、返回 0; 正在应用配置 → 这次不扫
+echo "== U4b. 后台扫描: 没有变化不写操作记录; 覆盖层 / 规则集有变化才交给应用任务; 应用配置时不扫"
+apps_scan >/dev/null; apps_scan >/dev/null
+ops_rows() { cat "$LOGS"/ops-*.log 2>/dev/null | wc -l | tr -d ' '; }
+ovr_sum() { cksum < "$H/overrides.tsv"; }
+o0=$(ops_rows); s0=$(ovr_sum); rc=0; apps_scan_bg || rc=$?
+eq "没有变化: 返回 1 (调用方直接返回列表, 不开应用任务)" "$rc" "1"
+eq "没有变化: 不写操作记录, 覆盖层一个字节都不变" "$(ops_rows):$(ovr_sum)" "$o0:$s0"
+t "没有变化: 扫描结束后释放应用锁" test ! -d "$H/.apply.lock"
+mkapp "$APPS" "Bg Newcomer"; rc=0; apps_scan_bg || rc=$?
+eq "新装了应用: 返回 0 (调用方开应用任务)" "$rc" "0"
+eq "…覆盖层还原到扫描前 (新应用没有写进去), 操作记录也没有写" "$(grep -c 'Bg Newcomer' "$H/overrides.tsv"):$(ops_rows)" "0:$o0"
+apps_scan >/dev/null
+eq "…应用任务随后的扫描照常把它记为新应用 (不是首次扫描的默认值)" "$(awk -F'|' '$2 == "Bg Newcomer" {print $3 "/" $4}' "$H/overrides.tsv")" "direct/new"
+o1=$(ops_rows); rc=0; apps_scan_bg || rc=$?
+eq "应用任务之后再后台扫描: 又没有变化 (返回 1, 操作记录不变)" "$rc:$(ops_rows)" "1:$o1"
+mkbrowser "$APPS" "Gone Browser"; printf 'app|Gone Browser|direct|ack|\n' >> "$H/overrides.tsv"; apps_scan >/dev/null
+t "卸载前: 直连的浏览器在 browserdirect 规则集里" grep -q 'Gone Browser' "$H/rules/ovr-browserdirect/ovr-browserdirect.json"
+rm -rf "$APPS/Gone Browser.app"; rc=0; apps_scan_bg || rc=$?
+eq "只有规则集会变 (覆盖层一行没动, 卸载了直连的浏览器): 返回 0" "$rc" "0"
+apps_scan >/dev/null
+t "应用任务把它从 browserdirect 挪到 appdirect" sh -c "! grep -q 'Gone Browser' '$H/rules/ovr-browserdirect/ovr-browserdirect.json' && grep -q 'Gone Browser' '$H/rules/ovr-appdirect/ovr-appdirect.json'"
+mkdir "$H/.apply.lock"; mkapp "$APPS" "Busy Newcomer"; rc=0; apps_scan_bg || rc=$?
+eq "正在应用配置 (应用锁被占着): 这次不扫, 返回 1, 覆盖层不动" "$rc:$(grep -c 'Busy Newcomer' "$H/overrides.tsv")" "1:0"
+rmdir "$H/.apply.lock"; rc=0; apps_scan_bg || rc=$?
+eq "锁释放后: 下一次后台扫描照常发现新应用 (返回 0)" "$rc" "0"
+apps_scan >/dev/null
+
+# ---- 后台扫描, TUN 根服务已装 (指纹一致): 助手不可信 → 2 (待应用: 不开任务、覆盖层不动); 助手可信 → 0 (由后台开任务); 失败后 24 小时内不自动重试同一组变化
+echo "== U4c. 后台扫描 (TUN, 根服务已装): 需要授权的变化只记为待应用 · 助手可信才自动开任务 · 失败的一组 24 小时内不自动重试 · 用户按「应用」后清掉"
+NETWORK_MODE=tun
+enhanced_loaded() { return 0; }
+enhanced_fingerprint() { printf 'FP\n'; }
+enhanced_helper_ok() { [ "${FAKE_HELPER:-0}" = 1 ]; }
+printf 'FP\n' > "$H/.enhanced-fingerprint"; enhanced_ovr_fingerprint > "$H/.enhanced-ovr-fingerprint"
+rm -f "$H/.apps-pending" "$H/.apps-bg-tried"
+FAKE_HELPER=0; o2=$(ops_rows); s2=$(ovr_sum); rc=0
+mkapp "$APPS" "Tun Newcomer"; apps_scan_bg || rc=$?
+eq "助手不可信: 变化要管理员授权 → 返回 2 (调用方不开任务)" "$rc" "2"
+eq "…覆盖层一个字节都不动, 操作记录也没有写" "$(ovr_sum):$(ops_rows)" "$s2:$o2"
+t "…记下待应用 (界面的「应用」卡片读它)" grep -q 'Tun Newcomer' "$H/.apps-pending"
+eq "…待应用的内容: 1 个新应用, 名称正确 (JSON 合法)" "$(apps_pending_json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["count"], d["names"][0])')" "1 Tun Newcomer"
+t "…没有记为已开过后台任务" test ! -f "$H/.apps-bg-tried"
+rc=0; apps_scan_bg || rc=$?
+eq "同一组变化再来一次 (还没应用): 仍是待应用 (2), 不会每分钟都想开任务" "$rc" "2"
+FAKE_HELPER=1; rc=0; apps_scan_bg || rc=$?
+eq "助手可信 (只有规则数据变了): 免密同步, 返回 0 (由后台开任务)" "$rc" "0"
+eq "…开任务之前覆盖层已经还原 (任务自己重新扫描、写入)" "$(ovr_sum)" "$s2"
+t "…这组变化记为后台已开过 (.apps-bg-tried)" test -s "$H/.apps-bg-tried"
+t "…待应用记录清掉 (已经在应用)" test ! -f "$H/.apps-pending"
+rc=0; apps_scan_bg || rc=$?
+eq "上一次后台开的任务没有应用成功 (模拟: 没有执行): 24 小时内同一组变化不再自动重开, 改为待应用 (2)" "$rc" "2"
+read -r tc tt < "$H/.apps-bg-tried"; printf '%s\t%s\n' "$tc" "$((tt - 86401))" > "$H/.apps-bg-tried"
+rc=0; apps_scan_bg || rc=$?
+eq "超过 24 小时: 再由后台开一次 (0)" "$rc" "0"
+apps_scan >/dev/null; apps_pending_clear; enhanced_ovr_fingerprint > "$H/.enhanced-ovr-fingerprint"     # 真正的应用任务同步根快照后会记下指纹 (这里模拟)
+rc=0; apps_scan_bg || rc=$?
+eq "用户按「应用」 (手动扫描) 之后: 没有变化 (1)" "$rc" "1"
+t "…没有变化时待应用记录也清掉" test ! -f "$H/.apps-pending"
+# 恢复真实的函数, 其它测试不受影响
+. "$LIB/enhanced.sh"; NETWORK_MODE=system; rm -f "$H/.apps-pending" "$H/.apps-bg-tried" "$H/.enhanced-fingerprint" "$H/.enhanced-ovr-fingerprint"
 
 echo "== U5. 覆盖层 → 规则集: 应用直连 / 网站直连 分开 · 固定出口指定 · 自动选 · 出口被删除"
 rs() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps(d["rules"], ensure_ascii=False, sort_keys=True))' "$H/rules/ovr-$1/ovr-$1.json"; }
@@ -251,7 +313,7 @@ printf '{"role":"pin","outbound":{"type":"socks","tag":"Pin-A","server":"203.0.1
 echo '{"log":{"level":"info"},"route":{"rules":[{"rule_set":["ovr-direct"],"action":"route","outbound":"direct-site"}],"final":"Final"},"outbounds":[{"type":"socks","tag":"Pin-A","server":"203.0.113.77","server_port":1080,"username":"u-secret","password":"PW-SECRET-123"}],"experimental":{"clash_api":{"external_controller":"127.0.0.1:1","secret":"CLASH-SECRET-XYZ"}}}' > "$H/config.json"
 logs_bundle 24 ops,access,proxy,snapshot > "$UW/bundle.txt" 2>/dev/null
 eq "第一行是格式标记 (#ENANA-DIAGNOSTICS format=1)" "$(head -1 "$UW/bundle.txt")" "#ENANA-DIAGNOSTICS format=1"
-eq "bash 3.2: 导出分区声明完整, 不混入 shell 代码" "$(sed -n '/^#sections=/p' "$UW/bundle.txt")" "#sections=meta,verdict,env,config,policy,servers,apps,probes,live,health_summary,outages,health,ops,access,proxy"
+eq "bash 3.2: 导出分区声明完整, 不混入 shell 代码" "$(sed -n '/^#sections=/p' "$UW/bundle.txt")" "#sections=meta,verdict,env,config,policy,servers,apps,probes,live,health_summary,outages,health,apilog,ops,access,proxy"
 python3 - "$UW/bundle.txt" > "$UW/bundle.check" 2>&1 <<'PY'
 import sys, re
 lines = open(sys.argv[1], encoding='utf-8').read().split('\n')
@@ -446,6 +508,16 @@ eq "…除了角色, 每一行都原样 (订阅名 / 出站内容不变)" "$(pri
   FAKE_APPLIED=0; op_maintain
   eq "3 天内刚做过: 什么都不做" "$AC" "1"
 )
+# 每日维护在凌晨的后台运行, 没有人输密码: 里面的每一次应用 (云端内容 / 规则集) 都是后台任务 (APPS_BG_JOB=1), TUN 下要授权就撤销, 不弹框
+(
+  logs_maintain() { :; }; stats_purge() { :; }; update_check() { :; }; auth_logged_in() { return 0; }; plan_refresh() { :; }
+  AUTO_UPDATE=1; rules_update() { :; }; op_subs_refresh() { SUBS_APPLIED=0; }
+  op_txn() { printf 'txn=%s\n' "${APPS_BG_JOB:-}" >> "$UW/maintain-bg"; return 0; }
+  apply_config() { printf 'apply=%s\n' "${APPS_BG_JOB:-}" >> "$UW/maintain-bg"; return 0; }
+  : > "$UW/maintain-bg"; rm -f "$H/.maintain-rules"; unset APPS_BG_JOB
+  op_maintain
+  eq "每日维护: 云端内容的事务和规则集的应用都以后台任务运行 (不弹管理员框); 维护结束后不留在进程里" "$(paste -sd, - < "$UW/maintain-bg"):${APPS_BG_JOB:-unset}" "txn=1,apply=1:unset"
+)
 t "install.sh 的 enana update 同样: 订阅刷新应用过配置就不再 op_apply" grep -q 'SUBS_APPLIED' "$REPO/install.sh"
 echo
 
@@ -571,6 +643,15 @@ eq "TUN + 后台: 节点有变化 → 不应用、不改文件、记下 deferred
 NETWORK_MODE=tun OP_WHO=dashboard FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync
 eq "TUN + 仪表盘: 用户在场 → 正常应用, deferred 清零" "$?:$(napply):$(official_state_get deferred)" "0:$((n3 + 1)):0"
 NETWORK_MODE=tun OP_WHO=auto FAKE_BODY=$OFFD/changed.json FAKE_CODE=200 official_sync; eq "TUN + 后台: 内容没变 → 什么都不做 (也不记 deferred)" "$(napply):$(official_state_get deferred)" "$((n3 + 1)):0"
+NETWORK_MODE=tun OP_WHO=terminal APPS_BG_JOB=1 FAKE_BODY=$OFFD/ok.json FAKE_CODE=200 official_sync
+eq "TUN + 后台任务 (APPS_BG_JOB=1; OP_WHO 不是 auto 也一样, 比如 tick 里前面一步留下的 terminal): 不应用, 记下 deferred=1" "$?:$(napply):$(official_state_get deferred)" "0:$((n3 + 1)):1"
+# 系统代理模式, 但根守护进程还加载着 (切回系统代理没有完成): 应用要先停它 (要授权), 后台同样推迟
+official_state_set deferred=0
+( enhanced_loaded() { return 0; }; NETWORK_MODE=system OP_WHO=auto FAKE_BODY=$OFFD/ok.json FAKE_CODE=200 official_sync >/dev/null 2>&1 )
+eq "系统代理模式 + 根守护进程还加载着 + 后台: 不应用, 记下 deferred=1" "$(napply):$(official_state_get deferred)" "$((n3 + 1)):1"
+# 管理员框被取消: 没应用成功, 但这份线路没有问题, 不记成坏的 (否则一天之内都不再试)
+( apply_config() { echo x >> "$OFFD/applies"; ENHANCED_ADMIN_ERR=cancelled; return 3; }; NETWORK_MODE=tun OP_WHO=dashboard FAKE_BODY=$OFFD/ok.json FAKE_CODE=200 official_sync >/dev/null 2>&1 )
+eq "TUN + 仪表盘, 管理员框被取消: 不记成坏的" "$(official_state_get bad)" ""
 NETWORK_MODE=system; unset OP_WHO
 
 # 套餐刷新后判断是否需要同步 / 退出账号清除
@@ -607,6 +688,7 @@ apply_mocks() {
   wait_port() { echo "wait $2" >> "$LOG"; return "${WAIT_RC:-0}"; }
   enhanced_ready() { return 0; }
   enhanced_configured() { return 1; }
+  enhanced_loaded() { return "${TUN_LOADED_RC:-1}"; }                # 根守护进程加载着吗 (默认没有)
   tun_residual_clean() { echo cleanup >> "$LOG"; }
   os_sysproxy_mine() { return "${MINE_RC:-1}"; }
   os_sysproxy_apply() { echo "apply $*" >> "$LOG"; return "${APPLY_RC:-0}"; }
@@ -639,6 +721,20 @@ eq "核心没起来 + 系统代理不是 enana 的: 不碰系统代理" "$(apply
 eq "TUN 模式核心没起来 + 系统代理指向 enana: 同样先静默关闭系统代理 (指向死端口的代理会断网)" "$(apply_run tun NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=1 RUNNING_RC=1 MINE_RC=0)" '3|restart;cleanup;restart;wait 15;cleanup;proxy_sync;wait 1;apply off quiet;record auto off 0|{"old":1}|kept|已先关闭'
 eq "TUN 模式核心没起来 + 系统代理关不掉: 记入操作记录 (off 1), 提示去仪表盘关闭" "$(apply_run tunstuck NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=1 RUNNING_RC=1 MINE_RC=0 APPLY_RC=1)" '3|restart;cleanup;restart;wait 15;cleanup;proxy_sync;wait 1;apply off quiet;record auto off 1|{"old":1}|kept|没能自动关闭'
 eq "服务没有加载 (还没启动核心): 只写配置, 不重启, 不清理旧文件" "$(apply_run noload LOADED_RC=1)" '0||{"new":1}|kept|'
+# 后台任务 (APPS_BG_JOB=1: tick / 每日维护 / 界面的自动扫描) 绝不弹管理员框: 只有要动根守护进程时才撤销 (返回 5), 用户自己的核心照常重启
+eq "后台任务 + 系统代理模式 (没有根守护进程): 照常应用并重启用户核心 (不需要授权)" "$(apply_run bgsys APPS_BG_JOB=1)" '0|restart;wait 15;proxy_sync|{"new":1}|pruned|'
+eq "后台任务 + TUN: 要管理员授权 → 撤销 (返回 5), 不重启, 配置和规则集文件都不动" "$(apply_run bgtun APPS_BG_JOB=1 NETWORK_MODE=tun)" '5||{"old":1}|kept|'
+eq "后台任务 + 系统代理模式但根守护进程还加载着 (重启要先停它, 要授权): 同样撤销" "$(apply_run bgloaded APPS_BG_JOB=1 TUN_LOADED_RC=0)" '5||{"old":1}|kept|'
+same_run() { # 名字 [变量=值 ...] -> rc|调用顺序   (配置没变: config.json 已经是 gen_config 会生成的那一份)
+  local name=$1; shift
+  ( H=$UW/same-$name; rm -rf "$H"; mkdir -p "$H/rules"; printf '{"new":1}' > "$H/config.json"
+    NETWORK_MODE=system; unset OP_WHO; [ $# -gt 0 ] && export "$@"
+    . "$LIB/config.sh"; apply_mocks; LOG=$UW/same-$name.log; : > "$LOG"
+    rc=0; apply_config >/dev/null 2>&1 || rc=$?; printf '%s|%s\n' "$rc" "$(paste -sd';' "$LOG")" )
+}
+eq "配置没变 + 后台任务 + 系统代理模式但根守护进程还加载着: 停不了它 (要授权), 照旧什么都不做, 返回 0 (不撤销, 同步 / 官方线路不记成失败)" "$(same_run bgsame APPS_BG_JOB=1 TUN_LOADED_RC=0)" '0|'
+eq "…用户自己操作 (前台): 往下走重启, 由重启停掉根守护进程" "$(same_run fgsame TUN_LOADED_RC=0)" '0|restart;wait 15;proxy_sync'
+eq "…根守护进程没加载: 前台也什么都不做" "$(same_run fgnone)" '0|'
 gcf=$(H=$UW/gcfail; rm -rf "$H"; mkdir -p "$H/rules"; printf 'file' > "$H/rules/geosite-cn"; printf 'OLD' > "$H/rules/geosite-cn.srs"; printf '{"old":1}' > "$H/config.json"; . "$LIB/config.sh"; sb_ver() { :; }; dns_load() { :; }; srv_emit() { :; }; official_emit() { :; }; NETWORK_MODE=system; rc=0; out=$(gen_config 2>&1) || rc=$?; echo "rc=$rc|$(test -e "$H/config.json.new" && echo new-written || echo no-new)|$(cat "$H/config.json")|$(printf '%s' "$out" | grep -c '规则集目录整理失败')")
 eq "规则集迁移失败 (新位置被占用): gen_config 返回 1, 不写新配置, 原配置不动, 给出提示" "$gcf" 'rc=1|no-new|{"old":1}|1'
 echo
@@ -651,13 +747,18 @@ upg_run() { # 名字 [变量=值 ...] -> rc|调用顺序|警告|当前二进制 
     NETWORK_MODE=system; unset OP_WHO
     [ $# -gt 0 ] && export "$@"
     core_version() { echo 1.14.2; }; job_step() { :; }; update_check() { :; }; proxy_sync_mode() { :; }
+    core_manifest_refresh() { :; }; core_latest_compat() { echo 1.14.2; }      # UPG_WANT=latest: 兼容清单里最新的就是现在这一版 1.14.2 (不联网)
+    case ${CORE_META:-} in   # 现在这个核心的来源 / 摘要记录 (core_tun_ok 看它们); 不设 = 没有记录 (2.3.23 及更早装的核心)
+      pinned)  printf 'pinned 1.14.2 %064d\n' 0 > "$H/core-provenance"; shasum -a 256 "$SB" | awk '{print $1}' > "$H/core-binary.sha256" ;;
+      changed) printf 'pinned 1.14.2 %064d\n' 0 > "$H/core-provenance"; printf '%064d\n' 0 > "$H/core-binary.sha256" ;;
+    esac
     core_install() { # 新核心带 NEW 标记; CHECK_RC 控制它的 check 子命令; STOP_IN_INSTALL 模拟 Windows 替换前先停掉核心
       [ -z "${STOP_IN_INSTALL:-}" ] || WAIT_RC=1
       [ "${INSTALL_RC:-0}" = 0 ] || return 1
       printf '#!/bin/sh\n# NEW\n[ "$1" = check ] && exit "${CHECK_RC:-0}"\nexit 0\n' > "$SB"; chmod +x "$SB"
     }
     core_trial() { echo trial >> "$LOG"; return "${TRIAL_RC:-0}"; }
-    os_service_restart() { echo restart >> "$LOG"; [ -z "${UP_AFTER_RESTART:-}" ] || WAIT_RC=0; return "${RESTART_RC:-0}"; }
+    os_service_restart() { echo restart >> "$LOG"; [ -z "${UP_AFTER_RESTART:-}" ] || WAIT_RC=0; [ -z "${CANCEL_RESTART:-}" ] || ENHANCED_ADMIN_ERR=cancelled; return "${RESTART_RC:-0}"; }   # CANCEL_RESTART: 管理员框被取消
     wait_port() { echo "wait $2" >> "$LOG"; return "${WAIT_RC:-0}"; }
     tun_residual_clean() { echo cleanup >> "$LOG"; }
     enhanced_ready() { return 0; }
@@ -667,9 +768,9 @@ upg_run() { # 名字 [变量=值 ...] -> rc|调用顺序|警告|当前二进制 
     oplog() { :; }; _txn_end() { echo "txn $1${3:+ $3}" >> "$LOG"; echo "$2"; }
     LOG=$UW/up-$name.log; : > "$LOG"
     [ -z "${BACKUP_FAIL:-}" ] || chmod 500 "$H"
-    rc=0; out=$(op_core_upgrade 1.14.3 2>&1) || rc=$?
+    rc=0; out=$(op_core_upgrade "${UPG_WANT:-1.14.3}" 2>&1) || rc=$?
     chmod 700 "$H"
-    printf '%s|%s|%s|%s\n' "$rc" "$(paste -sd';' "$LOG")" "$(printf '%s' "$out" | grep -Eo '已先关闭|没能自动关闭|没能自动启动' | paste -sd',' -)" "$(grep -q '# NEW' "$SB" && echo new || echo old)"
+    printf '%s|%s|%s|%s\n' "$rc" "$(paste -sd';' "$LOG")" "$(printf '%s' "$out" | grep -Eo '已先关闭|没能自动关闭|没能自动启动|已取消管理员授权' | paste -sd',' -)" "$(grep -q '# NEW' "$SB" && echo new || echo old)"
   )
 }
 eq "核心升级成功: 试运行通过 → 才重启 → 新二进制保留" "$(upg_run ok)" '0|wait 1;trial;restart;wait 15;txn ok||new'
@@ -681,12 +782,17 @@ eq "新核心重启后没就绪 (TUN): 清残留路由 → 还原旧二进制 �
 eq "…系统代理模式: 同上" "$(upg_run sys RESTART_RC=1 WAIT_RC=1 MINE_RC=0)" '1|wait 1;trial;restart;cleanup;restart;wait 15;cleanup;wait 1;apply off quiet;record auto off 0;txn fail 4|已先关闭|old'
 eq "…系统代理关不掉 (需要管理员授权): 记入操作记录 (off 1), 提示去仪表盘关闭" "$(upg_run stuck NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=1 MINE_RC=0 APPLY_RC=1)" '1|wait 1;trial;restart;cleanup;restart;wait 15;cleanup;wait 1;apply off quiet;record auto off 1;txn fail 4|没能自动关闭|old'
 eq "…旧核心还活着 (端口通): 不关系统代理" "$(upg_run alive NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=0 MINE_RC=0)" '1|wait 1;trial;restart;cleanup;restart;wait 15;cleanup;wait 1;txn fail 4||old'
+eq "…重启新核心时管理员框被取消: 同样回退 (回退的重启不会再弹框), 报告「已取消管理员授权」而不是「新版本未能启动」" "$(upg_run cancel NETWORK_MODE=tun RESTART_RC=1 CANCEL_RESTART=1 WAIT_RC=0 MINE_RC=0)" '1|wait 1;trial;restart;cleanup;restart;wait 15;cleanup;wait 1;txn fail 4|已取消管理员授权|old'
 eq "…系统代理不是 enana 的: 不碰系统代理" "$(upg_run other NETWORK_MODE=tun RESTART_RC=1 WAIT_RC=1 MINE_RC=1)" '1|wait 1;trial;restart;cleanup;restart;wait 15;cleanup;txn fail 4||old'
 eq "重启成功但 15 秒内端口不通 (TUN): 同样回退" "$(upg_run notready NETWORK_MODE=tun WAIT_RC=1 MINE_RC=0)" '1|wait 1;trial;restart;wait 15;cleanup;restart;wait 15;cleanup;wait 1;apply off quiet;record auto off 0;txn fail 4|已先关闭|old'
 eq "核心没在运行时升级失败: 不拉起服务 (用户停掉的服务不能被升级顺手启动)" "$(upg_run stopdl WAIT_RC=1 INSTALL_RC=1)" '1|wait 1;txn fail 1||old'
 eq "升级前在运行, 替换时核心被停掉 (Windows), 随后失败: 拉起旧核心, 报告保持原版本" "$(upg_run winrevive STOP_IN_INSTALL=1 INSTALL_RC=1 UP_AFTER_RESTART=1)" '1|wait 1;wait 1;restart;wait 15;txn fail 1||old'
 eq "…旧核心也拉不起来: 报告请手动启动" "$(upg_run winfail STOP_IN_INSTALL=1 INSTALL_RC=1)" '1|wait 1;wait 1;restart;wait 15;txn fail 1|没能自动启动|old'
 eq "备份旧核心失败: 不下载、不替换、不碰服务" "$(upg_run nobackup BACKUP_FAIL=1)" '1|wait 1;txn fail 1||old'
+# latest 和现在的核心是同一版: 只有核心能交给 TUN 的 root (core_tun_ok: 来源钉死, 校验之后没被改动) 才算已经最新; 否则照常重新下载这一版, 把来源和摘要记下来
+eq "latest 同一版, 但核心没有来源记录 (2.3.23 及更早装的): 不算已经最新, 重新下载这一版" "$(upg_run samever UPG_WANT=latest)" '0|wait 1;trial;restart;wait 15;txn ok||new'
+eq "…来源标着 pinned, 但核心在校验之后被改动过 (摘要对不上): 同样重新下载" "$(upg_run samechanged UPG_WANT=latest CORE_META=changed)" '0|wait 1;trial;restart;wait 15;txn ok||new'
+eq "…钉死且没有被改动过: 已经是最新, 什么都不做 (不下载、不重启)" "$(upg_run samepinned UPG_WANT=latest CORE_META=pinned)" '0|txn ok||old'
 echo
 echo "== U13. 核心试运行 (core_trial): 副本换成临时端口、临时缓存和日志, 去掉 TUN 入站与系统代理开关 → 不改动 config.json, 不写正式的缓存和日志"
 TR=$UW/trial; rm -rf "$TR"; mkdir -p "$TR"
@@ -779,6 +885,329 @@ eq "正式的混合端口被别的程序占用: 副本换用空闲端口, 试运
 kill "$busy_pid" 2>/dev/null; wait "$busy_pid" 2>/dev/null || true
 eq "假核心启动即崩溃: 试运行失败, 原因写进 core-trial.log, 临时目录清掉" "$(trial_run crash 39811 api FAKE_CRASH=1)" '1|same|none|cleaned|log|crash on start'
 eq "配置里没有 clash_api (无法确认就绪): 不启动核心, 失败, 日志写明原因" "$(trial_run noapi 39812 noapi)" '1|same|none|cleaned|log|no clash_api'
+echo "== U14. 网站条目 (site_entry): 直接读服务文件, 注释 / 空行 / 缩进行不算条目, 找不到或文件不存在时为空, 条目在文件前面时不报 Broken pipe"
+SE=$UW/site-entry; rm -rf "$SE"; mkdir -p "$SE/h/cloud/content" "$SE/nodata"
+{
+  printf '# 注释行\n\n  indented|x|y|pin|a.example|||缩进行\n\ttabbed|x|y|pin|b.example|||缩进行\n#hidden|x|y|pin|c.example|||注释行\n'
+  printf 'alpha|甲|search|auto|alpha.example,alpha2.example|||第一个\nbeta|乙|search|pin|beta.example|||第二个\n'
+  awk 'BEGIN { for (i = 1; i <= 20000; i++) printf "bulk%d|批量|search|auto|bulk%d.example|||占位\n", i, i }'
+} > "$SE/h/cloud/content/services.conf"
+CF_REAL=$(sed -n '/^content_file() {/,/^}/p' "$REPO/lib/common.sh")   # 上面 U4/U5 替换过 content_file (只认 apps.conf), 这里取回 common.sh 里真正的函数
+site_get() { ( eval "$CF_REAL"; H=$SE/h; site_entry "$1" ); }        # 子 shell 里改 H 和 content_file, 不影响后面的测试
+eq "site_entry: 条目原样返回 (前面有注释、空行、缩进行)" "$(site_get alpha)" 'alpha|甲|search|auto|alpha.example,alpha2.example|||第一个'
+eq "site_entry: 文件里最后的条目也能找到" "$(site_get beta)" 'beta|乙|search|pin|beta.example|||第二个'
+eq "site_entry: 注释行 / 缩进行不算条目 (找不到则为空)" "$(site_get indented)$(site_get tabbed)$(site_get hidden)" ""
+eq "site_entry: 没有这个条目 → 空" "$(site_get nope)" ""
+eq "site_entry: 服务文件不存在 → 空, 退出码 0" "$(eval "$CF_REAL"; H=$SE/none; DATA=$SE/nodata; site_entry alpha; echo "rc=$?")" "rc=0"
+se_err=$( (trap '' PIPE; eval "$CF_REAL"; H=$SE/h; site_entry alpha >/dev/null) 2>&1 )
+eq "site_entry: 条目在前、后面还有 2 万行, SIGPIPE 被忽略 (api.log 的情形) 时不报 Broken pipe" "$(printf '%s' "$se_err" | grep -c 'Broken pipe')" "0"
+
+echo "== U15. 程序文件替换 (install.sh install_files): 复制 / 换入 / VERSION 失败时原来的 lib 与 data 原样保留; 成功后与源码一致; 缺 common.sh 时安装器与 lib/api.sh 报错退出"
+IF=$UW/install-files; rm -rf "$IF"; mkdir -p "$IF"
+fn_src() { sed -n "/^$1() {/,/^}/p" "$REPO/install.sh"; }        # install.sh 末尾会直接运行安装, 不能整个 source, 只取出需要的函数
+mk_old() { rm -rf "$1"; mkdir -p "$1/lib" "$1/data"; printf 'OLD-LIB\n' > "$1/lib/marker.sh"; printf 'OLD-DATA\n' > "$1/data/marker"; }
+leftovers() { ls -d "$1".stage.* "$1".old.* 2>/dev/null | wc -l | tr -d ' '; }
+PT=$(fn_src _program_tree_fail; fn_src program_tree_replace; fn_src install_files)
+mk_old "$IF/a/h"
+( H=$IF/a/h; SRC=$REPO; eval "$PT"; cp() { return 1; }; install_files ) >/dev/null 2>&1; rc=$?
+eq "复制失败 (cp 报错): 安装中止, 退出码非 0" "$([ "$rc" != 0 ] && echo aborted)" "aborted"
+eq "复制失败: 原来的 lib 与 data 原样保留" "$(cat "$IF/a/h/lib/marker.sh" "$IF/a/h/data/marker" | paste -sd, -)" "OLD-LIB,OLD-DATA"
+eq "复制失败: 没有留下临时目录" "$(leftovers "$IF/a/h")" "0"
+mk_old "$IF/b/h"
+( H=$IF/b/h; SRC=$REPO; eval "$PT"; mv() { case $1 in *.stage.*) return 1 ;; esac; command mv "$@"; }; install_files ) >/dev/null 2>&1; rc=$?
+eq "换入失败 (新目录挪不进去): 安装中止, 退出码非 0" "$([ "$rc" != 0 ] && echo aborted)" "aborted"
+eq "换入失败: 旧的 lib 与 data 换回原位, 原样保留" "$(cat "$IF/b/h/lib/marker.sh" "$IF/b/h/data/marker" | paste -sd, -)" "OLD-LIB,OLD-DATA"
+eq "换入失败: 没有留下临时目录" "$(leftovers "$IF/b/h")" "0"
+mk_old "$IF/c/h"; mkdir -p "$IF/c/src"; cp -R "$REPO/lib" "$REPO/data" "$IF/c/src/"; printf 'not-a-version\n' > "$IF/c/src/VERSION"
+( H=$IF/c/h; SRC=$IF/c/src; eval "$PT"; install_files ) >/dev/null 2>&1; rc=$?
+eq "VERSION 不对: 安装中止, 退出码非 0" "$([ "$rc" != 0 ] && echo aborted)" "aborted"
+eq "VERSION 不对: 原来的 lib 与 data 原样保留" "$(cat "$IF/c/h/lib/marker.sh" "$IF/c/h/data/marker" | paste -sd, -)" "OLD-LIB,OLD-DATA"
+mk_old "$IF/d/h"
+( H=$IF/d/h; SRC=$REPO; eval "$PT"; install_files ) >/dev/null 2>&1; rc=$?
+eq "成功: 退出码 0" "$rc" "0"
+eq "成功: lib 与源码一致 (旧的 marker 已经不在了)" "$(diff -rq "$REPO/lib" "$IF/d/h/lib" >/dev/null 2>&1 && [ ! -e "$IF/d/h/lib/marker.sh" ] && echo same)" "same"
+eq "成功: data 与源码一致" "$(diff -rq "$REPO/data" "$IF/d/h/data" >/dev/null 2>&1 && echo same)" "same"
+eq "成功: 没有留下临时目录" "$(leftovers "$IF/d/h")" "0"
+EG=$IF/entry; mkdir -p "$EG/api"; cp "$REPO/install.sh" "$EG/install.sh"; cp "$REPO/lib/api.sh" "$EG/api/api.sh"
+out=$( cd "$EG" && bash "$EG/install.sh" </dev/null 2>&1 ); rc=$?
+eq "install.sh (已安装的 enana 也是它): 缺 lib/common.sh 时报错退出, 退出码 1, 写明原因" "rc=$rc:$(printf '%s' "$out" | grep -c '无法加载')" "rc=1:1"
+out=$( cd "$EG/api" && bash "$EG/api/api.sh" </dev/null 2>&1 ); rc=$?
+eq "lib/api.sh: 缺 common.sh 时报错退出, 退出码 1, 写明原因" "rc=$rc:$(printf '%s' "$out" | grep -c '无法加载')" "rc=1:1"
+echo
+echo "== U14. 更新失败记在真正失败的那一步 · 原因取最后一条「✗」 · api.log 带时间 · 轮转 · 诊断导出的 api.log 尾部 · 任务文件只留最近的 · 管理员框的结果 · 打码 · 导入失败删掉粘贴的数据"
+(
+  H=$UW/h14u; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$H/jobs" "$LOGS"; : > "$H/api.log"
+  update_check() { :; }; update_has_new() { return 0; }                     # 不联网: 假装有新版本
+  jst() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["state"] + ":" + ",".join(s["state"] for s in d["steps"]))' "$1"; }
+  upd() { awk -F'\t' '$3 == "更新 enana" { print $4 "\t" $5 }' "$LOGS"/ops-*.log 2>/dev/null; }
+  STEPS='检查新版本|下载并校验新版本|安装并重新生成配置|完成'
+  export T14_H=$H
+  cat > "$H/get.sh" <<'SH'
+#!/bin/bash
+ls "$T14_H/jobs" > "$T14_H/seen.txt" 2>/dev/null                         # 更新运行中: 错误文件在 jobs/ 下、以任务编号命名
+echo '##job 0 10 检查新版本'
+echo '##job 1 30 下载并校验新版本'
+echo '##job 2 50 安装并重新生成配置'
+printf '\n  \033[31m✗ 旧的错误\033[0m\n' >&2
+printf '    detail\n' >&2
+printf '\n  ✗ 安装器没有通过校验\n' >&2
+exit 1
+SH
+  JOB_NAME=self-update; JOB_ID=$(job_new self-update "$STEPS"); op_self_update >/dev/null 2>&1
+  eq "更新失败: 进度记在真正失败的那一步 (第 3 步 error, 前两步 done, 后面 todo), 不再硬编码第 2 步" "$(jst "$H/jobs/$JOB_ID.json")" "error:done,done,error,todo"
+  eq "操作记录: 失败的步骤和原因 (最后一条 ✗ 行) 写进详情, 结果 error" "$(upd | tail -n 1)" "from=$VERSION step=安装并重新生成配置 reason=安装器没有通过校验	error"
+  eq "api.log: 两条 ✗ 行都带日期时间, 颜色码去掉了" "$(grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} +✗ ' "$H/api.log"):$(grep -c "$(printf '\033')" "$H/api.log")" "2:0"
+  eq "错误输出按任务各写一个文件 (jobs/<任务编号>.get.err): 运行中可以看到它, 结束后删掉" "$(grep -cx "$JOB_ID.get.err" "$H/seen.txt"):$(test -e "$H/jobs/$JOB_ID.get.err" && echo left || echo gone)" "1:gone"
+  cat > "$H/get.sh" <<'SH'
+#!/bin/bash
+printf '\n  ✗ 连不上下载服务\n' >&2
+exit 1
+SH
+  JOB_ID=$(job_new self-update "$STEPS"); op_self_update >/dev/null 2>&1
+  eq "没有任何进度就失败: 记在第 1 步 (检查新版本), 不是安装那一步" "$(jst "$H/jobs/$JOB_ID.json")" "error:error,todo,todo,todo"
+  eq "…原因是这条 ✗ 行, 步骤名用默认的「检查新版本」" "$(upd | tail -n 1)" "from=$VERSION step=检查新版本 reason=连不上下载服务	error"
+  cat > "$H/get.sh" <<'SH'
+#!/bin/bash
+echo '##job 3 100 完成'
+exit 0
+SH
+  echo 9.9.9 > "$H/VERSION"
+  JOB_ID=$(job_new self-update "$STEPS"); op_self_update >/dev/null 2>&1
+  eq "成功: 四步全部 done, 操作记录写「旧版本 → 新版本」 ok" "$(jst "$H/jobs/$JOB_ID.json"):$(upd | tail -n 1)" "done:done,done,done,done:$VERSION → 9.9.9	ok"
+)
+(
+  H=$UW/h14k; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$H/jobs" "$LOGS"; : > "$H/api.log"
+  update_check() { :; }; update_has_new() { return 0; }
+  export T14_H=$H
+  cat > "$H/get.sh" <<'SH'
+#!/bin/bash
+echo '##job 1 30 下载并校验新版本'
+printf '\n  ✗ 写到一半被结束\n' >&2
+kill -TERM "$PPID"; exit 1                                              # 模拟: 更新进程在下载途中被结束
+SH
+  JOB_NAME=self-update; JOB_ID=$(job_new self-update 'a|b|c')
+  ( op_self_update ) >/dev/null 2>&1; rc=$?                             # 这一层被结束 (不是外面的测试进程)
+  eq "更新进程中途被结束 (TERM): 退出码 143; 写到一半的 ✗ 行在退出时补进 api.log (带日期时间); 错误文件删掉; 没有写操作记录" "$rc:$(grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8} +✗ 写到一半被结束$' "$H/api.log"):$(test -e "$H/jobs/$JOB_ID.get.err" && echo left || echo gone):$(cat "$LOGS"/ops-*.log 2>/dev/null | grep -c '更新 enana')" "143:1:gone:0"
+)
+(
+  H=$UW/h14r; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"
+  printf 'old-3\n' > "$H/api.log.3"; printf 'old-2\n' > "$H/api.log.2"; printf 'old-1\n' > "$H/api.log.1"
+  head -c 1000000 /dev/zero | tr '\0' a > "$H/api.log"
+  logs_rotate_api
+  eq "api.log 不到 5 MB: 不轮转, 三代都不动" "$(cat "$H/api.log.1"):$(cat "$H/api.log.2"):$(cat "$H/api.log.3")" "old-1:old-2:old-3"
+  { head -c 5300000 /dev/zero | tr '\0' b; echo; echo LATEST-LINE; } > "$H/api.log"
+  logs_rotate_api
+  eq "超过 5 MB: 当前文件转成第 1 代 (内容保留), 原第 1 代 → 第 2 代, 原第 2 代 → 第 3 代, 最旧的那一代删掉" "$(tail -n 1 "$H/api.log.1"):$(cat "$H/api.log.2"):$(cat "$H/api.log.3")" "LATEST-LINE:old-1:old-2"
+  eq "轮转后当前的 api.log 是空的, 之后的日志接着写进来" "$(wc -c < "$H/api.log" | tr -d ' ')" "0"
+  { head -c 5300000 /dev/zero | tr '\0' c; } > "$H/api.log"; logs_maintain >/dev/null 2>&1
+  eq "日常 / 每小时的维护 (logs_maintain) 也会检查轮转" "$(wc -c < "$H/api.log" | tr -d ' '):$(test -s "$H/api.log.1" && echo gen1)" "0:gen1"
+)
+(
+  H=$UW/h14t; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"
+  printf 'old\n' > "$H/api.log.2"; printf 'new\n' > "$H/api.log.1"
+  python3 -c 'import os,sys,time; t=time.time()-3*86400; os.utime(sys.argv[1],(t,t))' "$H/api.log.2"
+  LOG_HOURS=24; logs_purge >/dev/null
+  eq "api.log 的历史代也按保留期删: 超过 24 小时的 api.log.2 删掉, 刚写的 api.log.1 留着" "$(test -e "$H/api.log.2" && echo kept || echo gone):$(test -e "$H/api.log.1" && echo kept || echo gone)" "gone:kept"
+)
+(
+  H=$UW/h14d; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"
+  srv_list() { printf 'Pin-A\tsocks\tvps.example.net\t1080\tpin\t\n'; }     # 一台服务器: 标签 Pin-A, 地址 vps.example.net
+  seq -f 'g1-%g' 1 300 > "$H/api.log.1"
+  { seq -f 'cur-%g' 1 5; echo 'router: found process path: /Users/example/Applications/X.app, user: example'; } > "$H/api.log"
+  out=$(_b_apilog)
+  eq "诊断导出的 api.log 尾部: 只取 200 行 (上一代末尾 194 行 + 当前文件 6 行)" "$(printf '%s\n' "$out" | wc -l | tr -d ' '):$(printf '%s\n' "$out" | head -n 1)" "200:g1-107"
+  eq "…行里的用户名打码 (和其它分区一样)" "$(printf '%s\n' "$out" | tail -n 1)" "router: found process path: /Users/<user>/Applications/X.app, user: <user>"
+  printf '2026-10-01 10:00:00 OLD-LINE\ncontinuation-of-old\n' > "$H/api.log.1"
+  printf '2026-10-10 12:00:00 NEW-LINE\n  cont-new\n2026-10-09 23:59:59 BEFORE-WINDOW\nafter-before\n' > "$H/api.log"
+  out=$(_b_apilog '2026-10-10 00:00:00')
+  eq "导出时间范围: 早于范围的行和它的续行不导出; 范围内的行和它的续行导出" "$out" "$(printf '2026-10-10 12:00:00 NEW-LINE\n  cont-new')"
+  printf '2026-10-10 12:00:01 dial 203.0.113.9:443 failed; via [2001:db8:1:2::7]:443; error contacting vps.example.net (Pin-A); ver 2.3.22 at 10:00:00\n' > "$H/api.log"; : > "$H/api.log.1"
+  out=$(_b_apilog '2026-10-10 00:00:00')
+  eq "文字里的 IPv4 / IPv6 同 _b_mask_host 打码 (版本号和时刻不动); 服务器地址 → 同 _b_mask_host, 标签 → <server>" "$out" "2026-10-10 12:00:01 dial 203.0.*.*:443 failed; via [2001:db8:*]:443; error contacting v***.example.net (<server>); ver 2.3.22 at 10:00:00"
+  printf '2026-10-10 12:00:03 connect 203.0.113.9. and addr:2001:db8::1 end; server:198.51.100.7, ok 1.2.3.4.5\n' > "$H/api.log"
+  out=$(_b_apilog '2026-10-10 00:00:00')
+  eq "句末的地址也打码 (句号不算版本号的一部分); 「标签:」后面的 IPv6 打码; 1.2.3.4.5 这类不误伤" "$out" "2026-10-10 12:00:03 connect 203.0.*.*. and addr:2001:db8:* end; server:198.51.*.*, ok 1.2.3.4.5"
+  printf '2026-10-10 12:00:02 fetch https://user:pw123@198.51.100.7:8443/x?token=TOKEN123 and https://feed.example/a/b?key=K9 failed\n' > "$H/api.log"
+  out=$(_b_apilog '2026-10-10 00:00:00')
+  eq "URL: 用户名 / 密码, 路径和查询串去掉; IP 主机打码; 域名保留" "$out" "2026-10-10 12:00:02 fetch https://198.51.*.*:8443/<path> and https://feed.example/<path> failed"
+  out=$(printf 'my-rules|My|direct|1700000000|https://user:pw123@rules.example:8443/tok/abc.srs?key=SECRET99\nCN=https://[2001:db8::1]:443/x?t=ABC\n' | _b_url_redact)
+  eq "自定义规则集 / DNS 地址: user:pass@ 整段去掉 (域名保留, 路径 / 查询串换成 /<path>); IPv6 字面地址打码" "$out" "$(printf 'my-rules|My|direct|1700000000|https://rules.example:8443/<path>\nCN=https://[2001:db8:*]:443/<path>')"
+  out=$(printf 'app.example|203.0.113.9\nlast.example|198.51.100.7' | _b_hosts_mask)
+  eq "hosts.tsv: 最后一行没有换行也导出; IP 打码" "$out" "$(printf 'app.example|203.0.*.*\nlast.example|198.51.*.*')"
+  unset -f srv_list
+  printf '2026-10-10 12:00:02 fetch https://user:pw123@198.51.100.7:8443/x failed\n' > "$H/api.log"; : > "$H/api.log.1"
+  ( logs_bundle 24 snapshot > "$H/bundle.txt" 2>/dev/null )
+  eq "完整诊断 (完整上传用的同一份导出): 辅助服务日志里的 IP / URL 用户名不出现原文, apilog 分区存在" "$(grep -c '198.51.100.7' "$H/bundle.txt"):$(grep -c 'pw123' "$H/bundle.txt"):$(grep -c '^@@SECTION apilog ' "$H/bundle.txt")" "0:0:1"
+)
+(
+  H=$UW/h14j; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$H/jobs" "$LOGS"
+  python3 - "$H/jobs" <<'PY'
+import os, sys, time
+d = sys.argv[1]; now = time.time()
+def w(name, body, t):
+    p = os.path.join(d, name)
+    with open(p, 'w') as f: f.write(body)
+    os.utime(p, (t, t))
+def rec(jid, state, t):
+    w(jid + '.json', '{"ok":true,"id":"%s","name":"core","state":"%s","pct":100,"msg":"ok","steps":[{"label":"a","state":"done"}],"result":{}}\n' % (jid, state), t)
+    w(jid + '.steps', 'a', t)
+for i in range(260):                                             # 260 个已结束的任务, 都在一小时之内: 只留最近的 200 个
+    jid = 'core-%03d' % i; t = now - 3600 + i * 5
+    rec(jid, 'done', t); w(jid + '.ticket', '1', t)
+w('core-259.cred', 'SECRET-CRED', now - 2 * 86400)               # 记录还在最近 200 个之内, 但凭据超过一天: 删
+w('core-258.body', 'BODY', now - 60)                              # 刚写的: 留着
+rec('old-done', 'done', now - 2 * 86400); w('old-done.cred', 'OLD-CRED', now - 2 * 86400)   # 超过一天的已结束任务: 整份删, 即使数量没超
+rec('err-old', 'error', now - 3 * 86400)
+rec('apply-run', 'running', now - 3 * 86400); w('apply-run.cred', 'LIVE-CRED', now - 3 * 86400); w('apply-run.pid', '1', now - 3 * 86400)   # 进行中: 一个文件都不动
+w('stale.steps', 'x', now - 3 * 86400); w('fresh.steps', 'x', now); w('stale.body', 'x', now - 2 * 86400)   # 没有记录的残留
+PY
+  job_prune
+  eq "只留最近 200 个已结束的任务 (最旧的 60 个删掉, 最新的 core-259 还在)" "$(ls "$H/jobs" | grep -c '^core-[0-9]*\.json$'):$(test -f "$H/jobs/core-259.json" && echo kept):$(ls "$H/jobs" | grep -c '^core-000\.')" "200:kept:0"
+  eq "超过一天的已结束任务整份删掉 (数量没超也删): old-done / err-old 的全部文件" "$(ls "$H/jobs" | grep -c -e '^old-done\.' -e '^err-old\.')" "0"
+  eq "凭据 / 粘贴的数据 (.cred .body): 非运行中的任务超过一天就删, 不管记录还在不在 (core-259.cred 删掉); 刚写的 core-258.body 留着" "$(test -e "$H/jobs/core-259.cred" && echo kept || echo gone):$(test -e "$H/jobs/core-258.body" && echo kept || echo gone)" "gone:kept"
+  eq "进行中的任务一个文件都不动 (记录写着 running, 即使很旧, 包括它的凭据)" "$(ls "$H/jobs" | grep -c '^apply-run\.')" "4"
+  eq "没有记录的残留文件: 超过一天的删掉 (stale.steps / stale.body), 刚写的留着 (fresh.steps)" "$(test -e "$H/jobs/stale.steps" && echo kept || echo gone):$(test -e "$H/jobs/stale.body" && echo kept || echo gone):$(test -e "$H/jobs/fresh.steps" && echo kept || echo gone)" "gone:gone:kept"
+  J=$(job_new apply 'a|b')
+  eq "新建任务时也会整理: 已结束的仍是 200 个; 新任务和进行中的旧任务都还在" "$(grep -L '"state":"running"' "$H/jobs"/*.json | wc -l | tr -d ' '):$(test -f "$H/jobs/$J.json" && echo new-kept):$(test -f "$H/jobs/apply-run.json" && echo run-kept)" "200:new-kept:run-kept"
+)
+(
+  H=$UW/h14i; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$H/jobs" "$LOGS"
+  JID=imp-test-1; printf 'host-x PW-IMPORT-SECRET\n' > "$H/jobs/$JID.body"          # 粘贴的服务器数据 (整批都不合格: 导入失败)
+  ( job_dispatch servers-import "$JID" '' merge '' '' '' '' '' ) >/dev/null 2>&1
+  eq "服务器导入失败 (整批都不合格): 粘贴的数据在进程结束时删掉; 任务记为失败" "$(test -e "$H/jobs/$JID.body" && echo left || echo gone):$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["state"])' "$H/jobs/$JID.json")" "gone:error"
+)
+(
+  H=$UW/h14f; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"
+  logs_days() { : > "$H/logs_days_called"; }
+  printf '2026-10-10 09:00:00\tdashboard\t更新 enana\tfrom=2.3.22 step=安装并重新生成配置 reason=/Users/example/.enana/x\terror\n' > "$LOGS/ops-2026-10-10.log"
+  printf '2026-10-11 10:00:00\tdashboard\t更新 enana\t2.3.22 → 2.3.23\tok\n' > "$LOGS/ops-2026-10-11.log"
+  eq "诊断导出: 之后又有成功的更新 → 不报告旧的失败 (写 none)" "$(_b_update_failed)" "update.last_failed=none"
+  rm -f "$LOGS/ops-2026-10-11.log"
+  eq "最近一次更新失败: 写时间 + 详情, 路径里的用户名打码" "$(_b_update_failed)" "$(printf 'update.last_failed.ts=2026-10-10 09:00:00\nupdate.last_failed.detail=from=2.3.22 step=安装并重新生成配置 reason=/Users/<user>/.enana/x')"
+  eq "…只读操作记录, 不调用 logs_days (不扫 sing-box.log)" "$(test -e "$H/logs_days_called" && echo called || echo none)" "none"
+  : > "$LOGS/ops-2026-10-10.log"
+  eq "没有更新记录: 写 none" "$(_b_update_failed)" "update.last_failed=none"
+  printf '2026-10-10 09:00:00\tdashboard\t更新 enana\tfrom=2.3.22 step=检查新版本 reason=x\terror\n' > "$LOGS/ops-2026-10-10.log"
+  eq "没有选操作记录的导出: env 不带 update.last_failed" "$(BUNDLE_OPS=0; _b_helperlogs | grep -c 'update.last_failed')" "0"
+  eq "选了操作记录的导出: env 带 update.last_failed" "$(BUNDLE_OPS=1; _b_helperlogs | grep -c '^update.last_failed.ts=')" "1"
+)
+(
+  H=$UW/h14o; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"
+  printf '2026-10-10 09:00:00\tdashboard\t添加自己的服务器\thost=203.0.113.9 code=E_X\terror\n2026-10-10 09:01:00\tdashboard\t探测服务器\thost=vps.example.net:22 os=Ubuntu\tok\n' > "$LOGS/ops-2026-10-10.log"
+  out=$(_b_ops "" 2026-10-10)
+  eq "导出的操作记录: 详情里的 host= 打码 (IPv4 / 域名, 端口保留), 其它详情和结果不动" "$(printf '%s\n' "$out" | tail -n 2)" "$(printf '2026-10-10 09:00:00\tdashboard\t添加自己的服务器\thost=203.0.*.* code=E_X\terror\n2026-10-10 09:01:00\tdashboard\t探测服务器\thost=v***.example.net:22 os=Ubuntu\tok')"
+)
+(
+  H=$UW/h14v; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$H/jobs" "$LOGS"
+  job_write() { :; }
+  JOB_NAME=vps-probe JOB_ID=vps-probe-x V_HOST=203.0.113.9 V_PORT=22 VPS_CODE=E_SSH_UNREACHABLE VPS_ATTEMPT=3 VPS_ATTEMPTS=3 vps_job_error 1
+  eq "探测失败: 记成「探测服务器」一行 (本机记录里 host 原样, 导出时打码), 结果 error" "$(awk -F'\t' '{ print $3 "|" $4 "|" $5 }' "$LOGS"/ops-*.log)" "探测服务器|host=203.0.113.9 code=E_SSH_UNREACHABLE|error"
+)
+(
+  H=$UW/h14a; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"
+  enhanced_configured() { return 0; }; enhanced_restart_fast() { ENHANCED_FAST_WHY=changed; return 1; }
+  core_restart_note() { :; }; core_mark_start() { :; }
+  row() { awk -F'\t' '$3 == "重启核心方式" { print $4 "\t" $5 }' "$LOGS"/ops-*.log | tail -n 1; }
+  os_service_start() { ENHANCED_ADMIN_ERR=cancelled; echo "before=$(cat "$LOGS"/ops-*.log 2>/dev/null | wc -l | tr -d ' ')" > "$H/before"; return 1; }
+  os_service_restart; rc=$?
+  eq "管理员框被取消: 操作记录写 via=admin why=changed rc=1, 结果 cancelled (不再先写 ok)" "$rc:$(row)" "1:mode=tun via=admin why=changed rc=1	cancelled"
+  eq "…这一行是在管理员框的结果出来之后才写 (框弹出时还没有任何记录)" "$(cat "$H/before")" "before=0"
+  os_service_start() { ENHANCED_ADMIN_ERR=failed; return 3; }
+  os_service_restart; rc=$?
+  eq "管理员框之后失败: 结果 error, 带上返回码" "$rc:$(row)" "3:mode=tun via=admin why=changed rc=3	error"
+  os_service_start() { return 0; }
+  os_service_restart; rc=$?
+  eq "成功: 结果 ok, 没有返回码" "$rc:$(row)" "0:mode=tun via=admin why=changed	ok"
+  sudo() { return 1; }
+  osascript() { echo 'execution error: User canceled. (-128)' >&2; return 1; }
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
+  eq "弹框被取消: 返回 1, 结果 cancelled, 错误文字照样输出 (弹框本身不变)" "$rc:$ENHANCED_ADMIN_ERR:$(enhanced_result "$rc"):$(grep -c 'User canceled' "$H/err")" "1:cancelled:cancelled:1"
+  # 取消之后, 同一个操作 (这个进程) 里不再弹第二次框: 回滚 / 重试 / 回退重启要授权时直接返回 7 (不是拒绝的 2|3|4|6), 什么都不运行
+  osascript() { : > "$H/osa.again"; return 0; }; rm -f "$H/osa.again"
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
+  eq "…同一个操作里再要管理员授权: 不弹框 (osascript 没被调用), 返回 7, 结果仍记成 cancelled" "$rc:$ENHANCED_ADMIN_ERR:$(enhanced_result "$rc"):$(test -e "$H/osa.again" && echo shown || echo none)" "7:cancelled:cancelled:none"
+  os_admin_dialog '/bin/true y' >/dev/null 2>"$H/err"; rc=$?
+  eq "…系统代理的管理员框 (os_admin_dialog) 也不弹, 返回 7; 文字让 os_sysproxy_apply 认成用户取消" "$rc:$(test -e "$H/osa.again" && echo shown || echo none):$(grep -c 'User canceled' "$H/err")" "7:none:1"
+  ENHANCED_PROMPT_CANCELLED=0                                           # 下面每一项都是一个新的操作 (新的进程)
+  os_admin_dialog '/bin/true y' >/dev/null 2>"$H/err"; rc=$?
+  eq "…新的操作: os_admin_dialog 照常弹框" "$rc:$(test -e "$H/osa.again" && echo shown || echo none)" "0:shown"
+  osascript() { echo 'execution error: something broke (1)' >&2; return 1; }
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
+  eq "弹框的其它失败: 结果 error" "$rc:$ENHANCED_ADMIN_ERR:$(enhanced_result "$rc")" "1:failed:error"
+  osascript() { echo 'execution error: Foo failed (-1280)' >&2; return 1; }
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
+  eq "错误码 -1280 不是取消 (只认带括号的 (-128)): 结果 error" "$rc:$ENHANCED_ADMIN_ERR:$(enhanced_result "$rc")" "1:failed:error"
+  osascript() { echo 'execution error: cannot open /tmp/-128/x (1)' >&2; return 1; }
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
+  eq "路径里含 -128 不是取消: 结果 error" "$rc:$ENHANCED_ADMIN_ERR:$(enhanced_result "$rc")" "1:failed:error"
+  osascript() { echo 'execution error: User canceled. (-128)' >&2; return 1; }
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
+  eq "取消的写法不变: (-128) 仍然是 cancelled" "$rc:$ENHANCED_ADMIN_ERR" "1:cancelled"
+  ENHANCED_PROMPT_CANCELLED=0                                           # (新的操作)
+  osascript() { : > "$H/osa.called"; return 0; }
+  mktemp() { return 1; }
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
+  eq "建不了临时文件: 管理员框照样弹出 (osascript 被调用), 返回 0, 结果 ok" "$rc:$(test -e "$H/osa.called" && echo shown):$(enhanced_result "$rc")" "0:shown:ok"
+  unset -f mktemp
+  osascript() { return 0; }
+  enhanced_admin '/bin/true x' </dev/null 2>"$H/err"; rc=$?
+  eq "弹框通过: 返回 0, 结果 ok" "$rc:$(enhanced_result "$rc")" "0:ok"
+)
+echo
+
+echo "== U16. 后台流程绝不弹管理员框: 自动识别网站 (失败也冷却 24 小时) · 云端自动拉取 (同一版本不再每 10 分钟重试) · 心跳换令牌 · 每分钟的 tick"
+(
+  H=$UW/h16a; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"; NETWORK_MODE=tun
+  srv_list() { printf 'Auto-1\ttrojan\t198.51.100.4\t443\tauto\t\n'; }
+  sleep() { :; }; curl() { printf 'ENANA:000:0'; }                       # 验证访问: 没有任何响应 (不联网, 也不真的等)
+  N=0; op_txn() { N=$((N + 1)); printf '%s|%s|%s\n' "${APPS_BG_JOB:-}" "${OP_WHO:-}" "$1" >> "$H/txn"; [ "$N" -le "${TXN_OK:-0}" ]; }
+  rc=0; autosite_add stuck.example 4 4 timeout Safari stuck.example direct || rc=$?
+  eq "TUN: 自动识别加网站的事务是后台任务 (APPS_BG_JOB=1, 来源 auto): 要授权时撤销, 不弹管理员框" "$(cat "$H/txn")" "1|auto|自动识别: 添加网站到代理"
+  eq "…没加上: 返回 2, 记进冷却 (24 小时内不再试, 以前下一分钟又试一次)" "$rc:$(awk '{print $1}' "$H/.autosite.cool")" "2:stuck.example"
+  : > "$H/txn"; rm -f "$H/.autosite.cool"; N=0; TXN_OK=1; rc=0
+  autosite_add stuck.example 4 4 timeout Safari stuck.example direct || rc=$?
+  eq "…加上了但验证没通过, 撤销的事务也是后台任务; 撤销没成功同样冷却" "$rc:$(paste -sd';' - < "$H/txn"):$(awk '{print $1}' "$H/.autosite.cool")" "2:1|auto|自动识别: 添加网站到代理;1|auto|自动识别: 撤销网站:stuck.example"
+)
+(
+  H=$UW/h16b; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"
+  sync_enabled() { return 0; }; sync_auto() { return 0; }; sync_have_key() { return 0; }; auth_logged_in() { return 0; }; session_id() { printf sid; }
+  RV=5; sync_remote_meta() { R_EXISTS=1; R_VERSION=$RV; return 0; }; snap_hash() { printf H1; }
+  sync_open_remote() { SYNC_IN_VERSION=$RV; return 0; }
+  sync_pull_job() { printf '%s|%s|%s\n' "${APPS_BG_JOB:-}" "${OP_WHO:-}" "$3" >> "$H/pulls"; return "${PULL_RC:-1}"; }
+  sync_push_core() { printf 'push|%s\n' "${OP_WHO:-}" >> "$H/pulls"; return 0; }
+  sync_set BASE_VERSION 3; sync_set SYNCED_HASH H1
+  tick() { sync_set CHECKED 0; sync_auto_tick; }
+  unset OP_WHO APPS_BG_JOB; : > "$H/pulls"; tick
+  eq "云端有新版本 (5), 本机没改动: 自动拉取是后台任务 (APPS_BG_JOB=1), TUN 下要授权就撤销, 不弹管理员框" "$(cat "$H/pulls")" "1|terminal|5"
+  eq "…没应用成功: 记下这个版本 (PULL_FAILED)" "$(sync_get PULL_FAILED | cut -d' ' -f1)" "5"
+  : > "$H/pulls"; tick
+  eq "…10 分钟后同一个云端版本: 不再下载 / 拉取 (24 小时内)" "$(cat "$H/pulls")" ""
+  RV=6; tick
+  eq "…云端出了新版本 (6): 照常再试" "$(cat "$H/pulls")" "1|terminal|6"
+  : > "$H/pulls"; sync_set PULL_FAILED "6 $(( $(now) - 86401 ))"; tick
+  eq "…超过 24 小时: 同一个版本再试一次" "$(cat "$H/pulls")" "1|terminal|6"
+  eval "$(sed -n '/^sync_pull_job() {/,/^}/p' "$LIB/sync.sh")"; op_txn() { return 0; }      # 真实的 sync_pull_job, 应用 (op_txn) 成功
+  sync_pull_job replace 0 6 >/dev/null 2>&1
+  eq "…拉取成功 (自动的, 或者在仪表盘里手动拉取): 记录清掉, BASE_VERSION 跟上" "[$(sync_get PULL_FAILED)]:$(sync_get BASE_VERSION)" "[]:6"
+  snap_hash() { printf H2; }; RV=3; : > "$H/pulls"; tick
+  eq "本机有改动、云端没变: 上传 (来源 terminal), 而且 OP_WHO 不留给 tick 后面的步骤 (以前留下的 terminal 让官方线路在 TUN 下不再推迟)" "$(cat "$H/pulls"):${OP_WHO:-unset}:${APPS_BG_JOB:-unset}" "push|terminal:unset:unset"
+)
+(
+  H=$UW/h16c; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"
+  proxy_set_enabled() { :; }; auth_logout_local() { :; }
+  op_sync_secret() { printf '%s' "${APPS_BG_JOB:-}" > "$H/bg"; return 1; }
+  unset APPS_BG_JOB; session_local_end kicked 401
+  eq "被下线 (心跳里): 让核心换上新令牌的应用是后台任务 (APPS_BG_JOB=1): TUN 下不弹管理员框, 下一次授权的应用再换" "$(cat "$H/bg"):$(cat "$H/notice"):${APPS_BG_JOB:-unset}" "1:kicked:unset"
+)
+(
+  H=$UW/h16d; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"
+  eval "$(sed -n '/^cmd_tick() {/,/^}/p' "$REPO/install.sh")"
+  seen() { printf '%s=%s\n' "$1" "${APPS_BG_JOB:-}" >> "$H/tick"; }
+  stats_collect() { :; }; health_tick() { :; }; logs_tick() { :; }; diag_tick() { :; }; prefs_tick() { :; }
+  session_heartbeat() { seen heartbeat; }; sync_auto_tick() { seen sync; }; official_tick() { seen official; }; autosite_tick() { seen autosite; }
+  unset APPS_BG_JOB; rm -f "$H/.hb.last"; cmd_tick
+  eq "每分钟的 tick (install.sh 的 cmd_tick): 心跳 / 云端同步 / 官方线路 / 自动识别都以后台任务运行 (不弹管理员框); 结束后不留在进程里" "$(paste -sd, - < "$H/tick"):${APPS_BG_JOB:-unset}" "heartbeat=1,sync=1,official=1,autosite=1:unset"
+)
 echo
 PASS=$(wc -l < "$UW/.pass" 2>/dev/null | tr -d ' '); FAIL=$(wc -l < "$UW/.fail" 2>/dev/null | tr -d ' ')
 echo "单元测试: ${PASS:-0} 通过, ${FAIL:-0} 失败"

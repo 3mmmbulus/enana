@@ -159,7 +159,7 @@
       var back = ui.btn(t('ov.restoreAuto'), { sm: true, icon: 'auto' });
       ui.act(back, async function () {
         var why = TP.why.clash(); if (why) { ui.toast(why, 'warn'); return; }
-        var okc = await ui.confirmDialog({ title: t('ov.restore.title'), message: t('ov.restore.msg', { node: gl.now }), detail: t('ov.restore.detail'), confirmText: t('ov.restoreAuto'), rememberKey: 'policy' });
+        var okc = await ui.confirmDialog({ title: t('ov.restore.title'), message: t('ov.restore.msg', { node: gl.now }), detail: TP.tunDetail(t('ov.restore.detail')), confirmText: t('ov.restoreAuto'), rememberKey: 'policy' });
         if (!okc) return;
         await TP.setPolicy('Global', 'AUTO'); ui.toast(t('ov.restore.done'), 'ok');
       });

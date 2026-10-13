@@ -102,7 +102,7 @@
         h('p', { class: 'cfm-m' }, t('upd.apply.msgApp', { from: cur, to: latest })),
         h('b', { class: 'sm' }, t('upd.dlg.notes')),
         h('pre', { class: 'upd-notes' }, U.notes() || t('upd.card.noNotes')),
-        h('ul', { class: 'cfm-list' }, h('li', null, t('upd.apply.dApp1')), h('li', null, t('upd.apply.dApp2')))),
+        h('ul', { class: 'cfm-list' }, h('li', null, t('upd.apply.dApp1')), h('li', null, t('upd.apply.dApp2')), TP.tunNote() ? h('li', null, TP.tunNote()) : null)),
       actions: [
         { label: t('upd.card.later'), onClick: function () { TP.ls.set('update.dismissed', latest); notesOpen = false; renderCard(); ui.toast(t('upd.card.dismissed', { v: latest }), '', 4500); } },
         { label: t('upd.card.update'), kind: 'primary', icon: 'update', autofocus: true, onClick: function (api) { api.close(true); return U.apply('app', true); } }
@@ -130,6 +130,24 @@
   }
   TP.on('auth', function () { renderCard(); });
 
+  /* 更新失败的说明: 原因是后端任务的 msg, 失败的步骤是 steps 里 state 为 error 的那一步 (两者都已由后端按语言给出).
+   * 「当前版本保留不变」只在后端任务结果 (result.kept, 即保留的版本号) 确认时才说; 等辅助服务回来超时 (noBack) 则只说可能已经更新完成 */
+  function failInfo(e, reason, isCore) {
+    var steps = (e && e.data && e.data.steps) || [], kept = e && e.data && e.data.result && e.data.result.kept, step = '', tail = null, i;
+    for (i = 0; i < steps.length; i++) if (steps[i].state === 'error') { step = steps[i].label; break; }
+    if (e && e.noBack) tail = t('upd.fail.maybe');
+    else if (kept) tail = t(isCore ? 'upd.fail.keptCore' : 'upd.fail.kept', { v: String(kept) });
+    return h('div', { class: 'hint bad', role: 'alert' },
+      h('p', null, t('upd.fail.reason', { reason: reason })),
+      step ? h('p', null, t('upd.fail.step', { step: step })) : null,
+      tail ? h('p', null, tail) : null);
+  }
+  /* 查看日志: 在「操作记录」里搜索更新的动作名 (动作名与 lib/ops.sh 写入的文字、data/i18n/en.tsv 的译文一致); 操作记录没有任务编号, 所以按动作名筛 */
+  function openLogs(isCore) {
+    var q = t(isCore ? 'upd.logs.qCore' : 'upd.logs.qApp');
+    if (TP.logs && TP.logs.search) TP.logs.search('ops', q); else TP.go('logs');
+  }
+
   /* ---------- 更新 (app = 仪表盘 + 辅助服务, core = sing-box 核心) ---------- */
   U.apply = async function (what, confirmed) {          // confirmed: 调用方已经弹过确认窗口 (更新窗口里的「更新」按钮), 不再重复确认
     var isCore = what === 'core', u = S.update, tgt = isCore ? (u.core && u.core.latest) : u.latest, from = isCore ? (u.core && u.core.current) : U.version();
@@ -140,7 +158,7 @@
     var ok = confirmed || await ui.confirmDialog({
       title: t(isCore ? 'upd.apply.titleCore' : 'upd.apply.titleApp'),
       message: t(isCore ? 'upd.apply.msgCore' : 'upd.apply.msgApp', { from: from, to: tgt }),
-      detail: isCore ? [t('upd.apply.dCore1'), t('upd.apply.dCore2')] : [t('upd.apply.dApp1'), t('upd.apply.dApp2')],
+      detail: TP.tunDetail(isCore ? [t('upd.apply.dCore1'), t('upd.apply.dCore2')] : [t('upd.apply.dApp1'), t('upd.apply.dApp2')]),
       confirmText: t('upd.apply.go')
     });
     if (!ok) return;
@@ -166,7 +184,7 @@
         for (i = 0; i < 90 && !back; i++) {
           try { await TP.helper('GET', '/api/auth/status', { noAuth: true, timeout: 3000 }); back = true; } catch (e) { await TP.sleep(1000); }
         }
-        if (!back) throw new Error(t('upd.apply.noBack'));
+        if (!back) { var lost = new Error(t('upd.apply.noBack')); lost.noBack = true; throw lost; }
         card.done(t('upd.apply.doneReload', { to: tgt }));
         TP.ss.set('updated', tgt);
         await TP.sleep(700);
@@ -175,10 +193,15 @@
       }
     } catch (e) {
       failed = e && e.kind === 'auth' ? t('upd.apply.authLost') : TP.errMsg(e);
-      card.fail(failed); ui.toast(t('upd.apply.failToast', { reason: failed }), 'err');
+      card.fail(t('upd.fail.head')); ui.toast(t('upd.apply.failToast', { reason: failed }), 'err');
+      modal.body.appendChild(failInfo(e, failed, isCore));
     }
     applying = false; modal.setBusy(false); TP.emit('update'); renderCard();
-    modal.setActions([{ label: t('common.close'), kind: 'primary', cancel: true }]);
+    modal.setActions(failed ? [
+      { label: t('upd.fail.retry'), kind: 'primary', icon: 'refresh', id: 'retry', onClick: function (api) { api.close(true); return U.apply(what, !TP.tunNote()); } },      // 增强模式下重试也先确认 (可能再次弹出管理员授权)
+      { label: t('upd.fail.logs'), icon: 'scroll-text', onClick: function (api) { api.close(true); openLogs(isCore); } },
+      { label: t('common.close'), cancel: true, autofocus: true }                                                                                             // 焦点给「关闭」, 不给「重试」
+    ] : [{ label: t('common.close'), kind: 'primary', cancel: true }]);
     if (!failed) ui.toast(isCore ? t('upd.apply.coreDone', { to: tgt }) : t('upd.apply.okToast'), 'ok');
   };
 })();

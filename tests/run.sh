@@ -16,7 +16,7 @@ HOP_PORT=$((BASE+4)); A_PORT=$((BASE+5)); N_PORT=$((BASE+6)); DOH_PORT=$((BASE+7
 VER=$(cat "$REPO/VERSION" 2>/dev/null || echo 2.1.0)
 export FAKE_STATE=$W/state TESTS_DIR=$HERE HOME=$W/home ENANA_HOME=$W/h ENANA_SHORTCUT_DIR=$W/shortcut ENANA_PLIST_DIR=$W/home/Library/LaunchAgents
 export FAKE_PORT=$BASE PORT=$BASE UI_PORT=$((BASE+1)) API_PORT=$((BASE+2)) SPEED_PORT=$((BASE+3)) ENANA_YES=1 ENANA_SKIP_PROBE=1
-export ENANA_TUN_ROOT="$W/tun-root" ENANA_TUN_PLIST_DIR="$W/tun-plists"
+export ENANA_TEST=1 ENANA_TUN_ROOT="$W/tun-root" ENANA_TUN_PLIST_DIR="$W/tun-plists"
 export ENANA_ACCOUNT_URL=http://127.0.0.1:$A_PORT ENANA_SPEEDTEST_CONF=$W/speedtest.conf ENANA_IPLOOKUP_URL=http://127.0.0.1:$N_PORT/ip ENANA_IPLOOKUP_URL2=http://127.0.0.1:$N_PORT/trace
 export ENANA_CLOUD_PUBKEY=$W/cpub.pem ENANA_UPDATE_BASE=http://127.0.0.1:$N_PORT/dl ENANA_CORE_BASE=http://127.0.0.1:$N_PORT/dl/core MOCK_CORE_DIR=$W/coredl ENANA_CORE_LATEST=98.0.0 ENANA_LANG=zh ENANA_RULE_SOURCE=http://127.0.0.1:$N_PORT/rules/{file} ENANA_DNS_PRESETS=$W/dns-presets.conf
 export ENANA_MOCK_CTL=$W/vpsctl ENANA_VERIFY_IP_URL=http://127.0.0.1:$N_PORT/ipraw ENANA_SSH=$HERE/fakebin/fakessh FAKE_SSH_PW='sshpw-Test-123'
@@ -1463,9 +1463,13 @@ _i=0; while [ "$_i" -lt "${UP:-0}" ]; do echo p >> "$W/.pass"; _i=$((_i+1)); don
 echo "== 18b. 出口分配 (tests/exits.sh: 归属表 / 默认固定出口 / 批量移动与钉住 / 删除与改角色的保护 / 孤儿事件 / 上限 / HTTP 接口)"
 if bash "$HERE/exits.sh" > "$W/exits.out" 2>&1; then tpass "Exit assignment: items, default exit, move/freeze, delete/role/subscription guards, orphan events, cap, HTTP API ($(grep -c '^  ✓' "$W/exits.out") checks)"; else tfail "Exit assignment regression"; grep -E '^==|^  ✗|^      ↳' "$W/exits.out"; fi
 
+echo "== 18c. 外部代理内核与端口归属 (tests/detect.sh: 外部 sing-box 识别 · 只读清单 · 端口归属 · 安装前提醒与非交互行为)"
+if bash "$HERE/detect.sh" > "$W/detect.out" 2>&1; then tpass "Foreign sing-box inventory, port ownership and install-time prompts ($(grep -c '^  ✓' "$W/detect.out") checks)"; else tfail "Foreign sing-box / port ownership regression"; grep -E '^==|^  ✗|^      ↳' "$W/detect.out"; fi
+
 echo "== 19. Enhanced/TUN isolated regressions"
 if SINGBOX="$SB" bash "$HERE/enhanced.sh" > "$W/enhanced.out" 2>&1; then tpass "System/TUN schema, exclusions, PIN priority and socket evidence"; else tfail "Enhanced config regression"; cat "$W/enhanced.out"; fi
 if bash "$HERE/tun-service.sh" > "$W/tun-service.out" 2>&1; then tpass "Root snapshot rollback and route ownership"; else tfail "TUN service regression"; cat "$W/tun-service.out"; fi
+if bash "$HERE/enhanced-root-integrity.sh" > "$W/root-integrity.out" 2>&1; then tpass "Root script integrity (digests, staged tampering, preflight, command environment)"; else tfail "Root script integrity regression"; cat "$W/root-integrity.out"; fi
 if bash "$HERE/vps-probe.sh" > "$W/vps-probe.out" 2>&1; then tpass "Read-only SSH retries, cancellation and launch failure"; else tfail "SSH detection lifecycle regression"; cat "$W/vps-probe.out"; fi
 if bash "$HERE/vps-pending.sh" > "$W/vps-pending.out" 2>&1; then tpass "Deployed-but-unverified recovery: actual port, failure reasons, verify-only retry without redeploying"; else tfail "Deployed-but-unverified recovery regression"; cat "$W/vps-pending.out"; fi
 if command -v node >/dev/null; then

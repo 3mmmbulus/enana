@@ -179,7 +179,7 @@ rm -rf "$W"/snap/rules/ovr-*-[0-9]*
 
 echo "== T4. apply_config 的决策: 免密同步 还是 完整安装 (要管理员授权)"
 export HOME=$W/home ENANA_HOME=$W/h LC_ALL=C ENANA_LANG=zh ENANA_PLATFORM=darwin PORT=37970 UI_PORT=37971 API_PORT=37972 SPEED_PORT=37973 ENANA_NO_DIAG=1
-export FAKE_STATE=$W/state ENANA_ROOT_PREFIX=$W/root FAKE_SUDOERS_DIR=$W/root/etc/sudoers.d ENANA_TUN_ROOT=$W/snap
+export ENANA_TEST=1 FAKE_STATE=$W/state ENANA_ROOT_PREFIX=$W/root FAKE_SUDOERS_DIR=$W/root/etc/sudoers.d ENANA_TUN_ROOT=$W/snap
 mkdir -p "$HOME" "$ENANA_HOME" "$FAKE_STATE" "$ENANA_ROOT_PREFIX"
 export PATH="$HERE/fakebin:$PATH"
 . "$REPO/lib/common.sh"; init_paths "$REPO/install.sh"; LIB=$REPO/lib; DATA=$REPO/data
@@ -189,17 +189,23 @@ load_settings; QUIET=1; mkdir -p "$H/rules" "$LOGS"
 printf 'NETWORK_MODE=tun\n' > "$H/settings.env"
 printf '#!/bin/sh\nexit 0\n' > "$H/sing-box"; chmod +x "$H/sing-box"; SB=$H/sing-box
 # 把 apply_config 依赖的东西换成假的: 配置固定不变, 只统计「核心被重启了几次」
+# 配置和真的一样引用它的规则集文件 (route.rule_set 的本地路径): 指纹只算配置引用到的规则文件 (lib/enhanced.sh 的 enhanced_data_hashes)
 RESTARTS=0
-gen_config() { printf '{"fixed":"config"}' > "$H/config.json.new"; }
+RS='"route":{"rule_set":[{"type":"local","tag":"geosite-cn","format":"binary","path":"'"$H"'/rules/geosite-cn/geosite-cn.srs"}]}'
+gen_config() { printf '{"fixed":"config",%s}' "$RS" > "$H/config.json.new"; }
 ovr_sync() { :; }; _apply_step() { :; }
 os_service_restart() { RESTARTS=$((RESTARTS + 1)); return 0; }
 os_service_loaded() { return 0; }; os_service_pid() { echo 1; }; wait_port() { return 0; }; proxy_sync_mode() { :; }
 enhanced_ready() { return 0; }; enhanced_loaded() { return 0; }
-# 助手: 用测试副本安装到沙箱的「/usr/local/libexec」, sudoers 规则写进沙箱的「/etc/sudoers.d」
+# 助手: 用测试副本安装到沙箱的「/Library/PrivilegedHelperTools/com.enana.proxy」, sudoers 规则写进沙箱的「/etc/sudoers.d」
+# 助手 = enana 自己渲染出来的字节 (enhanced_helper_render, 和 root 安装时用的是同一段函数); 测试不是 root, 所以只把 uid 换成当前用户
+helper_bytes() { enhanced_helper_render "$W/snap" "$LBL" "$W/bin/mock-launchctl" < "$REPO/lib/tunrules-helper.pl" | sed "s/^my \$ROOT_UID = 0;/my \$ROOT_UID = $ME;/"; }
 install_helper() {
   local h; h=$(enhanced_helper_path); mkdir -p "$(dirname "$h")" "$FAKE_SUDOERS_DIR"
-  cp "$W/helper.pl" "$h"; chmod 755 "$h"
+  helper_bytes > "$h"
+  chmod 755 "$h"
   printf '%s ALL=(root) NOPASSWD: %s\n' "$(id -un)" "$h" > "$FAKE_SUDOERS_DIR/enana-tunrules-$ME"
+  enhanced_helper_expected() { helper_bytes | shasum -a 256 | awk '{print $1}'; }      # 测试的期望值 = 此刻渲染出来的字节 (和生产一样不看装上的文件: 换成旧版本的助手就对不上)
 }
 state() { # 把「现状」记成基线: 配置, 再让真实的 enhanced_record_install 记下完整安装之后留下的东西 (核心指纹 / 策略指纹 / 模式)
   cp "$H/config.json.new" "$H/config.json" 2>/dev/null || printf '{"fixed":"config"}' > "$H/config.json"
@@ -230,10 +236,13 @@ hs "…操作记录写明 rejected" "restart=yes err=rejected" "$(ops)"
 reset; install_helper; printf 'changed' > "$H/rules/geosite-cn/geosite-cn.srs"
 apply_config
 eq "规则库 (geosite) 变了 (不是策略): 必须完整安装" "$RESTARTS" "1"
+reset; mkdir -p "$H/rules/geosite-left"; printf 'L' > "$H/rules/geosite-left/geosite-left.srs"
+apply_config; rc=$?
+eq "取消了授权的规则集开关留下了下载 (rules/<x>/<x>.srs, 配置没有引用它): 之后的 TUN 应用不重启 (= 不再每次都要管理员密码)" "$rc:$RESTARTS" "0:0"
 reset; install_helper; printf '{"fixed":"config","new":1}' > "$H/config.json.new"; gen_config() { printf '{"fixed":"config","new":1}' > "$H/config.json.new"; }
 apply_config
 eq "核心配置变了: 必须完整安装" "$RESTARTS" "1"
-gen_config() { printf '{"fixed":"config"}' > "$H/config.json.new"; }
+gen_config() { printf '{"fixed":"config",%s}' "$RS" > "$H/config.json.new"; }
 reset; install_helper; chmod 775 "$(enhanced_helper_path)"; ovr changed.example
 apply_config
 eq "助手文件别人可写 (不可信): 不使用, 完整安装" "$RESTARTS" "1"
@@ -241,8 +250,12 @@ reset; install_helper; rm -f "$FAKE_SUDOERS_DIR"/*; ovr changed.example
 apply_config
 eq "sudoers 规则不在了 (sudo -n 要密码): 完整安装" "$RESTARTS" "1"
 reset; install_helper; NETWORK_MODE=system; printf 'NETWORK_MODE=system\n' > "$H/settings.env"; ovr changed.example
+enhanced_loaded() { return 1; }                                   # 系统代理模式: 根守护进程没有加载 (正常的状态)
 apply_config; rc=$?
 eq "系统代理模式: 完全不涉及助手 (规则本来就是热加载的)" "$rc:$RESTARTS:$(ops | grep -c 同步策略规则)" "0:0:0"
+enhanced_loaded() { return 0; }                                   # 切回系统代理没有完成: 设置是系统代理, 根守护进程却还加载着
+apply_config; rc=$?
+eq "系统代理模式、配置没变, 但根守护进程还加载着: 不能直接返回 (它还在接管流量), 重启一次 (停掉它、启动用户核心); 不走助手同步" "$rc:$RESTARTS:$(ops | grep -c 同步策略规则)" "0:1:0"
 printf 'NETWORK_MODE=tun\n' > "$H/settings.env"
 
 echo "== T5. 指纹: 策略规则文件不再计入「核心」指纹"
@@ -263,7 +276,15 @@ eq "下载 / 写入过程中的 *.new *.tmp 和 .DS_Store: 指纹不变" "$(fp_s
 printf 'y' > "$H/rules/geosite-cn/geosite-cn.srs"
 eq "…但 .srs 的内容变了: 指纹变 (必须完整安装)" "$(fp_same "$F0")" "changed"
 reset; F0=$(enhanced_fingerprint); mkdir -p "$H/rules/geosite-new"; printf 'n' > "$H/rules/geosite-new/geosite-new.srs"
-eq "新增一个 .srs: 指纹变" "$(fp_same "$F0")" "changed"
+eq "新增一个配置没有引用的 .srs (比如取消了授权的规则集开关留下的下载): 指纹不变 (root 的核心不读它)" "$(fp_same "$F0")" "same"
+printf 'm' > "$H/rules/geosite-new/geosite-new.srs"
+eq "…它的内容又变了: 指纹仍不变" "$(fp_same "$F0")" "same"
+printf '{"fixed":"config","route":{"rule_set":[{"type":"local","tag":"geosite-cn","format":"binary","path":"%s/rules/geosite-cn/geosite-cn.srs"},{"type":"local","tag":"geosite-new","format":"binary","path":"%s/rules/geosite-new/geosite-new.srs"}]}}' "$H" "$H" > "$H/config.json"
+eq "新增一个 .srs 并且配置引用了它 (启用了这个规则集): 指纹变" "$(fp_same "$F0")" "changed"
+F1=$(enhanced_fingerprint); printf 'o' > "$H/rules/geosite-new/geosite-new.srs"
+eq "…被引用的 .srs 内容变了: 指纹变 (必须完整安装)" "$(fp_same "$F1")" "changed"
+printf 'not json' > "$H/config.json"; F1=$(enhanced_fingerprint); mkdir -p "$H/rules/geosite-other"; printf 'p' > "$H/rules/geosite-other/geosite-other.srs"
+eq "配置读不懂 (root 那边反正会拒绝): 退回全部规则文件都算, 新增的 .srs 照样让指纹变" "$(fp_same "$F1")" "changed"
 reset; F0=$(enhanced_fingerprint); mkdir -p "$H/certs"; printf 'cert' > "$H/certs/a.crt"
 eq "新增 / 改动证书: 指纹变" "$(fp_same "$F0")" "changed"
 reset; printf '{"a":1,"clash_api":{"default_mode":"Direct"}}' > "$H/config.json"; F0=$(enhanced_fingerprint)
@@ -301,7 +322,7 @@ eq "…平铺文件全部删掉: 指纹仍不变" "$(fp_same "$F0")" "same"
 
 echo "== T4b. 只是记账内容 / 总开关模式变了: 不重启核心 (= 不弹管理员密码框); 真的变了才重启"
 (
-  gen_config() { printf '{"fixed":"config","clash_api":{"default_mode":"%s"}}' "$(proxy_clash_mode)" > "$H/config.json.new"; }
+  gen_config() { printf '{"fixed":"config",%s,"clash_api":{"default_mode":"%s"}}' "$RS" "$(proxy_clash_mode)" > "$H/config.json.new"; }
   printf 'NETWORK_MODE=tun\n' > "$H/settings.env"; load_settings
   reset
   eq "(准备) 完整安装之后记下的模式 = 当时的模式 (总开关关 = Direct)" "$(cat "$H/.enhanced-mode")" "Direct"
@@ -327,7 +348,7 @@ echo "== T4b. 只是记账内容 / 总开关模式变了: 不重启核心 (= 不
   LIVE=Global; apply_config; eq "…核心报告 Global 之后记下, 不再重试" "$(cat "$H/.enhanced-mode")" "Global"
   # 配置里真的有别的变化 (+ 模式也变了): 仍然要完整安装
   printf 'NETWORK_MODE=tun\n' > "$H/settings.env"; load_settings; reset
-  gen_config() { printf '{"fixed":"config","servers":2,"clash_api":{"default_mode":"%s"}}' "$(proxy_clash_mode)" > "$H/config.json.new"; }
+  gen_config() { printf '{"fixed":"config","servers":2,%s,"clash_api":{"default_mode":"%s"}}' "$RS" "$(proxy_clash_mode)" > "$H/config.json.new"; }
   _proxy_set PROXY_ENABLED 1; RESTARTS=0
   apply_config
   eq "default_mode 和别的内容一起变了: 必须完整安装" "$RESTARTS" "1"
@@ -342,7 +363,7 @@ echo "== T6. 重启核心 (os_service_restart): 指纹没变 + 助手可信 → 
   FULL=0; SYS=0
   os_service_start() { FULL=$((FULL + 1)); return 0; }
   os_system_service_restart() { SYS=$((SYS + 1)); return 0; }
-  gen_config() { printf '{"fixed":"config","inbounds":[{"type":"tun"}]}' > "$H/config.json.new"; }
+  gen_config() { printf '{"fixed":"config","inbounds":[{"type":"tun"}],%s}' "$RS" > "$H/config.json.new"; }
   lc() { cat "$W/lc.calls" 2>/dev/null; }
   fresh() { reset; install_helper; : > "$W/lc.calls"; rm -f "$W/lc-fail"; FULL=0; SYS=0; }
   fresh
@@ -350,7 +371,7 @@ echo "== T6. 重启核心 (os_service_restart): 指纹没变 + 助手可信 → 
   eq "TUN 已安装 + 配置 / 规则没变 + 助手可信: 返回 0, 完整安装一次都没走" "$rc:$FULL" "0:0"
   eq "…助手只做了一件事: kickstart -k 这个用户自己的守护进程" "$(lc)" "kickstart -k system/$LBL"
   hs "…操作记录写明是助手重启" "重启核心方式	mode=tun via=helper	ok" "$(ops)"
-  hs "…sudo 调用的是助手本身, 带 restart 参数, 而且是 -n (不等密码)" "^sudo -n $(enhanced_helper_path) restart" "$(cat "$FAKE_STATE/calls.log" 2>/dev/null)"
+  hs "…sudo 调用的是助手本身 (写死的 root 路径, 新位置), 带 restart 参数, 而且是 -n (不等密码)" "^sudo -n /Library/PrivilegedHelperTools/com\.enana\.proxy/tunrules-$ME restart" "$(cat "$FAKE_STATE/calls.log" 2>/dev/null)"
   fresh; ovr changed.example
   os_service_restart
   eq "还有没同步的应用 / 网站策略: 先同步进 root 快照, 再用助手重启 (仍然不走完整安装)" "$FULL:$(grep -c changed.example "$W/snap/rules/ovr-pin/ovr-pin.json"):$(lc)" "0:1:kickstart -k system/$LBL"
@@ -389,13 +410,30 @@ echo "== T6. 重启核心 (os_service_restart): 指纹没变 + 助手可信 → 
   fresh; enhanced_loaded() { return 1; }; enhanced_configured() { return 1; }
   os_service_restart
   eq "System Proxy (既没配 TUN 也没加载): 重启用户自己的核心, 完全不涉及助手 / 完整安装" "$FULL:$SYS:$(lc)" "0:1:"
+  enhanced_loaded() { return 0; }; eval "$(sed -n '/^enhanced_configured()/p' "$LIB/enhanced.sh")"      # 换回 TUN 已安装、正在运行 (上面最后一个用例把它们换掉了)
+  gen_config() { printf '{"fixed":"config","inbounds":[{"type":"tun"}]}' > "$H/config.json.new"; }
+  # 2.3.23 及更早版本装在 /usr/local/libexec/enana 的助手 (升级上来、还没完整安装过): 通过同样严格的检查就照常用, sudo -n 调用旧位置的路径 (免密规则写的就是它)
+  LEGACY=$W/root/usr/local/libexec/enana/tunrules-$ME
+  install_legacy() { mkdir -p "${LEGACY%/*}" "$FAKE_SUDOERS_DIR"; chmod 755 "$W/root/usr" "$W/root/usr/local" "$W/root/usr/local/libexec" "${LEGACY%/*}"; helper_bytes > "$LEGACY"; chmod 755 "$LEGACY"; printf '%s ALL=(root) NOPASSWD: %s\n' "$(id -un)" "$LEGACY" > "$FAKE_SUDOERS_DIR/enana-tunrules-$ME"; }
+  reset; install_legacy; : > "$W/lc.calls"; rm -f "$W/lc-fail"; FULL=0; SYS=0; : > "$FAKE_STATE/calls.log"
+  eq "(准备) 只有旧位置有助手, 它可信: enhanced_helper_root 给出旧位置的写死路径" "$(enhanced_helper_root)" "/usr/local/libexec/enana/tunrules-$ME"
+  os_service_restart; rc=$?
+  eq "只有旧位置的助手: 照样用它重启, 不走完整安装 (不弹管理员密码框)" "$rc:$FULL:$(lc)" "0:0:kickstart -k system/$LBL"
+  hs "…sudo -n 调用的是旧位置的写死路径" "^sudo -n /usr/local/libexec/enana/tunrules-$ME restart" "$(cat "$FAKE_STATE/calls.log" 2>/dev/null)"
+  reset; install_legacy; ovr legacy.example; : > "$W/lc.calls"; FULL=0
+  os_service_restart
+  eq "…还有没同步的策略: 也用旧位置的助手先同步, 再重启" "$FULL:$(grep -c legacy.example "$W/snap/rules/ovr-pin/ovr-pin.json"):$(lc)" "0:1:kickstart -k system/$LBL"
+  reset; install_legacy; chmod 775 "$W/root/usr/local"; : > "$W/lc.calls"; FULL=0
+  os_service_restart
+  eq "旧位置的目录链不合格 (/usr/local 组可写, 老的 Homebrew 会这样): 不用它, 走完整安装 (那次授权把助手装到新位置)" "$FULL:$(lc)" "1:"
+  chmod 755 "$W/root/usr/local"
 )
 
 echo "== T7. 停止已经停掉的守护进程不要管理员授权 (stop 之后 plist 还在; 更完整的覆盖在 tests/enhanced.sh)"
 (
   eval "$(sed -n -e '/^enhanced_idle()/,/^}/p' -e '/^enhanced_stop()/,/^}/p' "$LIB/enhanced.sh")"        # 真实的函数 (前面没有换成假的, 这里只换掉特权调用和 launchd)
-  ADMIN=0; enhanced_admin() { ADMIN=$((ADMIN + 1)); return 0; }
-  enhanced_paths() { TUN_UID=501; TUN_LABEL=com.enana.proxy.tun.501; TUN_PLIST="$W/stop.plist"; }; : > "$W/stop.plist"
+  ADMIN=0; enhanced_admin() { ADMIN=$((ADMIN + 1)); LOADED=0; return 0; }       # 和真的 root stop 一样: 停掉之后守护进程就不在 launchd 里了
+  enhanced_paths() { TUN_UID=501; TUN_LABEL=com.enana.proxy.tun.501; TUN_ROOT="$W/stop-root"; TUN_PLIST="$W/stop.plist"; }; : > "$W/stop.plist"
   LOADED=1; enhanced_loaded() { [ "$LOADED" = 1 ]; }
   launchctl() { return 1; }                                   # launchd 查不到 print-disabled: 只能靠本机记录
   rm -f "$H/.enhanced-stopped"
@@ -406,7 +444,7 @@ echo "== T7. 停止已经停掉的守护进程不要管理员授权 (stop 之后
   enhanced_stop; eq "launchd 说这个任务已禁用 (stop 做的就是这个): 没有任何记录也不要授权" "$ADMIN" "0"
   launchctl() { [ "$1" = print-disabled ] && printf '\t"com.enana.proxy.tun.501" => enabled\n'; }
   enhanced_stop; eq "没加载但仍是启用状态 (被手动 bootout 过): 下次开机会回来, 所以仍要 stop (顺带禁用)" "$ADMIN" "1"
-)
+) || tfail "T7 没有跑完 (子 shell 中途退出: 后面的断言都没有运行)"
 
 echo "== T8. 内容没变的订阅刷新不改动 servers.jsonl (否则文件顺序变 → 配置变 → 核心重启, TUN 下还要管理员授权)"
 (
