@@ -235,7 +235,7 @@ enana * — 代理环境控制台 (服务器/订阅/应用/网站请在仪表盘
   enana env            打印终端代理变量 (命令行工具不读系统代理): eval "$(enana env)"	  enana env            Print the terminal proxy variables (command-line tools don’t read the system proxy): eval "$(enana env)"
   enana uninstall      卸载 (--keep-data 保留数据目录)	  enana uninstall      Uninstall (--keep-data keeps the data directory)
 选项: --yes 全部采用推荐值 · --force 强制重装环境 · --quiet 静默 · --lang zh|en 指定语言	Options: --yes accept all recommended settings · --force force a reinstall · --quiet quiet mode · --lang zh|en set the language
-  注意: --yes / --upgrade 不再覆盖别人设置的系统代理 (跳过这一步, 需要时运行 enana on); 交互安装时回车 = 取消 (外部代理的提醒与系统代理的询问默认都是 n)	  Note: --yes / --upgrade no longer overwrite system proxy settings made by another program (that step is skipped; run enana on when needed); in interactive installs, Enter cancels (the external-proxy warning and the system-proxy question both default to n)
+  注意: --yes / --upgrade 不会覆盖别人设置的系统代理 (跳过这一步, 需要时运行 enana on); 交互安装时回车 = 取消 (外部代理的提醒与系统代理的询问默认都是 n)	  Note: --yes / --upgrade do not overwrite system proxy settings made by another program (that step is skipped; run enana on when needed); in interactive installs, Enter cancels (the external-proxy warning and the system-proxy question both default to n)
 配置已应用	Configuration applied
 配置无效	Invalid configuration
 
@@ -1038,6 +1038,7 @@ sing-box * 没有钉死的 SHA-256, 没有下载 (只接受钉死的官方包)	s
 TUN 没有启动, 新配置没有应用	TUN did not start; the new configuration was not applied
 TUN 没有启动 (*), 代理没有开启	TUN did not start (*); the proxy was not turned on
 已保留当前版本, 没有升级	The current version was kept; nothing was upgraded
+已取消管理员授权, 新配置没有应用	Administrator authorization was cancelled, so the new configuration was not applied
 TUN 没有启动 (*): 请运行 enana upgrade, 或改用系统代理模式; 旧的 TUN 仍在运行	TUN did not start (*): run enana upgrade, or switch to system proxy mode; the old TUN is still running
 TUN 没有启动 (*): 请运行 enana upgrade, 或改用系统代理模式	TUN did not start (*): run enana upgrade, or switch to system proxy mode
 TUN 没有启动 (*): 请运行 enana upgrade; 旧的 TUN 仍在运行	TUN did not start (*): run enana upgrade; the old TUN is still running

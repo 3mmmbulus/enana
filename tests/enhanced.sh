@@ -139,7 +139,7 @@ echo 'PASS: an upgrade re-pins the core only for TUN users whose core is unpinne
   step() { :; }; install_files() { :; }; auth_init() { :; }; srv_migrate_v1() { return 1; }; migrate_v1_domains() { :; }
   sb_ver() { SB_MAJOR=1; SB_MINOR=14; }; lock_take() { return 1; }; op_lock() { return 1; }; op_unlock() { :; }
   snapshot_program() { echo snapshot >> "$W/stcfg.calls"; }; restore_on_fail() { echo "restore $1" >> "$W/stcfg.calls"; }
-  apply_config() { TXN_ERR=$STUB_ERR; return "$STUB_RC"; }
+  apply_config() { TXN_ERR=$STUB_ERR; [ -z "${STUB_ADMIN+x}" ] || ENHANCED_ADMIN_ERR=$STUB_ADMIN; return "$STUB_RC"; }    # STUB_ADMIN: what the administrator dialog reported (unset: left alone)
   run_st() { # <language> <apply_config return code> <TXN_ERR>  -> rc, out
     : > "$W/stcfg.calls"; I18N_LANG=$1; LANG_UI=$1; STUB_RC=$2; STUB_ERR=$3
     out=$( ( st_config ) 2>&1 ); rc=$?
@@ -157,8 +157,21 @@ echo 'PASS: an upgrade re-pins the core only for TUN users whose core is unpinne
   printf '%s\n' "$out" | grep -qF 'The current version was kept; nothing was upgraded' || { echo "FAIL: the kept-version hint is not translated: $out"; exit 1; }
   run_st zh 1 ''                                                           # control: a real validation failure keeps its own message
   printf '%s\n' "$out" | grep -qF '生成的配置没有通过 sing-box 校验' || { echo "FAIL: the validation-failure message is gone: $out"; exit 1; }
+  # A TUN user who cancels the administrator dialog during the upgrade: apply_config returns 3 with ENHANCED_ADMIN_ERR=cancelled. Root never ran and the old
+  # TUN keeps running, so say the authorization was cancelled and the current version was kept, not "the new configuration could not start the proxy core"
+  STUB_ADMIN=cancelled; run_st zh 3 ''
+  [ "$rc" = 1 ] || { echo "FAIL: a cancelled authorization must stop the installer (rc=$rc)"; exit 1; }
+  printf '%s\n' "$out" | grep -qF '✗ 已取消管理员授权, 新配置没有应用' || { echo "FAIL: a cancelled authorization was not reported as cancelled: $out"; exit 1; }
+  printf '%s\n' "$out" | grep -qF '已保留当前版本, 没有升级' || { echo "FAIL: not told that the current version was kept after a cancel: $out"; exit 1; }
+  ! printf '%s\n' "$out" | grep -qF '新配置没能让代理核心启动' || { echo "FAIL: a cancelled authorization was reported as a core start failure: $out"; exit 1; }
+  [ "$(paste -sd, - < "$W/stcfg.calls")" = 'snapshot,restore 1' ] || { echo "FAIL: the upgrade rollback did not run after a cancel: $(cat "$W/stcfg.calls")"; exit 1; }
+  run_st en 3 ''
+  printf '%s\n' "$out" | grep -qF 'Administrator authorization was cancelled, so the new configuration was not applied' || { echo "FAIL: the cancel message is not translated: $out"; exit 1; }
+  unset STUB_ADMIN; ENHANCED_ADMIN_ERR=cancelled; run_st zh 3 ''       # control: a cancel left over from before st_config is not this apply's result; a real start failure keeps its message
+  printf '%s\n' "$out" | grep -qF '✗ 新配置没能让代理核心启动, 已回滚到原来的配置' || { echo "FAIL: a stale cancel hid a core start failure: $out"; exit 1; }
+  ENHANCED_ADMIN_ERR=''
 ) || exit 1
-echo 'PASS: a TUN refusal while installing reports its reason, keeps the current version and still rolls back'
+echo 'PASS: a TUN refusal or a cancelled authorization while installing reports what happened, keeps the current version and still rolls back'
 (
   SB=${SINGBOX:-$(type -P true)}
   cp "$W/tun.json" "$H/config.json"

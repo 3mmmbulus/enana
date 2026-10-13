@@ -258,10 +258,13 @@ st_config() {
   [ "$SB_MAJOR" -gt 1 ] || [ "$SB_MINOR" -ge 12 ] || warn "sing-box $(core_version) 偏旧, 建议 enana upgrade"
   if lock_take; then apps_scan >/dev/null 2>&1 || true; lock_drop; fi     # 识别已安装的应用 (升级时顺便修好 2.1.0 留下的「浏览器被设成直连」); 这之后才装的应用才算「新应用」
   local rc
+  ENHANCED_ADMIN_ERR=''                       # 管理员框这一次的结果 (见 lib/enhanced.sh 的 enhanced_admin), 和 op_txn 一样从头记
   if op_lock; then apply_config; rc=$?; op_unlock; else apply_config; rc=$?; fi      # 和仪表盘里的配置任务排队: 两边同时改 config.json 会让社区规则集被临时停用
   case $rc in
     0) ;;
-    3) die "新配置没能让代理核心启动, 已回滚到原来的配置" "日志: $H/sing-box.log   $(tail -n 3 "$H/sing-box.log" 2>/dev/null | tr '\n' ' ')" ;;
+    # 3 + cancelled = TUN 用户在升级时取消了管理员密码框: root 什么都没运行, 原来的 TUN 照常接管, 不是「核心没能启动」。EXIT 陷阱照常还原程序文件
+    3) if [ "${ENHANCED_ADMIN_ERR:-}" = cancelled ]; then die "已取消管理员授权, 新配置没有应用" "已保留当前版本, 没有升级"; fi
+       die "新配置没能让代理核心启动, 已回滚到原来的配置" "日志: $H/sing-box.log   $(tail -n 3 "$H/sing-box.log" 2>/dev/null | tr '\n' ' ')" ;;
     # 5 = TUN 被拒绝 (root 什么都没改动, 原来的配置放回去了, 流量接管方式不变; 见 lib/config.sh 的 config_tun_refused): 原因在 TXN_ERR 里, 和配置校验无关。EXIT 陷阱照常还原程序文件
     5) die "${TXN_ERR:-TUN 没有启动, 新配置没有应用}" "已保留当前版本, 没有升级" ;;
     *) die "生成的配置没有通过 sing-box 校验" "$(head -c 400 "$H/check.log" 2>/dev/null | tr '\n' ' ') — 请把这段信息反馈出来" ;;
@@ -584,7 +587,7 @@ $(_t "  enana open           打开仪表盘")
 $(_t "  enana env            打印终端代理变量 (命令行工具不读系统代理): eval \"\$(enana env)\"")
 $(_t "  enana uninstall      完整卸载 (删除全部本机数据)")
 $(_t "选项: --yes 全部采用推荐值 · --force 强制重装环境 · --quiet 静默 · --lang zh|en 指定语言")
-$(_t "  注意: --yes / --upgrade 不再覆盖别人设置的系统代理 (跳过这一步, 需要时运行 enana on); 交互安装时回车 = 取消 (外部代理的提醒与系统代理的询问默认都是 n)")
+$(_t "  注意: --yes / --upgrade 不会覆盖别人设置的系统代理 (跳过这一步, 需要时运行 enana on); 交互安装时回车 = 取消 (外部代理的提醒与系统代理的询问默认都是 n)")
 EOF
 }
 
