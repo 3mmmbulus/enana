@@ -33,6 +33,7 @@ with zipfile.ZipFile(package) as z:
     assert z.read(f'enana-{version}/get.ps1')==(release/'get.ps1').read_bytes()
 assert b'https://install.enana.cc/get.ps1' in (site/'index.html').read_bytes()
 assert b'windows-manifest.json' in (site/'site.js').read_bytes()
+assert (site/'site.css').is_file()   # index.html needs the matching stylesheet: publish them together
 print('Verified Windows package, bootstrap and website entry.')
 PY
 backup="/var/backups/enana/releases/windows-$version-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -54,7 +55,7 @@ snapshot_macos > "$backup/macos.before"
 for name in get.ps1 windows-manifest.json windows-manifest.json.sig windows-CHANGELOG.md; do
   [ ! -e "$dl/$name" ] || cp -p "$dl/$name" "$backup/download/$name"
 done
-for name in index.html site.js; do cp -p "$site/$name" "$backup/site/$name"; done
+for name in index.html site.js site.css; do [ ! -e "$site/$name" ] || cp -p "$site/$name" "$backup/site/$name"; done
 committed=0
 rollback() {
   rc=$?
@@ -62,7 +63,7 @@ rollback() {
     for name in get.ps1 windows-manifest.json windows-manifest.json.sig windows-CHANGELOG.md; do
       if [ -e "$backup/download/$name" ]; then cp -p "$backup/download/$name" "$dl/$name"; else rm -f "$dl/$name"; fi
     done
-    for name in index.html site.js; do cp -p "$backup/site/$name" "$site/$name"; done
+    for name in index.html site.js site.css; do if [ -e "$backup/site/$name" ]; then cp -p "$backup/site/$name" "$site/$name"; else rm -f "$site/$name"; fi; done
     rm -f "$dl/$archive"
   fi
   rm -f "$dl/.enana-windows-publish-$$" "$site/.enana-windows-publish-$$"
@@ -74,7 +75,7 @@ for name in "$archive" get.ps1 windows-CHANGELOG.md windows-manifest.json.sig wi
   install -m 644 -o root -g root "$release/$name" "$dl/.enana-windows-publish-$$"
   mv -f "$dl/.enana-windows-publish-$$" "$dl/$name"
 done
-for name in index.html site.js; do
+for name in index.html site.js site.css; do
   install -m 644 -o root -g root "$site_source/$name" "$site/.enana-windows-publish-$$"
   mv -f "$site/.enana-windows-publish-$$" "$site/$name"
 done
