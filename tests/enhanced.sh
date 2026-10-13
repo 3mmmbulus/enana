@@ -155,9 +155,25 @@ echo 'PASS: an upgrade re-pins the core only for TUN users whose core is unpinne
   want_replan 'TUN, pinned and unchanged: keep the core' tun 1.14.5 skip 'skip||'
   printf '%064d\n' 0 > "$H/core-binary.sha256"
   want_replan 'TUN, pinned but changed after it was verified: re-pin' tun 1.14.5 skip 'chain|1.14.5|1'
+  printf 'pinned 1.13.0 %064d\n' 0 > "$H/core-provenance"; shasum -a 256 "$SB" | awk '{print $1}' > "$H/core-binary.sha256"
+  want_replan 'TUN, pinned and unchanged but older than CORE_PIN: keep it (a reinstall never upgraded a usable core)' tun 1.13.0 skip 'skip||'
   rm -f "$H/core-provenance" "$H/core-binary.sha256"
+  want_replan 'System Proxy, core older than CORE_PIN: keep it as before' system 1.13.0 skip 'skip||'
   why=$(NETWORK_MODE=tun; CUR=1.14.5; ST_core=1; REC_core=skip; reinstall_core_plan; printf '%s' "$WHY_core")
   case $why in 'TUN 需要官方的'*'sing-box 1.14.5'*) ;; *) echo "FAIL: the install menu does not say why the core is downloaded again: [$why]"; exit 1 ;; esac
+  # cmd_install must call it in the non-upgrade branch, before the menu is built from REC_core
+  sed -n '/^cmd_install() {/,/^}/p' "$REPO/install.sh" | awk '/^    upgrade_core_plan$/ { u = NR } /^  else$/ { if (u && !e) e = NR } /^    reinstall_core_plan$/ { r = NR } /^  build_menu$/ { b = NR } END { exit !(u && e > u && r > e && b > r) }' \
+    || { echo 'FAIL: cmd_install does not call reinstall_core_plan in its non-upgrade branch before build_menu'; exit 1; }
+  # The menu then offers only the official download: Homebrew or a local package would be refused by TUN (and core_install refuses them under CORE_PINNED_ONLY)
+  eval "$(sed -n '/^build_menu() {/,/^}/p' "$REPO/install.sh")"
+  . "$LIB/menu.sh" || { echo 'FAIL: lib/menu.sh did not load'; exit 1; }
+  core_row() { local i=0; while [ "$i" -lt "$M_N" ]; do if [ "$(_mn_get ID "$i")" = core ]; then printf '%s|%s|%s' "$(_mn_get VAL "$i")" "$(_mn_get OPTS "$i")" "$(_mn_get LOCK "$i")"; return 0; fi; i=$((i + 1)); done; }
+  BREW=/opt/homebrew/bin/brew; LANG_UI=zh; REC_rules=1; REC_autostart=1; REC_updater=1; REC_sysproxy=1; REC_shortcut=1
+  WHY_core=x; WHY_rules=x; WHY_autostart=x; WHY_updater=x; WHY_sysproxy=x; WHY_shortcut=x
+  got=$(REC_core=chain; CORE_PINNED_ONLY=1; build_menu; core_row)
+  [ "$got" = 'chain|chain:GitHub 官方包(多线路+校验)|1' ] || { echo "FAIL: a pinned-only re-pin must lock the core row to the official download: [$got]"; exit 1; }
+  got=$(REC_core=chain; unset CORE_PINNED_ONLY; build_menu; core_row)
+  case $got in 'chain|chain:'*'|brew:Homebrew|local:'*'|0') ;; *) echo "FAIL: a normal core install must still offer Homebrew and a local package: [$got]"; exit 1 ;; esac
 ) || exit 1
 echo 'PASS: re-running the install command re-pins the core only for TUN users whose core TUN cannot use'
 # st_config (install.sh) when apply_config returns 5: TUN was refused (config_tun_refused keeps the capture mode, puts the old configuration back and gives the reason).

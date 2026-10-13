@@ -54,6 +54,8 @@ build_menu() {
   menu_reset
   menu_add lang     "界面语言 / Language" choice "$LANG_UI" 'zh:中文|en:English' "终端与仪表盘共用的界面语言 (安装后也可在仪表盘「设置」里改) / Used by the terminal and the dashboard"
   if [ "$REC_core" = skip ]; then menu_add core "sing-box 核心 (已安装 $(core_version))" choice skip 'skip:已就绪' "$WHY_core" 1
+  # 为 TUN 重新钉死核心 (upgrade_core_plan 设了 CORE_PINNED_ONLY): 只有官方钉死的下载能用, Homebrew / 本地安装包装上了 TUN 也会拒绝, 所以不给选
+  elif [ "${CORE_PINNED_ONLY:-0}" = 1 ]; then menu_add core "sing-box 核心 · 来源" choice chain 'chain:GitHub 官方包(多线路+校验)' "$WHY_core" 1
   else menu_add core "sing-box 核心 · 来源" choice "$REC_core" "$core_opts" "$WHY_core"; fi
   menu_add rules    "社区规则集 (国内直连 / 海外分流 / AI)" toggle "$REC_rules" '' "$WHY_rules"
   menu_add dash     "仪表盘 + 本地辅助服务" toggle 1 '' "必装: 服务器、订阅、应用、网站的设置与监控都在仪表盘里完成" 1
@@ -175,8 +177,9 @@ st_preflight() {
   if [ -n "$UNSEEN_PORTS" ]; then info "本地端口 $UNSEEN_PORTS 有人在用, 没能确认是谁 (普通账户看不到 root 核心的监听者), 沿用不变"
   elif [ "$PORTS_VERIFIED" = 1 ]; then ok "本地端口 $PORT / $UI_PORT / $API_PORT / $SPEED_PORT 可用"; fi
   # 端口被别的程序占着、换了端口时, 指向旧端口 (127.0.0.1) 的系统代理同样算别人的设置: enana 没有记录哪个系统代理是自己设置的, 而这时它多半属于正占着
-  # 这个端口的程序 (例如 Clash 也默认用 7890)。和其它代理设置一样先备份, 交互安装时询问 (默认「否」), 非交互时跳过; 升级不动系统代理 (和 2.3.23 一样)
-  if [ "$SEL_sysproxy" = 1 ]; then
+  # 这个端口的程序 (例如 Clash 也默认用 7890)。和其它代理设置一样先备份, 交互安装时询问 (默认「否」), 非交互时跳过; 升级不动系统代理 (和 2.3.23 一样)。
+  # TUN 模式下 st_sysproxy 保留现有的系统代理设置, 不会覆盖什么, 所以不为它备份、提醒或询问 (否则回车 = 取消会为一个不做事的步骤取消整次安装)
+  if [ "$SEL_sysproxy" = 1 ] && [ "${NETWORK_MODE:-system}" != tun ]; then
     local foreign; foreign=$(os_sysproxy_foreign | paste -sd, -)
     if [ -n "$foreign" ]; then
       os_sysproxy_backup

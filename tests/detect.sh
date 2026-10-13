@@ -299,6 +299,28 @@ echo "== 3. 端口归属 (pick_ports): enana 自己在用的保持不变 (升级
   nomut "3i"
 )
 
+(
+  # 代理端口同时被本程序的核心 (127.0.0.1) 和别的程序 (*:端口, 例如开了「允许局域网」的 Clash) 监听: 本程序和系统代理只用 127.0.0.1:端口, 那里仍是
+  # 本程序 —— 不换端口 (以前一个外部监听者就算被占用: 升级时换了端口, 系统代理却还指着旧端口)
+  c=$(mkcase); enter "$c"
+  printf '100 %s\n200 /usr/local/bin/otherapp\n' "$H/sing-box" > "$FAKE_PS"
+  printf '39700 100 127.0.0.1\n39700 200 *\n' > "$FAKE_LSOF"; export FAKE_SVC_PID=100 FAKE_BUSY=39700
+  pick_ports > "$c/out" 2>&1
+  eq "本程序的核心也在监听: 代理端口保持不变" "$PORT" "39700"
+  hasnt "没有换端口的提示" "$(cat "$c/out")" "已被其它程序占用"
+  eq "检查确实跑过" "$PORTS_VERIFIED" "1"
+  nomut "3j"
+)
+(
+  # 对照: 监听者里没有本程序 (本程序的服务在运行, 但核心没有绑上这个端口): 仍然换端口
+  c=$(mkcase); enter "$c"
+  printf '100 %s\n200 /usr/local/bin/otherapp\n300 /usr/local/bin/otherapp2\n' "$H/sing-box" > "$FAKE_PS"
+  printf '39700 200 127.0.0.1\n39700 300 *\n' > "$FAKE_LSOF"; export FAKE_SVC_PID=100 FAKE_BUSY=39700
+  pick_ports > "$c/out" 2>&1
+  eq "两个外部监听者、没有本程序: 换端口" "$([ "$PORT" = 39700 ] && echo same || echo moved)" "moved"
+  nomut "3k"
+)
+
 echo "== 4. 安装前检查 (st_preflight): 运行中的外部进程 / 已加载的 launchd 任务 / tun 模式下的外部默认路由才询问; 其余只是信息; 回车 = 取消"
 (
   c=$(mkcase); enter "$c"
@@ -393,6 +415,7 @@ echo "== 4. 安装前检查 (st_preflight): 运行中的外部进程 / 已加载
   os_sysproxy_backup() { echo "backup" >> "$FAKE_CALLS"; return 0; }
   os_sysproxy_set() { echo "sysproxy-set $*" >> "$FAKE_CALLS"; return 0; }
   st_preflight > "$c/out" 2>&1; rc=$?
+  if [ "$SEL_sysproxy" = 1 ]; then st_sysproxy > "$c/out2" 2>&1; fi     # cmd_install: [ "$SEL_sysproxy" = 1 ] && st_sysproxy
   eq "系统代理被别人占着 + 端口也被占着换了 + --yes: 不覆盖, 把「设置系统代理」这一步去掉" "$SEL_sysproxy:$STEPS" "0:3"
   eq "退出码 0" "$rc" "0"
   has "原设置照样备份" "$(cat "$FAKE_CALLS")" "backup"
@@ -429,6 +452,7 @@ echo "== 4. 安装前检查 (st_preflight): 运行中的外部进程 / 已加载
   os_sysproxy_backup() { echo "backup" >> "$FAKE_CALLS"; return 0; }
   os_sysproxy_set() { echo "sysproxy-set $*" >> "$FAKE_CALLS"; return 0; }
   st_preflight > "$c/out" 2>&1; rc=$?
+  if [ "$SEL_sysproxy" = 1 ]; then st_sysproxy > "$c/out2" 2>&1; fi     # cmd_install: [ "$SEL_sysproxy" = 1 ] && st_sysproxy
   out=$(cat "$c/out")
   eq "新装 (--yes): 旧端口上 127.0.0.1 的系统代理算别人的: 退出码 0" "$rc" "0"
   eq "端口已换, 去掉「设置系统代理」这一步" "$([ "$PORT" = 39700 ] && echo same || echo moved):$SEL_sysproxy:$STEPS" "moved:0:3"
@@ -461,19 +485,26 @@ echo "== 4. 安装前检查 (st_preflight): 运行中的外部进程 / 已加载
   os_sysproxy_backup() { echo "backup" >> "$FAKE_CALLS"; return 0; }
   os_sysproxy_set() { echo "sysproxy-set $*" >> "$FAKE_CALLS"; return 0; }
   st_preflight > "$c/out" 2>&1; rc=$?
+  if [ "$SEL_sysproxy" = 1 ]; then st_sysproxy > "$c/out2" 2>&1; fi     # cmd_install: [ "$SEL_sysproxy" = 1 ] && st_sysproxy
   eq "升级 --upgrade (--yes): 旧端口上的系统代理不动: 退出码 0, 步骤不变" "$rc:$SEL_sysproxy:$STEPS" "0:0:4"
   hasnt "升级: 没有「将改为新端口」的提示" "$(cat "$c/out")" "将改为新端口"
   hasnt "升级: 没有调用修改系统代理" "$(cat "$FAKE_CALLS")" "sysproxy-set"
   nomut "4h"
 )
 (
-  # 增强模式: 不碰系统代理 (由 TUN 管理), 所以端口变了也不改
+  # 增强模式: st_sysproxy 保留现有的系统代理设置, 所以安装前也不为它备份、提醒或跳过 (交互安装时也就不会因此询问, 回车不会为它取消安装)
   c=$(mkcase); enter "$c"
   printf '200 /usr/local/bin/otherapp\n' > "$FAKE_PS"; printf '39700 200 127.0.0.1\n' > "$FAKE_LSOF"
-  export ENANA_YES=1 FAKE_BUSY=39700 FAKE_PROXY_PORT=39700 FAKE_PROXY_SERVER=127.0.0.1; SEL_sysproxy=0; NETWORK_MODE=tun
+  export ENANA_YES=1 FAKE_BUSY=39700 FAKE_PROXY_PORT=39700 FAKE_PROXY_SERVER=127.0.0.1; SEL_sysproxy=1; NETWORK_MODE=tun
+  os_sysproxy_backup() { echo "backup" >> "$FAKE_CALLS"; return 0; }
+  os_sysproxy_set() { echo "sysproxy-set $*" >> "$FAKE_CALLS"; return 0; }
   st_preflight > "$c/out" 2>&1; rc=$?
-  eq "增强模式: 不因为旧端口的系统代理而打开系统代理设置: 退出码 0, 不改 SEL_sysproxy" "$rc:$SEL_sysproxy" "0:0"
-  hasnt "增强模式: 没有「系统代理还指向旧端口」的提示" "$(cat "$c/out")" "系统代理还指向旧端口"
+  eq "增强模式: 不为系统代理提醒或跳过: 退出码 0, SEL_sysproxy 不变, 步骤不变" "$rc:$SEL_sysproxy:$STEPS" "0:1:4"
+  hasnt "增强模式: 没有「已有其它系统代理设置」的提醒" "$(cat "$c/out")" "已有其它系统代理设置"
+  hasnt "增强模式: 不备份" "$(cat "$FAKE_CALLS")" "backup"
+  if [ "$SEL_sysproxy" = 1 ]; then st_sysproxy > "$c/out2" 2>&1; fi     # cmd_install: [ "$SEL_sysproxy" = 1 ] && st_sysproxy
+  has "增强模式: 系统代理这一步保留现有设置" "$(cat "$c/out2")" "保留现有系统代理设置"
+  hasnt "增强模式: 没有调用修改系统代理" "$(cat "$FAKE_CALLS")" "sysproxy-set"
   nomut "4i"
 )
 (
@@ -505,6 +536,14 @@ echo "== 5. 启动之后的验证 (st_verify): 端口仍被别的程序占着 �
   st_verify > "$c/out" 2>&1
   hasnt "端口是本程序自己的核心在用: 不报绑定失败" "$(cat "$c/out")" "被别的程序占用"
   nomut "5b"
+)
+(
+  c=$(mkcase); enter "$c"
+  printf '100 %s\n200 /usr/local/bin/otherapp\n' "$H/sing-box" > "$FAKE_PS"
+  printf '39700 100 127.0.0.1\n39700 200 *\n' > "$FAKE_LSOF"; export FAKE_SVC_PID=100 FAKE_BUSY=39700
+  st_verify > "$c/out" 2>&1
+  hasnt "本程序的核心在 127.0.0.1 上, 别的程序另外绑了 *:端口: 不报绑定失败" "$(cat "$c/out")" "被别的程序占用"
+  nomut "5c"
 )
 
 echo "== 6. 测试本身有效: 加载的是真实函数, 替身确实能记录 kill (上面的「没有 kill」才有意义); 加载 install.sh 的退出码不屏蔽"

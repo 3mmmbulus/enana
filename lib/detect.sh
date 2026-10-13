@@ -110,8 +110,8 @@ foreign_check() { # 安装 / 升级前: 写清单、打印摘要。只有「运�
   if _noninteractive; then warn "非交互模式: 照常继续安装; 外部程序没有被关闭、卸载或修改"
   else confirm "继续? (外部程序不会被关闭或修改)" n || die "已取消"; fi
 }
-port_state() { # 端口 标签 -> free 空闲 · own 只有本程序在用 · unseen 有人在用但看不到是谁 (增强模式的 root 核心) · foreign 别的程序在用
-  local p=$1 lbl=$2 running=0 svc pids pid path gone i
+port_state() { # 端口 标签 -> free 空闲 · own 本程序在用 (监听者里有本程序, 见下面) · unseen 有人在用但看不到是谁 (增强模式的 root 核心) · foreign 别的程序在用
+  local p=$1 lbl=$2 running=0 svc pids pid path gone own i
   if [ "$lbl" = "$LABEL" ]; then os_service_loaded && running=1; else os_label_loaded "$lbl" && running=1; fi
   svc=$(os_service_pid 2>/dev/null || true)
   for i in 1 2 3; do
@@ -121,13 +121,17 @@ port_state() { # 端口 标签 -> free 空闲 · own 只有本程序在用 · un
       port_busy "$p" || continue
       [ "$running" = 1 ] && echo unseen || echo foreign; return 0
     fi
-    gone=0
+    gone=0; own=0
     for pid in $pids; do
       path=$(_pid_path "$pid")
       [ -n "$path" ] || { gone=1; break; }                        # lsof 与 ps 之间已经退出: 整个重新检查, 不把它算成外部程序
-      _enana_owned "$pid" "$path" "$p" "$svc" || { echo foreign; return 0; }
+      if _enana_owned "$pid" "$path" "$p" "$svc"; then own=1; fi
     done
-    [ "$gone" = 1 ] || { echo own; return 0; }
+    if [ "$gone" = 1 ]; then continue; fi
+    # 监听者里有本程序自己的核心就算 own, 即使别的程序另外绑了 *:端口 或 [::]:端口 (例如开了「允许局域网」的 Clash): 本程序和系统代理只用 127.0.0.1:端口,
+    # macOS 把那里的连接交给绑得更具体的本程序。换了端口, 系统代理就会留在旧端口上 (2.3.23 服务在运行时从不换端口); 只有本程序不在其中才算 foreign
+    if [ "$own" = 1 ]; then echo own; else echo foreign; fi
+    return 0
   done
   [ "$running" = 1 ] && echo unseen || echo foreign
 }
