@@ -6,13 +6,13 @@ const MICRO=1000000, MONTHLY=4*MICRO;
 function now(){return Math.floor(Date.now()/1000)}
 function iso(t){return new Date(t*1000).toISOString().replace('T',' ')}
 function unix(r,k){const d=r.getDateTime(k);return d&&!d.isZero()?d.unix():0}
-function error(code,status){const e=Error(code);e.status=status||400;throw e}
+function error(code,status,extra){const e=Error(code);e.status=status||400;if(extra)e.extra=extra;throw e}   // extra: additional public fields of this error answer (plain numbers only)
 function find(app,c,f,p){try{return app.findFirstRecordByFilter(c,f,p||{})}catch(_){return null}}
 function record(app,c){return new Record(app.findCollectionByNameOrId(c))}
 function config(){try{return JSON.parse(toString($os.readFile($os.getenv('ENANA_BILLING_CONFIG')||'/etc/enana/billing.json')))}catch(_){return {}}}
 function configured(c){return c.payments_enabled===true&&typeof c.scanner_secret==='string'&&c.scanner_secret.length>=32&&typeof c.provider_key==='string'&&c.provider_key.length>0&&Array.isArray(c.addresses)&&c.addresses.length>0&&c.addresses.length<=20&&c.addresses.every(a=>/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(a))}
 function ready(app){const c=config(),h=find(app,'billing_health','code="scanner"');return configured(c)&&h&&h.getBool('healthy')&&unix(h,'checked_at')>=now()-180}
-function wrap(e,fn){try{return fn()}catch(err){const code=/^E_[A-Z_]+$/.test(err.message)?err.message:'E_BILLING_INTERNAL';return e.json(err.status||500,{ok:false,code:code,message:code})}}
+function wrap(e,fn){try{return fn()}catch(err){const code=/^E_[A-Z_]+$/.test(err.message)?err.message:'E_BILLING_INTERNAL';return e.json(err.status||500,Object.assign({ok:false,code:code,message:code},code!=='E_BILLING_INTERNAL'&&err.extra||{}))}}
 function user(e,verified){const g=base.needSession(e);if(g.res)return null;g.user=$app.findRecordById('users',g.user.id);if(verified&&!g.user.verified())error('E_EMAIL_UNVERIFIED',403);return g}
 function current(tx,g,verified){const u=tx.findRecordById('users',g.user.id),s=tx.findRecordById('device_sessions',g.session.id);if(u.getBool('disabled')||s.getString('user')!==u.id||unix(s,'revoked_at')||unix(s,'expires_at')<=now())error('E_AUTH',401);if(verified&&!u.verified())error('E_EMAIL_UNVERIFIED',403);return u}
 function internal(e){const c=config(),key=e.request.header.get('X-Enana-Payments')||'';if(!['127.0.0.1','::1'].includes(e.remoteIP())||typeof c.scanner_secret!=='string'||c.scanner_secret.length<32||!$security.equal(key,c.scanner_secret))error('E_NOT_FOUND',404);return c}
@@ -38,21 +38,28 @@ function renew(tx,uid,t){const u=tx.findRecordById('users',uid);if(u.getBool('di
 }
 function publicOrder(r){let s=r.getString('status');const lease=unix(r,'expires_at');if(s==='pending'&&lease<=now())s='expired';return {id:r.id,kind:r.getString('kind'),sku:r.getString('sku'),price:D.format(r.getInt('price')),amount:D.format(r.getInt('amount')),network:'TRC20',currency:'USDT',address:r.getString('address'),status:s,created_at:unix(r,'created'),pay_by:unix(r,'pay_by'),expires_at:lease,paid_at:unix(r,'paid_at')||null,tx_hash:r.getString('tx_hash')||null,event_key:r.getString('event_key')||null,recheck_at:unix(r,'recheck_at')||null}}
 function mailAvailable(){return !!$app.settings().smtp.enabled}
-function status(e){return wrap(e,()=>{const g=user(e,false);if(!g)return;const w=wallet($app,g.user.id,false),p=base.planFor($app,g.user,now());
- const orders=$app.findRecordsByFilter('billing_orders','user={:u}','-created',30,0,{u:g.user.id}).map(publicOrder);
+// Optional orders paging: ?orders_page=1..1000 (default 1), ?orders_per_page=5..30 (default 30); an empty value is the same as leaving it out.
+function pageArg(e,name,lo,hi,def){const v=e.request.url.query().get(name);if(v==='')return def;if(!/^[1-9][0-9]{0,3}$/.test(v)||Number(v)<lo||Number(v)>hi)error('E_INVALID');return Number(v)}
+function status(e){return wrap(e,()=>{const g=user(e,false);if(!g)return;const page=pageArg(e,'orders_page',1,1000,1),per=pageArg(e,'orders_per_page',5,30,30);const w=wallet($app,g.user.id,false),p=base.planFor($app,g.user,now());
+ // Newest first; the id breaks ties so that pages never overlap or skip an order.
+ const total=$app.countRecords('billing_orders',$dbx.exp('user = {:u}',{u:g.user.id})),orders=$app.findRecordsByFilter('billing_orders','user={:u}','-created,-id',per,(page-1)*per,{u:g.user.id}).map(publicOrder);
  const rows=$app.findRecordsByFilter('billing_ledger','user={:u}','-created',40,0,{u:g.user.id}).map(r=>({id:r.id,kind:r.getString('kind'),delta:(r.getInt('delta')<0?'-':'')+D.format(Math.abs(r.getInt('delta'))),balance_after:D.format(r.getInt('balance_after')),sku:r.getString('sku'),created_at:unix(r,'created'),expires_after:unix(r,'expires_after')||null}));
- return e.json(200,{ok:true,payments_available:!!ready($app),email:{address:g.user.email(),verified:g.user.verified(),mail_available:mailAvailable()},wallet:{balance:D.format(w?w.getInt('balance'):0),auto_renew:!!(w&&w.getBool('auto_renew')),monthly_price:'4.000000'},catalog:D.SKUS.map(s=>({id:s.id,months:s.months,price:D.format(s.price)})),plan:{code:p.code,expires_at:p.expires_at},orders:orders,ledger:rows,order_ttl:D.PAY_BY,lease_ttl:D.LEASE});})}
-// Slot leases: every (address, amount) still held by an unpaid order for 24 hours.
-function leases(tx){return tx.findRecordsByFilter('billing_orders','expires_at>{:t}','created',5000,0,{t:iso(now())}).map(r=>({address:r.getString('address'),amount:r.getInt('amount'),lease_until:unix(r,'expires_at'),status:r.getString('status'),created:unix(r,'created')}))}
+ return e.json(200,{ok:true,payments_available:!!ready($app),email:{address:g.user.email(),verified:g.user.verified(),mail_available:mailAvailable()},wallet:{balance:D.format(w?w.getInt('balance'):0),auto_renew:!!(w&&w.getBool('auto_renew')),monthly_price:D.format(MONTHLY)},catalog:D.SKUS.map(s=>({id:s.id,months:s.months,price:D.format(s.price)})),plan:{code:p.code,expires_at:p.expires_at},orders:orders,orders_total:total,orders_page:page,orders_per_page:per,ledger:rows,order_ttl:D.PAY_BY,lease_ttl:D.LEASE});})}
+// Slot leases for one base price: every unpaid order still inside its 24-hour lease whose amount is that price or one of its tails
+// (price .. price + 0.999). Newest first and uncapped (at most addresses x 1000 rows), so a live reservation can never be dropped.
+function leases(tx,price){return tx.findRecordsByFilter('billing_orders','expires_at>{:t}&&status!="paid"&&amount>={:lo}&&amount<={:hi}','-created',0,0,{t:iso(now()),lo:price,hi:price+D.TAIL_SPAN}).map(r=>({address:r.getString('address'),amount:r.getInt('amount'),lease_until:unix(r,'expires_at'),status:r.getString('status'),created:unix(r,'created')}))}
 function billingAlert(kind,price){console.log('enana-billing-alert '+kind+' price='+price+' time='+iso(now())+' action=add_payment_addresses')}
 function checkout(e){return wrap(e,()=>{const g=user(e,true);if(!g)return;const b=body(e),req=key(b.request_key);let q;try{q=D.quoteBase(b)}catch(_){error('E_INVALID')}
  let out;$app.runInTransaction(tx=>{current(tx,g,true);const existing=find(tx,'billing_orders','user={:u}&&request_key={:k}',{u:g.user.id,k:req});if(existing){if(existing.getString('kind')!==q.kind||existing.getString('sku')!==q.sku||existing.getInt('price')!==q.price)error('E_REQUEST_CONFLICT',409);out=publicOrder(existing);return}
  if(!ready(tx))error('E_PAYMENTS_UNAVAILABLE',503);
  // One invoice at a time until its 1-hour payment countdown ends; the slot itself stays leased for 24 hours.
  const pending=find(tx,'billing_orders','user={:u}&&status="pending"&&pay_by>{:t}',{u:g.user.id,t:iso(now())});if(pending)error('E_ORDER_PENDING',409);
+ // At most 5 new orders per account in any rolling 24 hours (every kind and status, cancelled included); the replay above never counts.
+ const recent=tx.findRecordsByFilter('billing_orders','user={:u}&&created>{:c}','-created',D.ORDER_LIMIT,0,{u:g.user.id,c:iso(now()-D.ORDER_WINDOW)}),wait=D.orderWait(recent.map(r=>unix(r,'created')),now());
+ if(wait)error('E_ORDER_LIMIT',429,{limit:D.ORDER_LIMIT,retry_after:wait});
  const c=config();let slot;
- // Integer price first; tails +0.01..+0.99 only when every address holds that price; never a units digit.
- try{slot=D.allocate(q.price,c.addresses,leases(tx),now())}catch(err){if(err.message==='E_QUOTE_CAPACITY'){billingAlert('quote_capacity',q.price);error('E_QUOTE_CAPACITY',503)}throw err}
+ // Base price first; tails (+0.1..+0.9, then two and three decimals) only when every address holds that price; never a units digit.
+ try{slot=D.allocate(q.price,c.addresses,leases(tx,q.price),now())}catch(err){if(err.message==='E_QUOTE_CAPACITY'){billingAlert('quote_capacity',q.price);error('E_QUOTE_CAPACITY',503)}throw err}
  const r=record(tx,'billing_orders');r.set('user',g.user.id);r.set('request_key',req);r.set('kind',q.kind);r.set('sku',q.sku);r.set('months',q.months);r.set('price',q.price);r.set('amount',slot.amount);r.set('address',slot.address);r.set('pay_by',iso(now()+D.PAY_BY));r.set('expires_at',iso(now()+D.LEASE));r.set('status','pending');tx.save(r);out=publicOrder(r);
  });return e.json(200,{ok:true,order:out});})}
 function order(e){return wrap(e,()=>{const g=user(e,false);if(!g)return;const id=e.request.url.query().get('id'),r=find($app,'billing_orders','id={:id}&&user={:u}',{id:id,u:g.user.id});if(!r)error('E_NOT_FOUND',404);return e.json(200,{ok:true,order:publicOrder(r)});})}
@@ -60,13 +67,18 @@ function cancel(e){return wrap(e,()=>{const g=user(e,false);if(!g)return;const b
 function purchase(e){return wrap(e,()=>{const g=user(e,true);if(!g)return;const b=body(e),req=key(b.request_key);let s;try{s=D.sku(b.sku)}catch(_){error('E_INVALID')}let end;
  $app.runInTransaction(tx=>{current(tx,g,true);const entry='purchase:'+g.user.id+':'+req,old=find(tx,'billing_ledger','entry_key={:k}',{k:entry});if(old){if(old.getString('sku')!==s.id)error('E_REQUEST_CONFLICT',409);end=unix(old,'expires_after');return}const w=wallet(tx,g.user.id,true);if(w.getInt('balance')<s.price)error('E_BALANCE',409);end=grant(tx,g.user.id,s.months,now());ledger(tx,w,entry,-s.price,'plan_purchase','',s.id,end)});
  return e.json(200,{ok:true,expires_at:end});})}
-function autoRenew(e){return wrap(e,()=>{const g=user(e,true);if(!g)return;const b=body(e);if(typeof b.enabled!=='boolean')error('E_INVALID');$app.runInTransaction(tx=>{current(tx,g,true);const w=wallet(tx,g.user.id,true);w.set('auto_renew',b.enabled);tx.save(w);if(b.enabled)renew(tx,g.user.id,now())});return e.json(200,{ok:true,auto_renew:b.enabled});})}
+// charged: a month was bought from the balance just now; needs_topup: renewal is on but the balance is below one month (nothing is charged until it is enough).
+function autoRenew(e){return wrap(e,()=>{const g=user(e,true);if(!g)return;const b=body(e);if(typeof b.enabled!=='boolean')error('E_INVALID');let charged=false,balance=0;$app.runInTransaction(tx=>{current(tx,g,true);const w=wallet(tx,g.user.id,true);w.set('auto_renew',b.enabled);tx.save(w);if(b.enabled)charged=renew(tx,g.user.id,now());balance=wallet(tx,g.user.id,false).getInt('balance')});
+ return e.json(200,{ok:true,auto_renew:b.enabled,charged:charged,balance:D.format(balance),monthly_price:D.format(MONTHLY),needs_topup:b.enabled&&balance<MONTHLY});})}
 function settle(tx,b,t){
  if(!/^[a-f0-9]{64}:\d{1,5}$/.test(b.event_key)||!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(b.address)||!Number.isSafeInteger(b.amount)||b.amount<1||b.amount>9000000000000||!Number.isSafeInteger(b.chain_at)||b.chain_at<=0||b.chain_at>t+30)error('E_INVALID');
  const old=find(tx,'billing_events','event_key={:k}',{k:b.event_key});if(old){if(old.getString('address')!==b.address||old.getInt('amount')!==b.amount||unix(old,'chain_at')!==b.chain_at)error('E_EVENT_CONFLICT',409);return {duplicate:true,status:old.getString('status')}}
  const ev=record(tx,'billing_events');ev.set('event_key',b.event_key);ev.set('address',b.address);ev.set('amount',b.amount);ev.set('chain_at',iso(b.chain_at));ev.set('status','unmatched');
- // Orders on this address whose lease covered the transfer time (any amount, so under/over-payments can be shown to the user).
- const win=tx.findRecordsByFilter('billing_orders','address={:a}&&created<{:c}&&expires_at>={:d}','created',200,0,{a:b.address,c:iso(b.chain_at+1),d:iso(b.chain_at)}).map(r=>({id:r.id,address:r.getString('address'),amount:r.getInt('amount'),created:unix(r,'created'),lease_until:unix(r,'expires_at'),status:r.getString('status'),rec:r}));
+ // Orders on this address whose lease covered the transfer time. Exact-amount orders first and uncapped, so a busy address can never hide the
+ // order being paid; only when there is none, the first two orders of the window tell an under/over-payment (one order) from an ambiguous one.
+ const p={a:b.address,c:iso(b.chain_at+1),d:iso(b.chain_at)},row=r=>({id:r.id,address:r.getString('address'),amount:r.getInt('amount'),created:unix(r,'created'),lease_until:unix(r,'expires_at'),status:r.getString('status'),rec:r});
+ let win=tx.findRecordsByFilter('billing_orders','address={:a}&&amount={:m}&&created<{:c}&&expires_at>={:d}','created',0,0,Object.assign({m:b.amount},p)).map(row);
+ if(!win.length)win=tx.findRecordsByFilter('billing_orders','address={:a}&&created<{:c}&&expires_at>={:d}','created',2,0,p).map(row);
  const m=D.matchPayment(win,{address:b.address,amount:b.amount,chain_at:b.chain_at}), hash=b.event_key.split(':')[0];
  if(m.action==='activate'){
   const r=m.order.rec,uid=r.getString('user'),u=tx.findRecordById('users',uid),w=wallet(tx,uid,true),plan=r.getString('kind')==='plan';

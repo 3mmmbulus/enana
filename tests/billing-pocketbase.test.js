@@ -71,8 +71,10 @@ test('transactional billing, email verification and entitlement integration',{ti
    const q=(await quote(w,'topup','10')).body.order;await internal('event',event(q));let b=(await req('/api/enana/v1/billing',null,w)).body;assert.equal(b.wallet.auto_renew,false);
    const subs=(await req('/api/collections/subscriptions/records?filter='+encodeURIComponent('user="'+w.user.id+'"'),null,null,admin)).body.items;
    await patch('/api/collections/subscriptions/records/'+subs[0].id,{expires_at:'2020-01-01 00:00:00Z'},admin);
-   const balance=b.wallet.balance;await req('/api/enana/v1/billing/auto-renew',{enabled:true},w);b=(await req('/api/enana/v1/billing',null,w)).body;assert.equal(b.wallet.balance,(Number(balance)-4).toFixed(6));assert.equal(b.plan.code,'pro');
-   await req('/api/enana/v1/billing/auto-renew',{enabled:true},w);assert.equal((await req('/api/enana/v1/billing',null,w)).body.wallet.balance,b.wallet.balance);
+   const balance=b.wallet.balance,on=await req('/api/enana/v1/billing/auto-renew',{enabled:true},w);b=(await req('/api/enana/v1/billing',null,w)).body;assert.equal(b.wallet.balance,(Number(balance)-4).toFixed(6));assert.equal(b.plan.code,'pro');
+   assert.deepEqual(on.body,{ok:true,auto_renew:true,charged:true,balance:b.wallet.balance,monthly_price:'4.000000',needs_topup:Number(b.wallet.balance)<4},'enough balance: one month is bought now and the answer says so');
+   const again=await req('/api/enana/v1/billing/auto-renew',{enabled:true},w);assert.equal((await req('/api/enana/v1/billing',null,w)).body.wallet.balance,b.wallet.balance);
+   assert.deepEqual([again.body.charged,again.body.balance],[false,b.wallet.balance],'already Pro: nothing is charged twice');
    await patch('/api/collections/subscriptions/records/'+subs[0].id,{expires_at:'2020-02-01 00:00:00Z'},admin);
    assert.equal((await req('/__test/renew',{})).status,200);
    const renewed=(await req('/api/enana/v1/billing',null,w)).body;assert.equal(renewed.wallet.balance,(Number(b.wallet.balance)-4).toFixed(6));
@@ -108,7 +110,8 @@ test('transactional billing, email verification and entitlement integration',{ti
    await closeLeases();const a=await user(admin),b=await user(admin);
    const o1=(await quote(a)).body.order;assert.equal(o1.amount,o1.price,'a free address takes the integer price, no decimals');
    const o2=(await quote(b)).body.order;assert.notEqual(o2.amount,o1.amount,'held integer slot: the next buyer gets a tail');
-   const tail=Math.round((Number(o2.amount)-Number(o1.price))*100);assert.ok(Number.isInteger(tail)&&tail>=1&&tail<=99,'tail is a whole number of cents between +0.01 and +0.99');
+   assert.equal(o2.amount,(Number(o1.price)+0.1).toFixed(6),'the first tail is exactly +0.1 (one decimal), never a units digit');
+   const o3=(await quote(await user(admin))).body.order;assert.equal(o3.amount,(Number(o1.price)+0.2).toFixed(6),'then +0.2 while +0.1 is held');
    assert.equal((await quote(a,'plan','m3')).body.code,'E_ORDER_PENDING','one invoice at a time until its 1-hour countdown ends');
   });
   await t.test('recheck is rate-limited to once per 30 seconds per order and puts its address into the next scan',async()=>{
@@ -144,6 +147,57 @@ test('transactional billing, email verification and entitlement integration',{ti
    const rf=await req('/api/enana/admin/billing/manual/resolve',{id:it3.id,action:'refund',note:'refunded to the sender',refund_tx:'ab'.repeat(32)},null,admin);assert.equal(rf.status,200);assert.equal(rf.body.item.resolution,'refunded');assert.equal(rf.body.item.refund_tx,'ab'.repeat(32));
    assert.equal((await req('/api/enana/admin/billing/manual',null,null,admin)).body.items.some(i=>i.id===it3.id),false,'resolved items leave the open queue');
    assert.equal((await req('/api/enana/admin/billing/manual',null,null,null)).status,401,'the operator queue is superuser-only');
+  });
+  // ---- 2.3.25: order limit, orders paging, auto-renew answer, amounts above 1000.01 ----
+  const backdate=(id,at)=>req('/__test/backdate',{id,created:new Date(at*1000).toISOString().replace('T',' ')});
+  let limited;
+  await t.test('at most 5 orders per account in any rolling 24 hours: cancelled orders count, idempotent replays do not',async()=>{
+   await closeLeases();const a=await user(admin),k1=requestKey(),ids=[];limited={user:a,ids};
+   const first=await quote(a,'plan','m1',k1);assert.equal(first.status,200);ids.push(first.body.order.id);
+   for(let i=0;i<3;i++){const r=await quote(a,'plan','m1',k1);assert.equal(r.status,200);assert.equal(r.body.order.id,ids[0],'a replay returns the same order')}
+   assert.equal((await req('/api/enana/v1/billing/cancel',{id:ids[0]},a)).body.order.status,'cancelled');
+   for(let i=0;i<4;i++){const r=await quote(a,i%2?'plan':'topup',i%2?'m3':'10');assert.equal(r.status,200,'order '+(i+2)+' of 5 (replays were not counted)');ids.push(r.body.order.id);assert.equal((await req('/api/enana/v1/billing/cancel',{id:r.body.order.id},a)).body.order.status,'cancelled')}
+   const at=Math.floor(Date.now()/1000),sixth=await quote(a);
+   assert.equal(sixth.status,429);assert.equal(sixth.body.code,'E_ORDER_LIMIT');assert.equal(sixth.body.limit,5);
+   assert.deepEqual(Object.keys(sixth.body).sort(),['code','limit','message','ok','retry_after']);
+   assert.ok(Number.isInteger(sixth.body.retry_after)&&sixth.body.retry_after<=86400&&sixth.body.retry_after>=86400-(at-first.body.order.created_at)-5,'retry_after: seconds until the first order is 24 h old, got '+sixth.body.retry_after);
+   const replay=await quote(a,'plan','m1',k1);assert.equal(replay.status,200);assert.equal(replay.body.order.id,ids[0],'a replay still answers at the limit');
+   assert.equal((await req('/api/enana/v1/billing',null,a)).body.orders_total,5,'neither the refused order nor the replays were stored');
+   const now=Math.floor(Date.now()/1000);assert.equal((await backdate(ids[0],now-86400+100)).status,200);
+   const soon=await quote(a);assert.equal(soon.body.code,'E_ORDER_LIMIT');assert.ok(soon.body.retry_after>=90&&soon.body.retry_after<=100,'retry_after counts down to the moment the oldest counted order turns 24 h old, got '+soon.body.retry_after);
+   assert.equal((await backdate(ids[0],now-2*86400)).status,200);
+   const next=await quote(a,'plan','m6');assert.equal(next.status,200,'an order older than 24 h no longer counts');ids.push(next.body.order.id);
+   assert.equal((await quote(a,'plan','m1')).body.code,'E_ORDER_PENDING','an unpaid invoice inside its hour is reported first');
+   await req('/api/enana/v1/billing/cancel',{id:next.body.order.id},a);
+   const again=await quote(a);assert.equal(again.status,429);assert.equal(again.body.code,'E_ORDER_LIMIT','five orders inside the window again');
+  });
+  await t.test('orders paging: newest first with orders_total / orders_page / orders_per_page; no query = as before; invalid values refused',async()=>{
+   const a=limited.user,newest=limited.ids.slice().reverse();assert.equal(newest.length,6);
+   const all=(await req('/api/enana/v1/billing',null,a)).body;
+   assert.deepEqual([all.orders_total,all.orders_page,all.orders_per_page],[6,1,30]);assert.deepEqual(all.orders.map(o=>o.id),newest,'without a query: up to 30 orders, newest first');
+   const page=async q=>{const r=await req('/api/enana/v1/billing?'+q,null,a);assert.equal(r.status,200,q);return r.body};
+   const p1=await page('orders_per_page=5'),p2=await page('orders_page=2&orders_per_page=5'),p3=await page('orders_page=3&orders_per_page=5');
+   assert.deepEqual([p1.orders_total,p1.orders_page,p1.orders_per_page,p1.orders.map(o=>o.id)],[6,1,5,newest.slice(0,5)]);
+   assert.deepEqual([p2.orders_total,p2.orders_page,p2.orders_per_page,p2.orders.map(o=>o.id)],[6,2,5,newest.slice(5)]);
+   assert.deepEqual([p3.orders_total,p3.orders_page,p3.orders_per_page,p3.orders.length],[6,3,5,0],'a page past the end is empty, not an error');
+   assert.deepEqual([p1.wallet,p1.ledger,p1.plan],[all.wallet,all.ledger,all.plan],'paging changes only the orders list');
+   const edge=await page('orders_page=1000&orders_per_page=30');assert.deepEqual([edge.orders_page,edge.orders_per_page,edge.orders.length],[1000,30,0],'the limits themselves are accepted');
+   assert.deepEqual((await page('orders_page=&orders_per_page=')).orders.map(o=>o.id),newest,'an empty value is the default');
+   for(const q of ['orders_page=0','orders_page=1001','orders_page=-1','orders_page=01','orders_page=1.5','orders_page=abc','orders_page=2%3B1','orders_per_page=4','orders_per_page=31','orders_per_page=05','orders_per_page=1e1','orders_page=2&orders_per_page=100']){const r=await req('/api/enana/v1/billing?'+q,null,a);assert.equal(r.status,400,q);assert.equal(r.body.code,'E_INVALID',q)}
+   assert.equal((await req('/api/enana/v1/billing?orders_page=2')).status,401,'paging needs the same session');
+  });
+  await t.test('auto-renew with an empty wallet is saved, charges nothing and says a top-up is needed',async()=>{
+   const z=await user(admin);
+   const on=await req('/api/enana/v1/billing/auto-renew',{enabled:true},z);assert.equal(on.status,200);
+   assert.deepEqual(on.body,{ok:true,auto_renew:true,charged:false,balance:'0.000000',monthly_price:'4.000000',needs_topup:true});
+   const b=(await req('/api/enana/v1/billing',null,z)).body;assert.deepEqual([b.wallet.auto_renew,b.wallet.balance,b.plan.code,b.ledger.length],[true,'0.000000','free',0]);
+   assert.deepEqual((await req('/api/enana/v1/billing/auto-renew',{enabled:false},z)).body,{ok:true,auto_renew:false,charged:false,balance:'0.000000',monthly_price:'4.000000',needs_topup:false},'switched off: no top-up is needed');
+  });
+  await t.test('top-ups are whole USDT 4..1000, and a 1000 USDT top-up can carry a tail (amounts above 1000.01 are stored)',async()=>{
+   await closeLeases();const a=await user(admin),b=await user(admin);
+   const o1=(await quote(a,'topup','1000')).body.order;assert.deepEqual([o1.price,o1.amount],['1000.000000','1000.000000']);
+   const r=await quote(b,'topup','1000');assert.equal(r.status,200,'needs migration 1790000006: the old bound stopped at 1000.01');assert.deepEqual([r.body.order.price,r.body.order.amount],['1000.000000','1000.100000']);
+   for(const bad of ['1001','3','4.5','10.000001','04','1e3']){const x=await quote(a,'topup',bad);assert.equal(x.status,400,bad);assert.equal(x.body.code,'E_INVALID',bad)}
   });
  }finally{pb.kill('SIGTERM');await new Promise(r=>pb.once('exit',r));if(smtp)await new Promise(r=>smtp.close(r));fs.rmSync(dir,{recursive:true,force:true})}
 });
