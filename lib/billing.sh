@@ -14,7 +14,8 @@ billing_body() {
         exit 1 unless ($d->{sku}//"")=~/\A(?:m1|m3|m6|y1|y2|y3|y5)\z/;
         $v{sku}=$d->{sku}; $v{kind}="plan" if $op eq "checkout";
       } elsif(($d->{kind}//"") eq "topup") {
-        exit 1 unless defined $d->{amount} && !ref($d->{amount}) && $d->{amount}=~/\A[0-9]{1,4}(?:\.[0-9]{1,6})?\z/;
+        # Whole USDT only, 4..1000: the cloud adds any distinguishing decimals itself.
+        exit 1 unless defined $d->{amount} && !ref($d->{amount}) && $d->{amount}=~/\A[1-9][0-9]{0,3}\z/ && $d->{amount}>=4 && $d->{amount}<=1000;
         $v{amount}="$d->{amount}"; $v{kind}="topup";
       } else {exit 1}
     } elsif($op eq "cancel") {
@@ -34,6 +35,7 @@ billing_body() {
 #   E_ACCOUNT_UNREACHABLE  连不上云端 (网络不通 / 超时), 或收到的不是云端的 JSON (例如认证网页 / 代理的网页)
 #   E_RATE_LIMITED         云端 429 且不是我们自己的 JSON
 #   E_SERVER_ERROR         连上了, 但云端返回了 5xx / 意外的状态码, 且正文不是我们自己的 JSON (不能拿它当「连不上」)
+# 云端自己的错误 JSON 只转发 ok 和 code; 唯一的例外是 E_ORDER_LIMIT (24 小时内下单太多): 再转发校验过的整数 limit (1-1000) 和 retry_after (1-86400 秒), 不合格的字段直接丢掉。
 billing_request() {
   local out code result
   BILLING_CODE=''
@@ -44,7 +46,14 @@ billing_request() {
   result=$(perl -MJSON::PP -e '
     local $/; my $s=<>; exit 1 if length($s)>131072;
     my $d=eval{decode_json($s)}; exit 1 unless ref $d eq "HASH" && JSON::PP::is_bool($d->{ok});
-    if(!$d->{ok}) {my $c=$d->{code}//""; exit 1 unless $c=~/\AE_[A-Z_]+\z/;print encode_json({ok=>JSON::PP::false,code=>$c})}
+    if(!$d->{ok}) {
+      my $c=$d->{code}//""; exit 1 unless !ref($c) && $c=~/\AE_[A-Z_]+\z/;
+      my %e=(ok=>JSON::PP::false,code=>$c);
+      if($c eq "E_ORDER_LIMIT") {
+        for([limit=>1000],[retry_after=>86400]) {my ($k,$max)=@$_; my $v=$d->{$k};
+          $e{$k}=0+$v if defined $v && !ref($v) && $v=~/\A[1-9][0-9]{0,5}\z/ && $v<=$max}
+      }
+      print encode_json(\%e)}
     else {exit 1 if exists $d->{token} || exists $d->{provider_key} || exists $d->{scanner_secret};print encode_json($d)}
   ' "$out")
   rm -f "$out"
