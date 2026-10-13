@@ -8,8 +8,10 @@
 .dns-scope b{display:block;margin-bottom:2px}
 .dns-scope p{margin:0}
 
-/* ===== 当前设置摘要 ===== */
-.dns-body>*+*{margin-top:12px}
+/* ===== 当前设置摘要 (和「测试解析」并排) ===== */
+.dns-body>*+*{margin-top:var(--gap)}
+.dns-optl{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}    /* 「默认已开启 N 项优化」+「详情」 */
+.dns-opt-sub{margin:0 0 4px}
 .dns-sum{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:8px}
 .dns-li{display:inline-flex;flex-wrap:wrap;align-items:center;gap:2px 6px;max-width:100%;padding:3px 12px;border:1px solid var(--line);border-radius:99px;background:var(--surface2);font-size:var(--fs-13);overflow-wrap:anywhere}
 .dns-k{flex:none;color:var(--muted);font-size:var(--fs-12)}
@@ -70,7 +72,7 @@
   .dns-pl thead .th-sort,.dns-hs-tbl thead .th-sort{visibility:hidden}      /* 窄屏表格变成卡片, 表头被藏起来了: 里面的排序按钮不能留在键盘焦点里 */
 }
 
-/* ===== 默认已开启的优化 ===== */
+/* ===== 默认已开启的优化 (弹窗里的列表) ===== */
 .dns-opts{list-style:none;margin:6px 0 0;padding:0}
 .dns-opt{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:4px 12px;align-items:start;padding:12px 0;border-top:1px solid var(--line)}
 .dns-opt:first-child{border-top:0;padding-top:4px}
@@ -95,6 +97,8 @@
 .dns-hs-b::before{content:"\00a0";content:"\00a0" / "";font-size:var(--fs-12-5)}                           /* 和输入框上面的标签一样高, 让按钮和输入框对齐 */
 .dns-hs-bb{display:flex;flex-wrap:wrap;gap:8px}
 .dns-hs-fm{grid-column:1/-1;margin:0}
+.dns-hs-form.is-bare{grid-template-columns:minmax(0,1fr)}                       /* 「添加」弹窗: 域名和 IP 上下排, 提交按钮在弹窗底部 */
+.dns-hs-add>.dns-prog{margin-top:12px}
 .dns-hs-tools{margin-top:12px}
 .dns-hs-tools .inp{width:100%;max-width:360px}
 .dns-hs-list{margin-top:12px;border:1px solid var(--line);border-radius:10px;overflow:hidden}

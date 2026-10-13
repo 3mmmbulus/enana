@@ -12,7 +12,7 @@
   --ok-s:#15803d; --warn-s:#b45309; --err-s:#b91c1c;
   --info:#4a6585; --info-bg:#e9eff6; --info-s:#4a6585; --zebra:#fafbfd; --row-py:8px;
   --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.05);
-  --r:12px; --side-w:224px; --side-wc:64px;
+  --r:12px; --side-w:224px; --side-wc:64px; --gap:12px;                                                                   /* --gap: 页面里上下相邻的区块之间统一的间距 */
   --fs-10-5:10.5px; --fs-11:11px; --fs-11-5:11.5px; --fs-12:12px; --fs-12-5:12.5px; --fs-13:13px; --fs-13-5:13.5px;       /* 窄屏 / 触屏下统一提高到 14px */
   --font:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Segoe UI",system-ui,sans-serif;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
@@ -103,8 +103,8 @@ html:not(.ui-ready) .shell{visibility:hidden}                  /* 登录状态�
 .acct-chev{flex:none;color:var(--muted)}
 .acct-dot{position:absolute;top:-1px;left:22px;width:10px;height:10px;border-radius:50%;background:var(--warn-s);border:2px solid var(--surface)}
 .scroll{flex:1;min-height:0;position:relative;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain}      /* position:relative —— 让 .sr 之类绝对定位的元素被它裁剪, 否则整个文档会变得可以(程序)滚动 */
-.page{max-width:1240px;margin:0 auto;padding:16px clamp(12px,2.4vw,28px) 24px;padding-left:calc(clamp(12px,2.4vw,28px) + env(safe-area-inset-left));padding-right:calc(clamp(12px,2.4vw,28px) + env(safe-area-inset-right))}
-.view>*+*{margin-top:12px}
+.page{max-width:1240px;margin:0 auto;padding:16px clamp(12px,2.4vw,28px) 24px;padding-bottom:calc(24px + env(safe-area-inset-bottom));padding-left:calc(clamp(12px,2.4vw,28px) + env(safe-area-inset-left));padding-right:calc(clamp(12px,2.4vw,28px) + env(safe-area-inset-right))}      /* 没有页脚了: 底部的安全区由内容区自己留出 */
+.view>*+*{margin-top:var(--gap)}
 .intro p{margin:0}
 .navtip{position:fixed;z-index:80;background:var(--text);color:var(--bg);padding:4px 10px;border-radius:7px;font-size:var(--fs-12-5);pointer-events:none;white-space:nowrap}
 
@@ -133,6 +133,7 @@ html:not(.ui-ready) .shell{visibility:hidden}                  /* 登录状态�
 .card-h h2,.card-h h3{margin:0;font-size:15px}
 .card-h h2{font-size:17px}
 .card-h>.btn:last-child{margin-left:auto}
+.card-h-a{margin-left:auto;display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px 12px}      /* 标题行右边的一组控件 (多个按钮 / 开关 + 图例): 一起靠右, 不会有一个飘在中间 */
 .card-h .ci{color:var(--muted)}
 .card>p:first-of-type{margin-top:0}
 .grid{display:grid;gap:12px}
@@ -149,6 +150,14 @@ fieldset.plain{border:0;margin:0;padding:0;min-width:0}
 .hint.warn{background:var(--warn-bg);border-color:transparent;color:var(--text);border-left:3px solid var(--warn)}
 .hint.bad{background:var(--err-bg);border-color:transparent;color:var(--text);border-left:3px solid var(--err)}
 .hint.ok{background:var(--ok-bg);border-color:transparent;color:var(--text);border-left:3px solid var(--ok)}
+.hint.info{display:flex;align-items:flex-start;gap:8px;border-left-color:var(--info);background:var(--surface2)}
+.hint.info .ci{flex:none;margin-top:2px;color:var(--info)}
+/* 提示里的图标 / 徽标 / 按钮和文字之间留出空隙 (普通的块状提示; 本身是 flex 的提示用 gap, 下面归零, 不会变成双倍间距)。不要把 .hint 本身改成 flex: 有的提示里是几段 <p> */
+.hint>.ci{margin-right:6px;vertical-align:-2px;flex:none}
+.hint>.badge{margin-right:6px}
+.hint>.btn{margin-left:8px}
+.hint.info>.ci,.proxy-note>.ci,.pmode-off>.ci,.sudo-hint>.ci,.sudo-ttl>.ci,.vps .hint>.ci,.apps-exists>.ci,.dns-warn>.ci,.syn-alert>.ci,.sx-autobar>.ci,.sdm-note>.ci,.trf-stale>.ci,.log-notice>.ci,.srv-orphan>.ci{margin-right:0}
+.log-notice>.btn,.sx-autobar>.btn,.sdm-note>.btn,.dns-warn>.btn,.syn-alert>.btn,.trf-stale>.btn,.vps .hint>.btn{margin-left:0}
 .kv-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--line)}
 .kv-k{flex:none;width:62px;color:var(--muted);font-size:var(--fs-12-5)}
 .kv-v{flex:1;min-width:0;overflow-wrap:anywhere}
@@ -276,7 +285,7 @@ button.chip{font-family:inherit;cursor:pointer}
 .subtabs.is-v .subtab>.ci{margin-top:2px}
 .subtabs.is-v .subtab-l{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
 .subtabs.is-v .subtab-n{margin-left:auto;flex:none}
-@media (max-width:760px){
+@media (max-width:759px){
   .subtabs.is-v{flex-direction:row;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
   .subtabs.is-v .subtab{width:auto;flex:none}
 }
@@ -504,7 +513,8 @@ canvas.chart{display:block;width:100%;height:190px}
 .ck.ok{background:var(--ok-s)}
 .chk-n{min-width:96px}
 .chk-d{overflow-wrap:anywhere}
-.rules-row{border-top:1px solid var(--line);margin-top:2px}
+.rules-row{border-top:1px solid var(--line);margin-top:2px;flex-wrap:wrap}
+.rules-row .kv-k{width:auto;min-width:96px}                     /* 「规则更新时间」「代理服务」: 英文标签放不进 62px 的窄列 */
 
 /* ===== 应用 ===== */
 .newbar .banner-ic{align-self:flex-start;margin-top:2px}
@@ -623,8 +633,6 @@ canvas.chart{display:block;width:100%;height:190px}
 .dev-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--direct)}
 .dev-st.on .dev-dot{background:var(--ok)}
 .devdlg .devs{margin:10px 0}
-.imp-sub{display:flex}
-.imp-in>.imp-sub{margin-top:10px}
 
 /* ===== 骨架屏 (读取数据时的占位, 比一行「正在读取…」更稳) ===== */
 .skel{display:grid;gap:10px;padding:6px 0}
@@ -744,7 +752,7 @@ canvas.chart{display:block;width:100%;height:190px}
   .chip.st{padding:7px;gap:0}
   .chip.st #status-text{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
   .pxy{padding:3px 5px 3px 9px;gap:6px}
-  .page{padding:12px 12px 20px;padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right))}
+  .page{padding:12px 12px 20px;padding-bottom:calc(20px + env(safe-area-inset-bottom));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right))}
   .card{padding:13px 13px}
   /* 表格 → 卡片 */
   .rt thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
@@ -792,9 +800,6 @@ canvas.chart{display:block;width:100%;height:190px}
   .dev>.btn{grid-column:1/-1;width:100%}
   .imp-in .subtabs{display:flex;width:100%}
   .imp-in .subtab{flex:1 1 auto;justify-content:center;white-space:normal;text-align:center;line-height:1.25;min-height:44px}
-  .imp-sub .seg{width:100%}
-  .imp-sub .seg label{flex:1}
-  .imp-sub .seg label>span{justify-content:center;white-space:normal;text-align:center;min-height:44px}
   .toolbar .inp[type=search]{flex:1 1 100%;max-width:none}
   /* 弹窗: 底部弹层 (大的是整屏), 操作栏固定在底部, 软键盘弹出时用 dvh 保证输入框可见 */
   dialog.dlg,dialog.dlg.sm,dialog.dlg.md,dialog.dlg.lg{width:100vw;max-width:100vw;margin:auto 0 0 0;max-height:calc(100dvh - 12px - env(safe-area-inset-top));border-radius:16px 16px 0 0;border-left:0;border-right:0;border-bottom:0}
@@ -910,19 +915,12 @@ dialog.authpage::backdrop{background:var(--bg)}
 .ap-note{display:flex;gap:6px;align-items:flex-start;justify-content:center;max-width:440px;margin:0;color:var(--muted);font-size:var(--fs-12-5);text-align:center}
 .ap-note .ci{flex:none;margin-top:2px}
 .ap-foot{flex:none;display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 16px calc(18px + env(safe-area-inset-bottom));color:var(--muted);font-size:var(--fs-12-5)}
-.ap-site,.foot-site{display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border:1px solid var(--line2);border-radius:99px;background:var(--surface);color:var(--text);font-size:var(--fs-13);text-decoration:none;white-space:nowrap}
-.ap-site:hover,.foot-site:hover{background:var(--pri-bg);border-color:var(--pri);color:var(--pri)}
+.ap-site{display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border:1px solid var(--line2);border-radius:99px;background:var(--surface);color:var(--text);font-size:var(--fs-13);text-decoration:none;white-space:nowrap}
+.ap-site:hover{background:var(--pri-bg);border-color:var(--pri);color:var(--pri)}
 .ap-copy{margin:0}
 .ap-lang{background:var(--surface);border:1px solid var(--line2)}
 @media (max-width:480px){ .ap-head{padding:22px 20px 16px} .ap-body{padding:18px 20px 8px} .ap-switch{padding:14px 20px 20px} .ap-t{font-size:24px} }
-
-/* ===== 仪表盘底部: 固定在最下面的一条 —— 终端命令提示 · 版本 · enana 官网链接 · 版权 ===== */
-.foot{flex:none;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px 16px;padding:6px clamp(12px,2.4vw,24px);padding-bottom:calc(6px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--surface);color:var(--muted);font-size:var(--fs-12-5);text-align:left}
-.foot-l{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.foot-r{display:flex;align-items:center;gap:6px 14px;flex:none;flex-wrap:wrap;justify-content:flex-end}
-.foot-site{padding:3px 11px;font-size:var(--fs-12-5)}
-.foot-copy{white-space:nowrap}
-@media (max-width:759px){ .foot{justify-content:center} .foot-l{display:none} .foot-r{justify-content:center} }
+/* 仪表盘没有常驻的页脚了 (2.3.25): 官网 / 项目主页链接和版权在「设置 → 关于」 */
 /* 添加服务器的「保存到云端」勾选: 弹窗底部左侧 */
 .imp-save{margin-right:auto;flex:1 1 220px;min-width:0;align-items:flex-start;flex-wrap:wrap}
 .imp-save input{margin-top:2px;accent-color:var(--pri)}

@@ -25,8 +25,8 @@
 
   V.init = function (root) {
     el.tabs = ui.tabs(L('set.tabs.aria'), TABS.map(function (x) { return { id: x[0], label: L('set.tab.' + x[0]), icon: x[1] }; }), function (id) { pick(id, true); });
-    root.appendChild(h('div', { class: 'intro set-intro' }, h('p', { class: 'muted' }, L('set.intro'), hl('settings.tabs'))));
-    root.appendChild(h('div', { class: 'set-tabs' }, el.tabs.el));
+    el.tabBar = h('div', { class: 'set-tabs' }, el.tabs.el, hl('settings.tabs'));            // 不再在标签上面用一句话把标签名再念一遍; 说明在「!」里
+    root.appendChild(el.tabBar);
     var built = {
       general: [generalCard()], proxy: [proxyCard(), autoSitesCard(), resetCard()],
       sync: [gateBanner('sync'), TP.sync && TP.sync.settingsCard ? TP.sync.settingsCard() : missing('sync', 'refresh', L('set.sync.title'))],
@@ -55,6 +55,7 @@
   };
   V.show = function () {
     TP.setCrumb(function () { return t('set.tab.' + cur); });
+    revealTab();                                             // 从别的页面跳过来 (TP.settingsTab('plan') 之类) 时页面刚显示出来, 这时才量得到标签的位置
     V.render();
     TP.loadSettings(); loadDevices(false); TP.plan.load(false); loadReset();
     if (TP.billing && (cur === 'account' || cur === 'plan')) TP.billing.load(false);
@@ -62,9 +63,18 @@
   };
   V.render = function () { renderAccount(); renderGeneral(); renderProxy(); renderAutoSites(); renderReset(); renderUpdates(); renderAbout(); renderPlan(); };
 
+  /* 窄屏时标签一行放不下 (横向滚动): 选中的标签不在可见范围里就把它滚到中间 (只滚标签这一行, 不动页面) */
+  function revealTab() {
+    var bar = el.tabBar, b = el.tabs && el.tabs.btn(cur);
+    if (!bar || !b || bar.scrollWidth <= bar.clientWidth + 1) return;
+    try {
+      var r = b.getBoundingClientRect(), s = bar.getBoundingClientRect();
+      if (r.left < s.left || r.right > s.right) bar.scrollLeft += (r.left - s.left) - (s.width - r.width) / 2;
+    } catch (e) { /* 忽略 */ }
+  }
   function pick(id, user) {
     if (!panels[id]) id = 'general';
-    cur = id; el.tabs.set(id);
+    cur = id; el.tabs.set(id); revealTab();
     TP.setCrumb(function () { return t('set.tab.' + cur); });
     TABS.forEach(function (x) { panels[x[0]].hidden = x[0] !== id; });
     if (user) TP.prefs.set('ui.settings.tab', id);
@@ -117,9 +127,9 @@
     el.asView = ui.btn(L('set.asite.view'), { sm: true, icon: 'globe' }); ui.act(el.asView, function () { TP.prefs.set('sites.tab', 'auto'); TP.go('sites'); });
     el.asClr = ui.btn(L('set.asite.clear'), { sm: true, icon: 'delete', cls: 'soft-bad' }); ui.act(el.asClr, clearAutoSites);
     var c = card('autosites', 'scan-search', L('set.asite.title'), L('set.asite.sub'), 'settings.autosites');
-    c.appendChild(h('div', { class: 'kv-row set-row' }, h('span', { class: 'kv-k' }, L('set.asite.label'), hl('settings.autosites')),
+    c.appendChild(h('div', { class: 'kv-row set-row' }, h('span', { class: 'kv-k' }, L('set.asite.label')),            // 「!」只放在卡片标题上 (同一个说明不重复两次)
       h('span', { class: 'kv-v' }, h('div', null, L('set.asite.desc')), h('div', { class: 'muted sm' }, L('set.asite.note'))), h('label', { class: 'sw' }, el.as, h('span', { class: 'sw-ui' }))));
-    c.appendChild(h('div', { class: 'kv-row set-row' }, h('span', { class: 'kv-k' }, L('set.asite.added')), h('span', { class: 'kv-v' }, el.asCnt), h('span', { class: 'set-acts' }, el.asView, el.asClr)));
+    c.appendChild(h('div', { class: 'kv-row set-row' }, h('span', { class: 'kv-k' }, L('set.asite.added')), h('span', { class: 'kv-v' }, el.asCnt), h('span', { class: 'set-ctl' }, el.asView, el.asClr)));
     return c;
   }
   function renderAutoSites() {
@@ -165,10 +175,10 @@
     el.rsBtn = ui.btn(L('set.reset.btn'), { icon: 'rotate-ccw', kind: 'soft-bad' }); ui.act(el.rsBtn, resetRules);
     el.rsUndo = ui.btn(L('set.reset.undo'), { sm: true, icon: 'history' }); ui.act(el.rsUndo, undoReset);
     el.rsStatus = h('div', null); el.rsOfficial = h('div', { class: 'muted sm' }); el.rsBkTxt = h('span', null);
-    el.rsBkRow = h('div', { class: 'kv-row set-row', hidden: true }, h('span', { class: 'kv-k' }, L('set.reset.backup')), h('span', { class: 'kv-v' }, el.rsBkTxt), h('span', { class: 'set-acts' }, el.rsUndo));
+    el.rsBkRow = h('div', { class: 'kv-row set-row', hidden: true }, h('span', { class: 'kv-k' }, L('set.reset.backup')), h('span', { class: 'kv-v' }, el.rsBkTxt), h('span', { class: 'set-ctl' }, el.rsUndo));
     var c = card('reset', 'rotate-ccw', L('set.reset.title'), L('set.reset.sub'), 'settings.reset');
     c.appendChild(h('p', { class: 'muted' }, L('set.reset.desc')));
-    c.appendChild(h('div', { class: 'kv-row set-row' }, h('span', { class: 'kv-k' }, L('set.reset.now'), hl('settings.reset')), h('span', { class: 'kv-v' }, el.rsStatus, el.rsOfficial), h('span', { class: 'set-acts' }, el.rsBtn)));
+    c.appendChild(h('div', { class: 'kv-row set-row' }, h('span', { class: 'kv-k' }, L('set.reset.now')), h('span', { class: 'kv-v' }, el.rsStatus, el.rsOfficial), h('span', { class: 'set-ctl' }, el.rsBtn)));
     c.appendChild(el.rsBkRow);
     c.appendChild(h('p', { class: 'muted sm set-note' }, L('set.reset.keeps')));
     return c;
@@ -314,7 +324,7 @@
     var notes = TP.updates.notes();
     ui.memo(el.notes, [u.available, u.latest, notes.length, u.loaded].join('|'), function () {
       if (u.available) return h('div', { class: 'set-notes' }, h('b', null, t('set.upd.notesTitle', { v: u.latest })), h('pre', { class: 'upd-notes' }, notes || t('upd.card.noNotes')), u.url && /^https:\/\//.test(u.url) ? xlink(u.url, t('set.upd.releasePage')) : null);
-      return u.loaded ? h('p', { class: 'hint ok' }, ui.icon('success', 15, 'ci'), ' ' + t('set.upd.upToDate', { v: v || '—' })) : null;
+      return u.loaded ? h('p', { class: 'hint ok' }, ui.icon('success', 15, 'ci'), t('set.upd.upToDate', { v: v || '—' })) : null;      // 图标和文字的间距由 .hint>.ci 统一给
     });
     var core = (S.core || '').replace(/^sing-box\s*/i, ''), c2 = S.update.core;
     setText(el.coreV, 'sing-box ' + (c2 && c2.current ? c2.current : core || '—') + (c2 && c2.available ? ' → ' + c2.latest : ''));
@@ -344,7 +354,7 @@
   function renderAccount() {
     var A = TP.auth;
     setText(el.accWho, A.email() || t('set.acc.unknown'));
-    setText(el.accNote, t('set.acc.note', { n: A.idleLabel(TP.lockIdleMin()) }));
+    setText(el.accNote, t('set.acc.note'));                  // 只说账号从哪来; 自动锁定的时间就在下面的下拉框里 (不重复三遍)
     var cur = String(TP.lockIdleMin());      // 同步来的自定义值不在下拉里时补一项, 让显示和实际生效的值一致
     if (!Array.prototype.some.call(el.lockSel.options, function (o) { return o.value === cur; })) el.lockSel.appendChild(TP.opt(cur, A.idleLabel(+cur)));
     el.lockSel.value = cur;
@@ -483,6 +493,8 @@
     c.appendChild(el.envBox);
     c.appendChild(h('div', { class: 'muted sm set-credits' }, ui.icon('library', 14, 'ci'), h('span', { class: 'cr-t' })));
     c.appendChild(h('div', { class: 'row wrap set-links' }, xlink(TP.auth.url('account_url'), L('set.about.site')), xlink(REPO, L('set.about.repo')), xlink(NOTICES, 'THIRD_PARTY_NOTICES.md')));
+    el.copy = h('p', { class: 'muted sm set-copy' });                // 版权 (以前在每个页面底部的页脚里; 2.3.25 起仪表盘不再有常驻页脚)
+    c.appendChild(el.copy);
     el.about = c;
     return c;
   }
@@ -499,6 +511,7 @@
       return f;
     });
     setText(el.about.querySelector('.cr-t'), t('set.about.credits'));
+    setText(el.copy, t('foot.copy', { year: new Date().getFullYear() }));
   }
   function fmt0(p) { return [TP.fmt.os(p.os), p.osver, p.arch].filter(Boolean).join(' · '); }
 })();

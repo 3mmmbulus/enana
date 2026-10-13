@@ -115,13 +115,12 @@
     function setMsg(text, cls) { setText(el.stepMsg, text || ''); el.stepMsg.className = 'step-msg' + (cls ? ' ' + cls : ''); }
 
     /* ---------- 骨架 ---------- */
+    /* 一排标签 (2.3.25 以前「导入」里面还有一个「粘贴 / 手动填写」的分段开关, 现在合成同一排): 导入 (粘贴内容) · 手动添加一台 · 用密码 / 密钥部署我的服务器 */
     el.tabs = ui.tabs(L('imp.tabs.aria'), [
       { id: 'import', label: L('imp.tab.import'), icon: 'file-down' },
+      { id: 'manual', label: L('imp.tab.manual'), icon: 'plus' },
       { id: 'vps-password', label: L('imp.tab.vpsPwd'), icon: 'server' },
-      { id: 'vps-key', label: L('imp.tab.vpsKey'), icon: 'key-round' }], function (id) { if (id === 'import') setMode(st.mode); else setTop(id); });
-    /* 「导入」标签里的两种输入方式: 粘贴内容 / 手动填写一台 */
-    el.sub = ui.seg(L('imp.sub.aria'), [{ v: 'import', label: L('imp.sub.paste'), icon: 'file-down' }, { v: 'manual', label: L('imp.sub.hand'), icon: 'plus' }], function (v) { el.sub.set(st.mode); setMode(v); });
-    el.subRow = h('div', { class: 'imp-sub' }, el.sub.el);
+      { id: 'vps-key', label: L('imp.tab.vpsKey'), icon: 'key-round' }], function (id) { if (id === 'import' || id === 'manual') setMode(id); else setTop(id); });
     el.paneVps = h('div', { class: 'pane imp-vps', hidden: true });
 
     /* --- 导入 --- */
@@ -169,7 +168,7 @@
     /* 不再让用户选择: 添加的服务器默认加入官方服务器池 (和云端同步 / 其它电脑), 跟随云端同步的开关; 不显示选项 */
     function paintSave(d) { el.saveCb.checked = !!d.checked; el.saveNote.hidden = true; }
     if (TP.sync && TP.sync.prime) TP.sync.prime().then(paintSave);
-    el.root = h('div', { class: 'imp-in' }, el.tabs.el, el.tabSub, el.subRow, el.paneImp, el.paneMan, el.paneVps, el.stepBox, el.job, el.preview, el.result);
+    el.root = h('div', { class: 'imp-in' }, el.tabs.el, el.tabSub, el.paneImp, el.paneMan, el.paneVps, el.stepBox, el.job, el.preview, el.result);
 
     api = ui.modal({
       title: t('imp.title'), icon: 'plus', iconKind: 'pri', size: 'lg', cls: 'imp', body: el.root,
@@ -195,22 +194,22 @@
 
     function setMode(m) {
       st.mode = m === 'manual' ? 'manual' : 'import'; st.top = 'import';
-      el.tabs.set('import'); el.sub.set(st.mode); paintTabSub();
+      el.tabs.set(st.mode); paintTabSub();
       var idle = st.phase === 'idle';
-      el.tabs.el.hidden = !idle; el.subRow.hidden = !idle; el.paneVps.hidden = true;
+      el.tabs.el.hidden = !idle; el.paneVps.hidden = true;
       el.paneImp.hidden = !idle || st.mode !== 'import'; el.paneMan.hidden = !idle || st.mode !== 'manual';
       if (st.mode === 'manual') prepManual();
       footer();
       setTimeout(function () { try { if (idle && st.top === 'import') (st.mode === 'manual' ? mf.host : el.ta).focus({ preventScroll: true }); } catch (e) { /* 忽略 */ } }, 40);
     }
-    function paintTabSub() { setText(el.tabSub, t(st.top === 'vps-password' ? 'imp.tabsub.pwd' : st.top === 'vps-key' ? 'imp.tabsub.key' : 'imp.tabsub.import')); el.tabSub.hidden = st.phase !== 'idle'; }
+    function paintTabSub() { setText(el.tabSub, t(st.top === 'vps-password' ? 'imp.tabsub.pwd' : st.top === 'vps-key' ? 'imp.tabsub.key' : st.mode === 'manual' ? 'imp.tabsub.manual' : 'imp.tabsub.import')); el.tabSub.hidden = st.phase !== 'idle'; }
     TP.on('lang', function () { if (el.tabSub && el.tabSub.isConnected) paintTabSub(); });
     /* 「我的服务器」两个标签: 面板由 TP.vps.pane 提供 (SSH 一键部署), 弹窗只负责标签 / 底部按钮 / 忙碌锁定 / 关闭时清除密码 */
     function setTop(id) {
       if (!TP.vps || !TP.vps.pane) { ui.toast(t('imp.vps.missing'), 'warn'); setMode(st.mode); return; }
       if (!TP.plan.feature('vps_deploy').enabled) { setMode(st.mode); TP.plan.explain('vps_deploy'); return; }       // 套餐不包含这项功能: 说明原因, 回到「导入」
       st.top = id; el.tabs.set(id); paintTabSub();
-      el.subRow.hidden = true; el.paneImp.hidden = true; el.paneMan.hidden = true; el.paneVps.hidden = false;
+      el.paneImp.hidden = true; el.paneMan.hidden = true; el.paneVps.hidden = false;
       if (!vps[id]) {
         vps[id] = TP.vps.pane(id === 'vps-key' ? 'key' : 'password', {
           setActions: function (list) { if (st.top === id) api.setActions(list); },

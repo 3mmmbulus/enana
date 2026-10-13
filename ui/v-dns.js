@@ -1,5 +1,5 @@
 /* enana · v-dns.js — DNS 页 (视图 id: dns)
- * 卡片 (自上而下): 当前设置 (+ DNS 服务器测速) · 一次解析是怎么完成的 (流程) · 默认已开启的优化 · 自定义解析 (hosts) · 测试解析
+ * 卡片 (自上而下): [当前设置 (+ DNS 服务器测速 + 「默认已开启 N 项优化」, 点「详情」弹窗列出) | 测试解析] 并排 · 一次解析是怎么完成的 (流程) · 自定义解析 (hosts, 「添加」打开弹窗)
  *  - 「修改 DNS 设置」弹窗: 国内 / 海外 DNS (选择器 = 弹层列表, 按协议分组, 带延迟徽标)、海外解析的线路、IP 策略、防泄漏、屏蔽广告。
  *    只提交改动的字段; 先 confirmDialog (旧 → 新), 再 POST /api/dns, 并在弹窗里用 taskCard 跟踪任务
  *  - 测速: POST /api/dns/bench (任务), job.result = {cn:[{id,ms}], global:[{id,ms}]}, ms:null = 不通。结果 (带时间) 记在本页状态里 (sessionStorage),
@@ -340,27 +340,27 @@
       el.plBody)));
     el.pipeEmpty = ui.emptyBox();
 
-    /* 默认已开启的优化 (不用设置, 只说明) */
-    el.opts = h('ul', { class: 'dns-opts' }, OPTS.map(function (o) {
-      return h('li', { class: 'dns-opt' },
-        h('span', { class: 'dns-opt-ic', 'aria-hidden': 'true' }, ui.icon(o.icon, 20)),
-        h('div', { class: 'dns-opt-b' }, h('div', { class: 'dns-opt-t' }, h('b', null, L(o.t)), H(o.help)), h('p', { class: 'dns-opt-d' }, L(o.d))),
-        ui.badge(L('dns.opt.on'), 'ok', 'check'));
-    }));
+    /* 默认已开启的优化 (不用设置, 只说明): 当前设置卡片里一行「默认已开启 N 项优化」+「详情」, 列表在弹窗里 (以前是一整张没有任何控件的卡片) */
+    function optList() {
+      return h('div', null, h('p', { class: 'muted dns-opt-sub' }, t('dns.opt.sub')), h('ul', { class: 'dns-opts' }, OPTS.map(function (o) {
+        return h('li', { class: 'dns-opt' },
+          h('span', { class: 'dns-opt-ic', 'aria-hidden': 'true' }, ui.icon(o.icon, 20)),
+          h('div', { class: 'dns-opt-b' }, h('div', { class: 'dns-opt-t' }, h('b', null, t(o.t)), H(o.help)), h('p', { class: 'dns-opt-d' }, t(o.d))),
+          ui.badge(t('dns.opt.on'), 'ok', 'check'));
+      })));
+    }
+    el.optLine = h('div', { class: 'dns-optl' }, ui.chip(L('dns.opt.chip', { n: OPTS.length }), 'ok', 'check'), ui.detailsBtn(L('common.details'), L('dns.opt.title'), optList));
 
     /* 自定义解析 */
     buildHosts();
 
+    el.sumCard = h('section', { class: 'card dns-sumc', hidden: true },
+      h('div', { class: 'card-h' }, h('h3', null, L('dns.sum.title')), el.change),
+      el.sum, el.adsNote, el.bar.el, el.bnSug, el.optLine);
     el.body = h('div', { class: 'dns-body', hidden: true },
-      h('section', { class: 'card' },
-        h('div', { class: 'card-h' }, h('h3', null, L('dns.sum.title')), el.change),
-        el.sum, el.adsNote, el.bar.el, el.bnSug),
       h('section', { class: 'card' },
         h('div', { class: 'card-h' }, h('h3', null, L('dns.pipe.title'), H('pipe')), h('span', { class: 'muted sm' }, L('dns.pipe.sub'))),
         el.plBox, el.pipeEmpty.el),
-      h('section', { class: 'card' },
-        h('div', { class: 'card-h' }, h('h3', null, L('dns.opt.title')), h('span', { class: 'muted sm' }, L('dns.opt.sub'))),
-        el.opts),
       el.hsCard);
 
     /* 解析测试 */
@@ -382,8 +382,8 @@
     root.appendChild(h('div', { class: 'intro' }, h('p', { class: 'muted' }, L('dns.intro'), H('page'))));
     root.appendChild(h('div', { class: 'dns-scope', role: 'note' }, ui.icon('info', 18, 'ci'), h('div', null, h('b', null, L('dns.scope.title')), h('p', null, L('dns.scope.text')))));
     root.appendChild(el.state.el);
+    root.appendChild(h('div', { class: 'grid cols2 dns-top' }, el.sumCard, el.testCard));      // 最常用的「测试解析」和当前设置并排放在最上面 (设置还没读到时测试卡片占满整行)
     root.appendChild(el.body);
-    root.appendChild(el.testCard);
 
     TP.on('auth', function (ok) { if (ok && active()) load(); syncBench(); syncHs(); });
     TP.on('helper', function (up) { if (up && active() && !D && !inflight) load(); syncBench(); syncHs(); });       // 辅助服务恢复了: 自动重试
@@ -411,7 +411,7 @@
   }
 
   function render() {
-    el.body.hidden = !D;
+    el.body.hidden = !D; el.sumCard.hidden = !D;
     if (D) { el.state.hide(); renderSummary(); renderBenchSug(); renderPipeline(); renderAds(); renderHosts(); return; }
     if (loadErr) showFail(loadErr);
     else el.state.show({ icon: 'refresh', text: t('dns.state.loading') });
@@ -537,10 +537,11 @@
   /* ================= 自定义解析 (hosts) ================= */
   function buildHosts() {
     el.hsCount = h('span', { class: 'chip dns-hs-n' });
+    el.hsAdd = ui.btn(L('dns.hs.add'), { sm: true, kind: 'primary', icon: 'plus' });              // 和其它页面一样: 「添加」打开弹窗 (以前是一直摆在卡片里的一行表单)
+    ui.act(el.hsAdd, function () { openAddHost(); });
     el.hsClear = ui.btn(L('dns.hs.clear'), { sm: true, cls: 'soft-bad', icon: 'delete' });
     ui.act(el.hsClear, function () { return clearHosts(); });
     el.hsProg = h('div', { class: 'dns-prog', hidden: true });
-    hs.add = hostForm({ mode: 'add', onSubmit: addHost });
     el.hsFilter = h('input', {
       class: 'inp', type: 'search', placeholder: L('dns.hs.filter.ph'), 'aria-label': L('dns.hs.filter.aria'), autocomplete: 'off', spellcheck: 'false',
       on: { input: function () { hs.filter = el.hsFilter.value; if (hs.pg.page() !== 1) hs.pg.setPage(1); renderHosts(); } }
@@ -564,13 +565,30 @@
     el.hsList = h('div', { class: 'dns-hs-list' }, el.hsTbl, el.hsEmpty.el, hs.pg.el);
     var go = h('button', { class: 'dns-link', type: 'button', on: { click: function () { goTest('', false); } } }, ui.icon('search', 14, 'ci'), L('dns.hs.tip.go'));
     el.hsCard = h('section', { class: 'card dns-hs' },
-      h('div', { class: 'card-h' }, h('h3', null, L('dns.hs.title'), H('hosts')), el.hsCount, el.hsClear),
+      h('div', { class: 'card-h' }, h('h3', null, L('dns.hs.title'), H('hosts')), el.hsCount, h('span', { class: 'card-h-a' }, el.hsAdd, el.hsClear)),
       h('p', { class: 'muted sm dns-hs-sub' }, L('dns.hs.intro')),
-      hs.add.el, el.hsProg, el.hsTools, el.hsList,
+      el.hsProg, el.hsTools, el.hsList,
       h('p', { class: 'dns-hs-tip muted sm' }, L('dns.hs.tip'), ' ', go));
   }
+  /* 「添加」弹窗: 域名 + IP (和表格里的行内修改共用 hostForm); 提交是后台任务, 进度卡片显示在弹窗里; 成功后关闭弹窗、列表里闪一下新加的那一行; 失败时原因留在弹窗里, 可以改了再试 */
+  function openAddHost() {
+    if (hs.add) return;
+    var prog = h('div', { class: 'dns-prog', hidden: true }), f = hostForm({ mode: 'add', bare: true, onSubmit: function (v) { return addHost(v, prog); } }), api;
+    api = ui.modal({
+      title: t('dns.hs.add.form'), icon: 'plus', iconKind: 'pri', size: 'sm', cls: 'dns-hs-dlg', body: h('div', { class: 'dns-hs-add' }, f.el, prog),
+      dirty: function () { return f.dirty(); },
+      actions: [
+        { label: t('common.cancel'), cancel: true },
+        { label: t('dns.hs.add'), kind: 'primary', icon: 'plus', id: 'go', onClick: function () { return f.submit().then(function (r) { return !!(r && r.ok); }); } }   // 返回 false = 留在弹窗里
+      ],
+      onClose: function () { if (hs.add === f) hs.add = null; hs.forms = hs.forms.filter(function (x) { return x !== f; }); }
+    });
+    f.ok = api.getBtn('go');                                          // 「暂不可用」(忙碌 / 已满 / 辅助服务) 由 syncHs 画在弹窗的「添加」按钮上; 回车也是点它
+    hs.add = f; syncHs();
+  }
 
-  /* 一行输入 (域名 + IP) + 提交 / 取消: 顶部的「添加」和表格里的「行内编辑」共用。o: {mode:'add'|'edit', domain, ip, orig, onSubmit(vals)->Promise<{ok,msg}>, onCancel(), onInput(vals)} */
+  /* 一行输入 (域名 + IP) + 提交 / 取消: 「添加」弹窗和表格里的「行内编辑」共用。
+   * o: {mode:'add'|'edit', bare (不带自己的按钮: 弹窗底部的按钮负责提交, 调用方把它设成 f.ok), domain, ip, orig, onSubmit(vals)->Promise<{ok,msg}>, onCancel(), onInput(vals)} */
   function hostForm(o) {
     var edit = o.mode === 'edit', n = ++uid, f = { touched: { d: false, i: false }, orig: o.orig || '' };
     f.d = h('input', { class: 'inp mono', type: 'text', id: 'dns-hd' + n, placeholder: L('dns.hs.ph.domain'), autocomplete: 'off', spellcheck: 'false', autocapitalize: 'off', 'aria-describedby': 'dns-hdm' + n, value: o.domain || '' });
@@ -578,12 +596,12 @@
     f.dm = h('div', { class: 'fld-h dns-hs-m dns-m', id: 'dns-hdm' + n, 'aria-live': 'polite' });
     f.im = h('div', { class: 'fld-h dns-hs-m dns-m', id: 'dns-him' + n, 'aria-live': 'polite' });
     f.fm = h('div', { class: 'fld-h dns-hs-fm dns-m', role: 'alert', hidden: true });
-    f.ok = ui.btn(edit ? L('common.save') : L('dns.hs.add'), { kind: 'primary', icon: edit ? 'check' : 'plus', cls: 'dns-hs-ok' });
-    f.cancel = edit ? ui.btn(L('common.cancel'), { cls: 'dns-hs-cancel' }) : null;
-    f.el = h('div', { class: 'dns-hs-form' + (edit ? ' is-edit' : ''), role: 'group', 'aria-label': L(edit ? 'dns.hs.edit.form' : 'dns.hs.add.form') },
+    f.ok = o.bare ? null : ui.btn(edit ? L('common.save') : L('dns.hs.add'), { kind: 'primary', icon: edit ? 'check' : 'plus', cls: 'dns-hs-ok' });
+    f.cancel = edit && !o.bare ? ui.btn(L('common.cancel'), { cls: 'dns-hs-cancel' }) : null;
+    f.el = h('div', { class: 'dns-hs-form' + (edit ? ' is-edit' : '') + (o.bare ? ' is-bare' : ''), role: 'group', 'aria-label': L(edit ? 'dns.hs.edit.form' : 'dns.hs.add.form') },
       h('div', { class: 'dns-hs-f' }, h('label', { class: 'fld-l', for: 'dns-hd' + n }, L('dns.hs.f.domain')), f.d, f.dm),
       h('div', { class: 'dns-hs-f' }, h('label', { class: 'fld-l', for: 'dns-hi' + n }, L('dns.hs.f.ip')), f.i, f.im),
-      h('div', { class: 'dns-hs-b' }, h('div', { class: 'dns-hs-bb' }, f.ok, f.cancel)),
+      o.bare ? null : h('div', { class: 'dns-hs-b' }, h('div', { class: 'dns-hs-bb' }, f.ok, f.cancel)),
       f.fm);
     function say(msg) { f.fm.hidden = !msg; setText(f.fm, msg || ''); f.fm.classList.toggle('bad-t', !!msg); }
     /* 随输入校验; show = 强制显示 (提交时), 否则只在用户碰过这个输入框后才显示。返回第一个不合法的输入框 (没有则 null) */
@@ -600,10 +618,6 @@
     function changed() { return f.d.value.trim() !== str(o.domain) || f.i.value.trim() !== str(o.ip); }
     f.dirty = changed;
     f.recheck = function () { check(false); };
-    f.reset = function () {
-      f.d.value = ''; f.i.value = ''; f.touched.d = false; f.touched.i = false; say('');
-      check(false); if (!coarse()) f.d.focus();
-    };
     f.say = say;
     [f.d, f.i].forEach(function (inp) {
       inp.addEventListener('input', function () {
@@ -611,28 +625,31 @@
         if (o.onInput) o.onInput({ domain: f.d.value, ip: f.i.value });
       });
       inp.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); f.ok.click(); }
+        if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); if (f.ok) f.ok.click(); }
         else if (e.key === 'Escape' && o.onCancel) { e.preventDefault(); e.stopPropagation(); o.onCancel(); }
       });
     });
-    ui.act(f.ok, async function () {
+    /* 提交: 先校验 (不合法的输入框得到焦点), 再交给 onSubmit; 返回 {ok} (弹窗据此决定关不关) */
+    f.submit = async function () {
       var c = check(true), r;
-      if (c.bad) { c.bad.focus(); return; }
-      if (edit && !f.dirty()) { say(t('dns.hs.noChange')); return; }
+      if (c.bad) { c.bad.focus(); return { ok: false }; }
+      if (edit && !f.dirty()) { say(t('dns.hs.noChange')); return { ok: false }; }
       say('');
       r = await o.onSubmit({ domain: c.domain, ip: c.ip });
       if (r && r.msg) say(r.msg);
-    });
+      return r || { ok: false };
+    };
+    if (f.ok) ui.act(f.ok, f.submit);
     if (f.cancel) ui.act(f.cancel, function () { if (o.onCancel) o.onCancel(); });
     hs.forms.push(f);
     check(false);
     return f;
   }
 
-  /* 新增 / 修改 / 删除 / 清空 都是任务: 在卡片里用 taskCard 跟踪, 完成后重新读取 GET /api/dns。
+  /* 新增 / 修改 / 删除 / 清空 都是任务: 在卡片里 (o.prog: 「添加」弹窗里的位置) 用 taskCard 跟踪, 完成后重新读取 GET /api/dns。
    * 提交被后端拒绝 (E_INVALID 等, 还没有任务) 时返回 {msg} 让表单把原因显示在输入框旁边; 其它错误用 toast / 进度卡片。 */
   async function hostsJob(form, o) {
-    var why = TP.why.helper(), card, r, name = o.flash || '';
+    var why = TP.why.helper(), card, r, name = o.flash || '', prog = o.prog || el.hsProg;
     if (why) { ui.toast(why, 'warn'); return { ok: false }; }
     if (hs.busy) { ui.toast(t('dns.hs.busy'), 'warn'); return { ok: false }; }
     hs.busy = true; syncHs();
@@ -646,31 +663,28 @@
       return { ok: false };
     }
     card = ui.taskCard(t(o.title));
-    TP.clear(el.hsProg); el.hsProg.appendChild(card.el); el.hsProg.hidden = false;
+    TP.clear(prog); prog.appendChild(card.el); prog.hidden = false;
     card.set({ pct: null, msg: t('dns.hs.sending') });
     try {
       if (r && r.job) await TP.jobs.follow(r.job, card);
       card.done(t(o.done, o.vars));
       ui.toast(t(o.done, o.vars), 'ok');
-      setTimeout(function () { card.close(); el.hsProg.hidden = true; }, 3500);
+      setTimeout(function () { card.close(); prog.hidden = true; }, 3500);
       if (o.ok) o.ok();
       hs.flash = name;
       if (TP.afterApply) TP.afterApply();
       await load();
       return { ok: true };
     } catch (e) {
-      if (e && (e.kind === 'auth' || e.kind === 'cancel')) { card.close(); el.hsProg.hidden = true; return { ok: false }; }
+      if (e && (e.kind === 'auth' || e.kind === 'cancel')) { card.close(); prog.hidden = true; return { ok: false }; }
       card.fail(errText(e));                                         // 失败: 进度卡片里留着原因 (后端会撤销本次更改)
       load();
       return { ok: false };
     } finally { hs.busy = false; syncHs(); }
   }
-  async function addHost(v) {
-    var r;
-    if (D && D.hosts.length >= HOST_MAX) return { ok: false, msg: t('dns.hs.err.max', { max: HOST_MAX }) };
-    r = await hostsJob({ action: 'add', domain: v.domain, ip: v.ip }, { title: 'dns.hs.job.add', done: 'dns.hs.done.add', vars: { domain: v.domain }, flash: v.domain });
-    if (r.ok) hs.add.reset();
-    return r;
+  function addHost(v, prog) {
+    if (D && D.hosts.length >= HOST_MAX) return Promise.resolve({ ok: false, msg: t('dns.hs.err.max', { max: HOST_MAX }) });
+    return hostsJob({ action: 'add', domain: v.domain, ip: v.ip }, { title: 'dns.hs.job.add', done: 'dns.hs.done.add', vars: { domain: v.domain }, flash: v.domain, prog: prog });      // 成功后弹窗自己关闭 (不用清空表单)
   }
   async function saveHost(v) {
     var e = hs.edit, form;
@@ -711,11 +725,12 @@
   function syncHs() {
     var why = TP.why.helper() || (hs.busy ? t('dns.hs.busy') : ''), full = !!D && D.hosts.length >= HOST_MAX;
     hs.forms.forEach(function (f) {
-      if (!document.contains(f.el) && f !== hs.add) return;
+      if ((!document.contains(f.el) && f !== hs.add) || !f.ok) return;
       ui.avail(f.ok, why || (f === hs.add && full ? t('dns.hs.err.max', { max: HOST_MAX }) : ''));
       if (f.cancel) ui.avail(f.cancel, hs.busy ? t('dns.hs.busy') : '');
     });
     hs.btns.forEach(function (b) { ui.avail(b, why); });
+    if (el.hsAdd) ui.avail(el.hsAdd, why || (full ? t('dns.hs.err.max', { max: HOST_MAX }) : ''));
     if (el.hsClear) ui.avail(el.hsClear, why || (D && !D.hosts.length ? t('dns.hs.clear.none') : ''));
   }
   function byDomain(a, b) { return a.domain < b.domain ? -1 : a.domain > b.domain ? 1 : 0; }
@@ -780,13 +795,13 @@
         if (tr.getAttribute('data-d') === n && !reduceMotion()) { try { tr.scrollIntoView({ block: 'nearest' }); } catch (e) { /* 忽略 */ } }
       });
     }
-    if (hs.focus) {                                                      // 行被重建 / 删除之后, 把焦点放回这一行的「修改」按钮 (没有这一行了就放到邻近的一行, 再没有就放到添加框)
+    if (hs.focus) {                                                      // 行被重建 / 删除之后, 把焦点放回这一行的「修改」按钮 (没有这一行了就放到邻近的一行, 再没有就放到「添加」按钮)
       var fx = hs.focus, rowsEl = el.hsBody.children, hit = null, b, i;
       hs.focus = null;
       for (i = 0; i < rowsEl.length; i++) if (fx.domain && rowsEl[i].getAttribute('data-d') === fx.domain) hit = rowsEl[i];
       if (!hit && fx.index != null && rowsEl.length) hit = rowsEl[Math.max(0, Math.min(fx.index, rowsEl.length - 1))];
       b = hit && hit.querySelector('.acts .btn:nth-child(2)');
-      if (b) b.focus(); else if (!coarse()) hs.add.d.focus();
+      if (b) b.focus(); else if (!coarse() && el.hsAdd) el.hsAdd.focus();
     }
   }
 

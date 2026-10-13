@@ -10,7 +10,7 @@
  * 不能用的控件不用 disabled: ui.avail(控件, 原因) + 点击时 toast 原因。
  * 分页: ui.pager('rules', {def: 20}) (筛选 / 搜索之后再分页; 改了筛选回到第 1 页); 偏好 (TP.prefs): rules.filter (上次选的筛选)。
  * 列头排序 (ui.sorter('rules'), 记在 prefs sort.rules): 启用 / 规则集 / 标签 / 来源 / 状态 都可以点列头排序 (「操作」列不是数据); 顺序: 筛选 → 排序 (整张表) → 分页;
- *   没有选排序时保持原来的顺序 (必选 → 自定义 → 其余按名称)。 */
+ *   没有选排序时保持原来的顺序 (必选 → 自定义 → 其余按名称)。窗口 ≤ 1260px 时表头被藏起来, 改用工具栏里的排序下拉 + 方向按钮 (同一个排序状态)。 */
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, fmt = TP.fmt, setText = TP.setText, I = window.I18N, t = I.t, L = I.L;
@@ -368,7 +368,13 @@
       on: { type: 'num', get: function (s) { return s.enabled ? 0 : 1; } },              // 升序 = 已启用的在前
       name: { get: nameOf }, tag: { get: function (s) { return s.tag; } }, src: { get: srcOf },
       st: { type: 'num', get: stOf }
-    }, { onChange: firstPage });
+    }, { onChange: function () { syncSort(); firstPage(); } });
+    /* 窗口窄一点 (≤ 1260px) 时表头藏起来了 (每行变成两行的网格 / 手机上的卡片), 列头排序就点不到: 工具栏里给一个排序下拉 + 方向按钮 (和列头是同一个 ui.sorter, css/rules.css 只在这时显示) */
+    el.sort = h('select', { class: 'sel rl-sort', 'aria-label': L('rules.sort.aria') }, [['', 'rules.sort.none'], ['name', 'rules.col.name'], ['tag', 'rules.col.tag'], ['src', 'rules.col.src'], ['st', 'rules.col.st'], ['on', 'rules.col.on']].map(function (o) { var op = TP.opt(o[0], t(o[1])); op._k = o[1]; return op; }));
+    el.sort.addEventListener('change', function () { so.set(el.sort.value, (so.state() || {}).dir); });
+    el.sortDir = ui.ibtn('chevron-up', L('apps.sort.dir'), { size: 16, cls: 'rl-sortdir' });
+    el.sortDir.addEventListener('click', function () { var s = so.state(); if (s) so.set(s.key, s.dir === 'asc' ? 'desc' : 'asc'); });
+    el.sortBox = h('span', { class: 'rl-sortbox' }, el.sort, el.sortDir);
     var thOn = so.th('on', function () { return t('rules.col.on'); }, { class: 'rl-c-sw' });
     thOn.querySelector('.th-t').classList.add('sr');                                       // 开关列很窄: 只显示排序箭头, 列名给读屏 (和原来的 sr 文字一样)
     var thSrc = so.th('src', function () { return t('rules.col.src'); });
@@ -382,13 +388,13 @@
       el.tbody));
     el.empty = ui.emptyBox();
 
-    el.bar = h('div', { class: 'toolbar rl-bar' }, el.q, el.chips, el.count);
+    el.bar = h('div', { class: 'toolbar rl-bar' }, el.q, el.chips, el.sortBox, el.count);
     root.appendChild(h('div', { class: 'intro' }, h('p', { class: 'muted' }, L('rules.intro'), ' ', ui.help(HT.page))));
     root.appendChild(h('div', { class: 'rl-head' }, el.upd, withHelp(el.updBtn, HT.update), withHelp(el.addBtn, HT.custom)));
     root.appendChild(el.bar);
     root.appendChild(h('section', { class: 'card flush rl-card' }, el.wrap, el.empty.el, pg.el));
 
-    TP.on('lang', function () { render(); });
+    TP.on('lang', function () { syncSort(); render(); });
     TP.on('helper', function (up) { if (!active()) return; if (up && err && !data) load(); else render(); });
     TP.on('state', function () { if (active()) renderHead(); });
     TP.on('rules-updated', function () { if (active()) load(); });                              // 「全部更新」完成: 重新读取 (不在本页时, 下次进入 show() 会重新加载)
@@ -399,7 +405,17 @@
       if (f !== flt.f) { flt.f = f; render(); }
     });
     setInterval(function () { if (active() && !document.hidden && data) render(); }, 60000);   // 「3 分钟前」之类的相对时间
+    syncSort();
   };
+  /* 工具栏的排序下拉 / 方向按钮跟列头排序保持一致 (同一个 ui.sorter 状态) */
+  function syncSort() {
+    if (!so || !el.sort) return;
+    var s = so.state();
+    Array.prototype.forEach.call(el.sort.options, function (op) { var lb = t(op._k); if (op.textContent !== lb) op.textContent = lb; });
+    el.sort.value = s ? s.key : '';
+    el.sortDir.hidden = !s;
+    if (s) { var lb = t(s.dir === 'asc' ? 'apps.sort.toDesc' : 'apps.sort.toAsc'); el.sortDir.setAttribute('aria-label', lb); el.sortDir.title = lb; el.sortDir.setAttribute('data-dir', s.dir); }
+  }
 
   V.show = function () {
     render();

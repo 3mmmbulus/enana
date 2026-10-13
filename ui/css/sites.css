@@ -25,29 +25,30 @@
 .sx-nav .subtabs.is-v .subtab.on>.ci{color:var(--pri)}
 .sx-main,.sx-pane{min-width:0}
 .sx-pane>*+*{margin-top:12px}
-@media (max-width:760px){
+@media (max-width:759px){
   .sx-layout{grid-template-columns:minmax(0,1fr);gap:10px;margin-left:0}
   .sx-nav-t{display:none}
   .sx-nav{position:static;max-height:none;overflow:visible}
   .sx-tb{flex:1 1 100%;justify-content:flex-start}
   .sx-tb .inp[type=search]{max-width:none}
 }
+/* 窄屏: 二级导航 (十几个分类) 是一行横向滚动的标签, 不换成好几行把内容挤到下面去; 选中的那个由 v-sites.js 滚到看得见的地方 */
+.sx-nav .subtabs:not(.is-v){display:flex;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;max-width:100%;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
+.sx-nav .subtabs:not(.is-v) .subtab{flex:none}
 /* 每一行右边的控件: 三段开关 / 下拉 + (固定出口有 2 个以上时) 指定走哪一个 */
 .sx-ctl{display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:0}
 .sx-tg{border-left-width:4px;border-left-color:var(--pin);max-width:230px}
 .sx-autobar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin:0}
 .sx-autobar-t{flex:1 1 280px;min-width:0}
 .sx-autobar .ci{flex:none}
-.sx-how{display:flex;align-items:center;flex-wrap:wrap;gap:2px 8px}
-.sx-how .help-i{margin-left:0}
-/* 出口类型图例: 路由颜色只用在图标上, 文字用正文色 (保证对比度, 也不只靠颜色区分) */
+/* 出口类型图例: 路由颜色只用在图标上, 文字用正文色 (保证对比度, 也不只靠颜色区分); 最后一个「!」说明三种出口的区别 */
 .sx-legend{display:flex;align-items:center;flex-wrap:wrap;gap:2px 16px}
 .sx-lg{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-13);font-weight:600;color:var(--text)}
 .sx-lg .ci{flex:none}
 .sx-lg-pin .ci{color:var(--pin)}
 .sx-lg-auto .ci{color:var(--auto)}
 .sx-lg-direct .ci{color:var(--direct)}
-.sx-lg .help-i{margin-left:0}
+.sx-legend .help-i{margin-left:-10px}
 /* 自定义网站卡片里的分页器: 去掉左右内边距 (卡片自己已有) */
 .sx-pgcard>.pager{padding:10px 0 0;margin-top:4px}
 /* 分组标题: 标题按钮 + 「!」 + 撑满整行的展开按钮 */
