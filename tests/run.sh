@@ -336,10 +336,11 @@ sdp add "claude.ai" | chk "添加: 已经有的域名 → 被拒" 'assert not d[
 J=$(sdp add "New-Claude.Example." | jp 'print(d["job"])'); [ "$(job_wait "$J")" = done ] && tpass "添加域名 (规范化为小写、去掉结尾的点; 任务完成)" || tfail "添加域名"
 sd | chk "添加后: 生效列表多了 new-claude.example (source=added), modified=true" 'm={x["domain"]:x["source"] for x in d["domains"]}; assert d["modified"] and m["new-claude.example"]=="added" and m["claude.ai"]=="system"'
 cat "$W/h/ui/catalog.json" | chk "catalog.json 里该条目的 domains 是生效后的列表 + modified=true" 'e={x["id"]:x for x in d["entries"]}["claude"]; assert "new-claude.example" in e["domains"] and e["modified"]'
-grep -q 'new-claude.example' "$W/h/config.json" && tpass "新域名已写进核心配置 (热生效)" || tfail "新域名已写进核心配置"
+SRF="$W/h/rules/site-claude/site-claude.json"      # 网站的生效域名是一个本地规则集 (核心热加载), 不写进核心配置: TUN 下改域名不用重装
+grep -q '"new-claude.example"' "$SRF" && ! grep -q 'new-claude.example' "$W/h/config.json" && tpass "新域名已写进这个网站的规则集文件 (热生效), 核心配置里没有它" || tfail "新域名已写进这个网站的规则集文件, 核心配置里没有它"
 J=$(sdp remove "claude.com" | jp 'print(d["job"])'); job_wait "$J" >/dev/null
 sd | chk "删除系统域名 (claude.com): 从生效列表消失, 记在 removed 里" 'assert "claude.com" not in [x["domain"] for x in d["domains"]] and d["removed"]==["claude.com"]'
-grep -q '"claude.com"' "$W/h/config.json" && tfail "删除的系统域名不再出现在核心配置里" || tpass "删除的系统域名不再出现在核心配置里"
+if grep -q '"claude.ai"' "$SRF" && ! grep -q '"claude.com"' "$SRF" && ! grep -q '"claude.com"' "$W/h/config.json"; then tpass "删除的系统域名不再出现在这个网站的规则集文件里 (其余的系统域名还在), 核心配置里也没有"; else tfail "删除的系统域名不再出现在这个网站的规则集文件里, 核心配置里也没有"; fi
 sdp remove "claude.com" | chk "重复删除同一个域名 → 被拒" 'assert not d["ok"]'
 J=$(sdp restore "claude.com" | jp 'print(d["job"])'); job_wait "$J" >/dev/null
 sd | chk "恢复被删除的系统域名" 'assert "claude.com" in [x["domain"] for x in d["domains"]] and d["removed"]==[]'

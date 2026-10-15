@@ -2,7 +2,9 @@
 # TUN 规则同步助手 (lib/tunrules-helper.pl · lib/enhanced.sh · lib/config.sh): 几秒钟, 不需要 sing-box / 真实的 launchd / 管理员权限。
 #   · 助手 (在临时目录里, 路径和 uid 在临时副本里替换): 合法数据包写进规则集目录 (原地覆盖, inode 不变); 任何一项不合格 → 一个文件都不动
 #   · 校验: 文件名 / 版本 / 结构 / 匹配键 / 值的类型和长度 / 控制字符 / 数量 / 总大小 / 符号链接 / 目录归属 / 多余参数
-#   · apply_config 的决策: 只有应用 / 网站策略变了且助手可用 → 免密同步、不重启; 助手没有 / 被拒绝 / 其它文件或配置变了 → 完整安装 (要管理员授权)
+#   · 网站的域名列表 (site-<id>.json, T3d): 只有一条 domain / domain_suffix 规则, 值必须是合法域名, 只覆盖快照里已经有的文件
+#   · apply_config 的决策: 只有应用 / 网站策略或网站的域名列表变了且助手可用 → 免密同步、不重启; 助手没有 / 被拒绝 / 其它文件或配置变了 → 完整安装 (要管理员授权)
+#   · T10 用真实的 gen_config / apply_config / op_txn: 改网站域名、添加 / 删除自己的网站、改线路、恢复网站默认 → 配置不变, 只经助手同步; 服务器变了 → 完整安装; 2.3.25 快照的迁移
 # 全部使用假 sudo (tests/fakebin); 助手只写测试沙箱里的目录。
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd -P); REPO=$(dirname "$HERE")
@@ -72,6 +74,7 @@ rej "文件名: 核心配置 config.json"            "{\"config.json\":$(R '[{"d
 rej "文件名: 不在固定集合里 (ovr-x.json)"     "{\"ovr-x.json\":$(R '[{"domain":["a"]}]')}"
 rej "文件名: 多余后缀 (ovr-pin.json.bak)"     "{\"ovr-pin.json.bak\":$(R '[{"domain":["a"]}]')}"
 rej "文件名: 序号超过 2 位 (ovr-pin-100.json)" "{\"ovr-pin-100.json\":$(R '[{"domain":["a"]}]')}"
+rej "文件名: 结尾带换行 (ovr-pin.json\\n: 以前的 \$ 会放过它, 建出名字带换行的目录)" "{\"ovr-pin.json\\n\":$(R '[{"domain":["a"]}]')}"
 rej "版本不是 3"                              '{"ovr-pin.json":{"version":2,"rules":[{"domain":["a"]}]}}'
 rej "规则集里多了别的键 (outbound)"            '{"ovr-pin.json":{"version":3,"rules":[{"domain":["a"]}],"outbound":"direct"}}'
 rej "规则集缺少 rules"                         '{"ovr-pin.json":{"version":3}}'
@@ -176,6 +179,104 @@ eq "上限 160 个文件: 通过 (留有余量)" "$rc:$(cat "$W/out")" "0:160 fi
 big 161 b.example | H sync >"$W/out" 2>&1; rc=$?
 eq "161 个文件: 整个数据包被拒, 已有文件一个字节都没变" "$([ "$rc" != 0 ] && echo rejected):$(snap ovr-pin-1.json | grep -c a.example):$(snap ovr-pin-1.json | grep -c b.example)" "rejected:1:0"
 rm -rf "$W"/snap/rules/ovr-*-[0-9]*
+
+echo "== T3d. 助手: 网站的域名列表 site-<id>.json —— 只有一条 domain / domain_suffix 规则、每个值都是合法的域名、只覆盖快照里已经有的文件"
+seed_site() { mkdir -p "$W/snap/rules/site-$1"; printf '%s\n' '{"version":3,"rules":[{"domain":["enana-placeholder.invalid"]}]}' > "$W/snap/rules/site-$1/site-$1.json"; }   # 完整安装放进快照的文件
+seed_site claude; seed_site ai-common
+SI0=$(inode site-claude.json)
+printf '%s' '{"site-claude.json":{"version":3,"rules":[{"domain_suffix":["claude.ai","anthropic.com"]}]},"ovr-pin.json":{"version":3,"rules":[{"domain":["keep.example"]}]}}' | H sync >"$W/out" 2>&1; rc=$?
+eq "合法的域名列表 (和策略规则集在同一个数据包里): 退出码 0, 写了 2 个文件" "$rc:$(cat "$W/out")" "0:2 files synced"
+eq "…内容写进去了, 原地覆盖 (inode 不变, 核心的文件监视继续有效)" "$(snap site-claude.json | grep -c anthropic.com):$(inode site-claude.json)" "1:$SI0"
+LONG63=$(python3 -c 'print("a"*63)'); MAX253=$(python3 -c 'print(".".join(["a"*63]*3 + ["b"*61]))')
+printf '{"site-ai-common.json":{"version":3,"rules":[{"domain_suffix":[".sub.example","cn","xn--fiqs8s.example","%s.example","%s","a-b.c-d.example"]}]}}' "$LONG63" "$MAX253" | H sync >"$W/out" 2>&1; rc=$?
+eq "合法的名字: 以点开头的后缀 (只匹配子域名) / 单段 (cn) / punycode / 63 位的标签 / 正好 253 位 / 中间的连字符: 允许" "$rc:$(cat "$W/out")" "0:1 files synced"
+printf '%s' '{"site-ai-common.json":{"version":3,"rules":[{"domain":["enana-placeholder.invalid"]}]}}' | H sync >/dev/null 2>&1; rc=$?
+eq "域名删光了 (占位规则: domain enana-placeholder.invalid): 允许" "$rc:$(snap site-ai-common.json | grep -c enana-placeholder.invalid)" "0:1"
+SBASE=$(snap site-claude.json); OBASE=$(snap ovr-pin.json)
+srej() { # <描述> <数据包 JSON>  拒绝; 快照里的 site-claude / ovr-pin 一个字节都不变, 同一个包里的合法文件 (site-ai-common) 也不写
+  local d=$1 body=$2 out rc
+  body=$(python3 -c 'import json,sys; good={"site-ai-common.json":{"version":3,"rules":[{"domain":["must-not-appear.example"]}]}}; bad=json.loads(sys.argv[1]); good.update(bad); print(json.dumps(good))' "$body")
+  printf '%s' "$body" | H sync >"$W/out" 2>&1; rc=$?
+  if [ "$rc" != 0 ] && ! snap site-ai-common.json | grep -q must-not-appear && [ "$(snap site-claude.json)" = "$SBASE" ] && [ "$(snap ovr-pin.json)" = "$OBASE" ]; then tpass "$d"; else tfail "$d" "rc=$rc out=$(cat "$W/out")"; fi
+}
+SR() { printf '{"site-claude.json":{"version":3,"rules":%s}}' "$1"; }      # SR <rules 数组>: site-claude.json 的数据包
+SV() { SR "$(python3 -c 'import json,sys; print(json.dumps([{sys.argv[1]: sys.argv[2:]}]))' "$@")"; }      # SV <匹配键> <值…>
+srej "文件名: 大写 (site-Claude.json)"                     "{\"site-Claude.json\":$(R '[{"domain":["a.example"]}]')}"
+srej "文件名: id 以连字符开头 (site--x.json)"              "{\"site--x.json\":$(R '[{"domain":["a.example"]}]')}"
+srej "文件名: 空 id (site-.json)"                          "{\"site-.json\":$(R '[{"domain":["a.example"]}]')}"
+srej "文件名: 路径穿越 (site-../../x.json)"                "{\"site-../../x.json\":$(R '[{"domain":["a.example"]}]')}"
+srej "文件名: 带斜杠 (site-a/site-a.json)"                 "{\"site-a/site-a.json\":$(R '[{"domain":["a.example"]}]')}"
+srej "文件名: 下划线 (site-a_b.json)"                      "{\"site-a_b.json\":$(R '[{"domain":["a.example"]}]')}"
+srej "文件名: id 超过 63 位"                               "{\"site-${LONG63}a.json\":$(R '[{"domain":["a.example"]}]')}"
+srej "文件名: 多余后缀 (site-claude.json.bak)"             "{\"site-claude.json.bak\":$(R '[{"domain":["a.example"]}]')}"
+srej "文件名: 结尾带换行 (site-claude.json\\n)"            "{\"site-claude.json\\n\":$(R '[{"domain":["a.example"]}]')}"
+srej "快照里没有的网站 (site-new: 目录和文件都不在): 拒绝" "{\"site-new.json\":$(R '[{"domain":["a.example"]}]')}"
+eq "…而且没有新建目录 (助手不为网站的域名列表建任何东西)" "$([ -e "$W/snap/rules/site-new" ] && echo created || echo untouched)" "untouched"
+mkdir -p "$W/snap/rules/site-half"
+srej "目录在、文件不在 (site-half.json): 拒绝, 不新建文件" "{\"site-half.json\":$(R '[{"domain":["a.example"]}]')}"
+eq "…site-half 目录里还是空的" "$(ls -A "$W/snap/rules/site-half" | wc -l | tr -d ' ')" "0"
+rmdir "$W/snap/rules/site-half"
+srej "匹配键: process_name (网站的列表里不能有应用)"        "$(SV process_name curl)"
+srej "匹配键: process_path_regex (不能有正则)"             "$(SV process_path_regex '(?i)/x\.app/')"
+srej "匹配键: domain_keyword"                              "$(SV domain_keyword claude)"
+srej "匹配键: domain_regex"                                "$(SV domain_regex '.*')"
+srej "匹配键: ip_cidr"                                     "$(SV ip_cidr 0.0.0.0/0)"
+srej "两条规则 (网站的列表只有一条)"                         "$(SR '[{"domain":["a.example"]},{"domain_suffix":["b.example"]}]')"
+srej "一条规则里有两个匹配键"                               "$(SR '[{"domain":["a.example"],"domain_suffix":["b.example"]}]')"
+srej "规则集里多了别的键 (path)"                            '{"site-claude.json":{"version":3,"rules":[{"domain":["a.example"]}],"path":"/etc/hosts"}}'
+srej "版本不是 3"                                          '{"site-claude.json":{"version":2,"rules":[{"domain":["a.example"]}]}}'
+srej "值: 带协议和路径 (https://a.example/x)"               "$(SV domain_suffix https://a.example/x)"
+srej "值: 路径 (/etc/passwd)"                              "$(SV domain_suffix /etc/passwd)"
+srej "值: 带空格"                                          "$(SV domain_suffix 'a example.com')"
+srej "值: 大写字母"                                        "$(SV domain_suffix A.example)"
+srej "值: 通配符 (*.a.example)"                            "$(SV domain_suffix '*.a.example')"
+srej "值: 下划线"                                          "$(SV domain_suffix a_b.example)"
+srej "值: 标签以连字符开头 (-a.example)"                    "$(SV domain_suffix -a.example)"
+srej "值: 标签以连字符结尾 (a-.example)"                    "$(SV domain_suffix a-.example)"
+srej "值: 空标签 (a..example)"                             "$(SV domain_suffix a..example)"
+srej "值: 结尾带点 (a.example.)"                           "$(SV domain_suffix a.example.)"
+srej "值: 两个点开头 (..a.example)"                        "$(SV domain_suffix ..a.example)"
+srej "值: 只有一个点"                                      "$(SV domain_suffix .)"
+srej "值: domain (完整域名) 不能以点开头"                    "$(SV domain .a.example)"
+srej "值: 标签超过 63 位"                                  "$(SV domain_suffix "${LONG63}a.example")"
+srej "值: 总长超过 253"                                    "$(SV domain_suffix "${MAX253}b")"
+srej "值: 中文 (要用 punycode)"                            "$(SV domain_suffix 中文.example)"
+srej "值: 控制字符"                                        "$(SR '[{"domain":["a\u0001.example"]}]')"
+srej "值: 数字"                                            "$(SR '[{"domain":[1]}]')"
+srej "值: 空字符串"                                        "$(SR '[{"domain":[""]}]')"
+srej "值: 同一条规则超过 5000 个"                           "$(python3 -c 'import json; print(json.dumps({"site-claude.json":{"version":3,"rules":[{"domain_suffix":["d%d.example"%i for i in range(5001)]}]}}))')"
+python3 -c 'import json; v=["%s.d%d.example" % (".".join(["a"*55]*4), i) for i in range(5000)]; print(json.dumps({"site-ai-common.json":{"version":3,"rules":[{"domain_suffix":v}]},"site-claude.json":{"version":3,"rules":[{"domain_suffix":v}]}}))' 2>/dev/null | H sync >/dev/null 2>&1; rc=$?
+eq "数据包超过 2 MB (两个网站各 5000 个合法的长域名): 整个拒绝, 一个字节都没写" "$([ "$rc" != 0 ] && echo rejected):$([ "$(snap site-claude.json)" = "$SBASE" ] && echo same):$(snap site-ai-common.json | grep -c d4999.example)" "rejected:same:0"
+printf 'TOP-SECRET' > "$W/secret.txt"; rm -f "$W/snap/rules/site-claude/site-claude.json"; ln -s "$W/secret.txt" "$W/snap/rules/site-claude/site-claude.json"
+printf '%s' '{"site-claude.json":{"version":3,"rules":[{"domain":["a.example"]}]}}' | H sync >/dev/null 2>&1; rc=$?
+eq "site-claude.json 是符号链接: 拒绝, 链接指向的文件没被改" "$([ $rc != 0 ] && echo rejected || echo accepted):$(cat "$W/secret.txt")" "rejected:TOP-SECRET"
+rm -f "$W/snap/rules/site-claude/site-claude.json"; printf '%s\n' "$SBASE" > "$W/snap/rules/site-claude/site-claude.json"
+mkdir -p "$W/evil"; mv "$W/snap/rules/site-claude" "$W/snap/rules/site-claude.real"; ln -s "$W/evil" "$W/snap/rules/site-claude"
+printf '%s' '{"site-claude.json":{"version":3,"rules":[{"domain":["a.example"]}]}}' | H sync >/dev/null 2>&1; rc=$?
+eq "目录 rules/site-claude 是符号链接 (指向快照外): 拒绝, 链接另一端什么都没写" "$([ $rc != 0 ] && echo rejected || echo accepted):$(ls -A "$W/evil" | wc -l | tr -d ' ')" "rejected:0"
+rm -f "$W/snap/rules/site-claude"; : > "$W/snap/rules/site-claude"
+printf '%s' '{"site-claude.json":{"version":3,"rules":[{"domain":["a.example"]}]}}' | H sync >/dev/null 2>&1; rc=$?
+eq "rules/site-claude 是普通文件: 拒绝" "$([ $rc != 0 ] && echo rejected || echo accepted)" "rejected"
+rm -f "$W/snap/rules/site-claude"; mv "$W/snap/rules/site-claude.real" "$W/snap/rules/site-claude"; rm -rf "$W/evil"
+sites() { # sites <个数> <域名> [策略文件个数]  -> 数据包: site-s1 … site-sN (+ 前 M 个固定名字 / 序号的 ovr 文件)
+  python3 -c '
+import json, sys
+n, dom, m = int(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+d = {"site-s%d.json" % i: {"version": 3, "rules": [{"domain_suffix": [dom]}]} for i in range(1, n + 1)}
+names = ["ovr-" + b + ".json" for b in "direct appdirect browserdirect browserauto browserpin browserpinauto pin pinauto apppin apppinauto appauto auto".split()]
+i = 1
+while len(names) < m:
+    for p in ("pin", "apppin", "browserpin"): names.append("ovr-%s-%d.json" % (p, i))
+    i += 1
+for x in names[:m]: d[x] = {"version": 3, "rules": [{"domain": [dom]}]}
+print(json.dumps(d))' "$1" "$2" "${3:-0}"
+}
+for i in $(seq 1 401); do seed_site "s$i"; done
+sites 400 a.example 160 | H sync >"$W/out" 2>&1; rc=$?
+eq "400 个网站的域名列表 + 160 个策略文件 (两个上限分开算): 一次同步完" "$rc:$(cat "$W/out")" "0:560 files synced"
+sites 401 b.example | H sync >"$W/out" 2>&1; rc=$?
+eq "401 个网站的域名列表: 整个数据包被拒, 一个字节都没变" "$([ "$rc" != 0 ] && echo rejected):$(snap site-s1.json | grep -c a.example):$(snap site-s1.json | grep -c b.example)" "rejected:1:0"
+rm -rf "$W"/snap/rules/site-* "$W"/snap/rules/ovr-*-[0-9]*
 
 echo "== T4. apply_config 的决策: 免密同步 还是 完整安装 (要管理员授权)"
 export HOME=$W/home ENANA_HOME=$W/h LC_ALL=C ENANA_LANG=zh ENANA_PLATFORM=darwin PORT=37970 UI_PORT=37971 API_PORT=37972 SPEED_PORT=37973 ENANA_NO_DIAG=1
@@ -319,6 +420,27 @@ eq "…平铺文件全部删掉: 指纹仍不变" "$(fp_same "$F0")" "same"
   rm -f "$H/rules/geosite-old.srs" "$H/rules/ovr-old.json"
   eq "Windows 指纹: 平铺文件删掉后仍不变" "$(fp_same "$F0")" "same"
 )
+
+echo "== T5c. 指纹: 网站的域名列表 (rules/site-<id>/site-<id>.json) 只算进策略指纹, 而且只算配置引用到的; 别处的同名文件不算网站的域名列表"
+site_cfg() { # 配置引用 geosite-cn 和给出的 rules/<目录>/<文件>
+  local extra='' rel
+  for rel in "$@"; do extra="$extra,{\"type\":\"local\",\"tag\":\"x-${rel##*/}\",\"format\":\"source\",\"path\":\"$H/$rel\"}"; done
+  printf '{"fixed":"config","route":{"rule_set":[{"type":"local","tag":"geosite-cn","format":"binary","path":"%s/rules/geosite-cn/geosite-cn.srs"}%s]}}' "$H" "$extra" > "$H/config.json"
+}
+site_file() { mkdir -p "$H/rules/${1%/*}"; printf '{"version":3,"rules":[{"domain_suffix":["%s"]}]}\n' "$2" > "$H/rules/$1"; }      # site_file <目录/文件> <域名>
+reset; site_file site-claude/site-claude.json claude.ai; site_file site-gone/site-gone.json gone.example
+site_cfg rules/site-claude/site-claude.json; F0=$(enhanced_fingerprint); O0=$(enhanced_ovr_fingerprint)
+eq "要同步的网站域名列表 (enhanced_site_files): 只有配置引用到的 site-claude, 没有不被引用的 site-gone" "$(enhanced_site_files | paste -sd, -)" "rules/site-claude/site-claude.json"
+eq "…数据包里有 site-claude.json 和策略规则集, 没有 site-gone.json" "$(enhanced_ovr_bundle | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin))))')" "ovr-pin.json,site-claude.json"
+site_file site-claude/site-claude.json changed.example
+eq "改了被引用的域名列表: 核心指纹不变 (不重装), 策略指纹变 (助手同步)" "$([ "$(enhanced_fingerprint)" = "$F0" ] && echo core-same):$([ "$(enhanced_ovr_fingerprint)" != "$O0" ] && echo ovr-changed)" "core-same:ovr-changed"
+O1=$(enhanced_ovr_fingerprint); site_file site-gone/site-gone.json other.example
+eq "改了没被引用的 site-gone.json (目录里删掉的网站留下的): 两个指纹都不变" "$([ "$(enhanced_fingerprint)" = "$F0" ] && echo core-same):$([ "$(enhanced_ovr_fingerprint)" = "$O1" ] && echo ovr-same)" "core-same:ovr-same"
+reset; site_file odd/site-odd.json odd.example; site_file site-Up/site-Up.json up.example
+site_cfg rules/odd/site-odd.json rules/site-Up/site-Up.json; F0=$(enhanced_fingerprint); O0=$(enhanced_ovr_fingerprint)
+site_file odd/site-odd.json odd2.example; site_file site-Up/site-Up.json up2.example
+eq "位置或名字不对的 site-*.json (rules/odd/site-odd.json、大写的 site-Up) 被引用时: 不当作网站的域名列表, 改动算进核心指纹 (完整安装), 也不进数据包" "$([ "$(enhanced_fingerprint)" != "$F0" ] && echo core-changed):$([ "$(enhanced_ovr_fingerprint)" = "$O0" ] && echo ovr-same):$(enhanced_site_files | wc -l | tr -d ' ')" "core-changed:ovr-same:0"
+reset
 
 echo "== T4b. 只是记账内容 / 总开关模式变了: 不重启核心 (= 不弹管理员密码框); 真的变了才重启"
 (
@@ -536,6 +658,109 @@ T
   scene; eq "多余的参数: 拒绝 (用法提示), 不删任何路由" "$(cc cleanup extra)" "fail|usage: tunrules sync|restart|cleanup|version|"
   eq "未知的子命令 (cleanupx): 拒绝, 不删任何路由" "$(cc cleanupx)" "fail|usage: tunrules sync|restart|cleanup|version|"
 )
+
+echo "== T10. 真实生成的配置 (TUN): 改网站域名 / 添加、删除自己的网站 / 改线路 / 恢复网站默认 → 配置一个字节不变, 只经助手免密同步 (不重装 = 不弹管理员框); 服务器变了 → 完整安装"
+(
+  . "$LIB/config.sh"; . "$LIB/apps.sh"; . "$LIB/autosites.sh"; . "$LIB/sites.sh"        # 真实的 gen_config / apply_config / ovr_sync / sites_edit (前面的用例把其中几个换成了假的)
+  eval "$(sed -n '/^os_service_restart()/,/^}/p' "$LIB/os-darwin.sh")"
+  core_version() { echo 1.14.2; }
+  _apply_step() { :; }; wait_port() { return 0; }; proxy_sync_mode() { :; }; clash() { return 0; }; sysproxy_off_if_core_down() { :; }
+  os_service_loaded() { return 0; }; os_service_pid() { echo 1; }; enhanced_ready() { return 0; }; enhanced_loaded() { return 0; }
+  SYS=0; os_system_service_restart() { SYS=$((SYS + 1)); return 0; }
+  snap_install() { # 和 root 的完整安装一样 (lib/enhanced-root.sh 的 c 步): 快照的 rules 整个换成 enana 这边 rules/<目录>/<文件> 的副本
+    local rel; rm -rf "$W/snap/rules"; mkdir -p "$W/snap/rules"
+    ( cd "$H" && find rules -mindepth 2 -maxdepth 2 -type f ) | while IFS= read -r rel; do mkdir -p "$W/snap/${rel%/*}"; cp "$H/$rel" "$W/snap/$rel"; done
+  }
+  FULL=0; os_service_start() { FULL=$((FULL + 1)); snap_install; install_helper; enhanced_record_install; return 0; }   # 完整安装 (要管理员授权) 的替身: 换上快照和新助手, 记下指纹
+  fresh_log() { rm -f "$LOGS"/ops-*.log; : > "$FAKE_STATE/calls.log"; }
+  cfg_sum() { shasum -a 256 < "$H/config.json" | awk '{print $1}'; }
+  in_snap() { local f="$W/snap/rules/${1%.json}/$1"; [ -f "$f" ] || { echo missing; return; }; grep -c "\"$2\"" "$f"; }      # in_snap <文件> <域名>: 根快照里这个文件有没有这个值
+  syncs() { ops | grep -c '同步策略规则	mode=tun via=helper restart=no	ok'; }
+  restarts() { ops | grep -c '重启核心'; }                                                     # 每一次重启核心都会先记一笔「重启核心」(core_restart_note)
+  admin() { grep -cE 'enana-root|osascript|/bin/sh -c' "$FAKE_STATE/calls.log"; }               # 管理员命令 (完整安装 / 停止都走这里) 一次都没有出现
+  helper_syncs() { grep -c "^sudo -n /Library/PrivilegedHelperTools/com.enana.proxy/tunrules-$ME sync$" "$FAKE_STATE/calls.log"; }
+  txn() { op_txn "$@" >/dev/null 2>&1; }
+  rm -rf "$H/rules" "$W/snap/rules" "$LOGS" "$H/cloud" "$H/backups"; rm -f "$H/config.json" "$H/config.json.bak" "$H/overrides.tsv" "$H/site-domains.tsv" "$H/autosites.tsv" "$H/autosites.dismissed"
+  mkdir -p "$H/rules" "$LOGS" "$H/cloud/content"
+  # 云端下发的目录: 自带的基线 + 一个和这次反馈里一样的条目 (ai-common, 删 intercom.io / auth0.com 那次要了管理员密码); 它还带了要被整理掉的写法 (大写 / 不合法的名字)
+  { cat "$REPO/data/services.conf"; printf 'ai-common|AI 通用|ai|pin|intercom.io,auth0.com,.cdn.example,Bad_Name.example,OpenAI.Example|||测试条目\n'; } > "$H/cloud/content/services.conf"
+  NSITES=$(awk '!/^[ \t]*(#|$)/' "$H/cloud/content/services.conf" | wc -l | tr -d ' ')
+  printf '%s\n' '{"role":"pin","outbound":{"type":"socks","tag":"Pin-A","server":"127.0.0.1","server_port":1}}' > "$H/servers.jsonl"
+  printf 'NETWORK_MODE=tun\n' > "$H/settings.env"; load_settings; fresh_log
+  apply_config; rc=$?
+  eq "(准备) 第一次应用 = 一次完整安装 (要管理员授权): 快照里有每个网站的域名列表 ($NSITES 个)" "$rc:$FULL:$(ls -d "$W"/snap/rules/site-* | wc -l | tr -d ' ')" "0:1:$NSITES"
+  eq "…配置里没有任何网站的域名, 每个网站一条 rule_set site-<id> → svc-<id>" "$(grep -cE 'claude\.ai|intercom\.io' "$H/config.json"):$(grep -o '"rule_set":\["site-[a-z0-9-]*"\],"action":"route","outbound":"svc-' "$H/config.json" | wc -l | tr -d ' ')" "0:$NSITES"
+  eq "…ai-common 的域名列表: 小写, 只留合法的名字 (.cdn.example 只匹配子域名, Bad_Name.example 去掉)" "$(python3 -c 'import json,sys; print(",".join(json.load(open(sys.argv[1]))["rules"][0]["domain_suffix"]))' "$W/snap/rules/site-ai-common/site-ai-common.json")" "intercom.io,auth0.com,.cdn.example,openai.example"
+  C0=$(cfg_sum); FULL=0; fresh_log
+  txn "修改网站域名" txn_site_domain ai-common remove intercom.io; rc=$?
+  eq "改网站域名 (ai-common 删掉 intercom.io): 成功, 没有完整安装, 也没有重启核心" "$rc:$FULL:$(restarts)" "0:0:0"
+  eq "…配置一个字节没变" "$(cfg_sum)" "$C0"
+  eq "…root 快照里的列表已经去掉 intercom.io (核心热加载), auth0.com 还在" "$(in_snap site-ai-common.json intercom.io):$(in_snap site-ai-common.json auth0.com)" "0:1"
+  eq "…经助手免密同步 (sudo -n 助手 sync 一次), 没有任何管理员命令" "$(syncs):$(helper_syncs):$(admin)" "1:1:0"
+  fresh_log; txn "修改网站域名" txn_site_domain ai-common remove auth0.com; txn "修改网站域名" txn_site_domain claude add new-claude.example
+  eq "再删 auth0.com、给 Claude 添加 new-claude.example: 两次都只经助手同步, 配置不变" "$FULL:$(syncs):$(admin):$(in_snap site-ai-common.json auth0.com):$(in_snap site-claude.json new-claude.example):$([ "$(cfg_sum)" = "$C0" ] && echo same)" "0:2:0:0:1:same"
+  fresh_log; txn "修改网站域名" txn_site_domain claude update new-claude.example renamed-claude.example
+  eq "修改域名 (new-claude.example → renamed-claude.example): 只经助手同步" "$FULL:$(syncs):$(in_snap site-claude.json new-claude.example):$(in_snap site-claude.json renamed-claude.example)" "0:1:0:1"
+  fresh_log; txn "重置网站域名" txn_site_reset ai-common
+  eq "重置一个网站的域名: 回到系统默认, 只经助手同步" "$FULL:$(syncs):$(in_snap site-ai-common.json intercom.io):$(in_snap site-ai-common.json auth0.com)" "0:1:1:1"
+  fresh_log; txn "修改应用/网站策略" txn_override site my-site.example pin ''
+  eq "添加自己的网站 (走固定出口): 只经助手同步, 配置不变" "$FULL:$(syncs):$(admin):$(in_snap ovr-pin.json my-site.example):$([ "$(cfg_sum)" = "$C0" ] && echo same)" "0:1:0:1:same"
+  fresh_log; txn "修改应用/网站策略" txn_override site my-site.example direct ''
+  eq "改线路 (固定出口 → 直连): 只经助手同步" "$FULL:$(syncs):$(in_snap ovr-direct.json my-site.example):$(in_snap ovr-pin.json my-site.example)" "0:1:1:0"
+  fresh_log; txn "修改应用/网站策略" txn_override site my-site.example auto ''
+  eq "改线路 (直连 → 自动线路): 只经助手同步" "$FULL:$(syncs):$(in_snap ovr-auto.json my-site.example):$(in_snap ovr-direct.json my-site.example)" "0:1:1:0"
+  fresh_log; txn "修改应用/网站策略" txn_override site my-site.example follow ''
+  eq "删除自己的网站: 只经助手同步, 快照里哪个规则集都没有它了" "$FULL:$(syncs):$(cat "$W"/snap/rules/ovr-*/ovr-*.json | grep -c my-site.example)" "0:1:0"
+  txn "修改网站域名" txn_site_domain claude add before-reset.example; txn "修改应用/网站策略" txn_override site reset-me.example direct ''
+  reset_selector_diff() { :; }; fresh_log; txn "恢复网站默认" txn_sites_reset
+  eq "恢复网站默认 (清掉域名改动和自己的网站): 只经助手同步, 配置不变" "$FULL:$(syncs):$(admin):$(in_snap site-claude.json before-reset.example):$(in_snap ovr-direct.json reset-me.example):$([ "$(cfg_sum)" = "$C0" ] && echo same)" "0:1:0:0:0:same"
+  fresh_log; APPS_BG_JOB=1 OP_WHO=auto txn "修改网站域名" txn_site_domain claude add bg.example; rc=$?
+  eq "后台任务 (APPS_BG_JOB=1, 从不弹管理员框) 改域名: 照常生效, 不会被撤销" "$rc:$FULL:$(syncs):$(in_snap site-claude.json bg.example)" "0:0:1:1"
+  printf '%s\n' '{"role":"auto","outbound":{"type":"socks","tag":"Auto-B","server":"127.0.0.1","server_port":2}}' >> "$H/servers.jsonl"
+  fresh_log; APPS_BG_JOB=1 apply_config; rc=$?
+  eq "服务器列表变了, 后台任务: 返回 5 (要管理员授权, 不弹框), 什么都没装, 配置不变" "$rc:$FULL:$([ "$(cfg_sum)" = "$C0" ] && echo same)" "5:0:same"
+  fresh_log; apply_config; rc=$?
+  eq "服务器列表变了 (用户操作): 完整安装一次 (要管理员授权)" "$rc:$FULL:$(syncs)" "0:1:0"
+  hs "…操作记录写明走的是授权安装, 原因 changed" "重启核心方式	mode=tun via=admin why=changed" "$(ops)"
+  C0=$(cfg_sum); FULL=0; fresh_log; txn "修改网站域名" txn_site_domain claude add after-servers.example
+  eq "…之后改域名又是免密的" "$FULL:$(syncs):$(in_snap site-claude.json after-servers.example)" "0:1:1"
+  rm -f "$FAKE_SUDOERS_DIR"/*; fresh_log; txn "修改网站域名" txn_site_domain claude add no-helper.example; rc=$?
+  eq "助手不可用 (免密规则不在了): 退回完整安装 (授权一次), 改动照样生效" "$rc:$FULL:$(in_snap site-claude.json no-helper.example)" "0:1:1"
+  hs "…操作记录写明 no-helper" "同步策略规则	mode=tun via=helper restart=yes err=no-helper" "$(ops)"
+  rm -f "$W/snap/rules/site-claude/site-claude.json"; FULL=0; fresh_log; txn "修改网站域名" txn_site_domain claude add refused.example; rc=$?
+  eq "助手拒绝 (root 快照里没有 site-claude.json): 退回完整安装, 不会假装成功" "$rc:$FULL:$(in_snap site-claude.json refused.example)" "0:1:1"
+  hs "…操作记录写明 rejected" "同步策略规则	mode=tun via=helper restart=yes err=rejected" "$(ops)"
+  # 2.3.25 的 TUN 快照: 域名直接写在配置里 (没有 site-* 规则集), 根助手是第 4 版 (字节和现在渲染出来的不同: 不可信)
+  python3 - "$H/config.json" "$H" <<'PY'
+import json, sys
+cfg, home = sys.argv[1:]
+c = json.load(open(cfg)); r = c["route"]; sites = {}
+for d in r["rule_set"]:
+    if d["tag"].startswith("site-"): sites[d["tag"]] = json.load(open(d["path"]))["rules"][0]
+r["rule_set"] = [d for d in r["rule_set"] if not d["tag"].startswith("site-")]
+out = []
+for x in r["rules"]:
+    t = (x.get("rule_set") or [""])[0]
+    if t in sites:
+        if "domain_suffix" in sites[t]: out.append({"domain_suffix": sites[t]["domain_suffix"], "action": "route", "outbound": x["outbound"]})
+    else: out.append(x)
+r["rules"] = out
+open(cfg, "w").write(json.dumps(c, separators=(",", ":")) + "\n")
+PY
+  rm -rf "$H"/rules/site-*; snap_install; mkhelper "$(enhanced_helper_path)" 4; enhanced_record_install
+  eq "(准备) 2.3.25 的快照: 配置里写着域名, 没有 site-* 规则集, 快照里也没有" "$(grep -c '"claude.ai"' "$H/config.json"):$(grep -c 'site-claude' "$H/config.json"):$(ls -d "$W"/snap/rules/site-* 2>/dev/null | wc -l | tr -d ' ')" "1:0:0"
+  FULL=0; fresh_log; txn "修改网站域名" txn_site_domain claude add first-after-upgrade.example; rc=$?
+  eq "升级后第一次需要新配置的应用: 完整安装一次 (授权一次), 装上新的配置、域名列表和新助手" "$rc:$FULL:$(grep -c 'site-claude' "$H/config.json"):$(in_snap site-claude.json first-after-upgrade.example)" "0:1:1:1"
+  fresh_log; txn "修改网站域名" txn_site_domain claude add second-after-upgrade.example
+  eq "…之后再改域名: 免密 (只经新助手同步, 没有再安装)" "$FULL:$(syncs):$(admin):$(in_snap site-claude.json second-after-upgrade.example)" "1:1:0:1"
+  # 系统代理模式: 用户自己的核心直接读同一个文件 (热加载), 不涉及助手, 也不重启
+  printf 'NETWORK_MODE=system\n' > "$H/settings.env"; load_settings; enhanced_loaded() { return 1; }
+  apply_config >/dev/null 2>&1; SYS=0; FULL=0; C0=$(cfg_sum); fresh_log
+  txn "修改网站域名" txn_site_domain claude add system-proxy.example; rc=$?
+  eq "系统代理模式改域名: 成功, 配置不变, 核心没有重启, 没有助手同步 / 完整安装" "$rc:$([ "$(cfg_sum)" = "$C0" ] && echo same):$SYS:$FULL:$(restarts):$(helper_syncs)" "0:same:0:0:0:0"
+  eq "…用户核心读的规则文件已经更新 (核心监视文件变化自己热加载)" "$(grep -c '"system-proxy.example"' "$H/rules/site-claude/site-claude.json")" "1"
+  printf 'NETWORK_MODE=tun\n' > "$H/settings.env"
+) || tfail "T10 没有跑完 (子 shell 中途退出: 后面的断言都没有运行)"
 
 P=$(wc -l < "$W/.pass" | tr -d ' '); F=$(wc -l < "$W/.fail" | tr -d ' ')
 echo; echo "tunrules.sh: $P passed, $F failed"; [ "$F" = 0 ]

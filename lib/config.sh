@@ -137,8 +137,12 @@ gen_config() { # gen_config [--no-rulesets]  -> $H/config.json.new ; 返回 0
   done
 
   # 服务目录 -> 每项一个开关 + 路由规则 (固定出口类在前, 其它在后)
-  : > "$T/sel"; : > "$T/r1"; : > "$T/r2"; : > "$T/cat"
-  LC_ALL=C awk -f "$LIB/catalog.awk" -v domf="$T/catdomains" -v pinx="$pinx_opts" -v have="$T/have" -v sel="$T/sel" -v r1="$T/r1" -v r2="$T/r2" -v catf="$T/cat" -v edits="$H/site-domains.tsv" "$(content_file services.conf)"
+  # 每项的生效域名是一个本地规则集 rules/site-<id>/site-<id>.json (tag site-<id>, 见 lib/catalog.awk 与 lib/sites.sh): 配置里只有对它的引用, 改域名不改配置,
+  # 核心监视文件变化自己热加载; TUN 下和 ovr-*.json 一样由规则同步助手免密同步到 root 快照 (lib/enhanced.sh)
+  : > "$T/sel"; : > "$T/r1"; : > "$T/r2"; : > "$T/cat"; : > "$T/siteids"; mkdir -p "$T/site"
+  LC_ALL=C awk -f "$LIB/catalog.awk" -v domf="$T/catdomains" -v pinx="$pinx_opts" -v have="$T/have" -v sel="$T/sel" -v r1="$T/r1" -v r2="$T/r2" -v catf="$T/cat" -v edits="$H/site-domains.tsv" -v sited="$T/site" -v sitel="$T/siteids" "$(content_file services.conf)"
+  sites_rules_write "$T/site" "$T/siteids" || { rm -rf "$T"; warn "网站域名规则写入失败 (磁盘满或没有写权限?), 已保留现有配置"; return 1; }
+  while IFS= read -r i; do rs_defs="$rs_defs${rs_defs:+,}{\"type\":\"local\",\"tag\":\"site-$i\",\"format\":\"source\",\"path\":\"$(rule_file "site-$i.json")\"}"; done < "$T/siteids"
   cat "$T/sel" >> "$T/ob"
   [ -f "$T/catdomains" ] && sort -u "$T/catdomains" > "$H/catalog.domains" || : > "$H/catalog.domains"
   while IFS='|' read -r ctag cname cpol; do   # 自定义规则集: 各自一个开关
@@ -256,8 +260,9 @@ apply_config() {
     if [ "${NETWORK_MODE:-system}" != tun ]; then
       if ! enhanced_loaded || [ "${APPS_BG_JOB:-0}" = 1 ]; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi
     elif enhanced_loaded && [ "$(enhanced_fingerprint)" = "$(cat "$H/.enhanced-fingerprint" 2>/dev/null)" ]; then
-      # 核心、配置、规则库都没变 (指纹不含 default_mode 和 rules/.updated 这类记账内容, 见 enhanced_fingerprint): 只有应用 / 网站的代理策略 (rules/*/ovr-*.json, 纯路由数据)
-      # 可能变了。已经装过规则同步助手 (上一次管理员授权时顺带装的) 就免密同步到 root 快照, 核心自己热加载 —— 不重启, 也就不用再输入管理员密码。没有助手 /
+      # 核心、配置、规则库都没变 (指纹不含 default_mode 和 rules/.updated 这类记账内容, 见 enhanced_fingerprint): 只有应用 / 网站的代理策略 (rules/*/ovr-*.json) 和
+      # 网站的域名列表 (rules/site-<id>/site-<id>.json: 改域名、添加 / 删除自己的网站、改线路都只动这些纯路由数据) 可能变了。
+      # 已经装过规则同步助手 (上一次管理员授权时顺带装的) 就免密同步到 root 快照, 核心自己热加载 —— 不重启, 也就不用再输入管理员密码。没有助手 /
       # 被拒绝就走下面的完整安装 (要管理员授权, 同时把助手装上)。总开关 / 模式只改了 default_mode 的话, 运行中的核心靠接口和缓存记住模式, 这里补一次同步即可。
       type enhanced_mode_resync >/dev/null 2>&1 && enhanced_mode_resync
       if ! type enhanced_ovr_fingerprint >/dev/null 2>&1 || [ "$(enhanced_ovr_fingerprint)" = "$(cat "$H/.enhanced-ovr-fingerprint" 2>/dev/null)" ]; then rm -f "$H/config.json.new"; APPLY_CHANGED=0; return 0; fi

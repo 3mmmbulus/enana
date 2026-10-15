@@ -2,8 +2,21 @@
 #
 # 用户的改动保存在 $H/site-domains.tsv:  条目id|+|域名 (用户添加)  /  条目id|-|域名 (用户从系统列表里删掉)。
 # 生效的域名 = (系统域名 − 已删除) ∪ 已添加。云端内容更新只换系统列表, 用户的改动单独保存、不会被覆盖; 重置 = 删除该条目的全部改动。
+# 生效的域名不写进核心配置: 每个条目一个本地规则集 rules/site-<id>/site-<id>.json (lib/catalog.awk 生成内容, 下面的 sites_rules_write 写入), 配置只引用它。
+# 所以改域名 / 重置只改这个文件, 核心监视文件变化自己热加载; TUN 下由规则同步助手免密同步到 root 快照 (lib/enhanced.sh 的 enhanced_sync_ovr), 不重装、不弹管理员框。
 
 SITE_EDITS=${SITE_EDITS:-$H/site-domains.tsv}
+
+# gen_config 调用: <目录> 里是 catalog.awk 写的 <id>.json, <列表> 是这些 id (每行一个, 目录顺序)。内容有变才写, 原地覆盖 (inode 不变, 核心的文件监视继续有效, 和 ovr_sync 一样)
+sites_rules_write() { # <目录> <列表>  -> 0 成功; 写不进去 (磁盘满 / 没有权限) 返回 1
+  local id src dst
+  while IFS= read -r id; do
+    case $id in ''|-*|*[!a-z0-9-]*) return 1 ;; esac          # catalog.awk 只列出合规的 id; 别的东西出现在这里就是出错了
+    src="$1/$id.json"; dst=$(rule_file "site-$id.json")
+    [ -s "$src" ] && mkdir -p "${dst%/*}" || return 1
+    if [ ! -f "$dst" ] || ! cmp -s "$src" "$dst"; then cat "$src" > "$dst" || return 1; fi
+  done < "$2"
+}
 
 site_entry() { local f; f=$(content_file services.conf); [ -f "$f" ] || return 0; awk -F'|' -v id="$1" '/^(#|[[:space:]]|$)/ {next} $1==id {print; exit}' "$f"; }   # 条目的原始行 (没有则空); 直接读文件: 管道里 awk 提前退出会让 catalog_list 报 Broken pipe
 

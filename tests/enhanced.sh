@@ -55,6 +55,33 @@ for app in ['Gemini','Claude','ChatGPT']:
 assert s['route']['rules']==[a for a in r if 'tun-in' not in a.get('inbound',[])]
 print('PASS: defaults, migration, IPv4/IPv6 exclusions, shared PIN routes, browser fallback priority')
 PY
+# Website domains are rule data, not configuration: every catalog entry routes through its own local rule set rules/site-<id>/site-<id>.json,
+# so editing a website's domains rewrites only that file (hot-reloaded; synced to the TUN root snapshot by the rule-data helper) and never config.json.
+cp "$W/tun.json" "$W/tun-before-edit.json"
+sites_edit claude add extra-claude.example && sites_edit claude remove claude.com || { echo "FAIL: site domain edit: $SITES_ERR"; exit 1; }
+NETWORK_MODE=tun; gen_config --no-rulesets || { echo "FAIL: config generation after a domain edit"; exit 1; }
+cmp -s "$W/tun-before-edit.json" "$H/config.json.new" || { echo 'FAIL: a website domain edit changed config.json (TUN would need an administrator-authorised reinstall)'; exit 1; }
+python3 - "$W" "$H" "$(content_file services.conf)" <<'PY'
+import json,sys
+w,h,conf=sys.argv[1:]; t=json.load(open(w+'/tun.json'))
+ids=[l.split('|')[0] for l in open(conf,encoding='utf-8') if l.strip() and not l.lstrip().startswith('#')]
+defs={d['tag']:d for d in t['route']['rule_set']}; r=t['route']['rules']
+for i in ids:
+ d=defs['site-'+i]
+ assert d=={'type':'local','tag':'site-'+i,'format':'source','path':h+'/rules/site-'+i+'/site-'+i+'.json'}, d
+ assert {'rule_set':['site-'+i],'action':'route','outbound':'svc-'+i} in r, i
+ rs=json.load(open(d['path']))
+ assert rs['version']==3 and len(rs['rules'])==1 and set(rs['rules'][0])<={'domain','domain_suffix'}, rs
+# no website domain is written into the configuration itself: the only inline domain rule left is the LAN one
+assert [a['domain_suffix'] for a in r if 'domain_suffix' in a]==[['local','lan','localhost','home.arpa']], [a for a in r if 'domain_suffix' in a]
+assert json.load(open(h+'/rules/site-claude/site-claude.json'))=={'version':3,'rules':[{'domain_suffix':['claude.ai','anthropic.com','claudeusercontent.com','extra-claude.example']}]}
+# a website's rule keeps its old place: website PIN rules before App direct / browser fallbacks
+idx=lambda k:next(n for n,a in enumerate(r) if k(a))
+assert idx(lambda a:a.get('rule_set')==['site-claude']) < idx(lambda a:a.get('rule_set')==['ovr-appdirect']) < idx(lambda a:a.get('rule_set')==['ovr-browserpin'])
+print('PASS: website domains are local rule sets (one per catalog entry); a domain edit changes only rules/site-<id>/site-<id>.json, not config.json')
+PY
+sites_reset claude; NETWORK_MODE=tun; gen_config --no-rulesets || { echo "FAIL: config generation after a domain reset"; exit 1; }
+cmp -s "$W/tun-before-edit.json" "$H/config.json.new" || { echo 'FAIL: resetting website domains changed config.json'; exit 1; }
 if [ -n "${SINGBOX:-}" ]; then
  "$SINGBOX" check -c "$W/system.json"
  "$SINGBOX" check -c "$W/tun.json"
