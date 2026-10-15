@@ -1508,7 +1508,7 @@
     "imp.toast.done": "已导入 {n} 个服务器",
     "imp.toast.fail": "导入失败: {reason}",
     "imp.done.title": "导入完成",
-    "imp.done.line": "新增 {added} · 更新 {replaced}",
+    "imp.done.line": "新增 {added} · 有变化 {changed} · 未变 {unchanged}",
     "imp.done.removed": "移除 {n}",
     "imp.done.ignored": "有 {n} 条被忽略 (点开看原因)",
     "imp.done.noPin": "提示: 还没有「固定出口」服务器。在服务器列表里把一个服务器的「角色」改成「固定出口」, AI / 账号类服务才能用上稳定 IP。",

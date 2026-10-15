@@ -30,6 +30,7 @@
  *   failnext=/api/路径前缀         该路径的下一个请求失败一次 (E_NETWORK); failnext=1 = 下一个后台任务失败并回滚 (旧用法)
  *   speedlast=seed|none           预置一条昨天的测速结果 / 清空                 env=bad|ok      环境异常 (规则缺失 / 无系统代理) / 恢复
  *   stale=1                       让第一个订阅过期                            tick=N          立刻生成 N 条「实时」访问 / 代理日志
+ *   network=system|tun            接管方式 (state.proxy.network_mode): tun = 增强模式, 订阅自动刷新有变化时只提示, 要管理员授权
  *   newapp=名称                   下一次「扫描应用」会发现这个新应用           reset=1|first-run   恢复初始数据 (令牌不变)
  *   content=cloud|cached|baseline  「恢复默认规则」(POST /api/settings/reset) 任务的结果: 云端最新 (默认) / 离线: 用本机缓存 / 从没拿到过云端内容: 用程序自带的基线
  *   stats=normal|short|empty      流量统计 (GET /api/stats?range=today|3d|7d|30d|90d): normal (默认) = 最早的数据在 41 天前 (90d 只有一部分有数据); short = 2 天前开始; empty = 没有任何数据 (since:"", 全是 0, nodes:[])
@@ -1228,7 +1229,7 @@ route('POST', '/api/email/send', billGate(() => { if (billVerified()) return { o
 /* ---- 状态 / 设置 ---- */
 const ovOut = () => M.overrides.map((o) => Object.assign({ target: '', src: 'user', at: 0, why: '', fails: 0, app: '' }, o, { target_ok: targetOk(o.target || '') }));
 route('GET', '/api/state', (c) => ({ ok: true, version: M.upd.cur, prefs_version: M.prefs.version, core: M.upd.coreCur, platform: platform(), ports: ports(), env: envOut(), servers: M.servers, subs: M.subs, overrides: ovOut(),
-  first_run: M.servers.filter((s) => !s.official).length === 0, update: { available: appAvail(), latest: latestApp(), checked: M.upd.checked }, lang: M.langSet || c.hdrLang || 'zh', proxy: { enabled: M.proxyOn, mode: M.proxyMode }, account: { email: M.account || '' } }));
+  first_run: M.servers.filter((s) => !s.official).length === 0, update: { available: appAvail(), latest: latestApp(), checked: M.upd.checked }, lang: M.langSet || c.hdrLang || 'zh', proxy: { enabled: M.proxyOn, mode: M.proxyMode, network_mode: M.network === 'tun' ? 'tun' : 'system', tun_ready: M.network === 'tun' }, account: { email: M.account || '' } }));
 route('GET', '/api/settings', (c) => ({ ok: true, lang: M.langSet || c.hdrLang || 'zh', settings: { log_hours: M.logHours, log_hours_min: 12, log_hours_max: 720, log_ops: M.logOps, access_log: M.accessLog, log_core: M.logCore, auto_sites: M.autoSites, auto_update: M.autoUpdate }, usage: logUsage(), ports: ports(), account: { email: M.account || '' } }));
 route('POST', '/api/settings', (c) => {
   let lh = c.p('log_hours'); const lang = c.p('lang'), ld = c.p('log_days'), al = c.p('access_log'), au = c.p('auto_update'), lo = c.p('log_ops'), lc = c.p('log_core'), as = c.p('auto_sites'), detail = {}; let job = null;
@@ -2663,6 +2664,7 @@ async function mockCtl(req, res, u) {
   sw('lastacct', ['none', 'demo', 'other'], (v) => { M.lastAcct = v === 'none' ? null : cacheRec(v + '@example.com', ACCOUNTS[v + '@example.com'].pw); });
   sw('proxy', ['on', 'off'], (v) => { if (M.proxyOn !== (v === 'on')) { M.proxyOn = v === 'on'; M.conns = []; } });
   sw('proxymode', ['auto', 'global'], (v) => { if (M.proxyMode !== v) { M.proxyMode = v; if (M.proxyOn) M.conns = []; } });
+  sw('network', ['system', 'tun'], (v) => { M.network = v; });             // 接管方式: system (默认) / tun (增强模式: 订阅有变化时自动刷新不替用户应用, 只提示「应用更新」)
   if (g('lock') === 'reset') { M.fails = []; M.regs = []; M.lockUntil = 0; }
   if (q.has('locksec')) M.locksec = Math.max(1, num(g('locksec'), 300));
   if (g('expire') === '1') { M.secret = randHex(16); sudoClear(); }
@@ -2712,7 +2714,7 @@ async function mockCtl(req, res, u) {
   if (g('newapp')) M.pendingApps.push(g('newapp').slice(0, 80));
   if (g('content')) M.resetContent = ['cached', 'baseline'].indexOf(g('content')) >= 0 ? g('content') : null;          // 「恢复默认规则」任务的结果: cloud (默认) / cached (离线, 用本机缓存) / baseline (从没拿到过云端内容)
   jsonRes(req, res, 200, { ok: true, helper: helperIsDown() ? 'down' : 'up', clash: clashIsDown() ? 'down' : 'up', helperDown: M.helperDown, clashDown: M.clashDown, conns: M.connTarget, os: M.os, net: M.net, central: M.central,
-    lastacct: M.lastAcct ? (M.lastAcct.email === 'demo@example.com' ? 'demo' : M.lastAcct.email === 'other@example.com' ? 'other' : 'custom') : 'none', proxy: M.proxyOn ? 'on' : 'off', proxymode: M.proxyMode, account: M.account ? maskEmail(M.account) : '', locked: lockWait(), locksec: M.locksec,
+    lastacct: M.lastAcct ? (M.lastAcct.email === 'demo@example.com' ? 'demo' : M.lastAcct.email === 'other@example.com' ? 'other' : 'custom') : 'none', proxy: M.proxyOn ? 'on' : 'off', proxymode: M.proxyMode, network: M.network === 'tun' ? 'tun' : 'system', account: M.account ? maskEmail(M.account) : '', locked: lockWait(), locksec: M.locksec,
     devices: Object.keys(M.devices).reduce((o, e) => { o[maskEmail(e)] = M.devices[e].filter((d) => d.online).map((d) => d.uid); return o; }, {}), notice: M.notice ? noticeText('en') : '',
     vps: M.vps.length, sync: { enabled: M.sync.enabled, remote: M.sync.remote.exists ? (M.sync.remote.version > M.sync.local.version ? 'newer' : 'exists') : 'none', key: M.sync.keyBad ? 'bad' : 'ok', offline: M.sync.offline, dirty: M.sync.local.dirty }, autoUpdate: M.autoUpdate,
     update: M.upd.fail ? 'fail' : M.upd.on ? 'on' : 'off', failnext: M.failNext.concat(M.failJob ? ['1'] : []), failNext: M.failJob, speedlast: M.speed.last ? M.speed.last.id : 'none', servers: M.servers.length, firstRun: M.servers.length === 0,
@@ -3341,6 +3343,9 @@ async function selftest() {
     r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', dry: 1 }, body: [line('Selftest R', 'pin'), line('Selftest N', 'auto')].join('\n') });
     ck('servers/import dry=1 with changes: honest counts (1 new, 1 changed), not recorded, nothing applied', jx(r).same === false && jx(r).recorded === false && jx(r).admin === false && jx(r).added === 1 && jx(r).changed === 1 && jx(r).unchanged === 0
       && jx(r).replaced === 1 && jx(r).removed === 0 && !('job' in jx(r)) && JSON.stringify(M.servers) === srv0 && dsub.updated === 1, r.text);
+    await ctl('network=tun'); r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', dry: 1 }, body: [line('Selftest R', 'pin'), line('Selftest N', 'auto')].join('\n') }); r2 = jx(await api('GET', '/api/state')).proxy; await ctl('network=system');
+    ck('servers/import dry=1 with changes in TUN mode (ctl network=tun): admin = true, nothing applied; state.proxy.network_mode = tun', jx(r).same === false && jx(r).admin === true && jx(r).recorded === false && !('job' in jx(r)) && JSON.stringify(M.servers) === srv0
+      && r2.network_mode === 'tun' && jx(await api('GET', '/api/state')).proxy.network_mode === 'system', r.text);
     r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', dry: 2 }, body: line('Selftest R', 'auto') }); r2 = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', background: 'x' }, body: line('Selftest R', 'auto') });
     ck('servers/import: dry / background only take 0 or 1', jx(r).code === 'E_INVALID' && jx(r2).code === 'E_INVALID' && JSON.stringify(M.servers) === srv0);
     r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', background: 1 }, body: line('Selftest R', 'auto') }); jb = await run(r);

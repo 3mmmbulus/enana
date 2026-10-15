@@ -1508,7 +1508,7 @@
     "imp.toast.done": {"one":"Imported 1 server","other":"Imported {n} servers"},
     "imp.toast.fail": "Import failed: {reason}",
     "imp.done.title": "Import finished",
-    "imp.done.line": "{added} added · {replaced} updated",
+    "imp.done.line": "{added} added · {changed} changed · {unchanged} unchanged",
     "imp.done.removed": "{n} removed",
     "imp.done.ignored": {"one":"1 line was ignored (open to see why)","other":"{n} lines were ignored (open to see why)"},
     "imp.done.noPin": "Tip: you still have no Fixed exit server. Change one server’s role to Fixed exit in the server list so AI and account services get a stable IP.",
