@@ -2,9 +2,9 @@ name: Cloud billing foundation
 on:
   push:
     branches: [main]
-    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'lib/plan.sh', 'lib/official.*', 'lib/servers.sh', 'lib/config.sh', 'tests/mock-account.py', 'ui/billing.js', 'ui/plan.js', 'tests/billing-*', 'tests/official-*', 'tests/update-official.sh', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml, 'ui/i18n/**', 'ui/css/billing.css', 'ui/v-settings.js', 'ui/app.js', 'tools/mock-server.js', 'server/update-billing.sh', 'tests/update-billing.sh', 'website/**', 'tests/website-*', 'tools/deploy-website.sh']
+    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'lib/plan.sh', 'lib/official.*', 'lib/servers.sh', 'lib/config.sh', 'tests/mock-account.py', 'ui/billing.js', 'ui/plan.js', 'tests/billing-*', 'tests/official-*', 'tests/update-official.sh', 'tests/diag-pocketbase.test.js', 'tests/devices-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml, 'ui/i18n/**', 'ui/css/billing.css', 'ui/v-settings.js', 'ui/app.js', 'tools/mock-server.js', 'server/update-billing.sh', 'tests/update-billing.sh', 'website/**', 'tests/website-*', 'tools/deploy-website.sh']
   pull_request:
-    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'lib/plan.sh', 'lib/official.*', 'lib/servers.sh', 'lib/config.sh', 'tests/mock-account.py', 'ui/billing.js', 'ui/plan.js', 'tests/billing-*', 'tests/official-*', 'tests/update-official.sh', 'tests/diag-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml, 'ui/i18n/**', 'ui/css/billing.css', 'ui/v-settings.js', 'ui/app.js', 'tools/mock-server.js', 'server/update-billing.sh', 'tests/update-billing.sh', 'website/**', 'tests/website-*', 'tools/deploy-website.sh']
+    paths: ['server/**', 'lib/billing.sh', 'lib/api.sh', 'lib/plan.sh', 'lib/official.*', 'lib/servers.sh', 'lib/config.sh', 'tests/mock-account.py', 'ui/billing.js', 'ui/plan.js', 'tests/billing-*', 'tests/official-*', 'tests/update-official.sh', 'tests/diag-pocketbase.test.js', 'tests/devices-pocketbase.test.js', 'tests/email-verification-ui.test.js', 'website/verify.*', .github/workflows/billing.yml, 'ui/i18n/**', 'ui/css/billing.css', 'ui/v-settings.js', 'ui/app.js', 'tools/mock-server.js', 'server/update-billing.sh', 'tests/update-billing.sh', 'website/**', 'tests/website-*', 'tools/deploy-website.sh']
   workflow_dispatch:
 permissions:
   contents: read
@@ -28,7 +28,7 @@ jobs:
       - name: Test real database transactions and local SMTP activation
         env:
           PB_BIN: ${{ runner.temp }}/enana-pb-test/pocketbase
-        run: node --test tests/billing-domain.test.js tests/billing-pocketbase.test.js tests/official-domain.test.js tests/official-pocketbase.test.js tests/billing-plan-ui.test.js tests/diag-pocketbase.test.js tests/prefs-pocketbase.test.js tests/email-verification-ui.test.js tests/billing-ui.test.js tests/billing-smtp-admin.test.js
+        run: node --test tests/billing-domain.test.js tests/billing-pocketbase.test.js tests/official-domain.test.js tests/official-pocketbase.test.js tests/billing-plan-ui.test.js tests/diag-pocketbase.test.js tests/prefs-pocketbase.test.js tests/devices-pocketbase.test.js tests/email-verification-ui.test.js tests/billing-ui.test.js tests/billing-smtp-admin.test.js
       - name: Check authenticated local bridge and exact amounts
         run: |
           python3 tests/billing-bridge.py

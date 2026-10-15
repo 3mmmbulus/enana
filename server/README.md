@@ -357,3 +357,27 @@ extra step: run `python3 update-nginx-diag.py <current enana.cc.conf> <new file>
 `nginx -t`, then reload. It adds the two exact-path locations with their larger body limits and
 touches nothing else. `tests/diag-pocketbase.test.js` runs all of this against a real PocketBase
 (`PB_BIN=/path/to/pocketbase node --test tests/diag-pocketbase.test.js`).
+
+## Device list and heartbeat (2.3.26)
+
+`GET /api/enana/v1/devices` lists only the devices that still hold a session that is neither revoked
+nor expired, plus the calling device. Devices that were signed out from another device, pushed out at
+sign-in, logged out, expired, or revoked by a password change or the device limit disappear from the
+list; their `devices` rows stay (they are reused at the next sign-in and pruned as before). `online`
+still means a heartbeat in the last 10 minutes, so an offline device in the list is one that is still
+signed in. `POST /api/enana/v1/session/heartbeat` accepts an optional body `{"app":"2.3.26","os":"15.6.1"}`:
+a valid `app` (`^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]{1,20})?$`, at most 32 characters) and a
+valid `os` (1-64 printable characters, no leading or trailing space) update `app_version` /
+`os_version` of the device; anything else is ignored and the heartbeat still succeeds, so clients
+that send `{}` keep working. `POST /api/enana/v1/devices/kick` returns `{"ok":true,"revoked":N}` and
+writes the `kick` audit event only when it revoked a session.
+
+Only `pb_hooks/enana_lib.js` changes: no migration, no new route, no nginx change. `update-official.sh`
+installs `enana_lib.js` (with the three official-node hooks, which are unchanged), restarts only
+`enana-pocketbase.service`, verifies and rolls back on failure, so deploy it with the steps in
+"Official route nodes" above (`--check`, then the install). Deploy the hooks before, or together
+with, the 2.3.26 client release: the 2.3.26 dashboard labels an offline device "Offline (still
+signed in)", which is only true once the server hides signed-out devices. Older clients work with the
+new hooks, and 2.3.26 clients work with the old hooks (the old hooks ignore the heartbeat body).
+`PB_BIN=/path/to/pocketbase node --test tests/devices-pocketbase.test.js` checks all of this against
+a real PocketBase.
