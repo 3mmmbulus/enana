@@ -7,12 +7,17 @@
 #     state   状态变化时 + 每 ~9 分钟  核心 / 控制接口 / 总开关 / 系统代理 / 登录 / TUN / 网络接口 —— 以前这些只在导出的那一刻采样一次, 看不出「什么时候开始不对的」
 #     tick    两次定时任务相隔 > 3 分钟 (电脑休眠 / 后台被暂停)
 #   状态变化同时写一条操作记录 (来源 auto): 「环境状态变化 item=sysproxy from=1 to=0」「核心进程已重启」……
+#   自动线路 (2.3.26): node 探测发现 AUTO / PINAUTO 当前选中的节点连不上, 立刻请核心重新测速这个组 (它当场改选), 见下面的 health_failover;
+#     真的换了节点才记一条操作记录「环境状态变化 item=auto_select from=旧节点 to=新节点 group=AUTO probe=timeout」
 #   「操作记录」开关关闭时一并不记 (隐私: 这些记录也包含时间线); 只在 macOS 上运行 (Windows 之后跟进)。
 # 诊断导出里的 health / health_summary / outages / verdict 分区由 _b_health* / _b_verdict 生成 (verdict 是 lib/health.pl 的自动判定)。
 
 HEALTH_CANARY_EVERY=280      # 秒
 HEALTH_STATE_EVERY=540       # 秒: 状态没变化时也每隔这么久写一行, 让「持续了多久」可以从记录里直接算出来
 HEALTH_NODE_MAX=8
+HEALTH_RETEST_MS=18000       # 毫秒: 请核心重测一个自动选线组时给它的时间 —— 要长过核心测一个节点的上限 (15 秒): 时间到了还没测完的节点核心不会判为不可用, 它的旧延迟还在, 不一定被换掉
+HEALTH_RETEST_GAP=60         # 秒: 同一个组最多每分钟重测一次
+HEALTH_RETEST_HOLD=300       # 秒: 重测之后核心仍然选它、并且它这次测速是通的 (核心经代理测得通, 只是本机直连它的端口不通) 时, 同一个节点 5 分钟内不再触发
 HEALTH_TS=''
 
 health_on() { [ "${ENANA_PLATFORM:-darwin}" = darwin ] && [ "${LOG_OPS:-1}" = 1 ]; }
@@ -96,9 +101,13 @@ health_state_tick() { # 标准输出: 需要写进健康记录的 state 行 (变
 }
 
 # ---------- 服务器端口 (每分钟) ----------
-health_nodes() { # 标准输出: node 行。只探测「固定出口」和「自动线路」里的服务器 (订阅里几十个备用节点不探)
-  local list res tag result ms role
-  list=$(srv_list | awk -F'\t' '($5 == "pin" || $5 == "auto") && $3 != "" && $4 ~ /^[0-9]+$/ { print $5 "\t" $1 "\t" $3 "\t" $4 }' | LC_ALL=C sort -s -r -k1,1 | head -n "$HEALTH_NODE_MAX")
+health_nodes() { # 标准输出: node 行。只探测「固定出口」和「自动线路」里的服务器 (订阅里几十个备用节点不探); 自动选线组当前选中的节点排在最前面, 一定会被探测
+  local list res tag result ms role sel
+  sel=$(health_auto_sel)
+  # 清单: 角色 标签 主机 端口 类型; 顺序 = 选中的节点 → 固定出口 → 自动线路 (同一类里保持 servers.jsonl 的顺序), 最多 HEALTH_NODE_MAX 个
+  list=$(srv_list | HEALTH_SEL="$sel" LC_ALL=C awk -F'\t' '
+    BEGIN { n = split(ENVIRON["HEALTH_SEL"], a, "\n"); for (i = 1; i <= n; i++) { p = index(a[i], "\t"); if (p) s[substr(a[i], p + 1)] = 1 } }
+    ($5 == "pin" || $5 == "auto") && $3 != "" && $4 ~ /^[0-9]+$/ { print (($1 in s) ? 0 : ($5 == "pin" ? 1 : 2)) "\t" $5 "\t" $1 "\t" $3 "\t" $4 "\t" $2 }' | LC_ALL=C sort -s -n -k1,1 | cut -f2- | head -n "$HEALTH_NODE_MAX")
   [ -n "$list" ] || return 0
   # TUN 模式: 探测绑定到物理网卡, 否则 TUN 会在本机应答握手, 「可达」就是假的 (耗时只有几毫秒)
   local ifx=''
@@ -113,6 +122,58 @@ health_nodes() { # 标准输出: node 行。只探测「固定出口」和「自
     _health_line node "$tag" "$result" "$ms" "$(kv role "$role" mode "${NETWORK_MODE:-system}" probe "${ifx:+bound}")"
   done <<EOF
 $res
+EOF
+  [ -z "$sel" ] || health_failover "$sel" "$res" "$list" >/dev/null 2>&1 || true
+}
+
+# ---------- 自动线路: 选中的节点坏了就马上让核心重新选 (2.3.26) ----------
+# 核心 (sing-box urltest, 见 lib/config.sh 的 AUTO / PINAUTO) 只在定时测速 (每 3 分钟) 时改选; 选中的节点坏了以后, 新连接照样交给它 (连接失败只删掉它的测速记录, 不改选),
+# 最长要等 3 分钟。每分钟的服务器端口探测发现「当前选中的节点」连不上 / 超时, 就调用 Clash API 的组测速 GET /group/<组>/delay:
+# 对 urltest 组它会强制测一遍组里所有节点, 然后按结果改选 (和定时测速是同一段代码: URLTest → urlTest(force) → performUpdateCheck), 返回时已经换好。
+# 探测是通的 / 没探测到 (官方线路没有地址) / 走 UDP 的协议 (TCP 端口不通不说明节点坏了) / 总开关关着: 什么都不做。
+health_group_now() { # <组> -> 核心里这个自动选线组当前选中的节点 (按 UTF-8 输出, 和 servers.jsonl 里的标签一致); 核心没运行 / 没有这个组 → 空
+  clash GET "/proxies/$1" 2>/dev/null | perl -MJSON::PP -e 'my $j = eval { JSON::PP->new->utf8->decode(join "", <STDIN>) }; my $n = ref $j eq "HASH" ? $j->{now} : undef;
+    exit 0 unless defined $n && !ref $n && length $n; utf8::encode($n); $n =~ tr/\t\r\n/   /; print $n' 2>/dev/null
+}
+health_auto_sel() { # -> 组<TAB>当前选中的节点 (每组一行): AUTO 有自己的自动线路服务器时才看, PINAUTO 固定出口有 2 个以上时才有; 总开关关着 / 核心没运行 → 空
+  [ "${PROXY_ENABLED:-0}" = 1 ] || return 0
+  local roles g n
+  roles=$(srv_list | awk -F'\t' '{ print $5 }')
+  for g in AUTO PINAUTO; do
+    if [ "$g" = AUTO ]; then printf '%s\n' "$roles" | grep -qx auto || continue
+    else [ "$(printf '%s\n' "$roles" | grep -cx pin)" -ge 2 ] || continue; fi
+    n=$(health_group_now "$g")
+    [ -z "$n" ] || printf '%s\t%s\n' "$g" "$n"
+  done
+}
+health_failover() { # <组<TAB>选中的节点 行…> <探测结果: 标签<TAB>结果<TAB>毫秒… 行> <探测清单: 角色<TAB>标签<TAB>主机<TAB>端口<TAB>类型 行>
+  # 限频 ($H/.health.retest-<组>: 时间<TAB>节点<TAB>结果): 同一个组最多每分钟一次; 结果 same (仍然选它, 而且返回的测速结果里它是通的) 时同一个节点 HEALTH_RETEST_HOLD 秒内不再触发;
+  # busy (仍然选它但它没有测速结果: 核心正在自己测速 / 到时间还没测完 / 组里全部连不上 / 接口没响应) 和 changed 只受每分钟一次的限制
+  local g cur r ty f last ltag lout t0 body after out
+  while IFS=$'\t' read -r g cur; do
+    [ -n "$g" ] && [ -n "$cur" ] || continue
+    r=$(printf '%s\n' "$2" | HT="$cur" LC_ALL=C awk -F'\t' '$1 == ENVIRON["HT"] { print $2; exit }')
+    case $r in ''|ok) continue ;; esac
+    ty=$(printf '%s\n' "$3" | HT="$cur" LC_ALL=C awk -F'\t' '$2 == ENVIRON["HT"] { print $5; exit }')
+    case $ty in hysteria*|tuic|wireguard) continue ;; esac
+    f="$H/.health.retest-$g"; last=0; ltag=''; lout=''
+    [ -f "$f" ] && IFS=$'\t' read -r last ltag lout < "$f"
+    case $last in ''|*[!0-9]*) last=0 ;; esac
+    t0=$(now)
+    [ $(( t0 - last )) -ge "$HEALTH_RETEST_GAP" ] || continue
+    if [ "$lout" = same ] && [ "$ltag" = "$cur" ] && [ $(( t0 - last )) -lt "$HEALTH_RETEST_HOLD" ]; then continue; fi
+    printf '%s\t%s\tpending\n' "$t0" "$cur" > "$f"           # 先占位: 同时跑的另一次定时任务不会再触发一次
+    body=$(curl -s -m $(( HEALTH_RETEST_MS / 1000 + 4 )) --noproxy '*' -H "Authorization: Bearer $(auth_secret)" \
+      "http://127.0.0.1:$UI_PORT/group/$g/delay?url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=$HEALTH_RETEST_MS" 2>/dev/null) || body=''
+    after=$(health_group_now "$g")
+    if [ -n "$after" ] && [ "$after" != "$cur" ]; then
+      out=changed; _health_event auto_select "$cur" "$after" group "$g" probe "$r" took_s "$(( $(now) - t0 ))"
+    elif printf '%s' "$body" | perl -MJSON::PP -e 'my $j = eval { JSON::PP->new->utf8->decode(join "", <STDIN>) }; exit 1 unless ref $j eq "HASH";
+        for my $k (keys %$j) { my $t = $k; utf8::encode($t); exit 0 if $t eq $ARGV[0] && defined $j->{$k} && $j->{$k} =~ /^[0-9]+$/ } exit 1' "$cur" 2>/dev/null; then out=same
+    else out=busy; fi
+    printf '%s\t%s\t%s\n' "$t0" "$cur" "$out" > "$f"
+  done <<EOF
+$1
 EOF
 }
 

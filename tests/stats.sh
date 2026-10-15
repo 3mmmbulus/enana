@@ -1,5 +1,5 @@
 #!/bin/bash
-# 流量统计 (lib/stats.pl): 采样分钟数 (区分「没有流量」和「没有采集到」) · 并发采样不丢数据 · 旧版本数据兼容 · 诊断摘要。几秒钟, macOS / Linux 都能跑, 只需要 perl。
+# 流量统计 (lib/stats.pl): 采样分钟数 (区分「没有流量」和「没有采集到」) · 并发采样不丢数据 · 旧版本数据兼容 · 诊断摘要 · 非 ASCII 的节点 / 应用名 (UTF-8, 没有 Wide character 警告)。几秒钟, macOS / Linux 都能跑, 只需要 perl (和 python3)。
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd -P); REPO=$(dirname "$HERE")
 W=$(mktemp -d /tmp/enana-stats.XXXXXX); W=$(cd "$W" && pwd -P); trap 'rm -rf "$W"' EXIT; : > "$W/.pass"; : > "$W/.fail"
@@ -115,6 +115,36 @@ R=$(report "$(epoch 2026 10 4 13 0)" 7d)
 eq "连续 3 天: 10-02 = 2000 (第一次采样只建基线), 10-03 = 3000, 10-04 = 3000" "$(printf '%s' "$R" | jf 'print([s["down"] for s in d["series"][-3:]])')" "[2000, 3000, 3000]"
 eq "daily.tsv 每天一行" "$(cut -f1 "$S/daily.tsv" | sort | uniq -d | wc -l | tr -d ' ')" "0"
 eq "每天的采样分钟数: 2 / 3 / 3" "$(awk -F'\t' '{print $10}' "$S/daily.tsv" | paste -sd, -)" "2,3,3"
+
+echo "== T8. 非 ASCII 的节点 / 应用名 (claude专用 · Café · R&D · 微信): 没有 Wide character 警告, 文件和报表里是正确的 UTF-8, 角色查得到, ASCII 的行逐字节不变"
+rm -rf "$S"
+T=$(epoch 2026 10 4 10 0)
+R8=$W/roles8; printf 'claude专用\tpin\nCafé\tauto\nR&D\tpin\nTokyo-Fix\tpin\n' > "$R8"      # 和 stats_collect 一样: srv_list 的标签 (servers.jsonl 里的原样 UTF-8 字节)
+: > "$W/err8"
+c8() { # <epoch> <累计上传> <累计下载> <连接 JSON…>   标准错误收集到 err8 (以前每分钟一条 Wide character in print)
+  local e=$1 u=$2 d=$3 cs; shift 3; cs=$(IFS=,; printf '%s' "$*")
+  printf '{"uploadTotal":%s,"downloadTotal":%s,"connections":[%s]}' "$u" "$d" "$cs" | ENANA_NOW=$e perl "$P" collect "$S" "$R8" auto 2>> "$W/err8"
+}
+cn() { printf '{"id":"%s","metadata":{"processPath":"%s"},"chains":["%s","PIN","svc-x"],"upload":%s,"download":%s}' "$1" "$2" "$3" "$4" "$5"; }   # <id> <processPath> <节点 (JSON 字符串里的原文)> <up> <down>
+WX='/Applications/微信.app/Contents/MacOS/WeChat'
+# 核心的 JSON: 中文原样输出 (UTF-8), & 写成 ${BS}u0026 (Go 的 HTML 转义), é 也可能写成 ${BS}u00e9 —— 解出来都要和 roles 文件里的字节对得上
+BS=$(printf '\\')       # 一个反斜杠: JSON 转义在运行时拼出来
+c8 "$T" 0 0
+c8 $((T + 60)) 400 4000 "$(cn k1 "$WX" 'claude专用' 100 1000)" "$(cn k2 /usr/bin/curl "Caf${BS}u00e9" 100 1000)" "$(cn k3 /usr/bin/curl "R${BS}u0026D" 100 1000)" "$(cn k4 /usr/bin/curl Tokyo-Fix 100 1000)"
+c8 $((T + 120)) 800 8000 "$(cn k1 "$WX" 'claude专用' 200 2000)" "$(cn k2 /usr/bin/curl "Caf${BS}u00e9" 200 2000)" "$(cn k3 /usr/bin/curl "R${BS}u0026D" 200 2000)" "$(cn k4 /usr/bin/curl Tokyo-Fix 200 2000)"
+eq "测试数据本身: 连接 JSON 里确实是转义写法 (6 个字符 ${BS}u0026, 不是 &)" "$(cn k3 /usr/bin/curl "R${BS}u0026D" 1 1 | grep -c 'R\\u0026D')" "1"
+eq "两次有流量的采样: 标准错误里什么都没有 (没有 Wide character 警告)" "$(cat "$W/err8")" ""
+eq "nodes.tsv: 每个节点每天正好一行, 名字是 UTF-8 字节 (\\u00e9 / \\u0026 还原成 é / &), ASCII 的 Tokyo-Fix 一行逐字节不变" \
+  "$(LC_ALL=C sort "$S/nodes.tsv" | od -An -tx1 | tr -d ' \n')" \
+  "$(printf '2026-10-04\tCafé\t200\t2000\n2026-10-04\tR&D\t200\t2000\n2026-10-04\tTokyo-Fix\t200\t2000\n2026-10-04\tclaude专用\t200\t2000\n' | od -An -tx1 | tr -d ' \n')"
+eq "按 roles 文件分类: claude专用 / R&D / Tokyo-Fix 是固定出口, Café 是自动线路 (pin_up:pin_down:auto_up:auto_down; 以前 claude专用 查不到角色, 被算成自动线路)" "$(awk -F'\t' '{print $6 ":" $7 ":" $8 ":" $9}' "$S/daily.tsv")" "600:6000:200:2000"
+eq "apps.tsv: 微信 (取 .app 的名字) 和 curl 各一行, UTF-8 字节" \
+  "$(LC_ALL=C sort "$S/apps.tsv" | od -An -tx1 | tr -d ' \n')" \
+  "$(printf '2026-10-04\tcurl\t600\t6000\n2026-10-04\t微信\t200\t2000\n' | od -An -tx1 | tr -d ' \n')"
+jb() { python3 -c 'import sys,json; d=json.loads(sys.stdin.buffer.read()); sys.stdout.buffer.write(('"$1"').encode("utf-8"))'; }   # 按字节读 JSON (不是合法 UTF-8 就直接报错), 按 UTF-8 写回
+eq "报表 (GET /api/stats) 是合法的 UTF-8 JSON, 节点名原样" "$(ENANA_NOW=$((T + 120)) perl "$P" report "$S" today 2>> "$W/err8" | jb '"|".join(sorted(n["tag"] for n in d["nodes"]))')" "Café|R&D|Tokyo-Fix|claude专用"
+eq "应用报表 (GET /api/stats/apps) 同样" "$(ENANA_NOW=$((T + 120)) perl "$P" apps "$S" today 2>> "$W/err8" | jb '"|".join(a["name"] for a in d["apps"])')" "curl|微信"
+eq "报表也没有任何警告" "$(cat "$W/err8")" ""
 
 P_=$(grep -c . "$W/.pass"); F_=$(grep -c . "$W/.fail")
 echo; echo "流量统计测试: $P_ 通过, $F_ 失败"
