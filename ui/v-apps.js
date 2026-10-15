@@ -111,11 +111,17 @@
   function selecting(row) {
     try { var s = window.getSelection && window.getSelection(); return !!(s && !s.isCollapsed && String(s) && row.contains(s.anchorNode)); } catch (e) { return false; }
   }
+  /* 习惯双击的人: 第一下已经打开了弹窗, 第二下会按在弹窗的遮罩上 (ui.modal: 点遮罩 = 关闭)。打开后紧跟着的那一次「第二下」(detail ≥ 2) 不交给弹窗 */
+  function swallowSecondPress() {
+    var until = Date.now() + 700;
+    function onDown(ev) { document.removeEventListener('mousedown', onDown, true); if (ev.detail >= 2 && Date.now() <= until) { ev.preventDefault(); ev.stopPropagation(); } }
+    document.addEventListener('mousedown', onDown, true);
+  }
   TP.rowOpen = function (row, open) {
     row.setAttribute('tabindex', '0'); row.classList.add('row-open');
     row.addEventListener('click', function (ev) {
       if (ev.defaultPrevented || inControl(ev.target, row) || selecting(row)) return;
-      open(row);
+      open(row); swallowSecondPress();
     });
     row.addEventListener('keydown', function (ev) {
       if (ev.key !== 'Enter' || ev.target !== row || ev.isComposing || ev.repeat) return;

@@ -24,7 +24,8 @@ function matches(el, sel) {
 
 function makeBrowser(o) {
   o = o || {};
-  const win = {}, docListeners = {};
+  const win = {}, docListeners = { capture: {}, bubble: {} };
+  const phase = opt => (opt === true || !!(opt && opt.capture) ? 'capture' : 'bubble');
   class El {
     constructor(tag) {
       this.nodeType = tag === '#text' ? 3 : 1; this.tagName = tag; this.nodeName = tag.toUpperCase();
@@ -57,12 +58,13 @@ function makeBrowser(o) {
     replaceChild(c, old) { this.insertBefore(c, old); this.removeChild(old); return old; }
     addEventListener(e, fn) { (this.events[e] = this.events[e] || []).push(fn); }
     removeEventListener(e, fn) { const a = this.events[e] || [], i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); }
-    /* 和浏览器一样冒泡: 目标 -> 父节点 … -> document; 返回事件对象 (defaultPrevented 等) */
+    /* 和浏览器一样: 先是 document 上的捕获监听 (capture), 再从目标冒泡: 目标 -> 父节点 … -> document; stopPropagation 之后不再往下传。返回事件对象 */
     dispatch(type, init) {
-      const ev = Object.assign({ type, target: this, currentTarget: null, bubbles: true, defaultPrevented: false, button: 0, key: '', isComposing: false, repeat: false, _stop: false,
+      const ev = Object.assign({ type, target: this, currentTarget: null, bubbles: true, defaultPrevented: false, button: 0, detail: 0, key: '', isComposing: false, repeat: false, _stop: false,
         preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this._stop = true; } }, init || {});
+      ev.currentTarget = doc; (docListeners.capture[type] || []).slice().forEach(fn => fn(ev));
       for (let n = this; n && !ev._stop; n = n.parentNode) { ev.currentTarget = n; (n.events[type] || []).slice().forEach(fn => fn(ev)); }
-      if (!ev._stop) (docListeners[type] || []).slice().forEach(fn => fn(ev));
+      if (!ev._stop) { ev.currentTarget = doc; (docListeners.bubble[type] || []).slice().forEach(fn => fn(ev)); }
       return ev;
     }
     click() { return this.dispatch('click'); }
@@ -85,7 +87,9 @@ function makeBrowser(o) {
     querySelectorAll: sel => doc.body.querySelectorAll(sel), querySelector: sel => doc.body.querySelector(sel),
     getElementById: id => doc.body.querySelectorAll('[id="' + id + '"]')[0] || null,
     contains: x => doc.body.contains(x),
-    addEventListener: (e, fn) => { (docListeners[e] = docListeners[e] || []).push(fn); }, removeEventListener() {}
+    addEventListener: (e, fn, opt) => { const m = docListeners[phase(opt)]; (m[e] = m[e] || []).push(fn); },
+    removeEventListener: (e, fn, opt) => { const a = docListeners[phase(opt)][e] || [], i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); },
+    listenerCount: (e, opt) => (docListeners[phase(opt)][e] || []).length
   };
   const timers = [];
   win.window = win; win.self = win;

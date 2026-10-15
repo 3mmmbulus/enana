@@ -144,6 +144,15 @@ const domainReqs = () => reqs.filter(r => r.indexOf('GET /api/sites/domains') ==
   await closeDialogs();
   rGithub.querySelector('.sx-c-n').click(); await settle();
   assert.equal(dialogs().length, 1, 'a click anywhere else on the row opens it too'); await closeDialogs();
+  // 双击: 第二下按在刚打开的弹窗遮罩上, 不会把它又关掉; 之后再点遮罩照常关闭
+  rGithub.querySelector('.site-n').click(); await settle();
+  const dd = dialogs()[0];
+  assert(dd, 'opened by the first click of a double-click');
+  dd.dispatch('mousedown', { detail: 2 }); dd.dispatch('click', { detail: 2 }); await settle();
+  assert(dd.open && dialogs().length === 1, 'the second press of a double-click does not close the new dialog');
+  assert.equal(b.doc.listenerCount('mousedown', true), 0, 'the double-click guard removes itself');
+  dd.dispatch('mousedown', { detail: 1 }); dd.dispatch('click', { detail: 1 }); await settle();
+  assert(!dd.open && dialogs().length === 0, 'a later click on the backdrop still closes it');
   const before = domainReqs().length;
   rGithub.querySelector('.sl').click(); rGithub.querySelector('.seg').click(); rGithub.querySelector('.seg').querySelector('input').click();
   rClaude.querySelector('select.sx-tg').click(); rClaude.querySelector('.sx-tg').dispatch('mousedown');
