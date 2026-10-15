@@ -5,10 +5,15 @@
 #   restart  重启这个用户自己的 TUN 守护进程: 只执行 `launchctl kickstart -k system/@LABEL@`。标签和 launchctl 路径都是安装时由 root 脚本写死的, 不读任何参数 / 输入 /
 #          环境变量, 所以不能用它去重启别的服务, 更不能运行别的东西。(核心和配置没有变化时用它代替完整安装, 重启核心不再弹管理员密码框。)
 #   version
-# 只认「应用 / 网站策略」那几个固定名字的规则集文件 (ovr-*.json) 和 4 种匹配键 (domain / domain_suffix / process_path_regex / process_name), 值只能是不含控制字符的字符串。
+# 只认两类文件:
+#   · 「应用 / 网站策略」那几个固定名字的规则集文件 (ovr-*.json), 4 种匹配键 (domain / domain_suffix / process_path_regex / process_name), 值只能是不含控制字符的字符串。
+#   · 网站的域名列表 site-<id>.json (id: 1–63 位小写字母 / 数字 / 连字符, 不以连字符开头; lib/catalog.awk 生成): 只有一条规则, 匹配键只能是 domain / domain_suffix,
+#     每个值都必须是合法的域名 (小写字母 / 数字 / 连字符组成的标签, 每段 ≤ 63, 总长 ≤ 253; domain_suffix 可以以一个点开头), 没有正则、路径或别的键。
+#     而且只覆盖 root 快照里已经有的文件 (完整安装时 root 核对过、配置引用到的那些): 不新建目录或文件, 所以名字再多也写不满磁盘。
 # 不接受路径、命令、环境变量、可执行文件或核心配置 (这些仍然只能走需要管理员授权的完整安装)。它处理的只是「路由规则数据」: 最坏的结果是这个用户自己的流量路由被改, 得不到 root 权限。
 # restart 的最坏结果: 这个用户自己的 root 守护进程被重启一次 (流量中断几秒), 同样得不到 root 权限, 也改不了任何文件。
-# 由 enana 在一次管理员授权里安装 (lib/enhanced-root.sh), 卸载时一并删除。版本 2 增加了 restart, 版本 3 改为每个规则集文件一个目录, 版本 4 增加了 cleanup; 旧版本 (版本 1–3) 的助手会被 enana 判为「不可用」, 下一次完整安装 (一次管理员授权) 时替换。
+# 由 enana 在一次管理员授权里安装 (lib/enhanced-root.sh), 卸载时一并删除。版本 2 增加了 restart, 版本 3 改为每个规则集文件一个目录, 版本 4 增加了 cleanup, 版本 5 增加了网站的域名列表;
+# 旧版本 (版本 1–4) 的助手会被 enana 判为「不可用」, 下一次完整安装 (一次管理员授权) 时替换。
 use strict;
 use warnings;
 use JSON::PP;
@@ -23,7 +28,8 @@ my $LABEL = '@LABEL@';        # 例: com.enana.proxy.tun.501 (这个用户的 TU
 my $LAUNCHCTL = '@LAUNCHCTL@'; # 生产里是 /bin/launchctl (安装时写死, 测试里换成假的)
 my $VERSION = @VERSION@;
 my $MAX_BYTES = 2_000_000;
-my $MAX_FILES = 160;          # 一次最多同步多少个规则集文件 (必须 >= 12 + 3 * lib/apps.sh 的 OVR_PIN_MAX; 升级前安装的旧助手上限是 60, 固定出口超过 16 个时它会拒绝, 退回完整安装)
+my $MAX_FILES = 160;          # 一次最多同步多少个策略规则集文件 (必须 >= 12 + 3 * lib/apps.sh 的 OVR_PIN_MAX; 升级前安装的旧助手上限是 60, 固定出口超过 16 个时它会拒绝, 退回完整安装)
+my $MAX_SITE_FILES = 400;     # 另外最多多少个网站的域名列表 (目录里每个网站一个; 超过就拒绝, enana 退回完整安装)
 
 my $cmd = shift(@ARGV) // '';
 die "usage: tunrules sync|restart|cleanup|version\n" if @ARGV || $cmd !~ /^(?:sync|restart|cleanup|version)$/;
@@ -85,15 +91,22 @@ if ($cmd eq 'cleanup') {
   exit($fail ? 1 : 0);
 }
 
-my $NAME_RE = qr/^ovr-(?:direct|appdirect|browserdirect|browserauto|browserpin|browserpinauto|pin|pinauto|apppin|apppinauto|appauto|auto)(?:-[0-9]{1,2})?\.json$/;
+my $NAME_RE = qr/\Aovr-(?:direct|appdirect|browserdirect|browserauto|browserpin|browserpinauto|pin|pinauto|apppin|apppinauto|appauto|auto)(?:-[0-9]{1,2})?\.json\z/;
+my $SITE_RE = qr/\Asite-[a-z0-9][a-z0-9-]{0,62}\.json\z/;    # 网站的域名列表 (rules/site-<id>/site-<id>.json)
 my %KEY_OK = map { $_ => 1 } qw(domain domain_suffix process_path_regex process_name);
+my %SITE_KEY_OK = map { $_ => 1 } qw(domain domain_suffix);
+# 合法的域名: 标签由小写字母 / 数字 / 连字符组成 (不以连字符开头或结尾), 每段 1–63, 总长 ≤ 253; domain_suffix 可以以一个点开头 (只匹配子域名)。和 lib/catalog.awk 的 okname 一致
+sub name_ok { my ($v, $sfx) = @_; $v =~ s/\A\.// if $sfx; return length($v) <= 253 && $v =~ /\A(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/; }
 
 binmode STDIN;
 my $in = ''; my $n = read(STDIN, $in, $MAX_BYTES + 1);
 die "empty input\n" unless $n;
 die "input too large\n" if length($in) > $MAX_BYTES;
 my $doc = eval { JSON::PP->new->utf8->max_depth(8)->decode($in) };
-die "invalid JSON\n" unless ref $doc eq 'HASH' && keys %$doc && keys %$doc <= $MAX_FILES;       # 12 个固定名字 + 每个固定出口 3 个 (网站 / 应用 / 浏览器): OVR_PIN_MAX=32 个出口 = 107 个; 留出余量
+die "invalid JSON\n" unless ref $doc eq 'HASH' && keys %$doc;
+# 12 个固定名字 + 每个固定出口 3 个 (网站 / 应用 / 浏览器): OVR_PIN_MAX=32 个出口 = 108 个, 上限 160 留出余量; 网站的域名列表另算 (名字以 site- 开头的都算这一类)
+my $n_site = grep { /\Asite-/ } keys %$doc;
+die "too many files\n" if keys(%$doc) - $n_site > $MAX_FILES || $n_site > $MAX_SITE_FILES;
 
 sub bad { die "rejected: $_[0]\n" }
 # JSON 里的数字和字符串在 Perl 里只能靠内部标志区分, 而且任何字符串操作 (length / 正则) 都会让数字也带上字符串标志: 所以类型检查必须先做。
@@ -101,22 +114,24 @@ sub is_str { my $f = svref_2object(\$_[0])->FLAGS; return ($f & SVp_POK) && !($f
 sub is_num { my $f = svref_2object(\$_[0])->FLAGS; return ($f & (SVp_IOK | SVp_NOK)) && !($f & SVp_POK); }
 my %out;
 for my $name (sort keys %$doc) {
-  bad("file name") unless $name =~ $NAME_RE;
+  my $site = $name =~ $SITE_RE ? 1 : 0;
+  bad("file name") unless $site || $name =~ $NAME_RE;
   my $rs = $doc->{$name};
   bad("rule set shape") unless ref $rs eq 'HASH' && keys(%$rs) == 2 && exists $rs->{version} && exists $rs->{rules};
   bad("version") unless !ref $rs->{version} && defined $rs->{version} && is_num($rs->{version}) && $rs->{version} == 3;
   my $rules = $rs->{rules};
-  bad("rules") unless ref $rules eq 'ARRAY' && @$rules >= 1 && @$rules <= 8;
+  bad("rules") unless ref $rules eq 'ARRAY' && @$rules >= 1 && @$rules <= ($site ? 1 : 8);
   my $total = 0;
   for my $r (@$rules) {
     bad("rule shape") unless ref $r eq 'HASH' && keys(%$r) == 1;
     my ($k) = keys %$r;
-    bad("rule key") unless $KEY_OK{$k};
+    bad("rule key") unless $site ? $SITE_KEY_OK{$k} : $KEY_OK{$k};
     my $vals = $r->{$k};
     bad("rule values") unless ref $vals eq 'ARRAY' && @$vals >= 1 && @$vals <= 5000;
     for my $v (@$vals) {
       bad("value type") if ref $v || !defined $v || !is_str($v);
       bad("value") if length($v) < 1 || length($v) > 400 || $v =~ /[\x00-\x1f\x7f]/;
+      bad("domain name") if $site && !name_ok($v, $k eq 'domain_suffix');
     }
     $total += @$vals;
   }
@@ -125,6 +140,7 @@ for my $name (sort keys %$doc) {
 }
 
 # 先检查全部目标 (子目录和文件都不能是符号链接, 子目录必须归 root), 全部通过才开始写: 任何一项不合格, 一个文件都不会动。rules 必须是 root 自己的真实目录。
+# 网站的域名列表只覆盖快照里已经有的文件 (目录和文件都必须已经在): 完整安装放进去的就是配置引用到的那些, 助手不新建
 my $dir = "$ROOT/rules";
 my @st = lstat($dir);
 die "no rules directory\n" unless @st && -d _ && !-l $dir && $st[4] == $ROOT_UID;
@@ -133,8 +149,10 @@ for my $name (sort keys %out) {
   (my $stem = $name) =~ s/\.json\z//;
   my $sub = "$dir/$stem";
   if (my @s = lstat($sub)) { die "refusing $stem (not a directory)\n" if -l _ || !-d _ || $s[4] != $ROOT_UID; }
+  elsif ($name =~ $SITE_RE) { die "refusing $name (not in the snapshot)\n"; }
   my $path = "$sub/$name";
   if (lstat($path)) { die "refusing $name (not a regular file)\n" if -l _ || !-f _; }
+  elsif ($name =~ $SITE_RE) { die "refusing $name (not in the snapshot)\n"; }
   $target{$name} = [$sub, $path];
 }
 for my $name (sort keys %out) {
