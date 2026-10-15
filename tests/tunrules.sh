@@ -454,7 +454,7 @@ echo "== T8. 内容没变的订阅刷新不改动 servers.jsonl (否则文件顺
   tags() { sed -n 's/.*"tag":"\([^"]*\)".*/\1/p' "$SF" | paste -sd, -; }
   { m M1; s A A1; s A A2; s B B1; m M2; s B B2; } > "$SF"; cp "$SF" "$W/before"
   r1=$({ s A A1; s A A2; } | srv_import A replace); r2=$({ s B B1; s B B2; } | srv_import B replace)
-  eq "两个订阅和手动服务器交错, 内容相同的刷新: servers.jsonl 一个字节没变" "$(cmp -s "$SF" "$W/before" && echo same || echo changed):$r1:$r2" "same:0 2 0:0 2 0"
+  eq "两个订阅和手动服务器交错, 内容相同的刷新: servers.jsonl 一个字节没变 (计数: 0 新增 · 2 保留 · 0 移除 · 0 有变化 · 2 未变)" "$(cmp -s "$SF" "$W/before" && echo same || echo changed):$r1:$r2" "same:0 2 0 0 2:0 2 0 0 2"
   { s A A1; s A A3; } | srv_import A replace >/dev/null
   eq "订阅 A 换了一个节点: A2 消失, A3 追加到末尾, 其它每个节点的位置不变" "$(tags)" "M1,A1,B1,M2,B2,A3"
 )

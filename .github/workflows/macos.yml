@@ -47,6 +47,8 @@ jobs:
           node tests/vps-verify-ui.test.js
       - name: Unit tests (log parsing, app scan and times, subscription refresh stability, diagnostics)
         run: bash tests/units.sh
+      - name: Dashboard subscription refresh (dry run first, silent when unchanged, TUN updates wait for the user)
+        run: node tests/subs-refresh.test.js
       - name: Foreign sing-box inventory, port ownership and install-time prompts (stubbed ps, lsof, launchctl)
         run: bash tests/detect.sh
       - name: Enhanced/TUN isolated regressions (fingerprint, stop/restart decisions)

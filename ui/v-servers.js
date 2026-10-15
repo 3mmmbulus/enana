@@ -360,6 +360,29 @@
   V.testing = function () { return test.running; };
 
   /* ================= 订阅 ================= */
+  /* 待应用的订阅更新: 自动刷新发现订阅有变化, 但应用要管理员授权 (TUN, 或系统代理模式下根守护进程还加载着) —— 不替用户应用, 在订阅这一行提示, 由用户点「应用更新」。
+   * 名称 -> {added, changed, removed, unchanged, admin, u: 发现时订阅的更新时间}, 记在这个浏览器里 (刷新页面后还在); 订阅之后刷新过 (u 对不上: 终端 / 每日维护 / 另一个浏览器), 提示就过时了, 自动去掉 */
+  var pend = Object.create(null);
+  function pendOf(x) {
+    if (!x) return null;
+    if (!(x.name in pend)) pend[x.name] = TP.ls.get('subpend.' + x.name, null);
+    var p = pend[x.name];
+    if (!p || typeof p !== 'object') return null;
+    if ((+p.u || 0) !== (+x.updated || 0)) { pendSet(x.name, null); return null; }
+    return p;
+  }
+  function pendSet(name, p) {
+    pend[name] = p || null;
+    if (p) TP.ls.set('subpend.' + name, p); else TP.ls.del('subpend.' + name);
+  }
+  /* 刷新的真实数量 (辅助服务按内容比较, 见 lib/servers.sh 的 srv_import): 新增 · 有变化 · 移除 · 未变; 没有 changed / unchanged 的老辅助服务退回 replaced */
+  function subCounts(res) {
+    var c = { added: +res.added || 0, changed: +res.changed || 0, removed: +res.removed || 0, unchanged: +res.unchanged || 0 };
+    if (res.changed == null && res.unchanged == null) c.changed = +res.replaced || 0;
+    return c;
+  }
+  function subSame(c) { return !c.added && !c.changed && !c.removed; }
+  function subResult(c) { return subSame(c) ? t('servers.subs.upToDate', { n: c.unchanged }) : t('servers.subs.result', { added: c.added, changed: c.changed, removed: c.removed, unchanged: c.unchanged }); }
   function findSub(name) { return ((S.state && S.state.subs) || []).filter(function (x) { return x.name === name; })[0]; }
   function renderSubs() {
     var subs = (S.state && S.state.subs) || [], why = TP.why.helper(), waiting = !S.state && !TP.noHelper();
@@ -372,13 +395,16 @@
     var r = {};
     r.name = h('b'); r.host = h('span', { class: 'muted sm' }); r.meta = h('div', { class: 'muted sm' });
     r.usage = h('div', { class: 'sm' }); r.bar = ui.bar(); r.bar.el.classList.add('thin');
+    r.pendTxt = h('span'); r.apply = ui.btn(L('servers.subs.applyUpdate'), { sm: true, kind: 'primary', icon: 'refresh' });
+    r.pend = h('div', { class: 'hint warn sub-pend', role: 'status', hidden: true }, ui.icon('warning', 14, 'ci'), r.pendTxt, r.apply);      // 「订阅有更新 …, 应用需要管理员授权」+「应用更新」
     r.refresh = ui.btn(L('servers.subs.refresh'), { sm: true, icon: 'refresh' });
     r.del = TP.sudo.mark(ui.ibtn('delete', t('common.delete'), { cls: 'danger-t' }));
     r.url = TP.sudo.mark(ui.btn(L('servers.subs.url'), { sm: true, icon: 'eye' }));
-    var row = h('div', { class: 'sub' }, h('div', { class: 'sub-main' }, h('div', { class: 'sub-t' }, r.name, r.host), r.meta, r.usage, r.bar.el), h('div', { class: 'acts' }, r.refresh, r.url, r.del));
+    var row = h('div', { class: 'sub' }, h('div', { class: 'sub-main' }, h('div', { class: 'sub-t' }, r.name, r.host), r.meta, r.usage, r.bar.el, r.pend), h('div', { class: 'acts' }, r.refresh, r.url, r.del));
     row._r = r;
     ui.act(r.url, function () { return showSubUrl(row._x); });
     ui.act(r.refresh, function () { return askRefresh(row._x); });
+    ui.act(r.apply, function () { return askRefresh(row._x); });
     ui.act(r.del, function () { return delSub(row._x); });
     return row;
   }
@@ -388,20 +414,27 @@
     return { label: t('servers.subs.refresh') };
   }
   function updateSub(row, x, why) {
-    var r = row._r, iv = +x.interval || 12, due = !x.updated || (Date.now() / 1000 - x.updated) > iv * 3600, st = subLabel(x.name);
+    var r = row._r, iv = +x.interval || 12, due = !x.updated || (Date.now() / 1000 - x.updated) > iv * 3600, st = subLabel(x.name), p = pendOf(x);
     row._x = x;
     setText(r.name, x.name); setText(r.host, x.host);
-    setText(r.meta, t('servers.subs.meta', { when: TP.fmt.rel(x.updated), n: x.count || 0, h: iv }) + (due ? ' · ' + t('servers.subs.due') : ''));
+    // 有待应用的更新时不说「将自动刷新」: 它不会自动应用, 下面的提示说明了要做什么
+    setText(r.meta, t('servers.subs.meta', { when: TP.fmt.rel(x.updated), n: x.count || 0, h: iv }) + (due && !p ? ' · ' + t('servers.subs.due') : ''));
     var u = x.usage, txt = TP.fmt.usage(u);
     setText(r.usage, txt); r.usage.hidden = !txt;
     var pct = u && +u.total > 0 ? Math.min(100, (+u.used) / (+u.total) * 100) : null;
     r.bar.el.hidden = pct == null; if (pct != null) r.bar.set(pct, pct > 90 ? 'err' : '');
+    r.pend.hidden = !p;
+    if (p) setText(r.pendTxt, t('servers.subs.pending', { added: +p.added || 0, changed: +p.changed || 0, removed: +p.removed || 0 }));
     TP.paintBtn(r.refresh, { label: st.label, icon: 'refresh', busy: st.busy, muted: st.muted, reason: why || st.reason || '' });
+    ui.avail(r.apply, why || (refreshing[x.name] ? t('servers.subs.refreshingReason') : ''));
     ui.avail(r.del, why || (refreshing[x.name] ? t('servers.subs.refreshingReason') : '')); ui.avail(r.url, why);
     setTip(r.del, t('servers.subs.delAria', { name: x.name }));
   }
   async function askRefresh(x) {
-    var ok = await ui.confirmDialog({ title: t('servers.subs.refreshTitle'), message: t('servers.subs.refreshMsg', { name: x.name }), detail: TP.tunDetail([t('servers.subs.refreshD1'), t('servers.subs.refreshD2')]), confirmText: t('servers.subs.refresh'), rememberKey: 'subrefresh' });
+    if (!x) return;
+    // 有待应用的更新 (应用要管理员授权) 时就是「应用更新」: 每次都确认 (不提供「不再询问」), 说明里一定带上管理员授权的提示 (系统代理模式下根守护进程还加载着时也一样)
+    var p = pendOf(x), admin = !!(p && p.admin);
+    var ok = await ui.confirmDialog({ title: t('servers.subs.refreshTitle'), message: t('servers.subs.refreshMsg', { name: x.name }), detail: TP.tunDetail([t('servers.subs.refreshD1'), t('servers.subs.refreshD2')], admin), confirmText: t(p ? 'servers.subs.applyUpdate' : 'servers.subs.refresh'), rememberKey: admin ? null : 'subrefresh' });
     if (!ok) return;
     await TP.subs.refresh(x.name, false);
   }
@@ -413,42 +446,67 @@
     }
     var ok = await ui.confirmDialog({ title: t('servers.subs.delTitle'), message: t('servers.subs.delMsg', { name: x.name }), detail: TP.tunDetail(detail), confirmText: t('common.delete'), danger: true });
     if (!ok) return;
-    await TP.jobs.runInDock(t('servers.subs.delJob', { name: x.name }), function () { return TP.helper('POST', '/api/sub/delete', { q: q }); });
+    var done = await TP.jobs.runInDock(t('servers.subs.delJob', { name: x.name }), function () { return TP.helper('POST', '/api/sub/delete', { q: q }); });
+    if (done && done.ok) pendSet(x.name, null);
     await TP.loadState();
     V.render();
   }
 
-  /* 刷新订阅: 下载 -> 解析 -> 写入并应用 (mode=replace), 带总进度条。已有节点保留原来的角色。 */
+  /* 刷新订阅: 下载 -> 解析 -> 写入并应用 (mode=replace)。已有节点保留原来的角色; 刷新间隔沿用现在的, 用量取这次下载的响应头。
+   * 手动 (auto = false): 带进度卡片, 照旧开应用任务; 结果是真实的数量「新增 · 有变化 · 移除 · 未变」, 什么都没变时「订阅已是最新」。
+   * 自动 (auto = true, 打开仪表盘时到期的订阅): 先干跑 (dry=1), 没有进度卡片 ——
+   *   没有变化: 辅助服务已经就地记下这次刷新 (更新时间 / 用量; 不生成配置、不重启, 下一次等满一个刷新间隔), 只有一个不起眼的提示;
+   *   有变化, 应用要管理员授权 (辅助服务说 admin, 或者是 TUN 模式): 不替用户应用 (以前打开仪表盘就会弹出管理员密码框), 在订阅这一行显示待应用的更新和「应用更新」;
+   *   有变化, 不要授权 (系统代理模式): 静默应用 (background=1: 万一要授权, 辅助服务撤销本次更改、不弹框), 完成后一个小提示。 */
   TP.subs.refresh = async function (name, auto) {
     if (refreshing[name]) return null;
-    var x = findSub(name);
+    var x = findSub(name), card = null, steps = [{ label: t('imp.step.download'), state: 'run' }, { label: t('imp.step.parse'), state: 'todo' }, { label: t('imp.step.write'), state: 'todo' }];
     refreshing[name] = true; TP.ls.set('subtry.' + name, Date.now()); V.render();
-    var card = ui.taskCard(t(auto ? 'servers.subs.autoJob' : 'servers.subs.refreshJob', { name: name })), steps = [{ label: t('imp.step.download'), state: 'run' }, { label: t('imp.step.parse'), state: 'todo' }, { label: t('imp.step.write'), state: 'todo' }];
-    ui.dock(card); card.set({ pct: null, msg: t('imp.msg.downloading'), steps: steps });
+    if (!auto) { card = ui.taskCard(t('servers.subs.refreshJob', { name: name })); ui.dock(card); card.set({ pct: null, msg: t('imp.msg.downloading'), steps: steps }); }
+    function show(o) { if (card) card.set(o); }
     try {
       var own = {}, others = [];
       servers().forEach(function (s) { if (s.sub === name) own[s.tag] = s.role; else others.push(s.tag); });
-      var r = await TP.imp.fetchSub({ name: name, existingTags: others, onNote: function (m) { card.set({ msg: m }); } });
+      var r = await TP.imp.fetchSub({ name: name, existingTags: others, onNote: function (m) { show({ msg: m }); } });
       // 带警告的节点 (如链接里没有账号密码) 不自动加入, 除非它本来就在这个订阅里
       r.servers = r.servers.filter(function (s) { return !s.warn || own[s.outbound.tag] !== undefined; });
       if (!r.servers.length) throw new Error(t('servers.subs.noNodes'));
       r.servers.forEach(function (s) { s.role = own[s.outbound.tag] || 'auto'; });
       steps[0].state = 'done'; steps[1].state = 'done'; steps[2].state = 'run';
-      card.set({ pct: 40, msg: t('servers.subs.parsed', { n: r.servers.length }), steps: steps });
-      var res = await TP.helper('POST', '/api/servers/import', { q: { sub: name, mode: 'replace' }, body: TPImporter.toJSONL(r.servers, name) });
-      if (res.job) await TP.jobs.follow(res.job, { fromJob: function (jj) { card.set({ pct: 40 + (+jj.pct || 0) * 0.6, msg: jj.msg || t('job.applying'), steps: steps }); } });
+      show({ pct: 40, msg: t('servers.subs.parsed', { n: r.servers.length }), steps: steps });
+      var u = r.usage, q = { sub: name, mode: 'replace', interval: x && +x.interval > 0 ? +x.interval : '' }, body = TPImporter.toJSONL(r.servers, name), res, c;
+      if (u && +u.total > 0) { q.used = Math.round(+u.used || 0); q.total = Math.round(+u.total); q.expire = Math.round(+u.expire || 0); }
+      if (auto) {
+        res = await TP.helper('POST', '/api/servers/import', { q: Object.assign({ dry: 1 }, q), body: body, timeout: 30000 });
+        c = subCounts(res);
+        if (res.same) {
+          pendSet(name, null); refreshedAt[name] = Date.now();
+          ui.toast(t('servers.subs.sameToast', { name: name, n: c.unchanged }), '', 3000);
+          return { ok: true, same: true };
+        }
+        if (res.admin || TP.tunNote()) {
+          var was = pendOf(x);
+          pendSet(name, { added: c.added, changed: c.changed, removed: c.removed, unchanged: c.unchanged, admin: true, u: x ? +x.updated || 0 : 0 });
+          if (!was) ui.toast(t('servers.subs.pendingToast', { name: name }), '', 8000, { action: { label: t('servers.subs.applyUpdate'), fn: function () { askRefresh(findSub(name)); } } });
+          return { ok: true, pending: true };
+        }
+        q.background = 1;
+      }
+      res = await TP.helper('POST', '/api/servers/import', { q: q, body: body });
+      if (res.job) await TP.jobs.follow(res.job, card ? { fromJob: function (jj) { card.set({ pct: 40 + (+jj.pct || 0) * 0.6, msg: jj.msg || t('job.applying'), steps: steps }); } } : null);
       steps[2].state = 'done';
-      var msg = t('servers.subs.result', { added: res.added || 0, replaced: res.replaced || 0, removed: res.removed || 0 });
-      card.set({ steps: steps }); card.done(msg);
-      setTimeout(card.close, 8000);
-      ui.toast(t('servers.subs.doneToast', { name: name, msg: msg }), 'ok');
+      c = subCounts(res);
+      var msg = subResult(c);
+      if (card) { card.set({ steps: steps }); card.done(msg); setTimeout(card.close, 8000); }
+      ui.toast(subSame(c) ? t('servers.subs.sameToast', { name: name, n: c.unchanged }) : t('servers.subs.doneToast', { name: name, msg: msg }), 'ok');
+      pendSet(name, null);
       refreshedAt[name] = Date.now();
       TP.afterApply();
       return { ok: true };
     } catch (e) {
-      if (e && e.kind === 'auth') { card.close(); return { ok: false, error: e }; }
+      if (e && e.kind === 'auth') { if (card) card.close(); return { ok: false, error: e }; }
       steps.forEach(function (s) { if (s.state === 'run') s.state = 'error'; });
-      card.set({ steps: steps }); card.fail(TP.errMsg(e));
+      if (card) { card.set({ steps: steps }); card.fail(TP.errMsg(e)); }
       ui.toast(t(auto ? 'servers.subs.autoFail' : 'servers.subs.refreshFail', { name: name, reason: TP.errMsg(e) }), auto ? 'warn' : 'err');
       return { ok: false, error: e };
     } finally { delete refreshing[name]; if (x) TP.loadState(); V.render(); }
