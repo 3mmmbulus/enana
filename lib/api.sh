@@ -618,19 +618,44 @@ ep_sites_auto_clear() { # 撤销所有「自动识别」添加的网站
 }
 
 ep_servers_import() { # 先对副本「干跑」, 立即返回数量与逐行错误; 真正的写入在后台任务里 (持锁, 失败自动回滚)
-  local sub mode res added replaced removed errs='' id e plan="$BODY.plan" save
+  # 数量: added / replaced / removed (老仪表盘只认这三个) + changed / unchanged = replaced 按内容拆开 (内容变了 / 和现有的那一行逐字节相同, 见 srv_import)
+  # dry=1 (仪表盘打开时的订阅自动刷新先问这一次): 只干跑, 不开任务, 什么也不应用; 另外返回
+  #   same  = 应用后 servers.jsonl 一个字节都不会变。这时已保存订阅的刷新 (replace + 订阅名) 就地记下 (sub_touch: 更新时间 / 节点数 / 用量), 不生成配置、不重启:
+  #           recorded = true, 下一次自动刷新等满一个刷新间隔 (以前每次都开一个应用任务, 结果写着「更新 33」)
+  #   admin = 应用这些变化要不要管理员授权: TUN 模式, 或者系统代理模式下根守护进程还加载着 (和 apply_config 对后台任务的规则一样); 只在 same = false 时判断
+  # background=1 (自动刷新在不需要授权时静默应用): 任务按后台任务运行 (APPS_BG_JOB=1, 操作记录写 auto): 万一应用要管理员授权, 撤销本次更改, 不弹授权框
+  local sub mode res added replaced removed changed unchanged errs='' id e plan="$BODY.plan" save dry bg same=false rec=false adm=false iv
   sub=$(qp sub); mode=$(qp mode); [ "$mode" = replace ] || mode=merge
   save=$(qp save); case $save in ''|0|1) ;; *) fail "参数无效" ;; esac            # 1 = 保存到云端 (进入云端同步清单), 0 = 只留在本机, 空 = 不改动 (例如订阅自动刷新)
+  dry=$(qp dry); case $dry in ''|0|1) ;; *) fail "参数无效" ;; esac
+  bg=$(qp background); case $bg in ''|0|1) ;; *) fail "参数无效" ;; esac
   [ -z "$sub" ] || sub_valid_name "$sub" || fail "订阅名称不合法"
   [ -s "$BODY" ] || fail "没有收到服务器数据"
   if [ -f "$H/servers.jsonl" ]; then cp "$H/servers.jsonl" "$plan"; else : > "$plan"; fi
   res=$(SRV_FILE="$plan" srv_import "$sub" "$mode" < "$BODY" 2> "$BODY.err")
-  set -- $res; added=${1:-0}; replaced=${2:-0}; removed=${3:-0}
+  set -- $res; added=${1:-0}; replaced=${2:-0}; removed=${3:-0}; changed=${4:-0}; unchanged=${5:-0}
   while IFS= read -r e; do [ -n "$e" ] && errs="$errs${errs:+,}\"$(printf '%s' "$(_t "$e")" | tr -d '"\\')\""; done < "$BODY.err"
   [ $((added + replaced)) -gt 0 ] || { json "{\"ok\":false,\"code\":\"E_INVALID\",\"error\":\"$(jesc "$(_t "没有可导入的服务器")")\",\"errors\":[$errs]}"; return; }
+  res="\"added\":$added,\"replaced\":$replaced,\"changed\":$changed,\"unchanged\":$unchanged,\"removed\":$removed,\"errors\":[$errs]"
+  if [ "$dry" = 1 ]; then
+    cmp -s "$plan" "$H/servers.jsonl" && same=true
+    if [ "$same" = true ] && [ "$mode" = replace ] && [ -n "$sub" ] && [ -n "$(awk -F'|' -v n="$sub" '$1 == n {print 1; exit}' "$H/subs.tsv" 2>/dev/null)" ]; then
+      op_lock || fail "系统繁忙, 请重试" E_BUSY
+      if cmp -s "$plan" "$H/servers.jsonl"; then                                 # 拿到锁之后再比一次: 这期间别的任务可能改过服务器列表
+        iv=$(num "$(qp interval)"); [ -n "$iv" ] || iv=$(awk -F'|' -v n="$sub" '$1 == n {print $5; exit}' "$H/subs.tsv")      # 没给刷新间隔: 沿用现在的, 不改回默认的 12 小时
+        sub_touch "$sub" "$(srv_list | awk -F'\t' -v s="$sub" '$6 == s' | wc -l | tr -d ' ')" "${iv:-12}" "$(num "$(qp used)")" "$(num "$(qp total)")" "$(num "$(qp expire)")"
+        rec=true
+      else same=false; fi
+      op_unlock
+      [ "$rec" = false ] || oplog auto "订阅「$sub」刷新" "$(kv sub "$sub" unchanged "$unchanged" restart no)" ok
+    fi
+    if [ "$same" = false ] && { [ "${NETWORK_MODE:-system}" = tun ] || enhanced_loaded; }; then adm=true; fi
+    okj "$res,\"dry\":true,\"same\":$same,\"recorded\":$rec,\"admin\":$adm"; return
+  fi
   id=$(job_new servers-import "$APPLY_STEPS"); cp "$BODY" "$H/jobs/$id.body"
-  job_launch servers-import "$id" "$sub" "$mode" "$(num "$(qp interval)")" "$(num "$(qp used)")" "$(num "$(qp total)")" "$(num "$(qp expire)")" "$save"
-  okj "\"added\":$added,\"replaced\":$replaced,\"removed\":$removed,\"errors\":[$errs],\"job\":\"$id\""
+  if [ "$bg" = 1 ]; then OP_WHO=auto APPS_BG_JOB=1 job_launch servers-import "$id" "$sub" "$mode" "$(num "$(qp interval)")" "$(num "$(qp used)")" "$(num "$(qp total)")" "$(num "$(qp expire)")" "$save"
+  else job_launch servers-import "$id" "$sub" "$mode" "$(num "$(qp interval)")" "$(num "$(qp used)")" "$(num "$(qp total)")" "$(num "$(qp expire)")" "$save"; fi
+  okj "$res,\"job\":\"$id\""
 }
 
 ep_servers_change() { # delete | role  (校验后交给后台任务)

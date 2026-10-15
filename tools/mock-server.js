@@ -1574,10 +1574,11 @@ route('POST', '/api/sites/domains/reset', (c) => {
 /* ---- 服务器 / 订阅 / 证书 / 重启 / 任务 ---- */
 const subNameOk = (n) => /^[A-Za-z0-9._ -]{1,40}$/.test(n);
 const SRV_TYPES = ['trojan', 'http', 'socks', 'tuic', 'hysteria2', 'vless', 'vmess', 'shadowsocks', 'anytls'], RESERVED = ['direct', 'AUTO', 'PIN', 'Global', 'Final'];
-/* 与 lib/servers.sh 的 srv_check_line 同样的闸门; 先对副本「干跑」, 有可导入的才提交 */
-function importJsonl(lang, sub, mode, body) {
-  const out = { added: 0, replaced: 0, removed: 0, errors: [] }; let work = clone(M.servers);
-  if (mode === 'replace' && sub) { const n = work.length; work = work.filter((s) => s.sub !== sub); out.removed = n - work.length; }
+/* 与 lib/servers.sh 的 srv_check_line 同样的闸门; 先对副本「干跑」, 有可导入的才提交 (dry: 只算数量, 不改 M.servers)。
+ * 和 srv_import 一样: replace + 订阅名 (订阅刷新) 就地合并 —— 已有的 tag 留在原位, 新的追加, 订阅里已经没有的删掉;
+ * replaced = changed (内容变了) + unchanged (完全相同); same = 应用后服务器列表不变 */
+function importJsonl(lang, sub, mode, body, dry) {
+  const out = { added: 0, replaced: 0, changed: 0, unchanged: 0, removed: 0, errors: [] }, seen = {}, FIELDS = ['tag', 'type', 'server', 'port', 'role', 'sub']; let work = clone(M.servers);
   body.split('\n').forEach((line, i) => {
     if (!line.trim()) return;
     const bad = () => { out.errors.push(tr(lang, 'e.badLine', { n: i + 1 })); };
@@ -1586,22 +1587,37 @@ function importJsonl(lang, sub, mode, body) {
     if (!ob || typeof ob !== 'object' || ['pin', 'auto', 'dl', 'off'].indexOf(j.role) < 0 || (j.sub && !subNameOk(String(j.sub))) || SRV_TYPES.indexOf(ob.type) < 0 || typeof ob.tag !== 'string' || !/^[^"\\\x00-\x1f]{1,64}$/.test(ob.tag)
       || !ob.server || !ob.server_port || RESERVED.indexOf(ob.tag) >= 0 || /^svc-/.test(ob.tag) || /^(官方-|enana-official-)/.test(ob.tag) || 'detour' in ob) return bad();
     const rec = { tag: ob.tag, type: ob.type, server: String(ob.server), port: +ob.server_port, role: j.role, sub: sub || j.sub || '' }, k = work.findIndex((s) => s.tag === ob.tag);
-    if (k >= 0) { work[k] = rec; out.replaced++; } else { work.push(rec); out.added++; }
+    if (k >= 0) { if (FIELDS.every((f) => work[k][f] === rec[f])) out.unchanged++; else out.changed++; work[k] = rec; out.replaced++; } else { work.push(rec); out.added++; }
+    seen[ob.tag] = 1;
   });
+  if (mode === 'replace' && sub) { const n = work.length; work = work.filter((s) => s.sub !== sub || seen[s.tag]); out.removed = n - work.length; }
   if (out.added + out.replaced === 0) throw E('E_INVALID', 'e.noImport', null, { errors: out.errors });
-  M.servers = work; return out;
+  out.same = !out.added && !out.changed && !out.removed;
+  if (!dry) M.servers = work;
+  return out;
 }
+/* dry=1 (仪表盘打开时的订阅自动刷新, 和 lib/api.sh 一样): 只干跑, 不开任务。没有变化的订阅刷新就地记下 (更新时间 / 节点数 / 用量): recorded;
+ * 有变化时 admin = 应用要不要管理员授权 (这里只有 TUN 模式算)。background=1: 静默的自动应用, 仍然是一个任务, 操作记录写 auto */
 route('POST', '/api/servers/import', (c) => {
-  const sub = c.p('sub'), mode = c.p('mode') === 'replace' ? 'replace' : 'merge';
+  const sub = c.p('sub'), mode = c.p('mode') === 'replace' ? 'replace' : 'merge', dry = c.p('dry') === '1', who = c.p('background') === '1' ? 'auto' : 'dashboard';
   if (sub && !subNameOk(sub)) throw E('E_INVALID', 'e.badSubName');
+  if (['', '0', '1'].indexOf(c.p('dry')) < 0 || ['', '0', '1'].indexOf(c.p('background')) < 0) throw E('E_INVALID', 'e.badBool');
   if (!c.body.trim()) throw E('E_INVALID', 'e.noBody');
-  const undo = snapshot(), sb = M.subs.filter((x) => x.name === sub)[0], refresh = !!(sb && mode === 'replace' && (sb.updated > 0 || sb.count > 0)), out = importJsonl(c.lang, sub, mode, c.body);
-  if (sb) {
+  const undo = snapshot(), sb = M.subs.filter((x) => x.name === sub)[0], refresh = !!(sb && mode === 'replace' && (sb.updated > 0 || sb.count > 0)), out = importJsonl(c.lang, sub, mode, c.body, dry);
+  const touch = () => {
     sb.count = M.servers.filter((s) => s.sub === sub).length; sb.updated = sec();
     const iv = num(c.p('interval'), 0), us = num(c.p('used'), -1), to = num(c.p('total'), 0), ex = num(c.p('expire'), 0);
     if (iv > 0) sb.interval = iv; if (to > 0) sb.usage = { used: Math.max(0, us), total: to, expire: ex };
+  };
+  if (dry) {
+    out.dry = true; out.recorded = false; out.admin = false;
+    if (out.same && sb && mode === 'replace') { touch(); out.recorded = true; oplog('auto', 'sub.refresh', kv({ sub, count: sb.count, unchanged: out.unchanged, restart: 'no' })); }
+    else if (!out.same) out.admin = M.network === 'tun';
+    return Object.assign({ ok: true }, out);
   }
-  if (refresh) oplog('dashboard', 'sub.refresh', kv({ sub, count: sb.count })); else oplog('dashboard', 'servers.import', kv({ sub, count: out.added + out.replaced, mode }));
+  delete out.same;
+  if (sb) touch();
+  if (refresh) oplog(who, 'sub.refresh', kv({ sub, count: sb.count })); else oplog(who, 'servers.import', kv({ sub, count: out.added + out.replaced, mode }));
   out.job = newJob('servers-import', APPLY, 4200, { done: applyNow, rollback: undo, msg: 'jd.import' });
   return Object.assign({ ok: true }, out);
 });
@@ -2933,7 +2949,7 @@ async function selftest() {
   await api('POST', '/api/override', { form: { kind: 'site', value: 'shop.example.com', state: 'follow' } }); r = await api('GET', '/api/state'); ck('override follow removes it (form body works too)', !jx(r).overrides.some((o) => o.value === 'shop.example.com'));
   const line = (tag, role, extra) => JSON.stringify(Object.assign({ role, outbound: { type: 'trojan', tag, server: '203.0.113.200', server_port: 443, password: 'pw' } }, extra));
   r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'merge' }, body: [line('Selftest A', 'auto'), line('Selftest B', 'pin'), '{"role":"bogus"}', line('PIN', 'auto')].join('\n') });
-  ck('servers/import response: added/replaced/removed counts, per-line errors (bad line + reserved tag), job id', jx(r).ok === true && jx(r).added === 2 && jx(r).replaced === 0 && jx(r).removed === 0 && jx(r).errors.length === 2 && /^servers-import-/.test(jx(r).job), r.text);
+  ck('servers/import response: added/replaced/removed (+ changed/unchanged) counts, per-line errors (bad line + reserved tag), job id', jx(r).ok === true && jx(r).added === 2 && jx(r).replaced === 0 && jx(r).changed === 0 && jx(r).unchanged === 0 && jx(r).removed === 0 && jx(r).errors.length === 2 && /^servers-import-/.test(jx(r).job) && !('same' in jx(r)), r.text);
   let jb = await run(r); r = await api('GET', '/api/state');
   ck('servers/import: job done and the servers show up in state (+2 -> 29)', jx(r).servers.length === 29 && jb.state === 'done');
   r = await api('POST', '/api/servers/import', { q: { mode: 'merge' }, body: 'not json\n{"x":1}' }); ck('servers/import: nothing importable -> E_INVALID + errors[]', jx(r).code === 'E_INVALID' && Array.isArray(jx(r).errors) && jx(r).errors.length === 2);
@@ -3315,6 +3331,21 @@ async function selftest() {
   }
   r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace' }, body: line('Selftest R', 'auto') }); jb = await run(r);          // 已填充的订阅 + replace = 刷新订阅 (sub.refresh)
   ck('servers/import mode=replace on a populated subscription: removed counted, logged as sub.refresh', jx(r).added === 1 && jx(r).removed === 21 && jb.state === 'done');
+  /* 订阅自动刷新的干跑 (dry=1): 没有变化 → 就地记下刷新 (更新时间 / 用量), 不开任务; 有变化 → 真实的数量, 什么都不应用; background=1 仍然是一个任务 */
+  {
+    const dsub = M.subs.filter((x) => x.name === 'demo-sub')[0], srv0 = JSON.stringify(M.servers); dsub.updated = 1;
+    r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', dry: 1, used: 5, total: 100, expire: 2000000000 }, body: line('Selftest R', 'auto') });
+    ck('servers/import dry=1, nothing changed: same + recorded (updated time, usage), no job, servers untouched', jx(r).ok === true && jx(r).dry === true && jx(r).same === true && jx(r).recorded === true && jx(r).admin === false
+      && jx(r).added === 0 && jx(r).changed === 0 && jx(r).unchanged === 1 && jx(r).replaced === 1 && jx(r).removed === 0 && !('job' in jx(r)) && JSON.stringify(M.servers) === srv0 && dsub.updated > 1 && dsub.usage && dsub.usage.total === 100, r.text);
+    dsub.updated = 1;
+    r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', dry: 1 }, body: [line('Selftest R', 'pin'), line('Selftest N', 'auto')].join('\n') });
+    ck('servers/import dry=1 with changes: honest counts (1 new, 1 changed), not recorded, nothing applied', jx(r).same === false && jx(r).recorded === false && jx(r).admin === false && jx(r).added === 1 && jx(r).changed === 1 && jx(r).unchanged === 0
+      && jx(r).replaced === 1 && jx(r).removed === 0 && !('job' in jx(r)) && JSON.stringify(M.servers) === srv0 && dsub.updated === 1, r.text);
+    r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', dry: 2 }, body: line('Selftest R', 'auto') }); r2 = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', background: 'x' }, body: line('Selftest R', 'auto') });
+    ck('servers/import: dry / background only take 0 or 1', jx(r).code === 'E_INVALID' && jx(r2).code === 'E_INVALID' && JSON.stringify(M.servers) === srv0);
+    r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', background: 1 }, body: line('Selftest R', 'auto') }); jb = await run(r);
+    ck('servers/import background=1 (silent automatic apply): a job as usual; the counts say nothing changed', /^servers-import-/.test(jx(r).job) && jx(r).unchanged === 1 && jx(r).changed === 0 && jx(r).added === 0 && jb.state === 'done' && !('same' in jx(r)), r.text);
+  }
   /* ---- 云端同步: 状态 / 设置 / 推送冲突 / 强制推送 / 脏标记 / 拉取 (replace + merge) / 旧密码 / 离线 / 清除 ---- */
   {
   FAST = 80; let r3;

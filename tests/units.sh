@@ -384,38 +384,41 @@ rm -f "$H"/servers.sync "$H"/subs.sync
 mk_base; cp "$SF" "$UW/before"
 res=$(a_same | srv_import A replace)
 eq "订阅 A 内容完全相同的刷新: servers.jsonl 一个字节都没变 (以前 A 的行被挪到文件末尾)" "$(cmp -s "$SF" "$UW/before" && echo same || echo changed)" "same"
-eq "…计数: 0 新增 · 3 保留 (replaced) · 0 移除 —— 导入的调用方用「新增 + 保留 > 0」判断有没有有效节点" "$res" "0 3 0"
+eq "…计数: 0 新增 · 3 保留 (replaced) · 0 移除 · 0 有变化 · 3 未变 —— 导入的调用方用「新增 + 保留 > 0」判断有没有有效节点 (前三个数的位置不变)" "$res" "0 3 0 0 3"
 res=$(b_same | srv_import B replace)
-eq "订阅 B 同样: 文件不变, 0 2 0" "$(cmp -s "$SF" "$UW/before" && echo same):$res" "same:0 2 0"
+eq "订阅 B 同样: 文件不变, 0 2 0 · 0 有变化 · 2 未变" "$(cmp -s "$SF" "$UW/before" && echo same):$res" "same:0 2 0 0 2"
 eq "…文件里的顺序不变 (手动服务器和两个订阅交错), 默认固定出口仍是 A-1 (以前会变成 M2, 生成出不同的配置)" "$(srv_order):$(pin_first)" "M1,A-1,A-2,B-1,M2,B-2,A-3:A-1"
 res=$({ sline auto A A-3 a3.example; sline pin A A-1 a1.example; sline auto A A-2 a2.example; } | srv_import A replace)
-eq "订阅端调整了节点顺序: 已有节点保持原来的位置 (文件不变)" "$(cmp -s "$SF" "$UW/before" && echo same):$res" "same:0 3 0"
+eq "订阅端调整了节点顺序: 已有节点保持原来的位置 (文件不变), 3 个都算「未变」" "$(cmp -s "$SF" "$UW/before" && echo same):$res" "same:0 3 0 0 3"
 eq "…没有留下临时文件; 文件权限 600" "$(stray):$(stat -f %Lp "$SF")" "0:600"
 
 mk_base
 res=$({ sline pin A A-1 a1.example; sline auto A A-2 a2-NEW.example 8443; sline auto A A-3 a3.example; } | srv_import A replace)
-eq "A-2 的服务器 / 端口变了: 原地覆盖 (仍在第 3 行), 其它每一行都原样不动" "$(sed -n 3p "$SF" | grep -c 'a2-NEW.example.*8443'):$(diff <(sed 3d "$UW/before") <(sed 3d "$SF") >/dev/null && echo rest-same):$res" "1:rest-same:0 3 0"
+eq "A-2 的服务器 / 端口变了: 原地覆盖 (仍在第 3 行), 其它每一行都原样不动; 计数 1 有变化 (A-2) · 2 未变" "$(sed -n 3p "$SF" | grep -c 'a2-NEW.example.*8443'):$(diff <(sed 3d "$UW/before") <(sed 3d "$SF") >/dev/null && echo rest-same):$res" "1:rest-same:0 3 0 1 2"
 eq "…顺序不变" "$(srv_order)" "M1,A-1,A-2,B-1,M2,B-2,A-3"
 
 mk_base
 res=$({ sline pin A A-1 a1.example; sline auto A A-3 a3.example; sline auto A A-4 a4.example; } | srv_import A replace)
 eq "A-2 从订阅里消失、A-4 新增: A-2 的行删掉, A-4 追加到末尾, 手动服务器和订阅 B 的位置不动" "$(srv_order)" "M1,A-1,B-1,M2,B-2,A-3,A-4"
-eq "…计数: 1 新增 · 2 保留 · 1 移除" "$res" "1 2 1"
+eq "…计数: 1 新增 · 2 保留 · 1 移除 · 0 有变化 · 2 未变" "$res" "1 2 1 0 2"
 eq "…别的来源的行原样保留 (M1 M2 B-1 B-2)" "$(grep -c '"tag":"M1"\|"tag":"M2"\|"tag":"B-1"\|"tag":"B-2"' "$SF")" "4"
 
 mk_base
 res=$({ sline auto A A-1 a1.example; sline auto A M1 m1-via-sub.example; } | srv_import A replace)
 eq "订阅里的 tag 和手动服务器重名: 就地换成订阅的版本 (和 merge 一样「后来者取代」), 位置不变, 不会出现两行" "$(srv_order):$(sed -n 1p "$SF" | grep -c '"sub":"A".*m1-via-sub.example')" "M1,A-1,B-1,M2,B-2:1"
-eq "…计数: 0 新增 · 2 保留 (A-1 和 M1) · 2 移除 (A-2 A-3)" "$res" "0 2 2"
+eq "…计数: 0 新增 · 2 保留 (A-1 和 M1) · 2 移除 (A-2 A-3) · 2 有变化 (A-1 的角色 pin → auto, M1 换成订阅的版本) · 0 未变" "$res" "0 2 2 2 0"
 
 mk_base
 res=$({ sline auto A A-1 first.example; sline auto A A-1 second.example; sline auto A N-1 n.example; } | srv_import A replace)
 eq "同一批里 tag 重复: 只留一行 (后一行的内容), 位置是已有的那一行" "$(srv_order):$(grep -c second.example "$SF"):$(grep -c first.example "$SF")" "M1,A-1,B-1,M2,B-2,N-1:1:0"
-eq "…计数: 1 新增 · 2 保留 (重复的算一次替换) · 2 移除" "$res" "1 2 2"
+eq "…计数: 1 新增 · 2 保留 (重复的算一次替换) · 2 移除 · 2 有变化 (second 取代 first, 又取代了文件里的 a1) · 0 未变" "$res" "1 2 2 2 0"
+mk_base; cp "$SF" "$UW/before"
+res=$({ sline pin A A-1 a1.example; sline pin A A-1 a1.example; sline auto A A-2 a2.example; sline auto A A-3 a3.example; } | srv_import A replace)
+eq "同一批里一模一样的重复行: 文件不变; 重复的那一次替换和它取代的行相同, 也算「未变」(changed + unchanged 始终等于 replaced)" "$(cmp -s "$SF" "$UW/before" && echo same):$res" "same:0 4 0 0 4"
 
 mk_base
 res=$({ sline pin A A-1 a1.example; printf 'garbage\n'; sline auto A A-2 a2.example; } | srv_import A replace 2>"$UW/imp.err")
-eq "格式不对的行被忽略并报行号, 其余照常导入 (A-3 不在新数据里 → 移除)" "$(grep -c '第 2 行' "$UW/imp.err"):$res:$(srv_order)" "1:0 2 1:M1,A-1,A-2,B-1,M2,B-2"
+eq "格式不对的行被忽略并报行号, 其余照常导入 (A-3 不在新数据里 → 移除)" "$(grep -c '第 2 行' "$UW/imp.err"):$res:$(srv_order)" "1:0 2 1 0 2:M1,A-1,A-2,B-1,M2,B-2"
 mk_base; cp "$SF" "$UW/before"
 JOB_BODY="$UW/jobbody"; printf 'garbage\n' > "$JOB_BODY"; printf 'A|https://a.example/s|0|3|12|0|0|0\n' > "$H/subs.tsv"
 txn_import A replace; rc=$?
@@ -424,15 +427,55 @@ a_same > "$JOB_BODY"; mk_base; txn_import A replace; rc=$?
 eq "txn_import: 内容完全相同的刷新 → 成功 (「保留」的节点也算有效), 文件不变" "$rc:$(cmp -s "$SF" "$UW/before" && echo same)" "0:same"
 
 mk_base; res=$(sline pin '' M1 m1-new.example | srv_import '' merge)
-eq "merge (添加服务器 / 保存 VPS) 行为不变: 已有的 tag 被取代、新行追加到末尾, 计数 0 1 0" "$(srv_order):$res" "A-1,A-2,B-1,M2,B-2,A-3,M1:0 1 0"
+eq "merge (添加服务器 / 保存 VPS) 行为不变: 已有的 tag 被取代、新行追加到末尾, 计数 0 1 0; M1 的地址变了 → 1 有变化" "$(srv_order):$res" "A-1,A-2,B-1,M2,B-2,A-3,M1:0 1 0 1 0"
 mk_base; res=$(a_same | srv_import A merge)
-eq "merge 带订阅名也不变 (只有 replace 才就地合并): A 的三行被重新追加到末尾" "$(srv_order):$res" "M1,B-1,M2,B-2,A-1,A-2,A-3:0 3 0"
+eq "merge 带订阅名也不变 (只有 replace 才就地合并): A 的三行被重新追加到末尾; 内容一样 → 3 未变" "$(srv_order):$res" "M1,B-1,M2,B-2,A-1,A-2,A-3:0 3 0 0 3"
 rm -f "$SF"; res=$(b_same | srv_import B replace)
-eq "还没有 servers.jsonl: 创建, 节点按订阅顺序, 2 0 0, 权限 600" "$(srv_order):$res:$(stat -f %Lp "$SF")" "B-1,B-2:2 0 0:600"
+eq "还没有 servers.jsonl: 创建, 节点按订阅顺序, 2 0 0 0 0, 权限 600" "$(srv_order):$res:$(stat -f %Lp "$SF")" "B-1,B-2:2 0 0 0 0:600"
 mk_base; cp "$SF" "$UW/before"; cp "$SF" "$UW/plan"
 res=$({ sline pin A A-1 a1.example; sline auto A A-9 a9.example; } | SRV_FILE="$UW/plan" srv_import A replace)
-eq "干跑 (SRV_FILE 副本, 仪表盘预览数量用): 计数 1 1 2, 真实文件没动, 没有临时文件留下" "$res:$(cmp -s "$SF" "$UW/before" && echo real-same):$(ls "$UW"/plan.* 2>/dev/null | wc -l | tr -d ' ')" "1 1 2:real-same:0"
+eq "干跑 (SRV_FILE 副本, 仪表盘预览数量用): 计数 1 1 2 0 1, 真实文件没动, 没有临时文件留下" "$res:$(cmp -s "$SF" "$UW/before" && echo real-same):$(ls "$UW"/plan.* 2>/dev/null | wc -l | tr -d ' ')" "1 1 2 0 1:real-same:0"
 eq "…干跑的副本里 A-9 追加在末尾, A-2 A-3 已移除" "$(sed -n 's/.*"tag":"\([^"]*\)".*/\1/p' "$UW/plan" | paste -sd, -)" "M1,A-1,B-1,M2,B-2,A-9"
+
+# 仪表盘打开时的订阅自动刷新先问一次 POST /api/servers/import?dry=1 (lib/api.sh 直接读请求; 单独的数据目录; 假 launchctl, 不碰真实的 launchd;
+# $AH/enana 是一个只记下环境的假程序, 后台任务不会真的运行)
+AH=$UW/hapi; rm -rf "$AH" "$UW/fake"; mkdir -p "$AH/logs" "$UW/fake"; : > "$UW/fake/calls.log"; printf 'unit-token\n' > "$AH/secret"
+cat > "$AH/enana" <<'SH'
+#!/bin/bash
+printf '%s|%s|%s|%s|%s|%s\n' "${OP_WHO:-}" "${APPS_BG_JOB:-}" "$1" "$2" "$4" "$5" > "$ENANA_HOME/launched.tmp" && mv "$ENANA_HOME/launched.tmp" "$ENANA_HOME/launched"
+SH
+chmod +x "$AH/enana"
+imp() { # imp <查询> <正文文件> -> 响应正文 (JSON)
+  { printf 'POST /api/servers/import?%s HTTP/1.1\r\nHost: 127.0.0.1:%s\r\nX-Enana: 1\r\nX-Enana-Token: unit-token\r\nContent-Length: %s\r\n\r\n' "$1" "$API_PORT" "$(wc -c < "$2" | tr -d ' ')"; cat "$2"; } |
+    ENANA_HOME="$AH" PATH="$HERE/fakebin:$PATH" FAKE_STATE="$UW/fake" ENANA_API_PIPE=1 bash "$REPO/lib/api.sh" 2>/dev/null | tr -d '\r' | sed '1,/^$/d'
+}
+njobs() { ls "$AH/jobs" 2>/dev/null | grep -c '^servers-import-.*\.json$' || true; }
+sub_row() { awk -F'|' -v n="$1" '$1 == n {print ($3 > 1000000000 ? "now" : $3) "|" $4 "|" $5 "|" $6 "|" $7 "|" $8}' "$AH/subs.tsv"; }
+launched() { local i=0; while [ ! -s "$AH/launched" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done; cat "$AH/launched" 2>/dev/null; rm -f "$AH/launched"; }
+TUNL="$UW/fake/loaded-$LABEL.tun.$(id -u)"
+mk_base; cp "$SF" "$AH/servers.jsonl"; cp "$SF" "$UW/before"
+printf 'A|https://a.example/s|100|3|24|1|2|3\nB|https://b.example/s|100|2|12|0|0|0\n' > "$AH/subs.tsv"
+a_same > "$UW/same.jsonl"; { sline pin A A-1 a1.example; sline auto A A-2 a2-NEW.example; sline auto A A-9 a9.example; } > "$UW/chg.jsonl"
+imp 'sub=A&mode=replace&dry=1&used=5&total=100&expire=2000000000' "$UW/same.jsonl" | chk "dry=1, 订阅内容没变: same + recorded, 真实的数量 (0 新增 · 0 有变化 · 3 未变 · 0 移除; replaced 仍是 3), 不开任务" 'assert d["ok"] and d["dry"] is True and d["same"] is True and d["recorded"] is True and d["admin"] is False and (d["added"], d["replaced"], d["changed"], d["unchanged"], d["removed"]) == (0, 3, 0, 3, 0) and "job" not in d'
+eq "…servers.jsonl 一个字节没变; 没有任务 (什么都没应用, 不重启)" "$(cmp -s "$AH/servers.jsonl" "$UW/before" && echo same):$(njobs):$(test -e "$AH/launched" && echo launched || echo none)" "same:0:none"
+eq "…这次刷新记下了: 更新时间是现在 (下一次等满一个刷新间隔), 节点数 3, 没给 interval 就沿用 24 小时, 用量是这次下载的; 订阅 B 不动" "$(sub_row A),$(sub_row B)" "now|3|24|5|100|2000000000,100|2|12|0|0|0"
+eq "…操作记录: 自动 · 订阅「A」刷新 · 没有变化、没有重启" "$(cat "$AH"/logs/ops-*.log 2>/dev/null | grep -cF "$(printf '\tauto\t订阅「A」刷新\tsub=A unchanged=3 restart=no\tok')")" "1"
+printf 'A|https://a.example/s|100|3|24|1|2|3\n' > "$AH/subs.tsv"
+imp 'sub=A&mode=replace&dry=1' "$UW/chg.jsonl" | chk "dry=1, 订阅有变化: 真实的数量 (1 新增 A-9 · 1 有变化 A-2 · 1 未变 A-1 · 1 移除 A-3), same=false, 不记录; 系统代理模式、根守护进程没加载: admin=false" 'assert d["ok"] and d["dry"] is True and d["same"] is False and d["recorded"] is False and d["admin"] is False and (d["added"], d["replaced"], d["changed"], d["unchanged"], d["removed"]) == (1, 2, 1, 1, 1) and "job" not in d'
+eq "…什么都没应用: servers.jsonl 没变, 订阅的更新时间没变, 没有任务" "$(cmp -s "$AH/servers.jsonl" "$UW/before" && echo same):$(sub_row A):$(njobs)" "same:100|3|24|1|2|3:0"
+printf 'NETWORK_MODE=tun\n' > "$AH/settings.env"
+imp 'sub=A&mode=replace&dry=1' "$UW/chg.jsonl" | chk "…TUN 模式: admin=true (应用要管理员授权, 仪表盘不会自动应用)" 'assert d["ok"] and d["same"] is False and d["recorded"] is False and d["admin"] is True'
+rm -f "$AH/settings.env"; touch "$TUNL"
+imp 'sub=A&mode=replace&dry=1' "$UW/chg.jsonl" | chk "…系统代理模式但根守护进程还加载着 (停它要授权): 同样 admin=true" 'assert d["ok"] and d["same"] is False and d["admin"] is True'
+imp 'sub=A&mode=replace&dry=1' "$UW/same.jsonl" | chk "…内容没变: 不管模式都直接记下, 不需要授权" 'assert d["ok"] and d["same"] is True and d["recorded"] is True and d["admin"] is False'
+rm -f "$TUNL"
+imp 'sub=A&mode=replace&dry=2' "$UW/same.jsonl" | chk "dry 只能是 0 / 1" 'assert d["ok"] is False and d["code"] == "E_INVALID"'
+imp 'sub=A&mode=replace&background=yes' "$UW/same.jsonl" | chk "background 只能是 0 / 1" 'assert d["ok"] is False and d["code"] == "E_INVALID"'
+eq "…被拒的请求什么也没改" "$(cmp -s "$AH/servers.jsonl" "$UW/before" && echo same):$(njobs)" "same:0"
+imp 'sub=A&mode=replace&background=1' "$UW/chg.jsonl" | chk "background=1 (自动刷新在系统代理模式下静默应用): 照常开导入任务, 带同样真实的数量; 不是干跑" 'assert d["ok"] and d["job"].startswith("servers-import-") and (d["added"], d["changed"], d["unchanged"], d["removed"]) == (1, 1, 1, 1) and "same" not in d and "dry" not in d'
+eq "…任务按后台任务运行: 操作记录写 auto, APPS_BG_JOB=1 (万一要管理员授权就撤销, 从不弹框)" "$(launched)" "auto|1|_job|servers-import|A|replace"
+imp 'sub=A&mode=replace' "$UW/chg.jsonl" | chk "不带 dry / background (手动刷新): 和以前一样开任务, 数量是真实的" 'assert d["ok"] and d["job"].startswith("servers-import-") and (d["added"], d["replaced"], d["changed"], d["unchanged"], d["removed"]) == (1, 2, 1, 1, 1)'
+eq "…手动刷新的任务: 操作记录写 dashboard, 会在需要时请求管理员授权 (没有 APPS_BG_JOB)" "$(launched)" "dashboard||_job|servers-import|A|replace"
 mk_base; : > "$H/servers.sync"
 a_same | SRV_SAVE=1 srv_import A replace >/dev/null
 eq "「保存到云端」(SRV_SAVE=1): 订阅的全部节点和订阅名进入同步清单 (刷新后也一样)" "$(sort "$H/servers.sync" | paste -sd, -):$(cat "$H/subs.sync")" "A-1,A-2,A-3:A"

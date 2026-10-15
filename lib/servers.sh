@@ -102,8 +102,10 @@ srv_check_line() { # 仪表盘提交的一行是否合法 (正则闸门; 真正�
 # 订阅刷新 (srv_import 的 replace) 是「就地」合并: 每个已有的 tag 留在原来那一行 (内容变了就原地覆盖), 新的 tag 追加到末尾, 订阅里已经没有的 tag 删掉。
 # 以前是「删光这个订阅的行, 再把新的追加到文件末尾」: 有两个以上订阅、或订阅后面还有手动添加的服务器时, 内容完全相同的刷新也会改变文件里的顺序; 而配置生成器按
 # 文件顺序决定默认固定出口 (PIN 列表的第一个) 和自动线路的顺序, 于是每次刷新都生成一份不同的配置, 核心白白重启 (TUN 下还要管理员授权, 长连接也被切断)。
-# 新节点文件每行是 "tag<TAB>整行 JSON" (tag 里不会有制表符, 见 srv_check_line); 数量 "added replaced removed" 写进 <数量文件>:
+# 新节点文件每行是 "tag<TAB>整行 JSON" (tag 里不会有制表符, 见 srv_check_line); 数量 "added replaced removed changed unchanged" 写进 <数量文件>:
 #   added = 全新的 tag · replaced = 文件里已有的 tag (不论内容有没有变, 和 merge 一致; 订阅刷新时也就是「保留的节点」) · removed = 这个订阅里有、新数据里没有的 tag
+#   changed + unchanged = replaced, 按内容拆开: 新的一行和文件里原来那一行逐字节相同 = unchanged, 否则 changed (以前只有 replaced, 内容完全没变的刷新也显示「更新 33」)。
+#   同一批里重复的 tag (后一行取代前一行, 计入 replaced) 和它取代的那一行比较
 srv_merge_inplace() { # <现有文件> <新节点文件> <数量文件>  -> 合并结果写到标准输出
   SRV_SUB="$SRV_SUB" LC_ALL=C awk -v cnt="$3" '
     function tagof(s,   i, rest, r2, r3) {
@@ -116,26 +118,27 @@ srv_merge_inplace() { # <现有文件> <新节点文件> <数量文件>  -> 合�
     BEGIN { want = ENVIRON["SRV_SUB"] }
     FILENAME == ARGV[1] {
       p = index($0, "\t"); if (p < 2) next
-      t = substr($0, 1, p - 1)
-      if (t in nl) dup++; else ord[++nn] = t
-      nl[t] = substr($0, p + 1); next
+      t = substr($0, 1, p - 1); l = substr($0, p + 1)
+      if (t in nl) { dup++; if ((nl[t] "") == (l "")) dsame++ } else ord[++nn] = t
+      nl[t] = l; next
     }
     {
       t = tagof($0)
-      if (t != "" && (t in nl)) { if (!(t in placed)) { print nl[t]; placed[t] = 1 }; next }     # 同一个 tag 在文件里出现多次时只保留第一处
+      if (t != "" && (t in nl)) { if (!(t in placed)) { print nl[t]; placed[t] = 1; if ((nl[t] "") == ($0 "")) same++ }; next }     # 同一个 tag 在文件里出现多次时只保留第一处
       if (mine($0)) { removed++; next }
       print
     }
     END {
       for (i = 1; i <= nn; i++) { t = ord[i]; if (t in placed) rep++; else { print nl[t]; add++ } }
-      printf "%d %d %d\n", add + 0, rep + dup, removed + 0 > cnt
+      printf "%d %d %d %d %d\n", add + 0, rep + dup, removed + 0, rep + dup - same - dsame, same + dsame > cnt
     }' "$2" "$1"
 }
 
-srv_import() { # srv_import [订阅名] [merge|replace] < JSONL  -> 打印 "added replaced removed", 逐行错误写 stderr
+srv_import() { # srv_import [订阅名] [merge|replace] < JSONL  -> 打印 "added replaced removed changed unchanged", 逐行错误写 stderr
   # 目标文件默认 $H/servers.jsonl; 设置 SRV_FILE 可对副本做「干跑」(仪表盘预览数量用)
   # merge: 已有的 tag 被新行取代, 新行追加到末尾。replace + 订阅名: 就地合并 (见 srv_merge_inplace), 内容不变的刷新不改动文件。
-  local sub=${1:-} mode=${2:-merge} line n=0 added=0 replaced=0 removed=0 tag f=${SRV_FILE:-$H/servers.jsonl}
+  # 前三个数的位置和含义不变 (调用方按位置读); 后两个把 replaced 按内容拆开: changed = 已有的 tag 内容变了, unchanged = 和文件里那一行逐字节相同 (merge 模式同样这样数)
+  local sub=${1:-} mode=${2:-merge} line n=0 added=0 replaced=0 removed=0 changed=0 unchanged=0 tag f=${SRV_FILE:-$H/servers.jsonl}
   local tmp="$f.new" tags="$f.tags" pairs="$f.pairs" counts="$f.counts" inplace=0
   : > "$tmp"; : > "$tags"
   [ -f "$f" ] && cp "$f" "$tmp"
@@ -151,6 +154,7 @@ srv_import() { # srv_import [订阅名] [merge|replace] < JSONL  -> 打印 "adde
       printf '%s\t%s\n' "$tag" "$line" >> "$pairs"
     else
       if LC_ALL=C grep -qF ",\"tag\":\"$tag\"" "$tmp" 2>/dev/null; then
+        if LC_ALL=C grep -qxF -- "$line" "$tmp" 2>/dev/null; then unchanged=$((unchanged+1)); else changed=$((changed+1)); fi
         LC_ALL=C awk -v needle=",\"tag\":\"$tag\"" 'index($0, needle) == 0' "$tmp" > "$tmp.2"; mv "$tmp.2" "$tmp"; replaced=$((replaced+1))
       else added=$((added+1)); fi
       printf '%s\n' "$line" >> "$tmp"
@@ -159,7 +163,7 @@ srv_import() { # srv_import [订阅名] [merge|replace] < JSONL  -> 打印 "adde
   done
   if [ "$inplace" = 1 ]; then
     if SRV_SUB="$sub" srv_merge_inplace "$tmp" "$pairs" "$counts" > "$tmp.2" 2>/dev/null && [ -s "$counts" ]; then
-      mv "$tmp.2" "$tmp"; read -r added replaced removed < "$counts"
+      mv "$tmp.2" "$tmp"; read -r added replaced removed changed unchanged < "$counts"
     else rm -f "$tmp" "$tmp.2" "$tags" "$pairs" "$counts"; return 1; fi
     rm -f "$pairs" "$counts"
   fi
@@ -170,7 +174,7 @@ srv_import() { # srv_import [订阅名] [merge|replace] < JSONL  -> 打印 "adde
     [ -n "$sub" ] && sync_list_set sub "$sub" "$SRV_SAVE"
   fi
   rm -f "$tags"
-  printf '%s %s %s\n' "$added" "$replaced" "$removed"
+  printf '%s %s %s %s %s\n' "$added" "$replaced" "$removed" "$changed" "$unchanged"
 }
 
 srv_keep_roles() { # <订阅名>  标准输入 JSONL -> 标准输出: 订阅里已有的节点沿用现在的角色 (pin / off / dl …); 新节点保持输入里的角色
