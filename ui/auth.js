@@ -394,15 +394,30 @@
 
   /* ================= 敏感操作: 再次输入登录密码 (step-up) =================
    * 后端有一张白名单, 里面的接口没带有效的 X-Enana-Sudo 时返回 403 E_SUDO_REQUIRED; TP.helper 捕获它 -> TP.sudo.ask() 弹出密码框 -> POST /api/auth/verify
-   * -> 拿到 sudo 令牌 (只放在内存里, 5 分钟有效) -> 带着 X-Enana-Sudo 重试原请求。退出账号 / 锁屏 / 登录失效时立即丢弃。
+   * -> 拿到 sudo 令牌 (5 分钟有效) -> 带着 X-Enana-Sudo 重试原请求。
+   * 令牌在内存里, 另外 {token, exp} 记在这个标签页的 sessionStorage (和登录令牌一样, 关闭标签页就没了; 绝不写 localStorage): 刷新页面后到期之前不用再输入密码。
+   * 读不到 / 写不进 sessionStorage (隐私模式、禁用存储) 时只在内存里, 和以前一样。
+   * 退出账号 / 锁屏 / 登录失效 (都会发出 auth=false) 以及后端说令牌不能用了 (403 E_SUDO_REQUIRED, core.js 调 sudo.clear) 时, 内存和 sessionStorage 里的一起丢弃。
    * 白名单在后端; 这里的 PATHS 只用来「提前带上令牌」和显示小锁图标 (多一个少一个都不影响正确性: 漏掉的会走 403 → 弹框流程)。 */
   var sudo = TP.sudo = { tok: '', exp: 0 }, sudoDlg = null;
   var SUDO_PATHS = ['/api/servers/delete', '/api/sub/delete', '/api/servers/secret', '/api/sub/url', '/api/logs/clear', '/api/devices/kick', '/api/sync/clear', '/api/export'];
+  var SUDO_KEY = 'sudo', SUDO_MAX_MS = 3600000;                       // sessionStorage 键 (实际是 enana.sudo); 恢复时到期时间最多在一小时以后 (后端只发 5 分钟的令牌, 再远就是改过的 / 时钟跳过的, 不用)
   sudo.PATHS = SUDO_PATHS;
   sudo.valid = function () { return !!sudo.tok && Date.now() < sudo.exp; };
-  sudo.token = function () { return sudo.valid() ? sudo.tok : ''; };
+  sudo.token = function () { if (sudo.tok && !sudo.valid()) sudo.clear(); return sudo.valid() ? sudo.tok : ''; };      // 过期了顺便把 sessionStorage 里的也清掉
   sudo.forPath = function (path) { return SUDO_PATHS.indexOf(path) >= 0; };
-  sudo.clear = function () { sudo.tok = ''; sudo.exp = 0; };
+  sudo.clear = function () { sudo.tok = ''; sudo.exp = 0; TP.ss.del(SUDO_KEY); };
+  /* 验证通过: ttl = 后端给的有效秒数 (提前 5 秒当作过期, 免得刚好在路上过期) */
+  sudo.keep = function (tok, ttl) {
+    sudo.tok = String(tok); sudo.exp = Date.now() + Math.max(10, (+ttl || 300) - 5) * 1000;
+    TP.ss.set(SUDO_KEY, { token: sudo.tok, exp: sudo.exp });
+  };
+  /* 页面刷新后: 这个标签页里还没过期的令牌接着用。没有登录令牌 / 已经过期 / 格式不对 (要能放进请求头) / 读不出来的直接删掉 */
+  (function restoreSudo() {
+    var v = TP.ss.get(SUDO_KEY, null), now = Date.now();
+    if (v && typeof v === 'object' && typeof v.token === 'string' && /^[\x21-\x7e]{1,256}$/.test(v.token) && +v.exp > now && +v.exp - now <= SUDO_MAX_MS && TP.getToken()) { sudo.tok = v.token; sudo.exp = +v.exp; }
+    else TP.ss.del(SUDO_KEY);
+  })();
   TP.on('auth', function (ok) { if (!ok) sudo.clear(); });
   /* 小锁图标: 放在需要再次验证的按钮 / 链接旁边 (title 和 aria-label 跟随语言) */
   sudo.icon = function () { return h('span', { class: 'sudo-l', role: 'img', title: L('sudo.lockTip'), 'aria-label': L('sudo.lockTip') }, ui.icon('lock', 13)); };
@@ -432,7 +447,7 @@
       try {
         var r = await TP.helper('POST', '/api/auth/verify', { form: { password: v }, timeout: 20000, noSudo: true });
         if (!r || !r.sudo) throw TP.mkErr('api', t('sudo.err.none'));
-        sudo.tok = String(r.sudo); sudo.exp = Date.now() + Math.max(10, (+r.ttl || 300) - 5) * 1000;
+        sudo.keep(r.sudo, r.ttl);
         pw.value = ''; done = true; api.close('ok');
       } catch (e) {
         if (e && e.kind === 'auth') { done = true; api.close('auth'); return false; }                  // 登录已失效: 交给登录框

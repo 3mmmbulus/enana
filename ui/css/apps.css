@@ -25,7 +25,7 @@
 
 .apps-row{display:grid;grid-template-columns:var(--ic) minmax(0,1fr) auto;align-items:center;gap:8px 12px;padding:10px 14px;border-bottom:1px solid var(--line);--ic:40px}
 .apps-row:last-child{border-bottom:0}
-.apps-row.is-new{background:var(--pri-bg)}
+.apps-row.is-new{background-color:var(--pri-bg)}                 /* 只设底色: 鼠标移上去的整行变色 (style.css 的 .row-hov) 叠在上面, 新应用的高亮还看得出 */
 .apps-row.is-off .apps-ic{filter:grayscale(.8);opacity:.7}
 .apps-main{min-width:0}
 .apps-t{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px}

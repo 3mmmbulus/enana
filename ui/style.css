@@ -10,7 +10,7 @@
   --pin:#2563eb; --auto:#0b8f63; --direct:#6f7b8f; --direct-fg:#ffffff;
   --ok:#15803d; --ok-bg:#e8f6ee; --warn:#a85407; --warn-bg:#fff4e2; --err:#b91c1c; --err-bg:#fdecec;
   --ok-s:#15803d; --warn-s:#b45309; --err-s:#b91c1c;
-  --info:#4a6585; --info-bg:#e9eff6; --info-s:#4a6585; --zebra:#fafbfd; --row-py:8px;
+  --info:#4a6585; --info-bg:#e9eff6; --info-s:#4a6585; --zebra:#fafbfd; --row-py:8px; --row-hover:rgba(37,99,235,.07);      /* --row-hover: 鼠标移到表格的一行上时叠在这一行底色上的颜色 (半透明) */
   --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.05);
   --r:12px; --side-w:224px; --side-wc:64px; --gap:12px;                                                                   /* --gap: 页面里上下相邻的区块之间统一的间距 */
   --fs-10-5:10.5px; --fs-11:11px; --fs-11-5:11.5px; --fs-12:12px; --fs-12-5:12.5px; --fs-13:13px; --fs-13-5:13.5px;       /* 窄屏 / 触屏下统一提高到 14px */
@@ -25,7 +25,7 @@
     --pri:#5b9bff; --pri-fg:#06142a; --pri-bg:#14253f; --pri-bg2:#1d3a66;
     --pin:#5b9bff; --auto:#34d399; --direct:#9aa7ba; --direct-fg:#0b1118;
     --ok:#4ade80; --ok-bg:#10281a; --warn:#fbbf24; --warn-bg:#2d230f; --err:#f87171; --err-bg:#331517;
-    --info:#9db4d0; --info-bg:#1b2634; --zebra:#18212b;
+    --info:#9db4d0; --info-bg:#1b2634; --zebra:#18212b; --row-hover:rgba(91,155,255,.1);
     --shadow:0 1px 2px rgba(0,0,0,.4);
     color-scheme:dark;
   }
@@ -36,7 +36,7 @@
   --pri:#5b9bff; --pri-fg:#06142a; --pri-bg:#14253f; --pri-bg2:#1d3a66;
   --pin:#5b9bff; --auto:#34d399; --direct:#9aa7ba; --direct-fg:#0b1118;
   --ok:#4ade80; --ok-bg:#10281a; --warn:#fbbf24; --warn-bg:#2d230f; --err:#f87171; --err-bg:#331517;
-  --info:#9db4d0; --info-bg:#1b2634; --zebra:#18212b;
+  --info:#9db4d0; --info-bg:#1b2634; --zebra:#18212b; --row-hover:rgba(91,155,255,.1);
   --shadow:0 1px 2px rgba(0,0,0,.4);
   color-scheme:dark;
 }
@@ -452,6 +452,12 @@ dialog.login{border-color:var(--line2);box-shadow:0 10px 40px rgba(0,0,0,.18)}
 [data-sort=asc]>.th-sort,[data-sort=desc]>.th-sort,[aria-sort=ascending]>.th-sort,[aria-sort=descending]>.th-sort{color:var(--pri);font-weight:650}
 [data-sort=asc] .th-ar,[aria-sort=ascending] .th-ar{opacity:1}[data-sort=asc] .th-ar::after,[aria-sort=ascending] .th-ar::after{content:"\25B2"}
 [data-sort=desc] .th-ar,[aria-sort=descending] .th-ar{opacity:1}[data-sort=desc] .th-ar::after,[aria-sort=descending] .th-ar::after{content:"\25BC"}
+/* 应用页 / 网站页的表格行: 鼠标移上去整行变色 (半透明的颜色叠在行原来的底色上, 新应用之类的高亮也还看得出; 触屏没有悬停, 不变色);
+ * 能点开详情的行 (TP.rowOpen, v-apps.js) 是手形指针, Tab 到这一行时整行描边 */
+.row-hov:hover{background-image:linear-gradient(var(--row-hover),var(--row-hover))}
+@media (hover:none){.row-hov:hover{background-image:none}}
+.row-open{cursor:pointer}
+.row-open:focus-visible{outline:2px solid var(--pri);outline-offset:-2px}
 .tbl tr.is-off td{opacity:.55}
 .tbl tr.is-busy{opacity:.6}
 .tbl th.num{text-align:right}

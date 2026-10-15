@@ -1,15 +1,20 @@
 /* enana · v-sites.js — 网站页
- * 布局: 顶部标签 = 网站的来源 (系统目录 | 我添加的 | 自动识别, 和全站同一套标签样式), 标签下面左边是二级导航 (系统目录: 分组 + 默认出口; 另外两个: 按路由筛选), 右边是内容。
- *   · 系统目录 (schema 3): 目录里的每一项一个三段开关 (固定出口 | 自动线路 | 直连); 固定出口有 2 个以上时, 选了「固定出口」的那一项还能再选: 默认 / 在固定出口里自动选 / 指定某一个。
- *   · 我添加的 / 自动识别: 网站覆盖 (kind=site), 每个网站一个下拉 (跟随规则 | 固定出口 | 自动线路 | 直连) + 固定出口的指定 + 删除; 自动识别的带「自动识别」标记、原因、时间 (设置 → 代理 里打开该功能)。
+ * 布局 (2.3.26 起和「应用」页一样是一张表): 顶部标签 = 网站的来源 (系统目录 | 我添加的 | 自动识别, 和全站同一套标签样式), 标签旁边是 搜索 + 筛选下拉 + 添加 + 「⋯」(恢复网站默认)。
+ *   · 系统目录 (schema 3): 列 = 网站 (名称 / 说明 / 标记) | 域名数 | 线路 (三段开关: 固定出口 | 自动线路 | 直连) | 出口 | 操作 (查看域名);
+ *     固定出口有 2 个以上、这一项走「固定出口」时, 出口一列还能再选: 默认 / 在固定出口里自动选 / 指定某一个 (其它时候是「—」)。
+ *     按分类分组 (分组标题行), 最后一组是「默认出口」(其他海外网站 = Final 选择器); 筛选下拉 = 全部分类 / 某一个分类 / 默认出口。
+ *   · 我添加的 / 自动识别: 网站覆盖 (kind=site), 列 = 网站 | 线路 (下拉: 跟随规则 | 固定出口 | 自动线路 | 直连) | 出口 | 操作 (删除), 筛选下拉 = 按出口;
+ *     自动识别的带「自动识别」标记、原因、时间 (设置 → 代理 里打开该功能)。
+ *   · 表格够宽时 (容器查询, css/sites.css) 一行一行对齐成列, 窄屏 / 窄窗口时每一行变成一张卡片 (和应用页一样)。
+ *   · 鼠标移上去整行变色; 点目录里一行不是控件的地方 (或者 Tab 到这一行按回车) = 点它的「查看域名」(TP.rowOpen, 在 v-apps.js)。
  * 每次改策略都先经过 confirmDialog; 当前没有固定出口 / 自动线路时, 对应选项显示为「暂不可用」, 点击会说明原因并提供「添加服务器」。
  * 每一项的域名列表用弹窗查看 / 添加 / 修改 / 删除 / 恢复, 并可一键重置为系统默认 (GET|POST /api/sites/domains, POST /api/sites/domains/reset; 写操作是后台任务)。
- * 页面里没有行内展开: 说明用「!」(ui.help), 长列表用 ui.pager, 折叠的分组记在 prefs (sites.collapsed); 选中的标签 / 导航记在 prefs (sites.tab / sites.nav.<标签>)。 */
+ * 页面里没有行内展开: 说明用「!」(ui.help), 长列表用 ui.pager; 选中的标签 / 筛选记在 prefs (sites.tab / sites.nav.<标签>)。 */
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, setText = TP.setText, I = window.I18N, t = I.t, L = I.L;
   var V = TP.V.sites = { id: 'sites' };
-  var el = {}, boxes = {}, flt = { q: '' }, pgC = null, pgD = null, dm = null, uid = 0, tabsCtl = null, navCtl = null, tab = 'catalog', nav = '';
+  var el = {}, flt = { q: '' }, pgK = null, pgC = null, pgD = null, dm = null, uid = 0, tabsCtl = null, tab = 'catalog', nav = '';
   var OPTS = [
     { v: 'PIN', label: L('name.policy.PIN'), icon: 'pin' },
     { v: 'Global', label: L('name.policy.Global'), icon: 'auto' },
@@ -18,12 +23,13 @@
   var DEF = { pin: 'PIN', auto: 'Global', direct: 'direct' };
   var GICON = { ai: 'ai', account: 'user', exchange: 'badge-check', social: 'message-square-warning', video: 'play', search: 'search', news: 'book-open', dev: 'terminal', shop: 'plug', tools: 'sliders-horizontal', direct: 'direct' };
   var ROUTE = { pin: 'pin', PIN: 'pin', auto: 'auto', Global: 'auto', direct: 'direct', Direct: 'direct' };     // 后端的策略名 / Clash 选择器名 -> 路由类别
-  var PREF_COLLAPSED = 'sites.collapsed';       // i18n-ignore
   var PREF_TAB = 'sites.tab';                   // i18n-ignore
+  var PG_CATALOG = 'sites.catalog';             // i18n-ignore
   var PG_CUSTOM = 'sites.custom';               // i18n-ignore
   var PG_DOMAINS = 'sites.domains';             // i18n-ignore
-  var TABS = ['catalog', 'mine', 'auto'], FINAL = '@final';     // i18n-ignore (标签 id / 导航里「默认出口」的 id)
-  var SITE_ST = ['follow', 'direct', 'pin', 'auto'];
+  var TABS = ['catalog', 'mine', 'auto'], FINAL = '@final';     // i18n-ignore (标签 id / 筛选下拉里「默认出口」的 id)
+  var SITE_ST = ['follow', 'direct', 'pin', 'auto'], ROUTES = ['pin', 'auto', 'direct', 'follow'];
+  var FIN = { id: 'final', tag: 'Final', group: FINAL, default: '', domains: [], rulesets: [], cidrs: 0 };      // 其他海外网站 = Final 选择器 (Global / PIN / direct): 目录表格的最后一行
 
   function active() { return TP.tab === 'sites'; }
   function catalog() { return S.catalog || { groups: {}, groups_en: {}, order: [], entries: [], failed: false }; }
@@ -37,20 +43,14 @@
   function sitesOf(tb) { return allSites().filter(function (o) { return tb === 'auto' ? o.src === 'auto' : o.src !== 'auto'; }); }
   function autoOn() { var p = S.prefs && S.prefs.settings; return !!(p && (p.auto_sites === true || p.auto_sites === 1)); }
   function polClass(st) { return st === 'pin' || st === 'auto' || st === 'direct' ? st : ''; }                    // 覆盖的状态 -> 路由类别 (跟随规则没有)
+  function routeOf(o) { return o.state === 'follow' ? 'follow' : polClass(o.state); }                             // 「按出口筛选」用的类别
   /* 选择器当前选中的名字 -> 三段开关里的哪一段: PIN / Global / direct; 指定了某一个固定出口 (或「固定出口里自动选」) 也算 PIN */
   function segOf(now) { return now === 'PIN' || now === 'Global' || now === 'direct' ? now : (TP.pinTargetOf(now) ? 'PIN' : (now || '')); }
   var X = TP.exits;                                                                                        // 出口选择器的公共部分在 exits.js (显示「默认 (当前是哪一个)」)
   function tgName(v) { return X.targetName(v); }
 
-  /* 折叠的分组: prefs 里存「被折叠的分组 id 数组」; 还没存过时, 前两个分组展开、其余折叠 (和以前一样) */
-  function collapsedList() { var c = TP.prefs.get(PREF_COLLAPSED, null); return Array.isArray(c) ? c : catalog().order.slice(2); }
-  function isOpen(g) { return !!flt.q || nav === g || collapsedList().indexOf(g) < 0; }
-  function toggleGroup(g) {
-    var c = collapsedList().slice(), i = c.indexOf(g);
-    if (i >= 0) c.splice(i, 1); else c.push(g);
-    TP.prefs.set(PREF_COLLAPSED, c);                                                // 触发 'prefs' 事件 -> 重新渲染
-  }
   function readPrefs() { tab = pickTab(TP.prefs.get(PREF_TAB, 'catalog')); nav = String(TP.prefs.get(navKey(), '') || ''); }
+  function toFirst() { if (pgK) pgK.setPage(1); if (pgC) pgC.setPage(1); }
   function setTab(v, save) {
     v = pickTab(v); if (v === tab && !save) return;
     tab = v; nav = String(TP.prefs.get(navKey(), '') || '');
@@ -59,21 +59,24 @@
     V.render();
   }
   function setNav(v) {
-    nav = String(v || ''); TP.prefs.set(navKey(), nav);
-    if (pgC) pgC.setPage(1);
-    V.render();
+    nav = String(v || ''); TP.prefs.set(navKey(), nav || undefined);
+    toFirst(); V.render();
   }
   /* 其它页面 (设置 → 自动识别 的「查看」) 要直接跳到某个标签 */
   TP.sitesTab = function (id) { TP.prefs.set(PREF_TAB, pickTab(id) === 'catalog' ? undefined : pickTab(id)); TP.go('sites'); };
+
+  /* 表格的列头 (只在表格够宽时显示, css/sites.css): [[类名, 词典键]] */
+  function colHead(cls, cols) { return h('div', { class: 'sx-colh ' + cls }, cols.map(function (c) { return h('span', { class: c[0] }, L(c[1])); })); }
 
   /* ================= 构建 ================= */
   V.init = function (root) {
     readPrefs();
 
-    /* 顶部标签 (来源) + 搜索 + 添加 + 「⋯」(恢复网站默认) */
+    /* 顶部标签 (来源) + 搜索 + 筛选 + 添加 + 「⋯」(恢复网站默认) */
     tabsCtl = ui.tabs(L('sites.tab.aria'), TABS.map(function (k) { return { id: k, label: L('sites.tab.' + k), icon: k === 'catalog' ? 'library' : k === 'mine' ? 'user' : 'scan-search', count: 0 }; }), function (id) { setTab(id, true); });
     tabsCtl.set(tab);
-    el.q = h('input', { class: 'inp', type: 'search', placeholder: L('sites.search'), 'aria-label': L('sites.search'), autocomplete: 'off', on: { input: function () { flt.q = el.q.value.trim().toLowerCase(); nav = flt.q ? '' : String(TP.prefs.get(navKey(), '') || ''); if (pgC) pgC.setPage(1); V.render(); } } });
+    el.q = h('input', { class: 'inp', type: 'search', placeholder: L('sites.search'), 'aria-label': L('sites.search'), autocomplete: 'off', on: { input: function () { flt.q = el.q.value.trim().toLowerCase(); toFirst(); V.render(); } } });
+    el.flt = h('select', { class: 'sel sx-flt', on: { change: function () { setNav(el.flt.value); } } });      // 系统目录: 分类 / 默认出口; 另外两个: 按出口
     el.addBtn = ui.btn(L('sites.add'), { kind: 'primary', icon: 'plus' });
     ui.act(el.addBtn, function () { return openAddSite(); });
     el.count = h('span', { class: 'muted sm' });
@@ -99,53 +102,50 @@
     el.legend = h('div', { class: 'sx-legend', role: 'group', 'aria-label': L('sites.legend') },
       lg('pin', 'pin', 'name.policy.PIN'), lg('auto', 'auto', 'name.policy.Global'), lg('direct', 'direct', 'name.policy.direct'), help('legend'));
 
-    /* 左侧二级导航 (按标签重建) */
-    el.nav = h('nav', { class: 'sx-nav', 'aria-label': L('sites.nav.aria') });
+    /* 系统目录: 一张表 (分类标题行 + 每一项一行 + 最后的「默认出口」), 分页 */
+    el.listK = h('div', { class: 'sx-list' });
+    pgK = ui.pager(PG_CATALOG, { sizes: [20, 50, 100], def: 50 });
+    pgK.onChange(renderRows);
+    el.boxK = h('div', { class: 'sx-box' },
+      colHead('sx-colh-k', [['sx-h-name', 'sites.col.site'], ['sx-h-n', 'sites.col.domains'], ['sx-h-route', 'sites.col.route'], ['sx-h-exit', 'sites.col.exit'], ['sx-h-act', 'sites.col.act']]), el.listK, pgK.el);
+    el.paneCatalog = h('div', { class: 'sx-pane' }, el.boxK);
 
-    /* 右侧: 系统目录 (分组卡片 + 默认出口) */
-    el.groups = h('div', { class: 'grps' });
-    el.final = h('div', { class: 'rows' });
-    el.finalCard = h('section', { class: 'card' }, h('div', { class: 'card-h' }, h('h3', null, L('sites.final.title'), help('final')), h('span', { class: 'muted sm' }, L('sites.final.sub'))), el.final);
-    el.paneCatalog = h('div', { class: 'sx-pane' }, el.groups, el.finalCard);
-
-    /* 右侧: 我添加的 / 自动识别 (网站覆盖列表) */
+    /* 我添加的 / 自动识别 (网站覆盖): 同样的表格样式 */
     el.autoBar = h('div', { class: 'hint sx-autobar', role: 'status', hidden: true });
-    el.cList = h('div', { class: 'rows' });
+    el.cTitle = h('b'); el.cSub = h('span');
+    el.cList = h('div', { class: 'sx-list' });
     el.cEmpty = ui.emptyBox();
     el.cSkel = ui.skeleton(3); el.cSkel.hidden = true;                             // 状态还没读到时的占位 (不要先闪一下「还没有添加」)
     pgC = ui.pager(PG_CUSTOM, { def: 10 });
     pgC.onChange(renderCustom);
-    el.cardTitle = h('h3'); el.cardSub = h('span', { class: 'muted sm' });
-    el.customCard = h('section', { class: 'card sx-pgcard' }, h('div', { class: 'card-h' }, el.cardTitle, el.cardSub), el.cList, el.cSkel, el.cEmpty.el, pgC.el);      // 个数只在工具栏里显示一次
-    el.paneCustom = h('div', { class: 'sx-pane' }, el.autoBar, el.customCard);
+    el.boxC = h('div', { class: 'sx-box' },
+      colHead('sx-colh-c', [['sx-h-name', 'sites.col.site'], ['sx-h-route', 'sites.col.route'], ['sx-h-exit', 'sites.col.exit'], ['sx-h-act', 'sites.col.act']]), el.cList, el.cSkel, pgC.el);
+    el.paneCustom = h('div', { class: 'sx-pane' }, h('p', { class: 'muted sm sx-sub' }, el.cTitle, ' · ', el.cSub), el.autoBar, el.boxC, el.cEmpty.el);      // 个数只在工具栏里显示一次
 
     el.empty = ui.emptyBox();
     el.main = h('div', { class: 'sx-main' }, el.paneCatalog, el.paneCustom, el.empty.el);
-    el.layout = h('div', { class: 'sx-layout' }, el.nav, el.main);
 
     root.appendChild(h('div', { class: 'intro' }, h('p', { class: 'muted' }, L('sites.intro'), help('page'), help('how'))));      // 第二个「!」: 规则如何生效 (先匹配到的先生效)
     root.appendChild(TP.proxyNote());
-    root.appendChild(h('div', { class: 'sx-top' }, h('div', { class: 'sx-tabs' }, tabsCtl.el, help('tabs')), h('div', { class: 'toolbar sx-tb' }, el.q, el.addBtn, el.more, el.count)));
+    root.appendChild(h('div', { class: 'sx-top' }, h('div', { class: 'sx-tabs' }, tabsCtl.el, help('tabs')), h('div', { class: 'toolbar sx-tb' }, el.q, el.flt, el.addBtn, el.more, el.count)));
     root.appendChild(el.legend);
-    root.appendChild(el.layout);
+    root.appendChild(el.main);
 
-    TP.on('catalog', function () { buildGroups(); if (active()) V.render(); });
+    TP.on('catalog', function () { if (active()) V.render(); });
     TP.on('proxies', function () { if (active()) { renderRows(); renderCustomPins(); } });
-    TP.on('state', function () { if (active()) { renderTabs(); renderNav(); renderCustom(); renderRows(); } });
+    TP.on('state', function () { if (active()) { renderTabs(); renderFilter(); renderCustom(); renderRows(); } });      // 不重建「自动识别」说明条 (每 10 秒一次, 会抢走它按钮上的焦点)
     TP.on('settings', function () { if (active()) renderAutoBar(); });
     TP.on('helper', function () { if (active()) V.render(); if (dm) dm.paint(); });
     TP.on('lang', function () { V.render(); if (dm) dm.paint(); });
     TP.on('prefs', function (d) {
       if (!active() || !d) return;
       if (d.all || d.key === PREF_TAB) { var nt = pickTab(TP.prefs.get(PREF_TAB, 'catalog')); if (nt !== tab) { setTab(nt, false); return; } }
-      if (d.all || d.key === navKey()) { var nn = String(TP.prefs.get(navKey(), '') || ''); if (nn !== nav) { nav = nn; V.render(); return; } }
-      if (d.all || d.key === PREF_COLLAPSED) renderRows();
+      if (d.all || d.key === navKey()) { var nn = String(TP.prefs.get(navKey(), '') || ''); if (nn !== nav) { nav = nn; toFirst(); V.render(); } }
     });
-    window.addEventListener('resize', function () { if (active()) renderNav(); });
-    buildFinal(); buildGroups(); V.render();
+    V.render();
   };
   V.show = function () { readPrefs(); tabsCtl.set(tab); V.render(); if (!S.prefs) TP.loadSettings(); };
-  V.render = function () { renderTabs(); renderNav(); renderPane(); };
+  V.render = function () { renderTabs(); renderPane(); };
 
   function renderTabs() {
     var cat = catalog();
@@ -153,73 +153,53 @@
     TABS.forEach(function (k) { tabsCtl.text(k, t('sites.tab.' + k)); });
   }
 
-  /* ---------- 左侧二级导航: 系统目录 = 分组 + 默认出口; 其它标签 = 按路由筛选 ---------- */
-  function navItems() {
-    var cat = catalog(), out = [], q = flt.q;
+  /* ---------- 筛选下拉: 系统目录 = 全部分类 / 每个分类 (后面是匹配搜索的个数) / 默认出口; 另外两个标签 = 按出口 ---------- */
+  function filterItems() {
+    var out = [];
     if (tab === 'catalog') {
-      out.push({ id: '', label: t('sites.all'), icon: 'list-checks', count: q ? cat.entries.filter(matches).length : cat.entries.length });
-      cat.order.forEach(function (g) {
-        var n = cat.entries.filter(function (e) { return e.group === g && (!q || matches(e)); }).length;
-        if (!n && g !== nav) return;                                                    // 没有条目的分组不放进导航
-        out.push({ id: g, label: TP.groupName(g), icon: GICON[g] || 'globe', count: n });
+      var ents = catEntries();
+      out.push({ id: '', label: t('sites.filter.all'), n: ents.filter(matches).length });
+      catalog().order.forEach(function (g) {
+        var all = ents.filter(function (e) { return e.group === g; });
+        if (all.length) out.push({ id: g, label: TP.groupName(g), n: all.filter(matches).length });       // 没有条目的分类不放进下拉
       });
-      out.push({ id: FINAL, label: t('sites.nav.final'), icon: 'waypoints', count: null });
+      out.push({ id: FINAL, label: t('sites.nav.final'), n: null });
     } else {
-      var list = sitesOf(tab);
-      out.push({ id: '', label: t('sites.all'), icon: 'list-checks', count: list.length });
-      ['pin', 'auto', 'direct', 'follow'].forEach(function (k) { out.push({ id: k, label: k === 'follow' ? t('txt.app.followLabel') : TP.name.route(k), icon: k === 'follow' ? 'waypoints' : k, count: list.filter(function (o) { return (o.state === 'follow' ? 'follow' : polClass(o.state)) === k; }).length }); });
+      var list = sitesOf(tab).filter(matchCustom);
+      out.push({ id: '', label: t('sites.all'), n: list.length });
+      ROUTES.forEach(function (k) { out.push({ id: k, label: k === 'follow' ? t('txt.app.followLabel') : TP.name.route(k), n: list.filter(function (o) { return routeOf(o) === k; }).length }); });
     }
     return out;
   }
-  /* 窄屏的二级导航是一行可以横向滚动的标签: 选中的那个不在可见范围里时, 把它滚到中间 (只滚这一行自己, 不会带着整个页面上下跳) */
-  function revealTab(bar, b) {
-    if (!bar || !b || bar.scrollWidth <= bar.clientWidth + 1) return;
-    try {
-      var r = b.getBoundingClientRect(), s = bar.getBoundingClientRect();
-      if (r.left < s.left || r.right > s.right) bar.scrollLeft += (r.left - s.left) - (s.width - r.width) / 2;
-    } catch (e) { /* 忽略 */ }
-  }
-  function renderNav() {
-    var items = navItems(), compact = window.matchMedia('(max-width:759px)').matches, sig = compact + '|' + tab + '|' + I.lang + '|' + items.map(function (x) { return x.id; }).join(',');
-    if (tab === 'catalog' && !flt.q && !nav && TP.prefs.get(navKey(), null) === null && items.length > 2) nav = items[1].id;
-    if (!items.some(function (x) { return x.id === nav; })) nav = '';
-    if (el.nav._sig !== sig) {
-      el.nav._sig = sig; TP.clear(el.nav);
-      navCtl = ui.tabs(L('sites.nav.aria'), items, function (id) { setNav(id); }, { vertical: !compact });
-      el.nav.appendChild(h('div', { class: 'sx-nav-t' }, L(tab === 'catalog' ? 'sites.nav.title' : 'sites.nav.titleRoute')));      // 二级导航的小标题: 这一列是「分类」(系统目录) / 「按出口筛选」(我添加的 / 自动识别)
-      el.nav.appendChild(navCtl.el);
+  function renderFilter() {
+    var items = filterItems(), sel = el.flt;
+    if (!items.some(function (x) { return x.id === nav; }) && (tab !== 'catalog' || catalog().entries.length)) nav = '';      // 选过的分类已经没有了 (目录还没读到时先保留)
+    var sig = tab + '|' + I.lang + '|' + items.map(function (x) { return x.id + '=' + x.label + '=' + x.n; }).join('|');
+    if (sel._sig !== sig) {                                                           // 选项变了才重建 (轮询刷新时不会把正在打开的下拉关掉)
+      sel._sig = sig; TP.clear(sel);
+      items.forEach(function (x) { sel.appendChild(TP.opt(x.id, x.n == null ? x.label : t('sites.filter.opt', { name: x.label, n: x.n }))); });
     }
-    items.forEach(function (x) { navCtl.count(x.id, x.count); });
-    navCtl.set(nav);
-    var rv = sig + '|' + nav;                                                         // 只在选中项 / 导航本身变了的时候滚一次 (用户自己横向滑过的位置不会被每次刷新拉回来)
-    if (compact && el.nav._rv !== rv && navCtl.el.offsetParent !== null) { el.nav._rv = rv; revealTab(navCtl.el, navCtl.btn(nav)); }
+    var want = items.some(function (x) { return x.id === nav; }) ? nav : '';
+    if (sel.value !== want) sel.value = want;
+    sel.setAttribute('aria-label', t(tab === 'catalog' ? 'sites.groups' : 'sites.nav.titleRoute'));
   }
 
   function renderPane() {
     var cat = tab === 'catalog';
     el.paneCatalog.hidden = !cat; el.paneCustom.hidden = cat;
+    renderFilter();
     if (cat) renderRows();
     else { el.empty.hide(); renderCustom(); renderAutoBar(); }
     el.q.placeholder = t(cat ? 'sites.search' : 'sites.search.custom'); el.q.setAttribute('aria-label', el.q.placeholder);
   }
 
-  /* ---------- 分组 ---------- */
-  function buildGroups() {
-    var cat = catalog(), sig = cat.order.join('|');
-    if (el.groups._sig === sig && Object.keys(boxes).length) return;                 // 分组没变: 复用现有 DOM (保住焦点和滚动位置)
-    el.groups._sig = sig;
-    TP.clear(el.groups); boxes = {};
-    cat.order.forEach(function (g) {
-      var rows = h('div', { class: 'rows grp-rows' }), name = h('span', { class: 'grp-n' }), cnt = h('span', { class: 'chip' });
-      var head = h('button', { class: 'grp-h', type: 'button', 'aria-expanded': 'true' }, ui.icon(GICON[g] || 'globe', 18, 'grp-ic'), name, cnt);
-      /* 「!」不能放进按钮里 (按钮里不能再嵌按钮): 标题按钮 + 「!」+ 一个把整行撑满的展开按钮 (只给鼠标 / 触屏用, 键盘用标题按钮) */
-      var more = h('button', { class: 'sx-gx', type: 'button', tabindex: '-1', 'aria-hidden': 'true' }, ui.icon('chevron-down', 18, 'grp-chev'));
-      var sec = h('section', { class: 'card grp' }, h('div', { class: 'sx-gh' }, head, I.has('help.sites.g.' + g + '.title') ? help('g.' + g) : null, more), rows);
-      head.addEventListener('click', function () { toggleGroup(g); });
-      more.addEventListener('click', function () { toggleGroup(g); });
-      sec._name = name; sec._cnt = cnt; sec._rows = rows; sec._head = head; sec._g = g;
-      boxes[g] = sec; el.groups.appendChild(sec);
-    });
+  /* ================= 系统目录 ================= */
+  /* 目录里的条目: 按分类的显示顺序排 (同一个分类里保持目录自己的顺序); 不在分类顺序里的条目不显示 (和以前一样) */
+  function catEntries() {
+    var cat = catalog(), rank = {};
+    cat.order.forEach(function (g, i) { rank[g] = i; });
+    return cat.entries.map(function (e, i) { return { e: e, i: i }; }).filter(function (x) { return rank[x.e.group] != null; })
+      .sort(function (a, b) { return rank[a.e.group] - rank[b.e.group] || a.i - b.i; }).map(function (x) { return x.e; });
   }
   function entryBlob(e) {
     if (!e._blob || e._blobLang !== I.lang) {
@@ -229,36 +209,48 @@
     return e._blob;
   }
   function matches(e) { return !flt.q || entryBlob(e).indexOf(flt.q) >= 0; }
+  function finalMatches() { return !flt.q || [t('sites.final.name'), t('sites.final.desc'), t('sites.nav.final')].join(' ').toLowerCase().indexOf(flt.q) >= 0; }
 
   function renderRows() {
     if (tab !== 'catalog') return;
-    var cat = catalog(), shown = 0, total = cat.entries.length, fin = nav === FINAL;
-    el.groups.hidden = fin; el.finalCard.hidden = !fin;
-    Object.keys(boxes).forEach(function (g) {
-      var sec = boxes[g], all = cat.entries.filter(function (e) { return e.group === g; }), items = all.filter(matches), open = isOpen(g), only = !!nav && !fin && nav !== g;
-      setText(sec._name, TP.groupName(g));
-      setText(sec._cnt, flt.q ? t('sites.group.countOf', { n: items.length, total: all.length }) : t('sites.group.count', { n: all.length }));
-      sec.hidden = fin || only || !items.length;
-      sec._head.setAttribute('aria-expanded', open ? 'true' : 'false'); sec.classList.toggle('is-open', open);
-      sec._rows.hidden = !open;
-      if (open && !sec.hidden) ui.syncList(sec._rows, items, function (e) { return e.id; }, makeEntry, function (row, e) { updateEntry(row, e); });
-      if (!sec.hidden) shown += items.length;
+    var cat = catalog(), ents = catEntries(), total = ents.length, fin = nav === FINAL;
+    var shown = fin ? [] : ents.filter(function (e) { return (!nav || e.group === nav) && matches(e); });
+    var list = shown.slice();
+    if ((fin || (!nav && total > 0)) && finalMatches()) list.push(FIN);                 // 「默认出口」: 全部分类的最后一组, 或者只看它
+    var pr = pgK.update(list.length), cnt = {}, items = [], last = null;
+    list.forEach(function (e) { cnt[e.group] = (cnt[e.group] || 0) + 1; });
+    list.slice(pr.start, pr.end).forEach(function (e) {
+      if (e.group !== last) { last = e.group; items.push({ head: e.group, n: cnt[e.group] }); }      // 每一页都从分类标题开始
+      items.push({ e: e });
     });
-    if (el.final._fin) updateEntry(el.final._fin, el.final._fin._e);
-    setText(el.count, total ? (flt.q ? t('sites.countOf', { n: shown, total: total }) : t('sites.count', { n: total })) : '');
+    ui.syncList(el.listK, items, function (x) { return x.e ? 'e:' + x.e.id : 'g:' + x.head; },
+      function (x) { return x.e ? makeEntry(x.e) : makeHead(x.head); },
+      function (row, x) { if (x.e) updateEntry(row, x.e); else paintHead(row, x); });
+    el.boxK.hidden = !list.length;
+    setText(el.count, total ? (fin ? t('sites.count', { n: total }) : (flt.q || nav) ? t('sites.countOf', { n: shown.length, total: total }) : t('sites.count', { n: total })) : '');
     if (cat.failed) el.empty.show({ icon: 'warning', text: t('sites.empty.failed'), hint: t('sites.empty.failedHint', { cmd: 'enana' }) });
     else if (!total) el.empty.show({ icon: 'refresh', text: t('sites.empty.loading') });
-    else if (!fin && !shown) el.empty.show({ icon: 'search', text: t('sites.empty.noMatch'), hint: t('sites.empty.noMatchHint') });
+    else if (!list.length) el.empty.show({ icon: 'search', text: t('sites.empty.noMatch'), hint: t('sites.empty.noMatchHint') });
     else el.empty.hide();
   }
 
-  /* ---------- 一个目录条目 ---------- */
+  /* ---------- 分类标题行 (分类图标 + 名称 + 个数 + 这一类的「!」) ---------- */
+  function makeHead(g) {
+    var tt = h('span', { class: 'sx-gh-t' }), n = h('span', { class: 'sx-gh-n' });
+    var hb = g === FINAL ? help('final') : I.has('help.sites.g.' + g + '.title') ? help('g.' + g) : null;
+    var e = h('h3', { class: 'sx-gh' }, ui.icon(g === FINAL ? 'waypoints' : (GICON[g] || 'globe'), 16, 'ci'), tt, n, hb);
+    e._t = tt; e._n = n;
+    return e;
+  }
+  function paintHead(e, x) { setText(e._t, x.head === FINAL ? t('sites.nav.final') : TP.groupName(x.head)); setText(e._n, String(x.n)); }
+
+  /* ---------- 目录里的一项 (一行): 网站 | 域名数 | 线路 | 出口 | 操作 ---------- */
   function makeEntry(e) {
     var r = {}, row;
     r.name = h('b', { class: 'site-n' });
-    r.cnt = h('span', { class: 'chip' });
     r.mod = ui.badge(L('sites.dm.modified'), 'warn'); I.attr(r.mod, 'title', L('sites.dm.modifiedTip')); r.mod.hidden = true;
     r.rs = h('span', { class: 'badges' });
+    r.cnt = h('span', { class: 'sx-cnt' });
     r.view = ui.btn(L('sites.dm.open'), { sm: true, kind: 'ghost', icon: 'list-checks', cls: 'sx-view' });
     r.desc = h('div', { class: 'muted sm site-d' });
     r.warn = h('div', { class: 'warn-t', hidden: true }, ui.icon('warning', 14, 'ci'), h('span', null, L('sites.warnIp')));
@@ -266,11 +258,14 @@
     r.seg = ui.seg(t('sites.seg.aria', { name: '' }), OPTS, TP.safe(function (v) { return pick(row, v); }));
     r.seg.mark(DEF[e.default]);
     r.tg = h('select', { class: 'sel sm sx-tg', hidden: true });                       // 固定出口有 2 个以上、这一项走「固定出口」时: 指定走哪一个
-    row = h('div', { class: 'site', role: 'group' },
-      h('div', { class: 'site-main' }, h('div', { class: 'site-t' }, r.name, r.cnt, r.mod, r.rs), r.desc, r.miss, r.warn),
-      r.view, h('div', { class: 'sx-ctl' }, r.seg.el, r.tg));
+    r.exit = h('div', { class: 'sx-c sx-c-exit' }, r.tg, h('span', { class: 'muted sx-none', 'aria-hidden': 'true' }, '—'));
+    r.act = h('div', { class: 'sx-c sx-c-act' }, r.view); r.nCell = h('div', { class: 'sx-c sx-c-n' }, r.cnt);
+    row = h('div', { class: 'sx-row row-hov', role: 'group' },
+      h('div', { class: 'sx-c sx-c-name' }, h('div', { class: 'site-t' }, r.name, r.mod, r.rs), r.desc, r.miss, r.warn),
+      r.nCell, h('div', { class: 'sx-c sx-c-route' }, r.seg.el), r.exit, r.act);
     row._r = r; row._e = e;
     ui.act(r.view, function () { openDomains(row._e); });
+    if (e.id !== 'final') TP.rowOpen(row, function () { openDomains(row._e); });        // 点这一行的其它地方 / 在行上按回车 = 「查看域名」(「默认出口」没有域名列表)
     ui.selectAct(r.tg, function () { return TP.pinTargetOf(((S.proxies[row._e.tag || ('svc-' + row._e.id)] || {}).now)) || 'PIN'; }, function (want) { return pickTarget(row, want); });
     return row;
   }
@@ -281,9 +276,9 @@
     setText(r.name, name);
     var d = isFinal ? t('sites.final.desc') : I.pick(e, 'desc');
     setText(r.desc, d); r.desc.hidden = !d;
-    r.cnt.hidden = isFinal; r.view.hidden = isFinal; r.rs.hidden = isFinal; r.mod.hidden = isFinal || !e.modified;
+    r.view.hidden = isFinal; r.rs.hidden = isFinal; r.mod.hidden = isFinal || !e.modified; r.act.classList.toggle('is-none', isFinal);
+    setText(r.cnt, isFinal ? '—' : t('sites.domainCount', { n: ds })); r.nCell.classList.toggle('is-none', isFinal);
     if (!isFinal) {
-      setText(r.cnt, t('sites.domainCount', { n: ds }));
       r.view.setAttribute('aria-label', t('sites.dm.openAria', { name: name }));
       var rss = (e.rulesets || []), sig = rss.join(',') + '|' + I.lang;
       if (r.rs._sig !== sig) {
@@ -294,7 +289,7 @@
     }
     var cls = segOf(now), canPick = !!p && cls === 'PIN' && TP.hasPin();
     r.seg.set(cls || '');
-    r.tg.hidden = !canPick;
+    r.tg.hidden = !canPick; r.exit.classList.toggle('is-none', !canPick);
     if (canPick) { X.fillTargets(r.tg); var tv = (TP.canPickPin() && TP.pinTargetOf(now)) || 'PIN'; if (r.tg.value !== tv) r.tg.value = tv; r.tg.setAttribute('aria-label', t('apps.tg.aria', { name: name })); X.targetAvail(r.tg, S.clash === 'down' ? TP.why.clash() : ''); }
     r.seg.el.setAttribute('aria-label', t('sites.seg.aria', { name: name })); row.setAttribute('aria-label', name);
     var ready = !!p, all = (p && p.all) || [];
@@ -336,14 +331,6 @@
     try { await TP.setPolicy(tag, to); }
     catch (err) { p.now = prev; updateEntry(row, e); throw err; }
     ui.toast(t('apps.tg.done', { name: name, to: tgName(to) }), 'ok', 2400);
-  }
-
-  /* 其他海外网站 = Final 选择器 (Global / PIN / direct) */
-  function buildFinal() {
-    var e = { id: 'final', tag: 'Final', group: 'final', default: '', domains: [], rulesets: [], cidrs: 0 };
-    var row = makeEntry(e);
-    el.final.appendChild(row); el.final._fin = row; row._e = e;
-    updateEntry(row, e);
   }
 
   /* ================= 我添加的 / 自动识别 (覆盖层: kind=site) ================= */
@@ -431,14 +418,15 @@
     return parts.join(' · ');
   }
 
+  function matchCustom(o) { return !flt.q || o.value.indexOf(flt.q) >= 0; }
   function renderCustom() {
     if (tab === 'catalog') return;
-    var noH = TP.noHelper(), why = TP.why.helper(), isAuto = tab === 'auto', all = sitesOf(tab).filter(function (o) { return !flt.q || o.value.indexOf(flt.q) >= 0; });
-    if (nav) all = all.filter(function (o) { return polClass(o.state) === nav; });
+    var noH = TP.noHelper(), why = TP.why.helper(), isAuto = tab === 'auto', all = sitesOf(tab).filter(matchCustom);
+    if (nav) all = all.filter(function (o) { return routeOf(o) === nav; });
     var pr = pgC.update(all.length), items = all.slice(pr.start, pr.end);
-    setText(el.cardTitle, t(isAuto ? 'sites.auto.title' : 'sites.custom.title')); setText(el.cardSub, t(isAuto ? 'sites.auto.sub' : 'sites.custom.sub'));
+    setText(el.cTitle, t(isAuto ? 'sites.auto.title' : 'sites.custom.title')); setText(el.cSub, t(isAuto ? 'sites.auto.sub' : 'sites.custom.sub'));
     ui.syncList(el.cList, items, function (o) { return o.value; }, makeCustom, function (row, o) {
-      row._o = o; setText(row._host, o.value);
+      row._o = o; setText(row._host, o.value); row.setAttribute('aria-label', o.value);
       var autoRow = o.src === 'auto', meta = autoRow ? autoMeta(o) : '';
       row._src.hidden = !autoRow; row._meta.hidden = !meta; setText(row._meta, meta);
       if (autoRow) row._src.title = t('sites.src.autoTip');
@@ -451,6 +439,7 @@
     });
     var waiting = !S.state && !noH;                                                   // 状态还没读到: 显示占位, 不要先闪一下「还没有添加」
     el.cSkel.hidden = !waiting;
+    el.boxC.hidden = !waiting && !all.length;
     if (waiting) el.cEmpty.hide();
     else if (!all.length) {
       var filtered = !!(flt.q || nav);
@@ -462,7 +451,7 @@
   }
   function paintCustomPin(row, o) {
     var noPin = o.state === 'pin' && !TP.hasPin(), show = o.state === 'pin' && !noPin, gone = show && !!o.target && o.target_ok === false, tv = customTarget(o);
-    row._tg.hidden = !show; row._gone.hidden = !(gone || noPin);
+    row._tg.hidden = !show; row._gone.hidden = !(gone || noPin); row._exit.classList.toggle('is-none', !show);
     if (noPin) setText(row._gone, t('apps.tg.none')); else if (gone) setText(row._gone, X.orphanText(o.target));
     if (!show) return;
     X.fillTargets(row._tg); if (row._tg.value !== tv) row._tg.value = tv;
@@ -471,14 +460,18 @@
   }
   function customTarget(o) { return !TP.canPickPin() || !o.target || o.target_ok === false ? 'PIN' : o.target; }      // select 的值: PIN = 跟随默认固定出口
   function renderCustomPins() { if (tab === 'catalog') return; Array.prototype.forEach.call(el.cList.children, function (row) { if (row._o) paintCustomPin(row, row._o); }); }
+  /* 我添加的 / 自动识别的一行: 网站 | 线路 (下拉) | 出口 | 操作 (删除) */
   function makeCustom() {
-    var host = h('span', { class: 'mono site-n' }), sel = h('select', { class: 'sel sm' }, SITE_ST.map(function (x) { return TP.opt(x, TP.name.app(x)); }));
+    var host = h('span', { class: 'mono site-n' }), sel = h('select', { class: 'sel sm sx-st' }, SITE_ST.map(function (x) { return TP.opt(x, TP.name.app(x)); }));
     var src = ui.badge(L('sites.src.auto'), 'info', 'scan-search'), meta = h('div', { class: 'muted sm site-d' });
     var tg = h('select', { class: 'sel sm sx-tg', hidden: true }), gone = h('span', { class: 'chip warn apps-tg-gone', hidden: true });
     var del = ui.ibtn('delete', t('common.delete'), { cls: 'danger-t' });
-    var row = h('div', { class: 'site custom' }, h('div', { class: 'site-main' }, h('div', { class: 'site-t' }, host, src), meta, gone), h('div', { class: 'sx-ctl' }, sel, tg), del);
+    var exit = h('div', { class: 'sx-c sx-c-exit' }, tg, h('span', { class: 'muted sx-none', 'aria-hidden': 'true' }, '—'));
+    var row = h('div', { class: 'sx-row sx-row-c row-hov', role: 'group' },
+      h('div', { class: 'sx-c sx-c-name' }, h('div', { class: 'site-t' }, host, src), meta, gone),
+      h('div', { class: 'sx-c sx-c-route' }, sel), exit, h('div', { class: 'sx-c sx-c-act' }, del));
     src.hidden = true; meta.hidden = true;
-    row._host = host; row._sel = sel; row._del = del; row._src = src; row._meta = meta; row._tg = tg; row._gone = gone;
+    row._host = host; row._sel = sel; row._del = del; row._src = src; row._meta = meta; row._tg = tg; row._gone = gone; row._exit = exit;
     ui.selectAct(sel, function () { return row._o.state; }, async function (want) {
       var o = row._o, prev = o.state, tx = TP.txt.app(o.value, prev, want);
       var ok = await ui.confirmDialog({ title: t('sites.change.title'), message: tx.message, detail: TP.tunDetail(tx.detail), confirmText: t('sites.change.go'), rememberKey: 'policy' });

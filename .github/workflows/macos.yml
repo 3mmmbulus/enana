@@ -29,12 +29,14 @@ jobs:
         run: bash tests/core.sh
       - name: Diagnostics summary (allow-list privacy) and upload flow
         run: bash tests/diag.sh
-      - name: Dashboard system-proxy flow, sortable table headers and exit-assignment dialogs
+      - name: Dashboard system-proxy flow, sortable table headers, exit-assignment dialogs, sites table, row click and step-up token
         run: |
           node tests/sysproxy-ui.test.js
           node tests/sorter.test.js
           node tests/exits-ui.test.js
           node tests/moved-actions-ui.test.js
+          node tests/table-rows-ui.test.js
+          node tests/sudo-session.test.js
       - name: Verify terminal waits for Enter and renders one action per line
         run: python3 tests/console-pty.py
       - name: Check protected TUN cleanup and rollback
