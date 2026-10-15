@@ -30,6 +30,7 @@
  *   failnext=/api/路径前缀         该路径的下一个请求失败一次 (E_NETWORK); failnext=1 = 下一个后台任务失败并回滚 (旧用法)
  *   speedlast=seed|none           预置一条昨天的测速结果 / 清空                 env=bad|ok      环境异常 (规则缺失 / 无系统代理) / 恢复
  *   stale=1                       让第一个订阅过期                            tick=N          立刻生成 N 条「实时」访问 / 代理日志
+ *   network=system|tun            接管方式 (state.proxy.network_mode): tun = 增强模式, 订阅自动刷新有变化时只提示, 要管理员授权
  *   newapp=名称                   下一次「扫描应用」会发现这个新应用           reset=1|first-run   恢复初始数据 (令牌不变)
  *   content=cloud|cached|baseline  「恢复默认规则」(POST /api/settings/reset) 任务的结果: 云端最新 (默认) / 离线: 用本机缓存 / 从没拿到过云端内容: 用程序自带的基线
  *   stats=normal|short|empty      流量统计 (GET /api/stats?range=today|3d|7d|30d|90d): normal (默认) = 最早的数据在 41 天前 (90d 只有一部分有数据); short = 2 天前开始; empty = 没有任何数据 (since:"", 全是 0, nodes:[])
@@ -997,7 +998,8 @@ route('GET', '/api/devices', (c) => {
   if (M.central !== 'up') throw E('E_ACCOUNT_UNREACHABLE', 'e.devOffline');
   const full = (d, cur) => ({ uid: d.uid, name: cur ? tr(c.lang, 'dev.this') : devName(d, c.lang), platform: cur ? platformOf() : d.platform, os: cur ? (M.os === 'windows' ? '11' : '15.1') : d.os, app: cur ? M.upd.cur : d.app, last_seen: cur ? sec() : d.last_seen, online: cur ? true : d.online, ip_hint: d.ip_hint, current: !!cur });
   const mine = devicesOf(M.account || ''), me = mine.filter((d) => d.uid === 'this-mock')[0] || { uid: 'this-mock', ip_hint: '192.0.*.*' };
-  return { ok: true, platform: platformOf(), limit: devLimit(), devices: [full(me, true)].concat(mine.filter((d) => d.uid !== 'this-mock').map((d) => full(d, false))) };
+  // 和云端一样只列出还登录着的设备: 被下线 / 因改密码被撤销的 (revoked) 不再出现; online=false 的是「离线但仍保持登录」
+  return { ok: true, platform: platformOf(), limit: devLimit(), devices: [full(me, true)].concat(mine.filter((d) => d.uid !== 'this-mock' && !d.revoked).map((d) => full(d, false))) };
 });
 route('POST', '/api/devices/kick', (c) => {
   const uid = c.p('uid'); if (!uid) throw E('E_INVALID', 'e.devUid'); if (uid === 'this-mock') throw E('E_INVALID', 'e.devSelf');
@@ -1227,7 +1229,7 @@ route('POST', '/api/email/send', billGate(() => { if (billVerified()) return { o
 /* ---- 状态 / 设置 ---- */
 const ovOut = () => M.overrides.map((o) => Object.assign({ target: '', src: 'user', at: 0, why: '', fails: 0, app: '' }, o, { target_ok: targetOk(o.target || '') }));
 route('GET', '/api/state', (c) => ({ ok: true, version: M.upd.cur, prefs_version: M.prefs.version, core: M.upd.coreCur, platform: platform(), ports: ports(), env: envOut(), servers: M.servers, subs: M.subs, overrides: ovOut(),
-  first_run: M.servers.filter((s) => !s.official).length === 0, update: { available: appAvail(), latest: latestApp(), checked: M.upd.checked }, lang: M.langSet || c.hdrLang || 'zh', proxy: { enabled: M.proxyOn, mode: M.proxyMode }, account: { email: M.account || '' } }));
+  first_run: M.servers.filter((s) => !s.official).length === 0, update: { available: appAvail(), latest: latestApp(), checked: M.upd.checked }, lang: M.langSet || c.hdrLang || 'zh', proxy: { enabled: M.proxyOn, mode: M.proxyMode, network_mode: M.network === 'tun' ? 'tun' : 'system', tun_ready: M.network === 'tun' }, account: { email: M.account || '' } }));
 route('GET', '/api/settings', (c) => ({ ok: true, lang: M.langSet || c.hdrLang || 'zh', settings: { log_hours: M.logHours, log_hours_min: 12, log_hours_max: 720, log_ops: M.logOps, access_log: M.accessLog, log_core: M.logCore, auto_sites: M.autoSites, auto_update: M.autoUpdate }, usage: logUsage(), ports: ports(), account: { email: M.account || '' } }));
 route('POST', '/api/settings', (c) => {
   let lh = c.p('log_hours'); const lang = c.p('lang'), ld = c.p('log_days'), al = c.p('access_log'), au = c.p('auto_update'), lo = c.p('log_ops'), lc = c.p('log_core'), as = c.p('auto_sites'), detail = {}; let job = null;
@@ -1573,10 +1575,11 @@ route('POST', '/api/sites/domains/reset', (c) => {
 /* ---- 服务器 / 订阅 / 证书 / 重启 / 任务 ---- */
 const subNameOk = (n) => /^[A-Za-z0-9._ -]{1,40}$/.test(n);
 const SRV_TYPES = ['trojan', 'http', 'socks', 'tuic', 'hysteria2', 'vless', 'vmess', 'shadowsocks', 'anytls'], RESERVED = ['direct', 'AUTO', 'PIN', 'Global', 'Final'];
-/* 与 lib/servers.sh 的 srv_check_line 同样的闸门; 先对副本「干跑」, 有可导入的才提交 */
-function importJsonl(lang, sub, mode, body) {
-  const out = { added: 0, replaced: 0, removed: 0, errors: [] }; let work = clone(M.servers);
-  if (mode === 'replace' && sub) { const n = work.length; work = work.filter((s) => s.sub !== sub); out.removed = n - work.length; }
+/* 与 lib/servers.sh 的 srv_check_line 同样的闸门; 先对副本「干跑」, 有可导入的才提交 (dry: 只算数量, 不改 M.servers)。
+ * 和 srv_import 一样: replace + 订阅名 (订阅刷新) 就地合并 —— 已有的 tag 留在原位, 新的追加, 订阅里已经没有的删掉;
+ * replaced = changed (内容变了) + unchanged (完全相同); same = 应用后服务器列表不变 */
+function importJsonl(lang, sub, mode, body, dry) {
+  const out = { added: 0, replaced: 0, changed: 0, unchanged: 0, removed: 0, errors: [] }, seen = {}, FIELDS = ['tag', 'type', 'server', 'port', 'role', 'sub']; let work = clone(M.servers);
   body.split('\n').forEach((line, i) => {
     if (!line.trim()) return;
     const bad = () => { out.errors.push(tr(lang, 'e.badLine', { n: i + 1 })); };
@@ -1585,22 +1588,37 @@ function importJsonl(lang, sub, mode, body) {
     if (!ob || typeof ob !== 'object' || ['pin', 'auto', 'dl', 'off'].indexOf(j.role) < 0 || (j.sub && !subNameOk(String(j.sub))) || SRV_TYPES.indexOf(ob.type) < 0 || typeof ob.tag !== 'string' || !/^[^"\\\x00-\x1f]{1,64}$/.test(ob.tag)
       || !ob.server || !ob.server_port || RESERVED.indexOf(ob.tag) >= 0 || /^svc-/.test(ob.tag) || /^(官方-|enana-official-)/.test(ob.tag) || 'detour' in ob) return bad();
     const rec = { tag: ob.tag, type: ob.type, server: String(ob.server), port: +ob.server_port, role: j.role, sub: sub || j.sub || '' }, k = work.findIndex((s) => s.tag === ob.tag);
-    if (k >= 0) { work[k] = rec; out.replaced++; } else { work.push(rec); out.added++; }
+    if (k >= 0) { if (FIELDS.every((f) => work[k][f] === rec[f])) out.unchanged++; else out.changed++; work[k] = rec; out.replaced++; } else { work.push(rec); out.added++; }
+    seen[ob.tag] = 1;
   });
+  if (mode === 'replace' && sub) { const n = work.length; work = work.filter((s) => s.sub !== sub || seen[s.tag]); out.removed = n - work.length; }
   if (out.added + out.replaced === 0) throw E('E_INVALID', 'e.noImport', null, { errors: out.errors });
-  M.servers = work; return out;
+  out.same = !out.added && !out.changed && !out.removed;
+  if (!dry) M.servers = work;
+  return out;
 }
+/* dry=1 (仪表盘打开时的订阅自动刷新, 和 lib/api.sh 一样): 只干跑, 不开任务。没有变化的订阅刷新就地记下 (更新时间 / 节点数 / 用量): recorded;
+ * 有变化时 admin = 应用要不要管理员授权 (这里只有 TUN 模式算)。background=1: 静默的自动应用, 仍然是一个任务, 操作记录写 auto */
 route('POST', '/api/servers/import', (c) => {
-  const sub = c.p('sub'), mode = c.p('mode') === 'replace' ? 'replace' : 'merge';
+  const sub = c.p('sub'), mode = c.p('mode') === 'replace' ? 'replace' : 'merge', dry = c.p('dry') === '1', who = c.p('background') === '1' ? 'auto' : 'dashboard';
   if (sub && !subNameOk(sub)) throw E('E_INVALID', 'e.badSubName');
+  if (['', '0', '1'].indexOf(c.p('dry')) < 0 || ['', '0', '1'].indexOf(c.p('background')) < 0) throw E('E_INVALID', 'e.badBool');
   if (!c.body.trim()) throw E('E_INVALID', 'e.noBody');
-  const undo = snapshot(), sb = M.subs.filter((x) => x.name === sub)[0], refresh = !!(sb && mode === 'replace' && (sb.updated > 0 || sb.count > 0)), out = importJsonl(c.lang, sub, mode, c.body);
-  if (sb) {
+  const undo = snapshot(), sb = M.subs.filter((x) => x.name === sub)[0], refresh = !!(sb && mode === 'replace' && (sb.updated > 0 || sb.count > 0)), out = importJsonl(c.lang, sub, mode, c.body, dry);
+  const touch = () => {
     sb.count = M.servers.filter((s) => s.sub === sub).length; sb.updated = sec();
     const iv = num(c.p('interval'), 0), us = num(c.p('used'), -1), to = num(c.p('total'), 0), ex = num(c.p('expire'), 0);
     if (iv > 0) sb.interval = iv; if (to > 0) sb.usage = { used: Math.max(0, us), total: to, expire: ex };
+  };
+  if (dry) {
+    out.dry = true; out.recorded = false; out.admin = false;
+    if (out.same && sb && mode === 'replace') { touch(); out.recorded = true; oplog('auto', 'sub.refresh', kv({ sub, count: sb.count, unchanged: out.unchanged, restart: 'no' })); }
+    else if (!out.same) out.admin = M.network === 'tun';
+    return Object.assign({ ok: true }, out);
   }
-  if (refresh) oplog('dashboard', 'sub.refresh', kv({ sub, count: sb.count })); else oplog('dashboard', 'servers.import', kv({ sub, count: out.added + out.replaced, mode }));
+  delete out.same;
+  if (sb) touch();
+  if (refresh) oplog(who, 'sub.refresh', kv({ sub, count: sb.count })); else oplog(who, 'servers.import', kv({ sub, count: out.added + out.replaced, mode }));
   out.job = newJob('servers-import', APPLY, 4200, { done: applyNow, rollback: undo, msg: 'jd.import' });
   return Object.assign({ ok: true }, out);
 });
@@ -2646,6 +2664,7 @@ async function mockCtl(req, res, u) {
   sw('lastacct', ['none', 'demo', 'other'], (v) => { M.lastAcct = v === 'none' ? null : cacheRec(v + '@example.com', ACCOUNTS[v + '@example.com'].pw); });
   sw('proxy', ['on', 'off'], (v) => { if (M.proxyOn !== (v === 'on')) { M.proxyOn = v === 'on'; M.conns = []; } });
   sw('proxymode', ['auto', 'global'], (v) => { if (M.proxyMode !== v) { M.proxyMode = v; if (M.proxyOn) M.conns = []; } });
+  sw('network', ['system', 'tun'], (v) => { M.network = v; });             // 接管方式: system (默认) / tun (增强模式: 订阅有变化时自动刷新不替用户应用, 只提示「应用更新」)
   if (g('lock') === 'reset') { M.fails = []; M.regs = []; M.lockUntil = 0; }
   if (q.has('locksec')) M.locksec = Math.max(1, num(g('locksec'), 300));
   if (g('expire') === '1') { M.secret = randHex(16); sudoClear(); }
@@ -2695,7 +2714,7 @@ async function mockCtl(req, res, u) {
   if (g('newapp')) M.pendingApps.push(g('newapp').slice(0, 80));
   if (g('content')) M.resetContent = ['cached', 'baseline'].indexOf(g('content')) >= 0 ? g('content') : null;          // 「恢复默认规则」任务的结果: cloud (默认) / cached (离线, 用本机缓存) / baseline (从没拿到过云端内容)
   jsonRes(req, res, 200, { ok: true, helper: helperIsDown() ? 'down' : 'up', clash: clashIsDown() ? 'down' : 'up', helperDown: M.helperDown, clashDown: M.clashDown, conns: M.connTarget, os: M.os, net: M.net, central: M.central,
-    lastacct: M.lastAcct ? (M.lastAcct.email === 'demo@example.com' ? 'demo' : M.lastAcct.email === 'other@example.com' ? 'other' : 'custom') : 'none', proxy: M.proxyOn ? 'on' : 'off', proxymode: M.proxyMode, account: M.account ? maskEmail(M.account) : '', locked: lockWait(), locksec: M.locksec,
+    lastacct: M.lastAcct ? (M.lastAcct.email === 'demo@example.com' ? 'demo' : M.lastAcct.email === 'other@example.com' ? 'other' : 'custom') : 'none', proxy: M.proxyOn ? 'on' : 'off', proxymode: M.proxyMode, network: M.network === 'tun' ? 'tun' : 'system', account: M.account ? maskEmail(M.account) : '', locked: lockWait(), locksec: M.locksec,
     devices: Object.keys(M.devices).reduce((o, e) => { o[maskEmail(e)] = M.devices[e].filter((d) => d.online).map((d) => d.uid); return o; }, {}), notice: M.notice ? noticeText('en') : '',
     vps: M.vps.length, sync: { enabled: M.sync.enabled, remote: M.sync.remote.exists ? (M.sync.remote.version > M.sync.local.version ? 'newer' : 'exists') : 'none', key: M.sync.keyBad ? 'bad' : 'ok', offline: M.sync.offline, dirty: M.sync.local.dirty }, autoUpdate: M.autoUpdate,
     update: M.upd.fail ? 'fail' : M.upd.on ? 'on' : 'off', failnext: M.failNext.concat(M.failJob ? ['1'] : []), failNext: M.failJob, speedlast: M.speed.last ? M.speed.last.id : 'none', servers: M.servers.length, firstRun: M.servers.length === 0,
@@ -2932,7 +2951,7 @@ async function selftest() {
   await api('POST', '/api/override', { form: { kind: 'site', value: 'shop.example.com', state: 'follow' } }); r = await api('GET', '/api/state'); ck('override follow removes it (form body works too)', !jx(r).overrides.some((o) => o.value === 'shop.example.com'));
   const line = (tag, role, extra) => JSON.stringify(Object.assign({ role, outbound: { type: 'trojan', tag, server: '203.0.113.200', server_port: 443, password: 'pw' } }, extra));
   r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'merge' }, body: [line('Selftest A', 'auto'), line('Selftest B', 'pin'), '{"role":"bogus"}', line('PIN', 'auto')].join('\n') });
-  ck('servers/import response: added/replaced/removed counts, per-line errors (bad line + reserved tag), job id', jx(r).ok === true && jx(r).added === 2 && jx(r).replaced === 0 && jx(r).removed === 0 && jx(r).errors.length === 2 && /^servers-import-/.test(jx(r).job), r.text);
+  ck('servers/import response: added/replaced/removed (+ changed/unchanged) counts, per-line errors (bad line + reserved tag), job id', jx(r).ok === true && jx(r).added === 2 && jx(r).replaced === 0 && jx(r).changed === 0 && jx(r).unchanged === 0 && jx(r).removed === 0 && jx(r).errors.length === 2 && /^servers-import-/.test(jx(r).job) && !('same' in jx(r)), r.text);
   let jb = await run(r); r = await api('GET', '/api/state');
   ck('servers/import: job done and the servers show up in state (+2 -> 29)', jx(r).servers.length === 29 && jb.state === 'done');
   r = await api('POST', '/api/servers/import', { q: { mode: 'merge' }, body: 'not json\n{"x":1}' }); ck('servers/import: nothing importable -> E_INVALID + errors[]', jx(r).code === 'E_INVALID' && Array.isArray(jx(r).errors) && jx(r).errors.length === 2);
@@ -3314,6 +3333,24 @@ async function selftest() {
   }
   r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace' }, body: line('Selftest R', 'auto') }); jb = await run(r);          // 已填充的订阅 + replace = 刷新订阅 (sub.refresh)
   ck('servers/import mode=replace on a populated subscription: removed counted, logged as sub.refresh', jx(r).added === 1 && jx(r).removed === 21 && jb.state === 'done');
+  /* 订阅自动刷新的干跑 (dry=1): 没有变化 → 就地记下刷新 (更新时间 / 用量), 不开任务; 有变化 → 真实的数量, 什么都不应用; background=1 仍然是一个任务 */
+  {
+    const dsub = M.subs.filter((x) => x.name === 'demo-sub')[0], srv0 = JSON.stringify(M.servers); dsub.updated = 1;
+    r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', dry: 1, used: 5, total: 100, expire: 2000000000 }, body: line('Selftest R', 'auto') });
+    ck('servers/import dry=1, nothing changed: same + recorded (updated time, usage), no job, servers untouched', jx(r).ok === true && jx(r).dry === true && jx(r).same === true && jx(r).recorded === true && jx(r).admin === false
+      && jx(r).added === 0 && jx(r).changed === 0 && jx(r).unchanged === 1 && jx(r).replaced === 1 && jx(r).removed === 0 && !('job' in jx(r)) && JSON.stringify(M.servers) === srv0 && dsub.updated > 1 && dsub.usage && dsub.usage.total === 100, r.text);
+    dsub.updated = 1;
+    r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', dry: 1 }, body: [line('Selftest R', 'pin'), line('Selftest N', 'auto')].join('\n') });
+    ck('servers/import dry=1 with changes: honest counts (1 new, 1 changed), not recorded, nothing applied', jx(r).same === false && jx(r).recorded === false && jx(r).admin === false && jx(r).added === 1 && jx(r).changed === 1 && jx(r).unchanged === 0
+      && jx(r).replaced === 1 && jx(r).removed === 0 && !('job' in jx(r)) && JSON.stringify(M.servers) === srv0 && dsub.updated === 1, r.text);
+    await ctl('network=tun'); r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', dry: 1 }, body: [line('Selftest R', 'pin'), line('Selftest N', 'auto')].join('\n') }); r2 = jx(await api('GET', '/api/state')).proxy; await ctl('network=system');
+    ck('servers/import dry=1 with changes in TUN mode (ctl network=tun): admin = true, nothing applied; state.proxy.network_mode = tun', jx(r).same === false && jx(r).admin === true && jx(r).recorded === false && !('job' in jx(r)) && JSON.stringify(M.servers) === srv0
+      && r2.network_mode === 'tun' && jx(await api('GET', '/api/state')).proxy.network_mode === 'system', r.text);
+    r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', dry: 2 }, body: line('Selftest R', 'auto') }); r2 = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', background: 'x' }, body: line('Selftest R', 'auto') });
+    ck('servers/import: dry / background only take 0 or 1', jx(r).code === 'E_INVALID' && jx(r2).code === 'E_INVALID' && JSON.stringify(M.servers) === srv0);
+    r = await api('POST', '/api/servers/import', { q: { sub: 'demo-sub', mode: 'replace', background: 1 }, body: line('Selftest R', 'auto') }); jb = await run(r);
+    ck('servers/import background=1 (silent automatic apply): a job as usual; the counts say nothing changed', /^servers-import-/.test(jx(r).job) && jx(r).unchanged === 1 && jx(r).changed === 0 && jx(r).added === 0 && jb.state === 'done' && !('same' in jx(r)), r.text);
+  }
   /* ---- 云端同步: 状态 / 设置 / 推送冲突 / 强制推送 / 脏标记 / 拉取 (replace + merge) / 旧密码 / 离线 / 清除 ---- */
   {
   FAST = 80; let r3;

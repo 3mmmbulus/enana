@@ -51,7 +51,7 @@
 退出账号: 代理设置保留 (不改系统代理、不改代理开关) + 账号的官方节点从本机移除 + 令牌立刻失效 (所有浏览器都要重新登录) + 立即释放这个设备的在线名额 (服务端会话撤销) → `{"ok":true}`。核心会在后台重启一次以换上新令牌 (约 2–3 秒, 期间仪表盘显示登录框即可)。`?switch=1` (「切换账号」) 会额外**关闭代理** (全部直连); 登录到上次登录的另一个账号时也会关闭代理。
 
 ### `GET /api/devices` (需登录) → 我的设备
-`{"ok":true,"platform":"macos","limit":2,"devices":[{"uid","name","platform","os","app","last_seen","online":true,"ip_hint","current":true}]}`。列出本账号全部设备 (所有平台), 当前设备 `current:true`; 用于「设置 → 我的设备」。连不上云端 → `E_ACCOUNT_UNREACHABLE` (前端给出原因, 不要做成死按钮)。
+`{"ok":true,"platform":"macos","limit":2,"devices":[{"uid","name","platform","os","app","last_seen","online":true,"ip_hint","current":true}]}`。列出本账号还登录着的设备 (所有平台; 被下线 / 退出登录 / 过期的设备云端不再返回), 当前设备 `current:true`, `online:false` = 离线但仍保持登录; 用于「设置 → 我的设备」(当前设备没有「下线」按钮)。连不上云端 → `E_ACCOUNT_UNREACHABLE` (前端给出原因, 不要做成死按钮)。
 ### `POST /api/devices/kick` (需登录) 表单 `uid` → `{"ok":true}` 下线另一台设备 (不能下线自己; 前端先二次确认)。被下线的设备在 ≤ 2 分钟内自动退出登录并关闭代理。
 
 ### `POST /api/proxy` (需登录) 表单 `on=0|1` 和/或 `mode=auto|global` (至少给一个)
@@ -160,7 +160,7 @@
 `POST /api/servers/import?sub=&mode=merge|replace&save=0|1` (正文=JSONL; **save★**: 1 = 「保存到云端」, 这些节点 (和订阅) 进入云端同步清单, 第一次用时自动打开云端同步; 0 = 只留在本机; 不带 = 不改动, 例如订阅自动刷新) · `POST /api/servers/delete?tag=[&reassign=][&freeze=1][&accept_orphans=1]` · `POST /api/servers/role?tag=&role=pin|auto|off|dl[&reassign=][&freeze=1][&accept_orphans=1]` (删除 / 改角色的新参数见「出口分配」: 固定出口有人在用时必须先指明去向) ·
 `POST /api/cert?name=` · `POST /api/sub/fetch` · `POST /api/sub/save?name=&save=0|1` · `POST /api/sub/delete?name=[&accept_orphans=1]` · `POST /api/restart` — 形状不变 (订阅里有被使用的固定出口时的新参数见「出口分配」)。
 
-`servers/import` 的 `mode=replace` + `sub` (订阅刷新) 是**就地**合并: 订阅里已有的 tag 留在 `servers.jsonl` 里原来的那一行 (内容变了就原地覆盖), 新的 tag 追加到末尾, 订阅里已经没有的 tag 删掉; 其它来源的行 (手动添加的服务器、别的订阅) 原样不动。内容完全相同的刷新不改动文件, 所以生成的配置不变、核心不重启 (TUN 下也不用管理员授权)。返回的 `added` = 全新的 tag · `replaced` = 文件里已有的 tag (不论内容有没有变; 和 `merge` 一致) · `removed` = 这个订阅里有、新数据里没有的 tag (以前是「先删光再追加」, 订阅整个刷新一次就是 `removed` = 旧节点数、`added` = 新节点数)。`mode=merge` 不变: 已有的 tag 被新行取代并移到末尾。命令行 / 定时刷新 (`enana update`、每日维护) 会把订阅里已有节点的角色 (pin / off / dl) 带回来, 不会被导入器的默认 `auto` 覆盖; 同一批要刷新的多个订阅在一个事务里导入、只应用一次 (合并的事务没通过时退回逐个订阅各一个事务)。
+`servers/import` 的 `mode=replace` + `sub` (订阅刷新) 是**就地**合并: 订阅里已有的 tag 留在 `servers.jsonl` 里原来的那一行 (内容变了就原地覆盖), 新的 tag 追加到末尾, 订阅里已经没有的 tag 删掉; 其它来源的行 (手动添加的服务器、别的订阅) 原样不动。内容完全相同的刷新不改动文件, 所以生成的配置不变、核心不重启 (TUN 下也不用管理员授权)。返回的 `added` = 全新的 tag · `changed` = 文件里已有、内容变了的 tag · `unchanged` = 文件里已有、内容完全相同的 tag · `replaced` = `changed` + `unchanged` (留给旧仪表盘; 和 `merge` 一致) · `removed` = 这个订阅里有、新数据里没有的 tag (以前是「先删光再追加」, 订阅整个刷新一次就是 `removed` = 旧节点数、`added` = 新节点数)。`mode=merge` 不变: 已有的 tag 被新行取代并移到末尾。`dry=1` (仪表盘打开时到期订阅的自动刷新): 只干跑, 不开任务、不应用, 另外返回 `dry: true`、`same` (没有新增 / 变化 / 移除)、`recorded` (`same` 时就地记下这次刷新: 更新时间 / 节点数 / 用量, 下一次自动刷新等满一个刷新间隔) 和 `admin` (`same` 为 false 时, 应用这些变化要不要管理员授权: TUN 模式, 或系统代理模式下根守护进程还加载着); `admin` 为 true 时仪表盘不替用户应用, 只在订阅行提示「应用更新」。`background=1`: 作为后台任务静默应用 (操作记录写 `auto`), 万一需要管理员授权就撤销本次更改, 不弹授权框。命令行 / 定时刷新 (`enana update`、每日维护) 会把订阅里已有节点的角色 (pin / off / dl) 带回来, 不会被导入器的默认 `auto` 覆盖; 同一批要刷新的多个订阅在一个事务里导入、只应用一次 (合并的事务没通过时退回逐个订阅各一个事务)。
 
 ### `GET /api/job?id=`
 `{"ok":true,"id","name","state":"running|done|error","pct":0-100,"msg":"…","steps":[{"label":"…","state":"todo|run|done|error"}],"result":{}}`; `msg`/`label` 按 `X-Enana-Lang` 翻译。

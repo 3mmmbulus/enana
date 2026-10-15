@@ -247,8 +247,9 @@ expect "日志与记录里没有密码" sh -c "! grep -rq -e 'New-Passw0rd2' -e 
 expect "账号服务只收到登录/注册请求" test "$(curl -s "http://127.0.0.1:$A_PORT/_test/hits" | jp 'print(d["hits"])')" -gt 5
 
 echo "== 2b. 设备数量限制 (同账号同平台最多 2 台) · 下线其它设备 · 被下线后本机自动退出 · 心跳"
-seed() { curl -s -G -X POST "http://127.0.0.1:$A_PORT/_test/seed" --data-urlencode "email=$1" --data-urlencode "uid=$2" --data-urlencode "platform=$3" --data-urlencode "name=$4" >/dev/null; }
+seed() { curl -s -G -X POST "http://127.0.0.1:$A_PORT/_test/seed" --data-urlencode "email=$1" --data-urlencode "uid=$2" --data-urlencode "platform=$3" --data-urlencode "name=$4" --data-urlencode "hb_ago=${5:-}" >/dev/null; }
 seed user2@example.test dev-aaaa-1111 macos "办公室 MacBook"; seed user2@example.test dev-bbbb-2222 macos "家里 iMac"; seed user2@example.test dev-cccc-3333 windows "公司 Windows"
+seed user2@example.test dev-dddd-4444 macos "旧 MacBook" 900       # 仍登录着, 但 15 分钟没有心跳: 离线, 不占名额
 R=$(login user2@example.test 'Another-Pass1')
 echo "$R" | chk "本平台已有 2 台设备在线 → E_DEVICE_LIMIT, 返回设备列表 (不含 Windows 那台)" 'assert d["code"]=="E_DEVICE_LIMIT" and d["platform"]=="macos" and d["limit"]==2 and sorted(x["uid"] for x in d["devices"])==["dev-aaaa-1111","dev-bbbb-2222"] and all(x["online"] for x in d["devices"]) and not d["ok"]'
 expect "设备已满时没有登录 (令牌文件保持不变, 不处于 user2 登录状态)" test "$(cat "$W/h/loggedin" | cut -d' ' -f1)" = user1@example.test
@@ -257,13 +258,16 @@ echo "$R" | chk "下线其中一台 (kick) → 自动完成登录" 'assert d["ok
 TOKEN=$(echo "$R" | jp 'print(d["token"])')
 curl -s "http://127.0.0.1:$A_PORT/_test/sessions" | chk "被下线的设备会话在云端已撤销 (kicked); 另一台与本机仍在线" 's={x["uid"]:x for x in d["sessions"] if x["user"]=="rec2def45"}; assert s["dev-aaaa-1111"]["revoked"]=="kicked" and s["dev-bbbb-2222"]["active"]'
 apin -X POST --data-urlencode "user=user2@example.test" --data-urlencode "password=Another-Pass1" --data-urlencode "kick=bad uid!" "$A/api/login" | chk "kick 参数非法 → 被拒" 'assert not d["ok"]'
-api "$A/api/devices" | chk "我的设备: 列出本账号全部设备, 本机标记 current, 含在线状态" 'ds={x["uid"]:x for x in d["devices"]}; assert d["limit"]==2 and d["platform"]=="macos" and len(ds)==4 and sum(1 for x in ds.values() if x["current"])==1 and ds["dev-bbbb-2222"]["online"] and not ds["dev-aaaa-1111"]["online"] and ds["dev-cccc-3333"]["platform"]=="windows"'
+api "$A/api/devices" | chk "我的设备: 只列出还登录着的设备 (刚被下线的那台不在了), 本机标记 current, 含在线状态 (离线但仍登录的照样列出)" 'ds={x["uid"]:x for x in d["devices"]}; assert d["limit"]==2 and d["platform"]=="macos" and len(ds)==4 and "dev-aaaa-1111" not in ds and sum(1 for x in ds.values() if x["current"])==1 and ds["dev-bbbb-2222"]["online"] is True and ds["dev-dddd-4444"]["online"] is False and ds["dev-cccc-3333"]["platform"]=="windows"'
 api -X POST "$A/api/devices/kick" -d "uid=dev-bbbb-2222" | chk "在「我的设备」里下线另一台设备" 'assert d["ok"]'
 curl -s "http://127.0.0.1:$A_PORT/_test/sessions" | chk "该设备会话已撤销" 's={x["uid"]:x for x in d["sessions"] if x["user"]=="rec2def45"}; assert s["dev-bbbb-2222"]["revoked"]=="kicked"'
+api "$A/api/devices" | chk "下线之后再读设备列表: 那台设备不见了, 其它的都还在" 'u=sorted(x["uid"] for x in d["devices"] if not x["current"]); assert u==["dev-cccc-3333","dev-dddd-4444"] and sum(1 for x in d["devices"] if x["current"])==1'
 api -X POST "$A/api/devices/kick" -d "uid=$(cat "$W/h/device.id")" | chk "不能下线自己" 'assert not d["ok"]'
 api -X POST "$A/api/devices/kick" -d "uid=bad%20uid" | chk "设备编号非法 → 被拒" 'assert not d["ok"]'
+curl -s -X POST "http://127.0.0.1:$A_PORT/_test/devapp?uid=$(cat "$W/h/device.id")&app=2.0.0" >/dev/null      # 设备记录里还是登录时写的旧版本
 rm -f "$W/h/.hb.last"; "$W/shortcut/enana" tick --quiet >/dev/null 2>&1
 expect "心跳成功: 仍处于登录状态, 没有联网失败记录" sh -c "test -f '$W/h/loggedin' && test ! -f '$W/h/hb.fail'"
+api "$A/api/devices" | chk "心跳带上了 enana 版本和系统版本: 本机在「我的设备」里显示当前版本 $VER, 不再是登录时写下的旧版本" 'c=[x for x in d["devices"] if x["current"]]; assert len(c)==1 and c[0]["app"]=="'"$VER"'" and c[0]["os"]'
 curl -s -X POST "http://127.0.0.1:$A_PORT/_test/revoke?uid=$(cat "$W/h/device.id")&reason=kicked" >/dev/null
 api -X POST "$A/api/proxy" -d 'on=1' >/dev/null
 rm -f "$W/h/.hb.last"; "$W/shortcut/enana" tick --quiet >/dev/null 2>&1; wait_clash_401 "$TOKEN"
@@ -336,10 +340,11 @@ sdp add "claude.ai" | chk "添加: 已经有的域名 → 被拒" 'assert not d[
 J=$(sdp add "New-Claude.Example." | jp 'print(d["job"])'); [ "$(job_wait "$J")" = done ] && tpass "添加域名 (规范化为小写、去掉结尾的点; 任务完成)" || tfail "添加域名"
 sd | chk "添加后: 生效列表多了 new-claude.example (source=added), modified=true" 'm={x["domain"]:x["source"] for x in d["domains"]}; assert d["modified"] and m["new-claude.example"]=="added" and m["claude.ai"]=="system"'
 cat "$W/h/ui/catalog.json" | chk "catalog.json 里该条目的 domains 是生效后的列表 + modified=true" 'e={x["id"]:x for x in d["entries"]}["claude"]; assert "new-claude.example" in e["domains"] and e["modified"]'
-grep -q 'new-claude.example' "$W/h/config.json" && tpass "新域名已写进核心配置 (热生效)" || tfail "新域名已写进核心配置"
+SRF="$W/h/rules/site-claude/site-claude.json"      # 网站的生效域名是一个本地规则集 (核心热加载), 不写进核心配置: TUN 下改域名不用重装
+grep -q '"new-claude.example"' "$SRF" && ! grep -q 'new-claude.example' "$W/h/config.json" && tpass "新域名已写进这个网站的规则集文件 (热生效), 核心配置里没有它" || tfail "新域名已写进这个网站的规则集文件, 核心配置里没有它"
 J=$(sdp remove "claude.com" | jp 'print(d["job"])'); job_wait "$J" >/dev/null
 sd | chk "删除系统域名 (claude.com): 从生效列表消失, 记在 removed 里" 'assert "claude.com" not in [x["domain"] for x in d["domains"]] and d["removed"]==["claude.com"]'
-grep -q '"claude.com"' "$W/h/config.json" && tfail "删除的系统域名不再出现在核心配置里" || tpass "删除的系统域名不再出现在核心配置里"
+if grep -q '"claude.ai"' "$SRF" && ! grep -q '"claude.com"' "$SRF" && ! grep -q '"claude.com"' "$W/h/config.json"; then tpass "删除的系统域名不再出现在这个网站的规则集文件里 (其余的系统域名还在), 核心配置里也没有"; else tfail "删除的系统域名不再出现在这个网站的规则集文件里, 核心配置里也没有"; fi
 sdp remove "claude.com" | chk "重复删除同一个域名 → 被拒" 'assert not d["ok"]'
 J=$(sdp restore "claude.com" | jp 'print(d["job"])'); job_wait "$J" >/dev/null
 sd | chk "恢复被删除的系统域名" 'assert "claude.com" in [x["domain"] for x in d["domains"]] and d["removed"]==[]'

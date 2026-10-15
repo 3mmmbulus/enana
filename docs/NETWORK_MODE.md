@@ -121,9 +121,9 @@ TUN 的核心是 root 守护进程: 改核心、配置、规则库 (`.srs`)、�
 
 **默认模式不会走错**: `default_mode` 只是核心「没有记住模式」时的起始模式。运行时的模式通过控制接口 (`PATCH /configs`) 推送, sing-box 把它存在 `cache.db` 里并在重启时恢复; enana 自己做的每一次重启 (应用配置、重启、升级核心、启动) 之后都会再 `proxy_sync_mode`。剩下的缺口是「推送时核心没在运行 + 缓存里也没有」, 所以完整安装会记下写进快照的模式 (`$H/.enhanced-mode`), 之后每次无变化的 `apply_config` 发现设置里的模式和它不一致就补同步一次, 核心确认之后才记下。
 
-**root 助手 (`/Library/PrivilegedHelperTools/com.enana.proxy/tunrules-<uid>`, 版本 3; 2.3.23 及更早版本在 `/usr/local/libexec/enana/`)** 现在有两个动作, 都只作用于这个用户自己的守护进程:
+**root 助手 (`/Library/PrivilegedHelperTools/com.enana.proxy/tunrules-<uid>`, 版本 5; 2.3.23 及更早版本在 `/usr/local/libexec/enana/`)** 的动作都只作用于这个用户自己的守护进程:
 
-- `sync`: 校验后写入 `rules/*/ovr-*.json` (应用 / 网站策略), 核心热加载。
+- `sync`: 校验后写入 `rules/*/ovr-*.json` (应用 / 网站策略) 和 `rules/site-<id>/site-<id>.json` (网站的域名列表, 见下面), 核心热加载。
 - `restart`: 只执行 `launchctl kickstart -k system/com.enana.proxy.tun.<uid>`。标签和 `launchctl` 路径是安装时由 root 脚本写死进助手的 (不是调用者给的), 助手不读任何参数 / 输入 / 环境变量; 有多余参数、标签不合规都会拒绝。威胁模型: 同一用户下的任何进程最多能让自己的 root 守护进程重启一次 (流量中断几秒), 得不到 root 权限, 也改不了任何文件; 助手文件归 root、别人不可写、不是符号链接、sudoers 规则经 `visudo -cf` 校验, 这些检查一条没放松。
 - 助手的可信判断只看字节 (`os_helper_trusted`): 安装到 root 目录的助手必须和 enana 此刻渲染出来的一模一样 (`enhanced_helper_render`, 与 root 脚本里的 `helper_render` 是同一段函数), 不再为了查版本而运行它。字节对不上、目录链 (助手所在的目录和上面两级: `…/com.enana.proxy`、`/Library/PrivilegedHelperTools`、`/Library`) 有组 / 其他人可写或者有 ACL, 或者 sudoers 规则不在, 都判为不可用; 下一次完整安装 (一次管理员授权) 换上新的。
 - 位置 (2.3.23 之后): 助手从 `/usr/local/libexec/enana/` 搬到 `/Library/PrivilegedHelperTools/com.enana.proxy/` (只有 root 能写, 包管理器从来不碰它; 老的 Homebrew 会把 `/usr/local` 改成用户可写, 那样的 Mac 上以前根本装不上助手, 早先装好的免密规则还指向一个用户能写的目录)。完整安装 (root 脚本的 d 步) 把助手装到新位置, 免密规则 `/etc/sudoers.d/enana-tunrules-<uid>` (文件名不变) 在同一步改写成新路径, 然后删掉旧位置的那一份 (旧目录是真目录才删; 空了连目录一起删)。缺的 `PrivilegedHelperTools` 和 `com.enana.proxy` 由 root 建成 `755` root:wheel, `/Library` 从来不建。还没完整安装过的 Mac 上, 旧位置的助手只要通过同样严格的检查 (旧位置的目录链 `/usr/local`、`/usr/local/libexec`、`/usr/local/libexec/enana`) 就照常用, `sync` / `restart` / `cleanup` 的 `sudo -n` 调用的都是判为可信的那一份 (先看新位置)。迁移的那次安装如果失败回滚, 指向旧位置的规则不放回去 (旧位置的助手已经删了)。删除 TUN 时两个位置的助手都删, 空了的 `com.enana.proxy` 也删, `PrivilegedHelperTools` 本身不删。
@@ -131,5 +131,16 @@ TUN 的核心是 root 守护进程: 改核心、配置、规则库 (`.srs`)、�
 - 管理员命令全部是一行、以 `/usr/bin/env -i` 清空环境运行, 所有命令都用绝对路径; 每个传给 root 的数据文件 (脚本、配置、快照、助手模板) 都由 enana 只读一次、算摘要, root 按摘要核对后才写入。
 
 Windows 的 TUN 没有免密助手 (每次完整安装都是 UAC), 指纹的两个问题同样存在, 已用同一套规则修复; 策略规则集 (`ovr-*.json`) 在 Windows 上仍计入指纹。Windows 的 `stop` 本来就会跳过没有运行的任务。
+
+### 网站的域名不写进核心配置 (2.3.26)
+
+2.3.25 把每个网站 (目录条目) 的生效域名直接写在 `config.json` 的路由规则里, 所以「修改网站域名」(例如 `ai-common` 删掉 `intercom.io` / `auth0.com`) 会改配置, TUN 下就要完整安装、弹管理员框; 取消授权就撤销。现在:
+
+- 每个目录条目一个本地规则集 `rules/site-<id>/site-<id>.json` (tag `site-<id>`, `lib/catalog.awk` 生成, `lib/sites.sh` 的 `sites_rules_write` 内容有变才原地覆盖)。配置里只有 `{"rule_set":["site-<id>"],"action":"route","outbound":"svc-<id>"}`, 规则的位置和以前的域名规则一样; 没有域名的条目用占位 (`enana-placeholder.invalid`), 配置照样引用, 所以以后加域名也不改配置。域名一律小写, 只留合法的名字 (和 root 助手的检查一致)。
+- 改域名、重置一个网站的域名、「恢复网站默认」、添加 / 删除自己的网站 (`ovr-*.json`)、改线路 (网站的出口开关本来就是核心里的选择器热切换, 自己的网站改线路只换 `ovr-*.json`) 都只改规则数据: 配置一个字节不变。`enhanced_fingerprint` 不算 `site-*.json`; 配置引用到的 `site-*.json` 算进 `enhanced_ovr_fingerprint`, 和策略规则集一起由 `enhanced_sync_ovr` 免密同步到 root 快照, root 的核心热加载。后台任务 (`APPS_BG_JOB=1`) 改的也一样能同步, 不再被撤销。云端内容只改了已有网站的域名时同理; 新增 / 删除目录条目会改配置 (多了 / 少了一个选择器), 仍然要完整安装。
+- 助手 (版本 5) 对 `site-<id>.json` 的检查: 名字是 `site-` 加 1–63 位小写字母 / 数字 / 连字符 (不以连字符开头); 只能有一条规则, 匹配键只能是 `domain` / `domain_suffix`, 值必须是合法的域名 (标签 1–63 位、总长 ≤ 253, `domain_suffix` 可以以一个点开头), 没有正则、路径或别的键; 只覆盖快照里已经有的文件 (完整安装时 root 核对过、配置引用到的那些), 不新建目录或文件; 最多 400 个 (策略规则集仍是 160 个, 分开算); 其它检查 (符号链接、目录归属、总大小 2 MB、全部通过才写) 和 `ovr-*.json` 一样。文件名的正则改成 `\A…\z` (以前的 `$` 会放过结尾的换行)。
+- 系统代理模式: 用户自己的核心读同一个文件, 改域名热加载, 不重启。
+- 迁移: 2.3.25 的 TUN 快照 (域名在配置里, 助手是第 4 版) 照常工作, 直到下一次授权的安装; 2.3.26 第一次需要新配置的应用 (通常就是升级时的那一次) 完整安装一次, 同时装上第 5 版助手, 之后改域名就免密了。助手没有 / 不可信 / 拒绝时照旧退回完整安装 (操作记录 `同步策略规则 … err=no-helper|rejected`)。
+- 测试: `tests/tunrules.sh` T3d (助手对 `site-*.json` 的接受 / 拒绝)、T5c (两个指纹各算什么)、T10 (真实的 `gen_config` / `apply_config` / `op_txn`: 改域名、自己的网站增删和改线路、恢复网站默认、后台任务都只经助手同步, 服务器变了走完整安装, 2.3.25 快照迁移, 系统代理模式热加载); `tests/enhanced.sh` (每个条目一个规则集、改域名配置不变)、`tests/tun-service.sh` 第 13 节 (完整安装带上 `site-*.json`, enana 的数据包通过 root 助手的检查)、`tests/enhanced-root-integrity.sh` (快照清单与 check-config)。
 
 测试: `tests/tunrules.sh` (T3b 助手 `restart` 的接受 / 拒绝, T4b 记账内容与模式切换不重启, T5b 指纹, T6 重启走助手还是完整安装)、`tests/tun-service.sh` (安装后的助手写死标签 / launchctl 路径并真实执行)、`tests/enhanced.sh` (停止已停掉的守护进程不弹框)、`tests/units.sh` U8 (订阅就地刷新、一次应用)、`tests/sysproxy.sh` S6c2 (系统代理助手写死的端口与当前端口不一致时不信任)。

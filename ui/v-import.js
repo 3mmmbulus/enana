@@ -576,14 +576,16 @@
       var card = ui.taskCard(t('imp.card.applying'), { horizontal: false });
       TP.clear(el.job); el.job.appendChild(card.el); card.set({ pct: 0, msg: t('imp.msg.submitting') });
       el.preview.hidden = true; el.paneImp.hidden = true; el.paneMan.hidden = true; el.tabs.el.hidden = true;             // 提交期间收起预览, 避免重复点击
-      var total = { added: 0, replaced: 0, removed: 0, errors: [] }, tags = [], gi, g, res, base, span, save = el.saveCb.checked ? 1 : 0;
+      var total = { added: 0, changed: 0, unchanged: 0, removed: 0, errors: [] }, tags = [], gi, g, res, base, span, save = el.saveCb.checked ? 1 : 0;
       try {
         for (gi = 0; gi < groups.length; gi++) {
           g = groups[gi]; base = gi / groups.length * 100; span = 100 / groups.length;
           card.set({ pct: base, msg: t('imp.msg.writingGroup', { label: groupLabel(g) }) });
           if (g.sub && g.url) await TP.helper('POST', '/api/sub/save', { q: { name: g.sub, save: save }, body: g.url });
           res = await TP.helper('POST', '/api/servers/import', { q: { sub: g.sub, mode: g.mode, save: save }, body: TPImporter.toJSONL(g.servers, g.sub) });
-          total.added += +res.added || 0; total.replaced += +res.replaced || 0; total.removed += +res.removed || 0;
+          total.added += +res.added || 0; total.removed += +res.removed || 0;
+          if (res.changed == null && res.unchanged == null) total.changed += +res.replaced || 0;      // 旧的辅助服务只有 replaced (= 有变化 + 未变)
+          else { total.changed += +res.changed || 0; total.unchanged += +res.unchanged || 0; }
           total.errors = total.errors.concat(res.errors || []);
           g.servers.forEach(function (s) { tags.push(s.outbound.tag); });
           if (res.job) {
@@ -615,7 +617,7 @@
 
     function renderDone(total, tags) {
       var box = TP.clear(el.result);
-      var line = t('imp.done.line', { added: total.added, replaced: total.replaced }) + (total.removed ? ' · ' + t('imp.done.removed', { n: total.removed }) : '');
+      var line = t('imp.done.line', { added: total.added, changed: total.changed, unchanged: total.unchanged }) + (total.removed ? ' · ' + t('imp.done.removed', { n: total.removed }) : '');
       var noPin = !TP.hasRole('pin');
       var testBtn = ui.btn(t('imp.done.test', { n: tags.length }), { kind: 'primary', icon: 'speed' });
       var tBar = ui.bar(); tBar.el.hidden = true;

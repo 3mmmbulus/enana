@@ -48,8 +48,9 @@ enhanced_admin() { # <命令串>: 整条命令 (每个参数都已 enhanced_quot
 enhanced_result() { # <返回码> -> 操作记录的结果: ok | cancelled (管理员密码框被取消) | error (其它失败; 和别的操作一样写 error, 失败筛选才能找到)
   if [ "$1" = 0 ]; then printf 'ok'; elif [ "${ENHANCED_ADMIN_ERR:-}" = cancelled ]; then printf 'cancelled'; else printf 'error'; fi
 }
-# The fingerprint of everything the root core was installed from EXCEPT the app/site policy rule sets (rules/*/ovr-*.json): those are plain routing data
-# that enhanced_sync_ovr can push into the root snapshot without a restart (see enhanced_ovr_fingerprint). A change to anything else needs a full,
+# The fingerprint of everything the root core was installed from EXCEPT the app/site policy rule sets (rules/*/ovr-*.json) and the websites' domain lists
+# (rules/site-<id>/site-<id>.json, see enhanced_site_files): those are plain routing data that enhanced_sync_ovr can push into the root snapshot without a
+# restart (see enhanced_ovr_fingerprint). A change to anything else needs a full,
 # administrator-authorised install, so the fingerprint must only move when the root snapshot would really differ:
 #   - config.json is hashed with the clash_api "default_mode" value blanked. proxy_apply_mode rewrites that value in place on every master-switch / mode
 #     toggle, but it is only the mode the core starts in when it has no remembered one: the live mode is pushed through the API (PATCH /configs) and
@@ -76,10 +77,25 @@ enhanced_rule_refs() {
   refs=$(/bin/bash "$LIB/enhanced-root.sh" check-config "$H/config.json" "$H" 2>/dev/null) || { echo ALL; return 0; }
   printf '%s\n' "$refs" | LC_ALL=C grep '^rules/' || true
 }
-# 指纹里的数据文件: 证书全部算; 规则集只算配置引用到的 (见上面的说明); 策略规则集 (ovr-*.json) 不算, 它们有自己的指纹 (enhanced_ovr_fingerprint)
+# 网站的域名列表 (lib/catalog.awk 生成, lib/sites.sh 写入): 只认 rules/site-<id>/site-<id>.json 这一种位置和名字 (和 root 助手的 SITE_RE 一样: id 是 1–63 位的
+# 小写字母 / 数字 / 连字符, 不以连字符开头)。<keep|drop>: 从标准输入的相对路径 (enhanced_snapshot_files 的格式) 里只留下 / 去掉这些文件。
+# 两边用的是同一个判断: 不进 enhanced_fingerprint 的 (drop) 正好是 enhanced_site_files 能挑出来的 (keep), 一个被引用的规则文件只会算进其中一个指纹
+_enhanced_site_split() {
+  LC_ALL=C awk -F/ -v m="$1" '{ s = (NF == 3 && $1 == "rules" && $2 ~ /^site-[a-z0-9][a-z0-9-]*$/ && length($2) <= 68 && $3 == $2 ".json"); if ((m == "keep") == s) print }'
+}
+# 要同步给 root 的网站域名列表 (相对 $H, 每行一个, C 排序): 只要配置引用到的 —— root 的核心只读这些, 快照里也正好有这些 (完整安装时 root 核对过引用的文件都在)。
+# 配置读不了时 (enhanced_rule_refs 打印 ALL) 全部都算
+enhanced_site_files() {
+  local refs rel; refs=$(enhanced_rule_refs)
+  enhanced_snapshot_files | _enhanced_site_split keep | while IFS= read -r rel; do
+    [ "$refs" = ALL ] || printf '%s\n' "$refs" | LC_ALL=C grep -qxF -- "$rel" || continue
+    printf '%s\n' "$rel"
+  done
+}
+# 指纹里的数据文件: 证书全部算; 规则集只算配置引用到的 (见上面的说明); 策略规则集 (ovr-*.json) 和网站的域名列表 (site-*.json) 不算, 它们有自己的指纹 (enhanced_ovr_fingerprint)
 enhanced_data_hashes() {
   local refs rel; refs=$(enhanced_rule_refs)
-  enhanced_snapshot_files | LC_ALL=C grep -v '/ovr-[^/]*\.json$' | while IFS= read -r rel; do
+  enhanced_snapshot_files | LC_ALL=C grep -v '/ovr-[^/]*\.json$' | _enhanced_site_split drop | while IFS= read -r rel; do
     case $rel in rules/*) [ "$refs" = ALL ] || printf '%s\n' "$refs" | LC_ALL=C grep -qxF -- "$rel" || continue ;; esac
     shasum -a 256 "$H/$rel"
   done 2>/dev/null
@@ -106,15 +122,19 @@ enhanced_mode_resync() { # the mode baked into the root snapshot is only a seed 
   [ "$(printf '%s' "$got" | tr 'A-Z' 'a-z')" != "$(printf '%s' "$want" | tr 'A-Z' 'a-z')" ] || printf '%s\n' "$want" > "$H/.enhanced-mode"
   return 0
 }
-enhanced_ovr_fingerprint() { # the app/site policy rule sets (written by ovr_sync); empty directory => a fixed hash
-  { find "$H/rules" -mindepth 2 -maxdepth 2 -type f -name 'ovr-*.json' -exec shasum -a 256 {} \; 2>/dev/null; echo ovr; } | LC_ALL=C sort | shasum -a 256 | awk '{print $1}'
+enhanced_ovr_fingerprint() { # the app/site policy rule sets (written by ovr_sync) + the referenced website domain lists (enhanced_site_files); empty directory => a fixed hash
+  { find "$H/rules" -mindepth 2 -maxdepth 2 -type f -name 'ovr-*.json' -exec shasum -a 256 {} \; 2>/dev/null
+    enhanced_site_files | while IFS= read -r rel; do shasum -a 256 "$H/$rel"; done 2>/dev/null
+    echo ovr; } | LC_ALL=C sort | shasum -a 256 | awk '{print $1}'
 }
 
-# ---- root helper: change an app/site policy in TUN mode (`sync`), bounce the root core (`restart`) or remove leftover routes (`cleanup`) without an administrator prompt ----
-# Version 2 added `restart`; version 3 writes each rule set into its own directory (rules/<名字>/<名字>.json, see lib/tunrules-helper.pl); version 4 added `cleanup`.
-# A helper installed by an older enana reports 1, 2 or 3, so enhanced_helper_ok rejects it and the next full install (one administrator authorisation, the same one
-# that already follows any upgrade of enhanced.sh / enhanced-root.sh) replaces it. Nothing silently calls a helper that lacks the action or the layout.
-TUNRULES_HELPER_VERSION=4
+# ---- root helper: change an app/site policy or a website's domains in TUN mode (`sync`), bounce the root core (`restart`) or remove leftover routes (`cleanup`) without an administrator prompt ----
+# Version 2 added `restart`; version 3 writes each rule set into its own directory (rules/<名字>/<名字>.json, see lib/tunrules-helper.pl); version 4 added `cleanup`;
+# version 5 also accepts the websites' domain lists (site-<id>.json: domain / domain_suffix lists of valid names, and only files the root snapshot already has).
+# A helper installed by an older enana reports 1 to 4 (and its bytes differ from what enana renders now), so enhanced_helper_ok rejects it and the next full install
+# (one administrator authorisation, the same one that already follows any upgrade of enhanced.sh / enhanced-root.sh) replaces it. Nothing silently calls a helper
+# that lacks the action or the layout.
+TUNRULES_HELPER_VERSION=5
 # 读 (可信判断) 用的路径可以被测试换成沙箱; 以 root 运行的一律用 enhanced_helper_root 给出的写死路径 (不经过 test_env: 环境变量不能决定 root 运行什么)
 # 助手装在 /Library/PrivilegedHelperTools/com.enana.proxy (root 安装脚本的 d 步)。2.3.23 及更早版本装在 /usr/local/libexec/enana: 那一份通过同样严格的检查就照常用,
 # 下一次完整安装把它换到新位置 (见 os_helper_pick)
@@ -129,9 +149,10 @@ enhanced_helper_render() { # <根目录> <标签> <launchctl 路径> < 模板 ->
 }
 enhanced_helper_expected() { enhanced_paths; enhanced_helper_render "$TUN_ROOT" "$TUN_LABEL" "$(test_env ENANA_TUN_LAUNCHCTL /bin/launchctl)" < "$LIB/tunrules-helper.pl" | shasum -a 256 | awk '{print $1}'; }
 enhanced_helper_ok() { enhanced_helper_root >/dev/null; }
-enhanced_ovr_bundle() { # {"ovr-pin.json": {...}, ...} from $H/rules/*/ovr-*.json (the helper validates it again, strictly)
-  perl -MJSON::PP -MFile::Glob=:bsd_glob -e '
-    my %o; for my $f (bsd_glob("$ARGV[0]/rules/*/ovr-*.json")) { my ($n) = $f =~ m{([^/]+)$}; open my $fh, "<", $f or next; local $/; my $d = eval { JSON::PP->new->utf8->decode(scalar <$fh>) }; $o{$n} = $d if ref $d eq "HASH"; }
+enhanced_ovr_bundle() { # {"ovr-pin.json": {...}, "site-claude.json": {...}, ...} from $H/rules/*/ovr-*.json + enhanced_site_files (the helper validates it again, strictly)
+  enhanced_site_files | perl -MJSON::PP -MFile::Glob=:bsd_glob -e '
+    my @f = bsd_glob("$ARGV[0]/rules/*/ovr-*.json"); while (my $l = <STDIN>) { chomp $l; push @f, "$ARGV[0]/$l" if length $l }
+    my %o; for my $f (@f) { my ($n) = $f =~ m{([^/]+)$}; open my $fh, "<", $f or next; local $/; my $d = eval { JSON::PP->new->utf8->decode(scalar <$fh>) }; $o{$n} = $d if ref $d eq "HASH"; }
     print JSON::PP->new->utf8->canonical->encode(\%o);' "$H"
 }
 enhanced_sync_ovr() { # 0 = synced (the running root core hot-reloads the files); non-zero = no/untrusted helper or rejected data -> caller does the full install

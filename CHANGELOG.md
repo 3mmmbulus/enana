@@ -1,5 +1,29 @@
 # Changelog / 更新日志
 
+## 2.3.26 (2026-10-15)
+
+### 中文
+- **改网站域名不再要 Mac 管理员密码 (macOS 增强模式):** 修改网站的域名、恢复默认域名、添加 / 删除自定义网站、改线路, 现在只更新规则数据, 由免密助手同步给 TUN 核心并立即生效, 配置不变, 不再弹管理员密码框。升级后第一次应用配置 (通常就是升级本身) 会要求输入一次管理员密码, 之后不再需要; 云端目录新增或删除网站条目时仍需要授权一次。Windows 不变。
+- **订阅刷新说实话:** 结果显示「新增 · 有变化 · 移除 · 未变」, 什么都没变时显示「订阅已是最新」(以前把保留下来的节点都算成「更新 33」)。导入服务器的结果也这样显示。
+- **打开仪表盘时的自动刷新更安静:** 到期的订阅先在后台比对; 没有变化只记下刷新时间, 不开任务、不重启核心, 等满一个刷新间隔再查; 有变化时, 系统代理模式静默应用, 增强模式 (TUN) 不替你应用, 而是在订阅那一行显示「订阅有更新 (新增 X、有变化 Y、移除 Z), 应用需要管理员授权」和「应用更新」按钮。
+- **我的设备:** 只列出仍登录着这个账号的设备, 下线后立刻从列表消失 (以前一直显示为离线); 当前设备不再有「下线」按钮; 「离线（仍保持登录）」说明设备只是暂时没有联网报到; 设备的 enana 版本和系统版本随心跳更新 (以前只在登录时记录, 所以显示的是旧版本)。
+- **敏感操作的密码验证:** 验证通过后 5 分钟内刷新页面也不用重新输入。验证只记在当前浏览器标签页里, 关闭标签页、退出账号、自动锁定后清除。
+- **网站页改成表格:** 上方是分类筛选、来源 (全部 / 我添加的 / 自动识别) 和搜索, 每行显示网站、域名数、线路和出口; 手机上每行变成一张卡片。
+- **应用和网站列表:** 鼠标移到某一行时整行高亮, 点击这一行的空白处就打开详情 (行里的选择框和按钮照常使用); 也可以用 Tab 选中一行, 按回车打开。
+- **自动线路换节点更快:** 每分钟的连接检查发现自动线路当前用的节点连不上时, 立即让核心重新测速, 换到能用的节点 (以前最多要等 3 分钟的定时测速)。仍然只按延迟和连通性选择, 不测下载速度; 已经建立的连接不会被打断; Hysteria2 / TUIC 节点不在这项检查内。
+- **流量统计修复:** 名称带中文的固定出口 (例如「claude专用」) 的流量以前被算到自动线路里, 现在算对了; tick.log 不再每分钟写一条 "Wide character" 警告。
+
+### English
+- **Editing website domains no longer asks for the Mac administrator password (macOS, Enhanced mode):** editing a site's domains, restoring its default domains, adding or removing a custom site and changing its route now only update rule data, which the passwordless helper syncs to the TUN core and which takes effect at once; the configuration stays the same and no password dialog appears. The first configuration apply after the upgrade (normally the upgrade itself) asks for the administrator password once; after that it is not needed. A cloud catalog update that adds or removes site entries still needs one authorisation. Windows is unchanged.
+- **Honest subscription refresh results:** "X added · Y changed · Z removed · W unchanged", and "The subscription is up to date" when nothing changed (before, every kept node counted as "33 updated"). Server imports report the same way.
+- **Quieter automatic refresh when you open the dashboard:** an overdue subscription is compared in the background first. If nothing changed, only the refresh time is recorded (no task, no core restart) and the next check waits a full interval. If something changed, System Proxy mode applies it silently; Enhanced (TUN) mode does not apply it for you but shows "Subscription has updates (X added, Y changed, Z removed); applying needs administrator authorisation" with an "Apply update" button on the subscription row.
+- **My devices:** only devices still signed in to the account are listed, and a device disappears as soon as you sign it out (before, it stayed listed as offline); the current device has no Sign out button; "Offline (still signed in)" explains that the device just has not checked in; each device's enana and OS versions are updated by its heartbeat (before, only at sign-in, so old versions were shown).
+- **Password check for sensitive actions:** after you confirm your password, reloading the page does not ask again for 5 minutes. The confirmation is kept only in the current browser tab and is cleared when the tab closes, you sign out or the dashboard locks.
+- **Sites page is a table:** category filter, source tabs (All / Added by me / Detected) and search on top; each row shows the site, domain count, route and exit; on phones each row becomes a card.
+- **Apps and Sites lists:** the whole row is highlighted under the mouse, and clicking an empty part of a row opens its details (selects and buttons in the row work as before); Tab selects a row and Enter opens it.
+- **Automatic route switches faster:** when the per-minute connection check finds that the node the automatic route is using does not answer, the core re-tests the group at once and moves to a working node (before, up to 3 minutes until the periodic test). Selection is still by latency and reachability, not download speed; existing connections are not interrupted; Hysteria2 / TUIC nodes are not part of this check.
+- **Traffic statistics fixes:** traffic through a fixed exit with a non-ASCII name (such as "claude专用") was counted as automatic route and is now counted correctly; tick.log no longer gets a "Wide character" warning every minute.
+
 ## 2.3.25 (2026-10-13)
 
 ### 中文

@@ -2,6 +2,7 @@
 # 连接健康记录 (lib/health.sh + lib/health.pl) 和会话心跳事件: 几秒钟, 不需要 sing-box / 网络 / 管理员权限, macOS 和 Linux 都能跑。
 #   · 每分钟 tick: 服务器端口 (真实的本机监听端口 / 关闭的端口) · 经代理的金丝雀分类 (ok / region-blocked / timeout …) · 状态变化 → 操作记录 + state 行 · 休眠间隔
 #   · 「操作记录」开关关闭时一并不记 · 心跳失败 / 恢复 / 被踢下线的操作记录
+#   · 自动线路 (AUTO / PINAUTO) 选中的节点探测不通 → 立刻请核心重测这个组 (限频 / 不触发的情形 / 只在真的换了节点时记录)
 #   · 自动判定 (verdict): 每种原因都用合成数据验证 —— 系统代理没开 / 节点不可达 / 本机断网 / OpenAI 拒绝出口 IP / 被退出登录 / 代理核心没运行 / 数据不足
 # curl / scutil / route / launchctl / nc 全部用本文件里的函数替身 (函数优先于 PATH 里的命令), 不碰真实系统。
 set -u
@@ -32,13 +33,17 @@ nc()        { return 0; }
 auth_secret() { printf 'stub-secret'; }
 auth_logged_in() { [ "$STUB_LOGIN" = 1 ]; }
 curl() {
-  local url='' a v
+  local url='' a v g
   for a in "$@"; do case $a in http*) url=$a ;; esac; done
   case $url in
     */version) printf '200'; return 0 ;;
     */proxies/svc-chatgpt) printf '{"now":"PIN","type":"Selector"}'; return 0 ;;
     */proxies/PIN) printf '{"now":"Pin-A","type":"Selector"}'; return 0 ;;
     */proxies/Final) printf '{"now":"Global","type":"Selector"}'; return 0 ;;
+    # 自动选线组 (H10): 当前选择来自 $W/now.<组> (JSON 字符串里的原文); 没有这个文件 = 核心没运行 / 没有这个组。
+    # 组测速: 记下调用; 有 $W/next.<组> 就把它变成当前选择 (= 核心测完改选了), 返回 $W/delay.body
+    */proxies/AUTO|*/proxies/PINAUTO) g=${url##*/}; [ ! -f "$W/now.$g" ] || printf '{"type":"URLTest","name":"%s","now":"%s","all":[]}' "$g" "$(cat "$W/now.$g")"; return 0 ;;
+    */group/*/delay*) g=${url#*/group/}; g=${g%%/*}; printf '%s %s\n' "$g" "$url" >> "$W/delay.calls"; [ ! -f "$W/next.$g" ] || mv -f "$W/next.$g" "$W/now.$g"; cat "$W/delay.body" 2>/dev/null; return 0 ;;
     */proxies/*) printf '{"type":"Socks"}'; return 0 ;;
     *gstatic*) v=$C_GOOGLE ;; *chatgpt.com*) v=$C_CHATGPT ;; *api.openai.com*) v=$C_OPENAI ;; *captive.apple*) v=$C_CN ;; *) v=200 ;;
   esac
@@ -428,6 +433,67 @@ if [ -n "$ENANA_PROBE_IFINDEX" ]; then
   has "接口序号无效: 退回原来的探测, 不会因此失败" "^o	ok	" "$PB"
 fi
 unset ENANA_PROBE_IFINDEX
+
+
+echo "== H10. 自动线路: 选中的节点探测不通 → 立刻请核心重测这个组 (每组每分钟最多一次; 真的换了节点才记一笔); 探测正常时什么都不做"
+r10() { reset; rm -f "$W"/now.* "$W"/next.* "$W/delay.calls"; printf '{"Auto-Live":120}' > "$W/delay.body"; }
+srvl() { printf '{"role":"%s","outbound":{"type":"%s","tag":"%s","server":"127.0.0.1","server_port":%s}}\n' "$1" "$2" "$3" "$4"; }    # <角色> <类型> <标签> <端口>
+setauto() { { srvl auto socks Auto-Dead "$CLOSED"; srvl auto socks Auto-Live "$OPEN"; } > "$H/servers.jsonl"; }       # 一台不通 (关着的端口) + 一台通的
+calls() { cat "$W/delay.calls" 2>/dev/null | grep -c .; }
+age() { awk -F'\t' -v s="$2" 'BEGIN { OFS = "\t" } { $1 -= s; print }' "$H/.health.retest-$1" > "$W/age.t" && mv -f "$W/age.t" "$H/.health.retest-$1"; }   # <组> <秒>: 上一次重测往前挪 (= 过了这么久)
+r10; setauto; printf 'Auto-Live' > "$W/now.AUTO"
+health_tick
+eq "选中的 Auto-Live 是通的 (另一台不通): 不重测 —— 探测正常时行为不变" "$(calls)" "0"
+hasnt "…没有自动线路的操作记录" "item=auto_select" "$(ops)"
+has "…没选中的那台照常探测、照常记录" "	node	Auto-Dead	refused	" "$(hf)"
+r10; setauto; printf 'Auto-Dead' > "$W/now.AUTO"; printf 'Auto-Live' > "$W/next.AUTO"
+health_tick
+eq "选中的 Auto-Dead 探测不通 (refused): 当场调用一次组测速" "$(calls)" "1"
+has "…调用 /group/AUTO/delay, 给核心 18 秒 (长过它测一个节点的 15 秒上限, 坏节点才会被判为不可用)" "^AUTO http://127.0.0.1:$UI_PORT/group/AUTO/delay?url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=18000$" "$(cat "$W/delay.calls")"
+has "…核心改选了: 记「环境状态变化 item=auto_select from=Auto-Dead to=Auto-Live group=AUTO probe=refused」(来源 auto)" "	auto	环境状态变化	item=auto_select from=Auto-Dead to=Auto-Live group=AUTO probe=refused took_s=[0-9][0-9]*	ok$" "$(ops)"
+health_tick
+eq "下一次 tick 选中的是 Auto-Live (通的): 不再调用, 不会来回测" "$(calls)/$(ops | grep -c item=auto_select)" "1/1"
+r10; setauto; printf 'Auto-Dead' > "$W/now.AUTO"; printf '{}' > "$W/delay.body"
+health_tick; health_tick
+eq "核心没给出任何结果 (它正在自己测速 / 全部连不上): 选择没变就不记录; 同一分钟内的第二次 tick 不再调用" "$(calls)/$(ops | grep -c item=auto_select)" "1/0"
+age AUTO 61; health_tick
+eq "…一分钟后仍然不通: 再试一次 (没有结果时不额外等待)" "$(calls)" "2"
+r10; setauto; printf 'Auto-Dead' > "$W/now.AUTO"      # 返回 {"Auto-Live":120}: 别的节点测到了, 选中的那台没有结果 (到时间还没测完, 旧延迟还在) 却仍被选着
+health_tick; age AUTO 61; health_tick
+eq "核心仍选着它、但它自己没有测速结果: 不算「核心确认它是通的」, 一分钟后再试" "$(calls)/$(ops | grep -c item=auto_select)" "2/0"
+r10; setauto; printf 'Auto-Dead' > "$W/now.AUTO"; printf '{"Auto-Dead":90,"Auto-Live":160}' > "$W/delay.body"
+health_tick
+eq "核心经代理测得通、仍然选它 (只是本机直连它的端口不通): 调用一次, 选择没变不记录" "$(calls)/$(ops | grep -c item=auto_select)" "1/0"
+age AUTO 61; health_tick
+eq "…同一个节点 5 分钟内不再触发 (不会每分钟把整组测一遍)" "$(calls)" "1"
+age AUTO 300; health_tick
+eq "…5 分钟后仍是它、仍不通: 再测一次" "$(calls)" "2"
+r10; { srvl pin socks Pin-Dead "$CLOSED"; srvl pin socks Pin-Live "$OPEN"; } > "$H/servers.jsonl"
+printf 'Pin-Dead' > "$W/now.PINAUTO"; printf 'Pin-Live' > "$W/next.PINAUTO"; printf 'Auto-X' > "$W/now.AUTO"
+health_tick
+eq "固定出口里自动选 (PINAUTO) 选中的 Pin-Dead 不通: 只重测 PINAUTO (没有自己的自动线路服务器时不看 AUTO; PIN 本身永远不动)" "$(cut -d' ' -f1 "$W/delay.calls" | paste -sd, -)" "PINAUTO"
+has "…记一笔 group=PINAUTO" "item=auto_select from=Pin-Dead to=Pin-Live group=PINAUTO probe=refused" "$(ops)"
+r10; { srvl auto hysteria2 Auto-H2 "$CLOSED"; srvl auto socks Auto-Live "$OPEN"; } > "$H/servers.jsonl"; printf 'Auto-H2' > "$W/now.AUTO"
+health_tick
+eq "选中的是 hysteria2 (走 UDP, TCP 端口不通不说明它坏了): 不重测" "$(calls)" "0"
+r10; setauto; printf 'Auto-Dead' > "$W/now.AUTO"; PROXY_ENABLED=0
+health_tick
+eq "总开关关着 (流量都直连, 选哪个节点无所谓): 不重测" "$(calls)" "0"
+r10; setauto
+health_tick
+eq "读不到组的当前选择 (核心没运行 / 没有这个组): 不重测, tick 照常完成" "$(calls)/$(hf | grep -c '	node	')" "0/2"
+r10; { for _i in 1 2 3 4 5 6 7 8 9; do srvl auto socks "Auto-$_i" "$OPEN"; done; srvl auto socks Auto-Dead "$CLOSED"; } > "$H/servers.jsonl"
+printf 'Auto-Dead' > "$W/now.AUTO"; printf 'Auto-1' > "$W/next.AUTO"
+health_tick
+eq "10 台自动线路服务器 (最多探测 8 台): 排在最后的选中节点排到最前面、一定被探测, 总数仍是 8" "$(hf | grep -c '	node	')/$(hf | grep -c '	node	Auto-Dead	refused	')" "8/1"
+eq "…并且触发了重测" "$(calls)" "1"
+r10; { srvl auto socks '东京 & 1' "$CLOSED"; srvl auto socks Auto-Live "$OPEN"; } > "$H/servers.jsonl"
+BS=$(printf '\\')       # 一个反斜杠: 核心的 JSON 里中文是原样的 UTF-8, & 写成 ${BS}u0026 (Go 的 HTML 转义)
+printf '%s' "东京 ${BS}u0026 1" > "$W/now.AUTO"; printf 'Auto-Live' > "$W/next.AUTO"
+eq "测试数据本身: 核心返回的 now 里 & 是转义写法" "$(curl -s "http://127.0.0.1:$UI_PORT/proxies/AUTO" | grep -c '"now":"东京 \\u0026 1"')" "1"
+health_tick
+has "标签带中文 / 空格 / &: 核心返回的 now 解码后和 servers.jsonl 里的标签对得上, 照样重测并记录" "item=auto_select from=\"东京 & 1\" to=Auto-Live group=AUTO probe=refused" "$(ops)"
+rm -f "$W"/now.* "$W"/next.* "$W/delay.calls" "$W/delay.body"
 
 P=$(grep -c . "$W/.pass"); F=$(grep -c . "$W/.fail")
 echo; echo "健康记录测试: $P 通过, $F 失败"

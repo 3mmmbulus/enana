@@ -16,6 +16,8 @@
 #   state.json  上一次采样的累计值与每条连接的字节数 (用来算增量)
 # 精度说明: 总量来自核心的累计计数 (准确); 分类 (直连 / 固定出口 / 自动线路 / 各节点) 来自采样时仍在的连接, 两次采样之间已经结束的短连接
 # 按当时的分类比例分摊 (估算)。核心重启后计数会清零, 脚本自动识别并从新计数开始。
+# 编码: 文件 / roles 文件 / 输出都是 UTF-8 字节, 读的时候不解码。decode_json 解出来的节点名 / 应用名是字符, 先 utf8::encode 回字节再用 (ASCII 不受影响, 输出逐字节不变);
+#   2.3.25 及更早版本直接用字符: 非 ASCII 的名字 (claude专用 / 微信) 每分钟报一次「Wide character in print」, 查不到 roles 文件里的角色 (固定出口被算成自动线路), Latin-1 范围的字母 (é) 被写成单字节。
 use strict; use warnings;
 use JSON::PP; use POSIX qw(strftime); use Fcntl qw(:flock);
 my ($cmd, $dir, @rest) = @ARGV;
@@ -64,14 +66,14 @@ if ($cmd eq 'collect') {
     my %cur; my (%cu, %cd, %nu, %nd, %pu, %pd); my ($au, $ad) = (0, 0);
     for my $c (@{ $j->{connections} || [] }) {
         my $id = $c->{id} or next; my $up = $c->{upload} || 0; my $down = $c->{download} || 0;
-        my $chain = $c->{chains} || []; my $node = $chain->[0] // 'direct';
+        my $chain = $c->{chains} || []; my $node = $chain->[0] // 'direct'; utf8::encode($node);     # 文本一律按 UTF-8 字节处理 (见文件头): 否则「claude专用」这样的节点查不到角色, 写文件时报 Wide character
         my $class = $node =~ /^direct(?:-[a-z]+)?$/ ? 'direct' : (($role{$node} // '') eq 'pin' ? 'pin' : 'auto');      # direct-mode / direct-lan / direct-site / direct-app / direct-cn 也是直连
         my $p = $state->{conns}{$id} || [0, 0];
         my $du = $up - $p->[0]; $du = $up if $du < 0; my $dd = $down - $p->[1]; $dd = $down if $dd < 0;
         $cur{$id} = [$up + 0, $down + 0];
         $cu{$class} += $du; $cd{$class} += $dd; $au += $du; $ad += $dd;
         if ($class ne 'direct') { $nu{$node} += $du; $nd{$node} += $dd; }
-        my $app = appname($c->{metadata} && $c->{metadata}{processPath}); if (length $app) { $pu{$app} += $du; $pd{$app} += $dd; }
+        my $app = appname($c->{metadata} && $c->{metadata}{processPath}); utf8::encode($app); if (length $app) { $pu{$app} += $du; $pd{$app} += $dd; }
     }
     my $first = !exists $state->{ut};                                     # 第一次采样: 只建立基线, 不记录 (否则会把核心启动以来的累计都算成「这一分钟」)
     my ($tu, $td) = (0, 0);

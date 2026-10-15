@@ -36,10 +36,10 @@ Pro 订单、余额、到账记录与验证接口见 [BILLING_API.md](BILLING_AP
 - 400 `{"code":"bad_credentials"}` · 403 `{"code":"account_disabled"}` · 429 限流
 - `kick_device_uid` 非空: 先撤销该设备 (必须是同账号、同平台) 的会话再登录; 仍然超限 → 再次 409。
 ### `POST /api/collections/users/records` 注册 (PocketBase 原生接口, `{"email","password","passwordConfirm"}`); 服务端自动给新账号创建 free 套餐。
-### `POST /api/enana/v1/session/heartbeat` → `{"ok":true,"token":"<刷新后的 jwt>","expires_at":…}`; 会话被撤销/过期 → 401 `{"code":"session_revoked","reason":"kicked|logout|limit|expired"}`。客户端每 ~120 秒一次 (launchd 定时任务), 连续联网失败超过宽限期 (默认 7 天) 后本机自动退出登录。
+### `POST /api/enana/v1/session/heartbeat` `{"app":"2.3.26","os":"15.6.1"}` (正文可选) → `{"ok":true,"token":"<刷新后的 jwt>","expires_at":…}`; 会话被撤销/过期 → 401 `{"code":"session_revoked","reason":"kicked|logout|limit|expired"}`。客户端每 ~120 秒一次 (launchd 定时任务), 连续联网失败超过宽限期 (默认 7 天) 后本机自动退出登录。正文里合法的 `app` (`^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]{1,20})?$`, 最多 32 个字符) / `os` (1~64 个可打印字符, 首尾没有空白) 会更新设备记录的 `app_version` / `os_version` (升级后「我的设备」显示新版本); 不合法或没有就忽略, 心跳照样成功 (老客户端发 `{}`)。
 ### `POST /api/enana/v1/session/logout` → `{"ok":true}` 立即释放这个设备名额。
-### `GET /api/enana/v1/devices` → `{"limit":2,"platform":"macos","devices":[{…同上, 另有 "app":"2.1.0","current":true}]}` (列出本账号全部设备, 用于「设置 → 我的设备」)
-### `POST /api/enana/v1/devices/kick` `{"device_uid":"…"}` → `{"ok":true}` (不能下线自己; 自己用 logout)
+### `GET /api/enana/v1/devices` → `{"limit":2,"platform":"macos","devices":[{…同上, 另有 "app":"2.1.0","current":true}]}` (用于「设置 → 我的设备」: 只列出还登录着的设备 —— 至少有一个未撤销、未过期的会话 —— 外加当前设备; 被下线 / 退出登录 / 过期 / 因改密码或超限被撤销的设备不再出现。`online` = 10 分钟内有心跳, 所以 `online:false` 的是「离线但仍保持登录」)
+### `POST /api/enana/v1/devices/kick` `{"device_uid":"…"}` → `{"ok":true,"revoked":1}` (撤销那台设备所有登录着的会话; 已经没有会话时是幂等的 `revoked:0`, 不记审计; 不能下线自己, 自己用 logout)
 ### `GET /api/enana/v1/session/check` → 204 / 401 (供网关 auth_request 校验 `/v1/` 下的签名内容)
 ### `POST /api/enana/v1/account/password` `{"old_password":"…","new_password":"…"}`
 → 200 `{"ok":true,"token":"<新 jwt>","session":{"id":"…","expires_at":…}}` (当前设备保持登录, 旧令牌立即作废; 账号下**其它所有会话**被撤销, `reason=password_changed`) · 400 `bad_credentials` (旧密码不对) / `weak_password` (新密码不是 8–71 个字符 / 超过 72 字节 / 与旧密码相同) · 429 (与登录共用失败计数)。密码只在请求体里 (经 TLS), 本机从不落盘。

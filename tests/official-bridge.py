@@ -86,7 +86,7 @@ class OfficialBridge(unittest.TestCase):
         raw = jsonl(row, ok)
         r = subprocess.run(['/bin/bash', '-c', '. "$1/lib/common.sh"; init_paths "$1/install.sh"; for f in servers; do . "$LIB/$f.sh"; done; load_settings 2>/dev/null; srv_import "" merge < "$2"', 'test', str(repo), '/dev/stdin'],
                            env=self.env, input=raw.encode(), capture_output=True, timeout=30)
-        self.assertEqual(r.stdout.decode().split(), ['1', '0', '0'], r.stderr.decode())
+        self.assertEqual(r.stdout.decode().split(), ['1', '0', '0', '0', '0'], r.stderr.decode())      # added replaced removed changed unchanged
         text = (self.home / 'servers.jsonl').read_text()
         self.assertIn('Fine', text); self.assertNotIn('官方-我的', text)
 

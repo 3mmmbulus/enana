@@ -19,6 +19,9 @@ cc_fail() { cc "$1"; [ "$?" = 4 ] && grep -q "config-path: $2" "$W/cc.err"; }
 echo "== A. 配置路径检查 (check-config)"
 check "合法配置: DNS https 的 path、ws 传输的 path 都放行 (M3); 证书 / 规则集的引用被列出" cc_pass '{"log":{"output":"ROOT/sing-box.log"},"dns":{"servers":[{"type":"https","server":"d.example","path":"/dns-query"}]},"outbounds":[{"type":"vless","transport":{"type":"ws","path":"/ws"},"tls":{"enabled":true,"certificate_path":"ROOT/certs/Tokyo.crt","key_path":"ROOT/certs/k.pem"}}],"route":{"rule_set":[{"type":"local","tag":"g","path":"ROOT/rules/geo/geo.srs"}]},"experimental":{"cache_file":{"path":"ROOT/cache.db"}}}'
 check "列出的引用包含证书和规则集" grep -q '^certs/Tokyo.crt$' "$W/cc.out"
+check "网站的域名列表 (本地 source 规则集 rules/site-<id>/site-<id>.json): 放行, 并列为引用 (完整安装时必须在快照里)" cc_pass '{"route":{"rule_set":[{"type":"local","tag":"site-claude","format":"source","path":"ROOT/rules/site-claude/site-claude.json"}],"rules":[{"rule_set":["site-claude"],"action":"route","outbound":"svc-claude"}]}}'
+check "…列出的引用就是 rules/site-claude/site-claude.json" test "$(cat "$W/cc.out")" = rules/site-claude/site-claude.json
+check "…路径多一层 (rules/site-claude/x/site-claude.json): 拒绝" cc_fail '{"route":{"rule_set":[{"type":"local","tag":"site-claude","format":"source","path":"ROOT/rules/site-claude/x/site-claude.json"}]}}' /route/rule_set/0/path
 check "log.output 指向 ROOT 之外: 拒绝" cc_fail '{"log":{"output":"/etc/x"}}' /log/output
 check "任何字符串里的 .. 路径段: 拒绝 (即使是不认识的键)" cc_fail '{"x":"/a/../b"}' /x
 check "experimental.clash_api.external_ui: 拒绝 (enana 从不生成)" cc_fail '{"experimental":{"clash_api":{"external_ui":"ROOT/ui"}}}' /experimental/clash_api/external_ui
@@ -53,16 +56,17 @@ check "…mixed 监听 0.0.0.0 → 拒绝" cc_fail '{"inbounds":[{"type":"mixed"
 check "…tun 加上 127.0.0.1 上的 mixed: 放行" cc_pass '{"inbounds":[{"type":"tun","tag":"tun-in"},{"type":"mixed","tag":"in","listen":"127.0.0.1","listen_port":1080}]}'
 
 echo "== B. 快照文件的筛选 (3.4): 规则集 rules/目录/文件, 证书 certs/名字.crt"
-mkdir -p "$H/rules/app/deep" "$H/certs"
-printf x > "$H/rules/app/ovr-pin.json"; printf x > "$H/rules/app/.DS_Store"; printf x > "$H/rules/app/deep/x.srs"
+mkdir -p "$H/rules/app/deep" "$H/rules/site-claude" "$H/certs"
+printf x > "$H/rules/app/ovr-pin.json"; printf x > "$H/rules/app/.DS_Store"; printf x > "$H/rules/app/deep/x.srs"; printf x > "$H/rules/site-claude/site-claude.json"
 printf x > "$H/rules/app/a.srs.new"; printf x > "$H/rules/flat.srs"; printf x > "$H/certs/.hidden.crt"; printf x > "$H/certs/Tokyo.crt"; printf x > "$H/certs/notes.txt"
 LIST=$(enhanced_snapshot_files)
 has() { printf '%s\n' "$LIST" | grep -qx "$1"; }
 skipped() { printf '%s\n' "$LIST" | grep -Eq 'DS_Store|deep|\.new$|flat\.srs|notes'; }
 check "ovr-*.json 在快照里" has rules/app/ovr-pin.json
+check "网站的域名列表 (rules/site-<id>/site-<id>.json) 在快照里 (完整安装时一起交给 root; 之后由助手免密覆盖)" has rules/site-claude/site-claude.json
 check "以点开头的证书 (api 可以建) 在快照里" has certs/.hidden.crt
 check "隐藏文件 / 深层文件 / *.new / 旧的扁平 .srs / 非 .crt 都不在" test "$(skipped; echo $?)" = 1
-rm -rf "$H/rules/app" "$H/certs"
+rm -rf "$H/rules/app" "$H/rules/site-claude" "$H/certs"
 
 echo "== C. 弹框之前的预检: 不调用一次管理员命令"
 rf_reset

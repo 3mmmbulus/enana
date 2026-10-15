@@ -3,8 +3,8 @@
 用法: python3 mock-account.py <端口> [/v1 静态目录]    (/v1/* 只有带有效 Bearer + X-Enana-Session 的请求才能下载, 模拟网关的 auth_request)
   POST /api/enana/v1/auth/login            {email,password,device{uid,name,platform,os,arch,app},kick_device_uid} -> 200 / 409 device_limit / 400 / 429
   POST /api/collections/users/records      注册 {email,password,passwordConfirm} -> 200 / 400 (data.email.code / data.password.code)
-  POST /api/enana/v1/session/heartbeat     (Bearer + X-Enana-Session) -> 200 {token} / 401 session_revoked
-  POST /api/enana/v1/session/logout        GET /api/enana/v1/devices      POST /api/enana/v1/devices/kick {device_uid}
+  POST /api/enana/v1/session/heartbeat     (Bearer + X-Enana-Session) [{app,os}] -> 200 {token} / 401 session_revoked (合法的 app / os 更新设备记录)
+  POST /api/enana/v1/session/logout        GET /api/enana/v1/devices (只列出还登录着的设备 + 本机)      POST /api/enana/v1/devices/kick {device_uid}
   POST /api/enana/v1/account/password      {old_password,new_password} -> 200 {token,session} / 400 bad_credentials|weak_password (其它会话全部撤销: password_changed)
   GET  /api/enana/v1/plan                  套餐与权益 (默认 free; POST /_test/plan?code=pro 切换)
   GET  /api/enana/v1/nodes                 官方线路节点 (会员): {entitled, nodes:[{outbound}]}; POST /_test/nodes?mode=none|ok|ok2|changed|empty|junk|500 切换 (全部是占位数据: *.example.invalid)
@@ -12,9 +12,10 @@
   GET  /api/health
   测试控制:  POST /_test/mode?m=ok|down|ratelimit|badjson    POST /_test/passwd?email=..&pw=..    GET /_test/hits
              POST /_test/revoke?uid=..&reason=kicked         (模拟云端/其它设备把某设备的会话撤销)   POST /_test/limit?n=2
-             POST /_test/seed?email=..&uid=..&platform=macos&name=..   (让某账号在另一台设备上已经登录)   GET /_test/sessions
+             POST /_test/seed?email=..&uid=..&platform=macos&name=..[&hb_ago=秒]   (让某账号在另一台设备上已经登录; hb_ago = 最近一次心跳在多久以前, 超过 600 秒就是离线但仍登录)   GET /_test/sessions
+             POST /_test/devapp?uid=..&app=..                (把设备记录里的版本改旧: 模拟只在登录时写过版本的老记录)
 """
-import json, os, sys, threading, time, uuid
+import json, os, re, sys, threading, time, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -30,10 +31,26 @@ PREFS = {}     # user_id -> {version, stamp, prefs}   (偏好: 改动时间 stam
 V1_DIR = sys.argv[2] if len(sys.argv) > 2 else ''
 LOCK = threading.Lock()
 ONLINE_TTL = 600
+APP_RE = re.compile(r'^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]{1,20})?$')   # 与 server/pb_hooks/enana_lib.js 的 heartbeatInfo 一致
+
+
+def live(s):    # 仍登录着: 未撤销、未过期 (不管有没有心跳)
+    return s['revoked'] is None and s['exp'] > time.time()
 
 
 def active(s):
-    return s['revoked'] is None and s['exp'] > time.time() and s['hb'] > time.time() - ONLINE_TTL
+    return live(s) and s['hb'] > time.time() - ONLINE_TTL
+
+
+def hb_info(body):  # 心跳正文里可选的 app / os: 合法才用 (os: 字符串, 1~64 个字符, 没有控制字符, 首尾没有空白)
+    out = {}
+    body = body if isinstance(body, dict) else {}
+    a, o = body.get('app'), body.get('os')
+    if isinstance(a, str) and len(a) <= 32 and APP_RE.fullmatch(a):
+        out['app'] = a
+    if isinstance(o, str) and o and len(o) <= 64 and o == o.strip() and not re.search('[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]', o):
+        out['os'] = o
+    return out
 
 
 def plan_obj():
@@ -94,12 +111,15 @@ class H(BaseHTTPRequestHandler):
             return s, 'expired'
         return s, None
 
-    def _devlist(self, uid_user, platform=None, cur_uid=None):
+    def _devlist(self, uid_user, platform=None, cur_uid=None, signed_in=False):
         out = []
         for uid, d in DEVICES.get(uid_user, {}).items():
             if platform and d['platform'] != platform:
                 continue
-            on = any(active(s) for s in SESSIONS.values() if s['user'] == uid_user and s['uid'] == uid)
+            mine = [s for s in SESSIONS.values() if s['user'] == uid_user and s['uid'] == uid]
+            if signed_in and uid != cur_uid and not any(live(s) for s in mine):
+                continue            # 「我的设备」: 被下线 / 退出 / 过期的设备不再列出 (与云端一致)
+            on = any(active(s) for s in mine)
             out.append({'app': d.get('app', ''), 'current': uid == cur_uid, 'ip_hint': '203.0.*.*', 'last_seen': int(d['last_seen']), 'name': d['name'],
                         'online': on, 'os': d.get('os', ''), 'platform': d['platform'], 'uid': uid})
         return out
@@ -132,7 +152,7 @@ class H(BaseHTTPRequestHandler):
                 s, why = self._session()
                 if s is None or why:
                     return self._send(401, {'code': 'session_revoked', 'reason': why or 'invalid'})
-                return self._send(200, {'devices': self._devlist(s['user'], None, s['uid']), 'limit': STATE['limit'], 'platform': s['platform']})
+                return self._send(200, {'devices': self._devlist(s['user'], None, s['uid'], True), 'limit': STATE['limit'], 'platform': s['platform']})
         if u.path == '/api/enana/v1/plan':
             if STATE['mode'] == 'down':
                 return self._send(502, {'message': 'bad gateway'})
@@ -271,10 +291,18 @@ class H(BaseHTTPRequestHandler):
                     if s['uid'] == q['uid'][0] and s['revoked'] is None:
                         s['revoked'] = q.get('reason', ['kicked'])[0]; c += 1
             return self._send(200, {'revoked': c})
+        if u.path == '/_test/devapp':   # 设备记录里的版本改旧 (老客户端只在登录时写版本)
+            with LOCK:
+                c = 0
+                for devs in DEVICES.values():
+                    if q['uid'][0] in devs:
+                        devs[q['uid'][0]]['app'] = q.get('app', [''])[0]; c += 1
+            return self._send(200, {'updated': c})
         if u.path == '/_test/seed':   # 让某账号在另一台设备上已经登录
             em = q['email'][0]; uid = q['uid'][0]
             with LOCK:
-                self._login_ok(USERS[em][0], {'uid': uid, 'name': q.get('name', ['其它设备'])[0], 'platform': q.get('platform', ['macos'])[0], 'os': '14.5', 'arch': 'arm64', 'app': '2.1.0'})
+                sid = self._login_ok(USERS[em][0], {'uid': uid, 'name': q.get('name', ['其它设备'])[0], 'platform': q.get('platform', ['macos'])[0], 'os': '14.5', 'arch': 'arm64', 'app': '2.1.0'})
+                SESSIONS[sid]['hb'] -= int(q.get('hb_ago', ['0'])[0] or 0)
             return self._send(200, {'ok': True})
         # ---- 以下是被测接口 (test mode 对它们全部生效: down = 云端不可用, ratelimit = 限流) ----
         mode = STATE['mode']
@@ -312,6 +340,7 @@ class H(BaseHTTPRequestHandler):
                     return self._send(401, {'code': 'session_revoked', 'reason': why})
                 if u.path.endswith('/heartbeat'):
                     s['hb'] = time.time(); DEVICES[s['user']][s['uid']]['last_seen'] = time.time()
+                    DEVICES[s['user']][s['uid']].update(hb_info(body))
                     return self._send(200, {'ok': True, 'token': 'tok-' + [k for k, v in SESSIONS.items() if v is s][0], 'expires_at': int(s['exp'])})
                 if u.path.endswith('/logout'):
                     s['revoked'] = 'logout'

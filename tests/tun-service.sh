@@ -169,6 +169,25 @@ rf_reset; mkdir -p "$W/usr/local/libexec/enana" "$W/Library/PrivilegedHelperTool
 rf_enana_start; rc=$?; chmod g-w "$W/usr/local"
 check "新位置已经有系统代理助手 (规则已经改写成新路径): 不动它" test "$rc:$(test -e "$SPR" && echo y || echo n)" = "0:y"
 
+echo "== 13. 网站的域名列表 (rules/site-<id>/site-<id>.json): 完整安装时随快照逐字节交给 root; 之后 enana 生成的数据包通过 root 助手的检查, 原地覆盖快照里的那一份"
+rf_reset
+mkdir -p "$H/rules/site-claude"; printf '%s\n' '{"version":3,"rules":[{"domain_suffix":["claude.ai","anthropic.com"]}]}' > "$H/rules/site-claude/site-claude.json"
+printf '%s\n' '{"log":{"level":"info","output":"'"$H"'/sing-box.log"},"inbounds":[{"type":"tun","tag":"tun-in"}],"route":{"rule_set":[{"type":"local","tag":"geo","path":"'"$H"'/rules/geo/geo.srs"},{"type":"local","tag":"site-claude","format":"source","path":"'"$H"'/rules/site-claude/site-claude.json"}],"rules":[{"rule_set":["site-claude"],"action":"route","outbound":"direct"}],"final":"direct"}}' > "$H/config.json"
+rf_enana_start; rc=$?
+check "安装成功 (退出码 0)" test "$rc" = 0
+check "root 快照里的 site-claude.json 和 enana 这边逐字节一致" cmp -s "$ROOT/rules/site-claude/site-claude.json" "$H/rules/site-claude/site-claude.json"
+check "安装后记下的策略指纹算上了这个文件 (之后改域名, 策略指纹一变就走助手同步)" test "$(cat "$H/.enhanced-ovr-fingerprint")" = "$(enhanced_ovr_fingerprint)"
+check "…核心指纹不算它 (改域名不触发完整安装)" test "$(cat "$H/.enhanced-fingerprint")" = "$(enhanced_fingerprint)"
+# 装好的助手只给 root 用 (目录归 root, uid 写死成 0): 这里用同一个模板渲染一份 uid = 当前用户的副本, 验证 enana 的数据包和 root 的检查对得上
+sed -e "s|@ROOT@|$ROOT|g" -e "s|@ROOTUID@|$ME|g" -e "s|@VERSION@|$TUNRULES_HELPER_VERSION|g" -e "s|@LABEL@|com.enana.proxy.tun.$ME|g" -e "s|@LAUNCHCTL@|$W/bin/launchctl|g" "$RF_REPO/lib/tunrules-helper.pl" > "$W/helper-me.pl"
+printf '%s\n' '{"version":3,"rules":[{"domain_suffix":["claude.ai","new-claude.example"]}]}' > "$H/rules/site-claude/site-claude.json"
+ino=$(stat -f %i "$ROOT/rules/site-claude/site-claude.json")
+check "改了域名: 核心指纹不变 (不重装), 策略指纹变 (助手同步)" test "$([ "$(cat "$H/.enhanced-fingerprint")" = "$(enhanced_fingerprint)" ] && echo core-same):$([ "$(cat "$H/.enhanced-ovr-fingerprint")" != "$(enhanced_ovr_fingerprint)" ] && echo ovr-changed)" = "core-same:ovr-changed"
+enhanced_ovr_bundle | perl "$W/helper-me.pl" sync > "$W/sync.out" 2>&1; rc=$?
+check "enana 的数据包 (只有被引用的 site-claude.json): root 助手校验通过, 写了 1 个文件" test "$rc:$(cat "$W/sync.out")" = "0:1 files synced"
+check "…快照里的那一份原地覆盖 (inode 不变): 新域名在, anthropic.com 没了" test "$(stat -f %i "$ROOT/rules/site-claude/site-claude.json"):$(grep -c new-claude.example "$ROOT/rules/site-claude/site-claude.json"):$(grep -c anthropic.com "$ROOT/rules/site-claude/site-claude.json")" = "$ino:1:0"
+rm -rf "$H/rules/site-claude"
+
 echo
 if [ "$fails" = 0 ]; then echo 'PASS: root snapshot install, bootstrap / route rollback, staged symlink refusal, stop and remove from the root copy, rollback without a helper backup, past a failed step and without restoring a helper into an unsafe directory, migration from /usr/local/libexec'
 else echo "FAIL: $fails check(s) failed"; exit 1; fi
