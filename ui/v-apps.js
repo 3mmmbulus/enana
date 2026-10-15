@@ -9,7 +9,8 @@
  * · 列表分页 (ui.pager) + 分组标题; 分类筛选 / 搜索记在 TP.prefs (apps.group / apps.q)
  * · 2.3.8: 每个应用显示「安装 / 识别时间」(GET /api/apps 的 installed / seen) 和「今日流量」(GET /api/stats/apps?range=today, 页面开着时每 30 秒刷新);
  *   「操作」列每行都有按钮 (详情 + 保持直连 / 删除); 所有列头可点击排序 (ui.sorter, 记在 prefs sort.apps; 排序时不分组); 列表窄 (没有列头) 时列表顶上换成一条排序栏 (排序下拉 + 方向 + 模式说明);
- *   「详情」弹窗: 路径 / 类型 / 分类 / 安装与识别时间 / 今日流量 / 当前与推荐设置, 可以直接采用推荐设置或跳到该应用的访问记录 */
+ *   「详情」弹窗: 路径 / 类型 / 分类 / 安装与识别时间 / 今日流量 / 当前与推荐设置, 可以直接采用推荐设置或跳到该应用的访问记录
+ * · 2.3.26: 鼠标移到一行上整行变色; 点这一行里不是控件的地方 (或者 Tab 到这一行按回车) = 点「详情」(TP.rowOpen, 网站页的表格也用它) */
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, setText = TP.setText, I = window.I18N, t = I.t, L = I.L;
@@ -93,6 +94,34 @@
   }
 
   TP.appIc = { mk: mkIc, paint: paintIc };                                 // 其它页面 (日志 / 网站) 也要显示应用图标: 复用同一个图标盒子
+
+  /* ================= 整行点开详情: TP.rowOpen(行, open(行)) (应用页 / 网站页的表格共用) =================
+   * 点这一行里不是控件的地方 = 点这一行的「详情」/「查看域名」; 行里的控件 (下拉 / 分段开关 / 按钮 / 链接 / 输入框 / 「!」) 照常工作, 不会顺带打开详情。
+   * 键盘: 行可以 Tab 到 (tabindex=0), 在行上按回车打开 (焦点在行里的控件上时回车归控件); 拖动选中了行里的文字 (复制名称 / 路径) 时松开鼠标不算点击。
+   * 样式: .row-open = 手形指针 + 键盘焦点框 (style.css, 和整行变色 .row-hov 一起) */
+  var CTL_TAG = { a: 1, button: 1, input: 1, select: 1, option: 1, textarea: 1, label: 1, summary: 1, details: 1 };
+  var CTL_ROLE = { button: 1, link: 1, checkbox: 1, radio: 1, radiogroup: 1, 'switch': 1, combobox: 1, listbox: 1, menu: 1, menuitem: 1, tab: 1, tablist: 1, textbox: 1, slider: 1 };
+  function inControl(node, row) {
+    for (var n = node; n && n !== row; n = n.parentNode) {
+      if (n.nodeType !== 1) continue;
+      if (CTL_TAG[String(n.tagName || '').toLowerCase()] || CTL_ROLE[n.getAttribute('role') || ''] || n.isContentEditable) return true;
+    }
+    return false;
+  }
+  function selecting(row) {
+    try { var s = window.getSelection && window.getSelection(); return !!(s && !s.isCollapsed && String(s) && row.contains(s.anchorNode)); } catch (e) { return false; }
+  }
+  TP.rowOpen = function (row, open) {
+    row.setAttribute('tabindex', '0'); row.classList.add('row-open');
+    row.addEventListener('click', function (ev) {
+      if (ev.defaultPrevented || inControl(ev.target, row) || selecting(row)) return;
+      open(row);
+    });
+    row.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'Enter' || ev.target !== row || ev.isComposing || ev.repeat) return;
+      ev.preventDefault(); open(row);
+    });
+  };
 
   /* ---------- 轮询新图标: 图标在扫描后由辅助服务在后台提取, 几秒内陆续出现 ----------
    * 只在「应用」页可见时, 每 3 秒读一次 GET /api/apps, 直到没有「刚出现 (60 秒内) 还没有图标」的应用; 只更新受影响行的图片 / 头像。 */
@@ -403,7 +432,7 @@
     r.info = ui.btn(L('apps.info'), { sm: true, kind: 'ghost', icon: 'info' });
     r.ack = ui.btn(L('apps.keepOffOne'), { sm: true, kind: 'ghost' }); r.ack.hidden = true;
     r.del = ui.btn(L('common.delete'), { sm: true, cls: 'soft-bad', icon: 'delete' }); r.del.hidden = true;
-    var row = h('div', { class: 'apps-row', role: 'group' },
+    var row = h('div', { class: 'apps-row row-hov', role: 'group' },
       r.ic,
       h('div', { class: 'apps-main' }, h('div', { class: 'apps-t' }, r.name, r.badge, r.cus, r.cusHelp, r.kind, r.tHelp, r.rec, r.grp), r.path, r.tm, r.tr),
       h('div', { class: 'apps-c' }, h('div', { class: 'apps-md' }, r.sel, r.tg, r.tgGone), h('div', { class: 'apps-act' }, r.info, r.ack, r.del)));
@@ -412,6 +441,7 @@
     ui.selectAct(r.tg, function () { return tgOf(row._a); }, function (want) { return askTarget(row, want); });
     ui.act(r.rec, function () { return askState(row, row._a.rec); });
     ui.act(r.info, function () { TP.safe(openInfo)(row._a); });        // 弹窗开着时按钮不能一直显示「正在读取…」: 不等弹窗关闭
+    TP.rowOpen(row, function () { TP.safe(openInfo)(row._a); });       // 点这一行的其它地方 / 在行上按回车 = 「详情」
     ui.act(r.ack, function () { return ack(row); });
     ui.act(r.del, function () { return delCustom(row); });
     return row;
