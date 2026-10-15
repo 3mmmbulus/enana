@@ -2,8 +2,9 @@
 #
 #   $H/cloud.token   云端令牌 (JWT, 每次心跳刷新; 600)        $H/session   云端会话 id (600)
 #   $H/hb.fail       连续联网失败的起始时间 (成功一次就清除)   $H/notice    这台设备上一次被退出登录的原因 (kicked / offline_expired / limit)
-# 心跳: 定时任务每 ~2 分钟运行 `enana heartbeat`: 告诉云端「我还在线」; 云端说会话被撤销 (被同账号另一台设备下线 / 超限) 时,
-# 本机自动退出登录并关闭代理。连续 7 天连不上云端也会自动退出登录 (离线宽限)。离线登录不会创建云端会话。
+#   $H/hb.os         系统版本缓存 (心跳带给云端; 一天读一次)
+# 心跳: 定时任务每 ~2 分钟运行 `enana heartbeat`: 告诉云端「我还在线」, 顺带报上 enana 版本和系统版本 (「我的设备」显示的版本随升级更新);
+# 云端说会话被撤销 (被同账号另一台设备下线 / 超限) 时, 本机自动退出登录并关闭代理。连续 7 天连不上云端也会自动退出登录 (离线宽限)。离线登录不会创建云端会话。
 
 HB_OFFLINE_DAYS=7
 
@@ -72,12 +73,26 @@ session_local_end() { # <原因> [云端返回的 HTTP 状态码] [补充信息 
   APPS_BG_JOB=1 op_sync_secret
 }
 
+# 系统版本 (心跳用): 一天读一次, 缓存在 $H/hb.os (Windows 上每读一次都要启动 PowerShell); 读不到就是空 (云端忽略空值, 下次再读)
+session_os() {
+  local f="$H/hb.os" ts='' v='' now_; now_=$(date +%s)
+  [ -s "$f" ] && IFS=' ' read -r ts v < "$f"
+  case $ts in ''|*[!0-9]*) ts=0 ;; esac
+  if [ -z "$v" ] || [ $(( now_ - ts )) -ge 86400 ] || [ "$ts" -gt "$now_" ]; then
+    v=$(os_version 2>/dev/null | head -1 | tr -d '\000-\037\177' | cut -c1-64)
+    [ -z "$v" ] || { printf '%s %s\n' "$now_" "$v" > "$f.new" 2>/dev/null && mv "$f.new" "$f"; }
+  fi
+  printf '%s' "$v"
+}
+# 心跳正文: {"app":"<enana 版本>","os":"<系统版本>"}。云端只在值合法时更新设备记录; 老的云端忽略正文
+session_hb_body() { printf '{"app":"%s","os":"%s"}' "$(jesc "$VERSION")" "$(jesc "$(session_os)")"; }
+
 # session_heartbeat: 0 = 在线 (或暂时连不上但还在宽限期内) · 1 = 会话已被撤销, 本机已自动退出登录
 session_heartbeat() {
   local code reason now_ first age tok out rcode raw
   auth_logged_in || return 0
   [ -n "$(session_id)" ] || return 0                      # 没有云端会话 (例如离线登录时): 没有可汇报的
-  out=$(mktemp); code=$(session_call "$out" POST /api/enana/v1/session/heartbeat '{}')
+  out=$(mktemp); code=$(session_call "$out" POST /api/enana/v1/session/heartbeat "$(session_hb_body)")
   session_hb_note "$code"
   case $code in
     200)
