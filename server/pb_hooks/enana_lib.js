@@ -244,6 +244,11 @@ function activeSessions(app, userId, t) {
     "user = {:u} && revoked_at = '' && expires_at > {:now} && last_heartbeat_at > {:cut}",
     '-last_heartbeat_at', 500, 0, { u: userId, now: iso(t), cut: iso(t - ONLINE_WINDOW) })
 }
+// 仍登录着 = 未撤销 && 未过期 (不管有没有心跳): 「我的设备」只列出这样的设备
+function liveSessions(app, userId, t) {
+  return app.findRecordsByFilter('device_sessions', "user = {:u} && revoked_at = '' && expires_at > {:now}",
+    '-last_heartbeat_at', 500, 0, { u: userId, now: iso(t) })
+}
 
 // 某平台上当前在线的 [{session, device}]; exceptSessionId 用于心跳「排除自己」。
 // 两次查询 (该平台的设备 + 在线会话), 在内存里按 device id 对上, 没有逐会话再查设备的 N+1。
@@ -472,6 +477,17 @@ function loginTx(tx, user, d, kickUid, ipMasked, t) {
 
 // ---------------------------------------------------------------- POST /session/heartbeat
 
+// 心跳正文里可选的 app (enana 版本) / os (系统版本): 设备记录以前只在登录时写, 升级后「我的设备」一直显示旧版本。
+// 合法才用, 不合法 / 没有就忽略 (心跳照样成功; 老客户端发的是 {})。os 必须原样就是「可打印、最多 64 个字符」(不替它清洗 / 截断)。
+const APP_RE = /^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]{1,20})?$/
+function heartbeatInfo(body) {
+  const out = {}
+  if (!body) return out
+  if (typeof body.app === 'string' && body.app.length <= 32 && APP_RE.test(body.app)) out.app = body.app
+  if (typeof body.os === 'string' && body.os && clean(body.os, 64) === body.os) out.os = body.os
+  return out
+}
+
 function heartbeat(e) {
   const g = needUser(e)
   if (g.res) return g.res
@@ -479,13 +495,14 @@ function heartbeat(e) {
   if (!sid) return fail(e, 401, 'session_required', 'The X-Enana-Session header is required.')
   const t = nowSec()
   const ipMasked = maskIP(e.realIP())
+  const info = heartbeatInfo(readJSON(e, SMALL_BODY_MAX))
   let out
-  $app.runInTransaction((tx) => { out = heartbeatTx(tx, g.user, sid, ipMasked, t) })
+  $app.runInTransaction((tx) => { out = heartbeatTx(tx, g.user, sid, ipMasked, t, info) })
   if (out.revoked) return revokedReply(e, out.revoked)
   return reply(e, 200, { ok: true, token: g.user.newAuthToken(), expires_at: out.expires_at })
 }
 
-function heartbeatTx(tx, user, sid, ipMasked, t) {
+function heartbeatTx(tx, user, sid, ipMasked, t, info) {
   const c = checkSession(tx, user, sid, t)
   if (c.revoked) {
     if (c.expired) {
@@ -511,6 +528,8 @@ function heartbeatTx(tx, user, sid, ipMasked, t) {
   tx.save(s)
   dev.set('last_seen_at', iso(t))
   dev.set('last_ip_masked', ipMasked)
+  if (info && info.app && info.app !== dev.getString('app_version')) dev.set('app_version', info.app)
+  if (info && info.os && info.os !== dev.getString('os_version')) dev.set('os_version', info.os)
   tx.save(dev)
   return { expires_at: unixOf(s, 'expires_at') }
 }
@@ -548,20 +567,28 @@ function check(e) {
 
 // ---------------------------------------------------------------- 设备列表 / 踢设备 / 套餐
 
+// 「我的设备」: 只列出还登录着的设备 (至少有一个未撤销、未过期的会话)。被下线 / 退出登录 / 会话过期的设备不再出现
+// (设备记录本身保留, 再次登录时复用)。online = 其中有会话在窗口内有心跳 (与名额计算一致)。当前设备总在列表里。
 function devices(e) {
   const g = needSession(e)
   if (g.res) return g.res
   const t = nowSec()
   const plan = planFor($app, g.user, t)
-  const online = {}
-  for (const s of activeSessions($app, g.user.id, t)) online[s.getString('device')] = true
+  const live = {}, online = {}
+  for (const s of liveSessions($app, g.user.id, t)) {
+    const d = s.getString('device')
+    live[d] = true
+    if (unixOf(s, 'last_heartbeat_at') > t - ONLINE_WINDOW) online[d] = true
+  }
   const list = $app.findRecordsByFilter('devices', 'user = {:u}', '-last_seen_at', 200, 0, { u: g.user.id })
   const currentDevice = g.session.getString('device')
   let platform = null
-  const out = list.map((d) => {
-    if (d.id === currentDevice) platform = d.getString('platform')
-    return deviceJSON(d, online[d.id], d.id === currentDevice)
-  })
+  const out = []
+  for (const d of list) {
+    const cur = d.id === currentDevice
+    if (cur) platform = d.getString('platform')
+    if (cur || live[d.id]) out.push(deviceJSON(d, online[d.id], cur))
+  }
   return reply(e, 200, { limit: plan.limit, platform: platform, devices: out })
 }
 
@@ -577,11 +604,12 @@ function kick(e) {
   if (target.id === selfDevice) return fail(e, 400, 'cannot_kick_self', 'Use logout to sign this device out.')
   const t = nowSec()
   const ipMasked = maskIP(e.realIP())
+  let n = 0
   $app.runInTransaction((tx) => {
-    const n = revokeDeviceSessions(tx, g.user.id, target.id, 'kicked', selfDevice, t)
-    audit(tx, 'kick', { user: g.user.id, device: target.id, ip: ipMasked, detail: { sessions: n } })
+    n = revokeDeviceSessions(tx, g.user.id, target.id, 'kicked', selfDevice, t)
+    if (n > 0) audit(tx, 'kick', { user: g.user.id, device: target.id, ip: ipMasked, detail: { sessions: n } })   // 已经没有登录着的会话: 幂等的 ok, 不记审计
   })
-  return reply(e, 200, { ok: true })
+  return reply(e, 200, { ok: true, revoked: n })
 }
 
 // 套餐 + 权益 (docs/API.md「会员 / 套餐」): 界面提示用; 真正的限制在云端 (比如官方线路只有核对订阅后才下发)

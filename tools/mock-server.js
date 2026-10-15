@@ -997,7 +997,8 @@ route('GET', '/api/devices', (c) => {
   if (M.central !== 'up') throw E('E_ACCOUNT_UNREACHABLE', 'e.devOffline');
   const full = (d, cur) => ({ uid: d.uid, name: cur ? tr(c.lang, 'dev.this') : devName(d, c.lang), platform: cur ? platformOf() : d.platform, os: cur ? (M.os === 'windows' ? '11' : '15.1') : d.os, app: cur ? M.upd.cur : d.app, last_seen: cur ? sec() : d.last_seen, online: cur ? true : d.online, ip_hint: d.ip_hint, current: !!cur });
   const mine = devicesOf(M.account || ''), me = mine.filter((d) => d.uid === 'this-mock')[0] || { uid: 'this-mock', ip_hint: '192.0.*.*' };
-  return { ok: true, platform: platformOf(), limit: devLimit(), devices: [full(me, true)].concat(mine.filter((d) => d.uid !== 'this-mock').map((d) => full(d, false))) };
+  // 和云端一样只列出还登录着的设备: 被下线 / 因改密码被撤销的 (revoked) 不再出现; online=false 的是「离线但仍保持登录」
+  return { ok: true, platform: platformOf(), limit: devLimit(), devices: [full(me, true)].concat(mine.filter((d) => d.uid !== 'this-mock' && !d.revoked).map((d) => full(d, false))) };
 });
 route('POST', '/api/devices/kick', (c) => {
   const uid = c.p('uid'); if (!uid) throw E('E_INVALID', 'e.devUid'); if (uid === 'this-mock') throw E('E_INVALID', 'e.devSelf');

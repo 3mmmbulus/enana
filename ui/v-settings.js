@@ -392,7 +392,16 @@
     if (!ok) return;
     await TP.helper('POST', '/api/devices/kick', { form: { uid: d.uid }, sudoWhy: t('set.dev.sudoWhy', { name: d.name }) });
     ui.toast(t('set.dev.kicked', { name: d.name }), 'ok');
+    // 下线成功: 这一行马上消失 (云端也不再返回它), 再读一次列表核对
+    if (dev.data && dev.data.devices) { dev.data.devices = dev.data.devices.filter(function (x) { return x.uid !== d.uid; }); renderDevices(); }
     await loadDevices(false);
+  }
+  /* 一行设备: 离线 = 超过 10 分钟没有心跳, 但仍保持登录 (被下线 / 退出 / 过期的设备云端已经不返回), 标签和说明写明这一点; 当前设备的标记带一句说明 */
+  function deviceLine(x, action) {
+    var r = TP.auth.deviceRow(x, action), st = x.online === false ? r.querySelector('.dev-st') : null, cur = x.current ? r.querySelector('.badge') : null;
+    if (st) st.parentNode.replaceChild(h('span', { class: 'dev-st off', title: t('set.dev.offTip') }, h('i', { class: 'dev-dot' }), t('set.dev.offKept')), st);
+    if (cur) cur.setAttribute('title', t('set.dev.current'));
+    return r;
   }
   function renderDevices() {
     var d = dev.data, list = (d && d.devices) || [], why = TP.why.helper();
@@ -408,10 +417,13 @@
     if (!list.length) { el.devEmpty.show({ icon: 'monitor', text: t('set.dev.empty') }); return; }
     el.devEmpty.hide();
     list.slice().sort(function (a, b) { return (b.current ? 1 : 0) - (a.current ? 1 : 0) || (b.online ? 1 : 0) - (a.online ? 1 : 0) || (+b.last_seen || 0) - (+a.last_seen || 0); }).forEach(function (x) {
-      var b = TP.sudo.mark(ui.btn(L('set.dev.kick'), { sm: true, kind: 'danger', icon: 'logout' }));
-      ui.act(b, function () { return kickDevice(x); });
-      ui.avail(b, x.current ? t('set.dev.current') : why);
-      el.devList.appendChild(TP.auth.deviceRow(x, b));
+      var b = null;
+      if (!x.current) {                                           // 当前设备不能下线自己 (要退出用「退出账号」): 不放按钮, 只显示「当前设备」
+        b = TP.sudo.mark(ui.btn(L('set.dev.kick'), { sm: true, kind: 'danger', icon: 'logout' }));
+        ui.act(b, function () { return kickDevice(x); });
+        ui.avail(b, why);
+      }
+      el.devList.appendChild(deviceLine(x, b));
     });
   }
 

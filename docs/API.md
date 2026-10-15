@@ -51,7 +51,7 @@
 退出账号: 代理设置保留 (不改系统代理、不改代理开关) + 账号的官方节点从本机移除 + 令牌立刻失效 (所有浏览器都要重新登录) + 立即释放这个设备的在线名额 (服务端会话撤销) → `{"ok":true}`。核心会在后台重启一次以换上新令牌 (约 2–3 秒, 期间仪表盘显示登录框即可)。`?switch=1` (「切换账号」) 会额外**关闭代理** (全部直连); 登录到上次登录的另一个账号时也会关闭代理。
 
 ### `GET /api/devices` (需登录) → 我的设备
-`{"ok":true,"platform":"macos","limit":2,"devices":[{"uid","name","platform","os","app","last_seen","online":true,"ip_hint","current":true}]}`。列出本账号全部设备 (所有平台), 当前设备 `current:true`; 用于「设置 → 我的设备」。连不上云端 → `E_ACCOUNT_UNREACHABLE` (前端给出原因, 不要做成死按钮)。
+`{"ok":true,"platform":"macos","limit":2,"devices":[{"uid","name","platform","os","app","last_seen","online":true,"ip_hint","current":true}]}`。列出本账号还登录着的设备 (所有平台; 被下线 / 退出登录 / 过期的设备云端不再返回), 当前设备 `current:true`, `online:false` = 离线但仍保持登录; 用于「设置 → 我的设备」(当前设备没有「下线」按钮)。连不上云端 → `E_ACCOUNT_UNREACHABLE` (前端给出原因, 不要做成死按钮)。
 ### `POST /api/devices/kick` (需登录) 表单 `uid` → `{"ok":true}` 下线另一台设备 (不能下线自己; 前端先二次确认)。被下线的设备在 ≤ 2 分钟内自动退出登录并关闭代理。
 
 ### `POST /api/proxy` (需登录) 表单 `on=0|1` 和/或 `mode=auto|global` (至少给一个)
