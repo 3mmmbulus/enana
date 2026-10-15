@@ -750,7 +750,8 @@ PY
   rm -rf "$H"/rules/site-*; snap_install; mkhelper "$(enhanced_helper_path)" 4; enhanced_record_install
   eq "(准备) 2.3.25 的快照: 配置里写着域名, 没有 site-* 规则集, 快照里也没有" "$(grep -c '"claude.ai"' "$H/config.json"):$(grep -c 'site-claude' "$H/config.json"):$(ls -d "$W"/snap/rules/site-* 2>/dev/null | wc -l | tr -d ' ')" "1:0:0"
   FULL=0; fresh_log; txn "修改网站域名" txn_site_domain claude add first-after-upgrade.example; rc=$?
-  eq "升级后第一次需要新配置的应用: 完整安装一次 (授权一次), 装上新的配置、域名列表和新助手" "$rc:$FULL:$(grep -c 'site-claude' "$H/config.json"):$(in_snap site-claude.json first-after-upgrade.example)" "0:1:1:1"
+  # 新配置: 恰好一条 site-claude 规则集定义和一条引用它的路由规则 (配置是一行一项, 定义和引用在不同的行, 所以不按行数数), 域名不再写在配置里
+  eq "升级后第一次需要新配置的应用: 完整安装一次 (授权一次), 装上新的配置、域名列表和新助手" "$rc:$FULL:$(grep -o '"tag":"site-claude","format":"source"' "$H/config.json" | wc -l | tr -d ' '):$(grep -o '"rule_set":\["site-claude"\],"action":"route","outbound":"svc-claude"' "$H/config.json" | wc -l | tr -d ' '):$(grep -c '"claude.ai"' "$H/config.json"):$(in_snap site-claude.json first-after-upgrade.example)" "0:1:1:1:0:1"
   fresh_log; txn "修改网站域名" txn_site_domain claude add second-after-upgrade.example
   eq "…之后再改域名: 免密 (只经新助手同步, 没有再安装)" "$FULL:$(syncs):$(admin):$(in_snap site-claude.json second-after-upgrade.example)" "1:1:0:1"
   # 系统代理模式: 用户自己的核心直接读同一个文件 (热加载), 不涉及助手, 也不重启
