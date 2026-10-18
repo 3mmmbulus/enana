@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """测试用: 模拟 enana.cc 云端 (只实现本地辅助服务用到的接口, 契约见 docs/CLOUD_API.md)。
-用法: python3 mock-account.py <端口> [/v1 静态目录]    (/v1/* 只有带有效 Bearer + X-Enana-Session 的请求才能下载, 模拟网关的 auth_request)
+用法: python3 mock-account.py <端口> [/v1 静态目录]    (/v1/* 默认只有带有效 Bearer + X-Enana-Session 的请求才能下载, 模拟 2.3.26 网关的 auth_request;
+      POST /_test/v1public?on=1 之后匿名也能下载, 模拟 2.3.27 起公开的签名内容)
   POST /api/enana/v1/auth/login            {email,password,device{uid,name,platform,os,arch,app},kick_device_uid} -> 200 / 409 device_limit / 400 / 429
   POST /api/collections/users/records      注册 {email,password,passwordConfirm} -> 200 / 400 (data.email.code / data.password.code)
   POST /api/enana/v1/session/heartbeat     (Bearer + X-Enana-Session) [{app,os}] -> 200 {token} / 401 session_revoked (合法的 app / os 更新设备记录)
@@ -133,7 +134,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(502, {'message': 'bad gateway'})
             with LOCK:
                 s, why = self._session()
-            if s is None or why:
+            if not STATE.get('v1public') and (s is None or why):
                 return self._send(401, {'code': 'session_revoked', 'reason': why or 'invalid'})
             f = os.path.join(V1_DIR, os.path.basename(u.path))
             if not os.path.isfile(f):
@@ -268,6 +269,9 @@ class H(BaseHTTPRequestHandler):
         if u.path == '/_test/mode':
             STATE['mode'] = q.get('m', ['ok'])[0]
             return self._send(200, {'mode': STATE['mode']})
+        if u.path == '/_test/v1public':   # 1 = /v1/ 的签名内容匿名也能下载 (2.3.27 起的云端), 0 = 只对有会话的请求开放 (2.3.26)
+            STATE['v1public'] = q.get('on', ['0'])[0] == '1'
+            return self._send(200, {'v1public': STATE['v1public']})
         if u.path == '/_test/limit':
             STATE['limit'] = int(q.get('n', ['2'])[0])
             return self._send(200, {'limit': STATE['limit']})

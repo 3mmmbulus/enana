@@ -122,6 +122,7 @@ class OfficialSyncAgainstMockCloud(unittest.TestCase):
         self.post('/_test/seed?email=user1@example.test&uid=' + uid + '&platform=macos')
         sid = [x['id'] for x in self.get('/_test/sessions')['sessions'] if x['uid'] == uid][0]
         (self.home / 'session').write_text(sid + '\n'); (self.home / 'cloud.token').write_text('tok-' + sid + '\n')
+        (self.home / 'loggedin').write_text('user1@example.test 1760000000\n')      # signed in (2.3.27: GET /api/plan is the neutral free plan when signed out)
         self.env = {**os.environ, 'ENANA_HOME': self.tmp.name, 'ENANA_ACCOUNT_URL': self.base, 'LC_ALL': 'C', 'PORT': '39800', 'UI_PORT': '39801', 'API_PORT': '39802', 'SPEED_PORT': '39803'}
         self.post('/_test/nodes?mode=none')
 
