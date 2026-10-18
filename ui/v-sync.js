@@ -11,7 +11,9 @@
  *   POST /api/sync/clear      -> {ok}
  * 错误码可能出现在两处: POST 本身 (e.code) 或失败的任务 (e.data.code / e.data.result.code) —— codeOf() 两处都看。
  * 约定: 来自网络的字符串 (设备名 / 邮箱) 一律只用 textContent; 不用 disabled, 暂时不能用的控件用 ui.avail 说明原因; 每个会改动数据的操作先确认。
- * 状态是模块级单例 (D): 卡片、恢复弹窗、冲突弹窗、新电脑提示共用同一份, 任何动作之后都重新读取。 */
+ * 状态是模块级单例 (D): 卡片、恢复弹窗、冲突弹窗、新电脑提示共用同一份, 任何动作之后都重新读取。
+ * 云端同步需要 enana 账号: 没有登录时 (TP.auth.guest(), 或 GET /api/sync 的 logged_in:false) 卡片里只有一段说明 + 登录 / 注册, 不读取、不发任何同步请求;
+ * 登录 / 退出 (事件 account) 时丢掉旧数据、关掉同步弹窗并重新读取。 */
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, fmt = TP.fmt, setText = TP.setText, I = window.I18N, t = I.t, L = I.L;
@@ -36,6 +38,8 @@
 
   /* ================= 小工具 ================= */
   function active() { return TP.tab === 'settings'; }
+  /* 没有登录 enana 账号 (确定知道的时候才算; 没有 auth.js 时当作登录了, 和以前一样) */
+  function guest() { return !!(TP.auth && TP.auth.guest && TP.auth.guest()) || !!(D && D.loggedIn === false); }
   function str(v) { return v == null ? '' : String(v); }
   function pos(v) { v = +v; return v > 0 ? v : 0; }
   function yes(v) { return v === true || v === 1 || v === '1' || v === 'true'; }
@@ -56,6 +60,7 @@
     if (!r || typeof r !== 'object') return null;
     var rm = r.remote || {}, lc = r.local || {};
     return {
+      loggedIn: r.logged_in !== false,                                                // 没有登录时辅助服务回一个中性的状态 + logged_in:false (老版本没有这个字段 = 登录了)
       enabled: yes(r.enabled), auto: yes(r.auto), decided: yes(r.decided), ask: yes(r.ask), account: str(r.account), online: !(r.online === false || r.online === 0 || r.online === '0'),
       remote: { exists: yes(rm.exists), version: pos(rm.version), updated: pos(rm.updated), size: pos(rm.size), device: str(rm.device), servers: rm.servers == null || rm.servers === '' ? -1 : pos(rm.servers) },   // servers: 可选扩展, -1 = 不知道
       local: { version: pos(lc.version), dirty: yes(lc.dirty) },
@@ -85,7 +90,7 @@
   /* ================= 读取 (合并并发请求; 过期的响应丢弃) ================= */
   /* soft=true: 已有请求在进行 / 刚读过 (3 秒内) 就不重复读; 否则总是发新请求 */
   function load(soft) {
-    if (S.locked) return Promise.resolve(D);
+    if (S.locked || (TP.auth && TP.auth.guest && TP.auth.guest())) return Promise.resolve(D);      // 没有登录: 不读 (卡片只显示说明 + 登录 / 注册)
     if (soft && inflight) return inflight;
     if (soft && D && !loadErr && Date.now() - loadedAt < 3000) return Promise.resolve(D);
     var my = ++seq, p;
@@ -197,12 +202,18 @@
     TP.sudo.mark(C.bClear);                                          // 清除云端数据: 敏感操作, 再次输入登录密码
     C.btns = h('div', { class: 'syn-btns' }, C.bPush, C.bPull, C.bClear, ui.help('sync.actions'));
     C.live = h('div', { class: 'sr', role: 'status', 'aria-live': 'polite' });
+    /* 没有登录: 只有说明 + 登录 / 注册 (其它内容都藏起来) */
+    C.guest = TP.auth && TP.auth.guestBlock ? TP.auth.guestBlock('sync') : h('div', { hidden: true });
 
     C.el = h('section', { class: 'card syn', 'aria-labelledby': id + '-t' },
       h('div', { class: 'card-h' }, ui.icon('cloud-download', 20, 'ci'), h('h2', { id: id + '-t' }, L('sync.title'), ui.help('sync.page')), C.sub, C.refresh),
-      C.alert, C.what, C.sets, C.status, C.btns, C.live);
+      C.guest, C.alert, C.what, C.sets, C.status, C.btns, C.live);
 
     C.render = function () {
+      var g = guest();
+      C.guest.hidden = !g; C.refresh.hidden = g;
+      [C.what, C.sets, C.status, C.btns].forEach(function (x) { x.hidden = g; });
+      if (g) { C.alert.hidden = true; setText(C.sub, t('sync.sub.plain')); return; }
       var d = D, why = TP.why.helper(), sh = shown(), b = baseWhy(), mode = d ? 'data' : (loadErr || why ? 'error' : 'loading');
       var acct = (d && d.account) || (TP.auth && TP.auth.email ? TP.auth.email() : ''), al = null;
       setText(C.sub, acct ? t('sync.sub', { account: acct }) : t('sync.sub.plain'));
@@ -606,10 +617,10 @@
     } finally { busy = ''; renderAll(); load(); }
   }
 
-  /* 添加服务器时的「保存到云端」: 默认勾选; 只有用户在设置里明确关闭过同步时默认不勾选 (勾选会重新开启) */
+  /* 添加服务器时的「保存到云端」: 默认勾选; 只有用户在设置里明确关闭过同步时默认不勾选 (勾选会重新开启); 没有登录 enana 账号时不勾选 (同步需要账号) */
   SY.prime = function () { return load(true).then(function () { return SY.saveDefault(); }, function () { return SY.saveDefault(); }); };
   SY.saveDefault = function () {
-    var off = !!(D && D.decided && !D.enabled);
+    var off = guest() || !!(D && D.decided && !D.enabled);
     return { checked: !off, off: off };
   };
 
@@ -618,7 +629,7 @@
     offerRun = true;
     try {
       var d = await load();
-      if (S.locked || !SY.shouldAskFirst(d)) return;                            // 不问: 不在线 / 云端没有数据 / 已经选择过 / 这次登录没有要问的
+      if (S.locked || guest() || !SY.shouldAskFirst(d)) return;                 // 不问: 没有登录 / 不在线 / 云端没有数据 / 已经选择过 / 这次登录没有要问的
       await askFirst(d);
     } catch (e) { console.error('[sync] offer', e); }                           // 提示只是锦上添花: 出错不要变成全局的「未处理错误」提示
     finally { offerRun = false; }
@@ -641,11 +652,18 @@
   };
 
   /* ================= 事件 ================= */
+  /* 丢掉上一个账号的数据, 关掉所有同步弹窗 (含旧密码输入框) */
+  function forget() {
+    seq++; D = null; loadErr = null; loading = false; inflight = null; loadedAt = 0; busy = ''; pend = null;
+    modals.slice().forEach(function (m) { try { m.api.close('lock'); } catch (e) { console.error('[sync]', e); } });
+  }
   TP.on('auth', function (ok) {
     if (ok) { if (cards.length) load(); return; }
-    seq++; D = null; loadErr = null; loading = false; inflight = null; loadedAt = 0; busy = ''; pend = null;      // 退出 / 锁定: 丢掉上一个账号的数据, 关掉所有同步弹窗 (含旧密码输入框)
-    modals.slice().forEach(function (m) { try { m.api.close('lock'); } catch (e) { console.error('[sync]', e); } });
-    renderAll();
+    forget(); renderAll();                                                       // 和本机服务的连接失效
+  });
+  TP.on('account', function (on) {                                               // 登录 / 退出 / 被下线 / 在别处换了账号: 按新的状态重新来
+    forget();
+    if (on && cards.length) load(); else renderAll();
   });
   TP.on('helper', function (up) { if (up && !S.locked && cards.length) load(true); else renderAll(); });
   TP.on('lang', renderAll);

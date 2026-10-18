@@ -31,6 +31,7 @@ function fixture(handler,opts={}){
  const TP={S:{locked:false},h:node,ui,why:{helper:()=>''},clear:n=>{n.children=[];},setText:(n,v)=>{n.children=[String(v)];},on:(ev,fn)=>{(callbacks[ev]||=[]).push(fn);},emit,errMsg:e=>e.message||e.code||'error',mkErr:(kind,message)=>({kind,message}),
   helper:async(...args)=>{calls.push(args);return handler(...args);},plan:{load:(...a)=>{planLoads.push(a)}},fmt:{dateTime:String,clock:s=>'clock:'+s,date:s=>'date:'+s},auth:{logout:async(kind)=>{signIns.push(kind)}}};
  if(opts.tabs!==false)TP.settingsTab=id=>{tabs.push(id);};
+ if(opts.guest)TP.auth.guest=()=>true;   // 2.3.27: this computer is not signed in to an enana account (TP.auth.guest() from ui/auth.js)
  const document={hidden:false};const I={t:(k,args)=>k+(args?JSON.stringify(args):''),L:k=>k,has:k=>k.startsWith('billing.')};
  vm.runInNewContext(script,{window:{TP,I18N:I,crypto:'crypto' in opts?opts.crypto:crypto,qrcode:opts.qrcode},document,setInterval:(fn,ms)=>{intervals.set(++id,{fn,ms});return id},clearInterval:i=>intervals.delete(i),setTimeout:fn=>{timers.set(++id,fn);return id},clearTimeout:i=>timers.delete(i),console});
  return {B:TP.billing,TP,calls,modals,copies,copyMsgs,toasts,confirmations,timers,intervals,document,emit,signIns,planLoads,segs,tabs};
@@ -354,4 +355,22 @@ test('the pending-order notice and the payment block follow the newest orders ev
  st='paid';await f.B.load(true);
  assert.ok(hasAny(root,'billing.pageOf{"page":2,"pages":2}'),'the refresh stays on page 2');assert.equal(f.calls.at(-1)[2].q.orders_page,2);
  assert.ok(!hasText(root,'billing.notice.pending'),'paid elsewhere: the notice is gone without going back to page 1');assert.equal(find(root,'billing.topup').reason,'','and payments are open again');
+});
+test('without an enana account (2.3.27) the membership block neither loads nor draws anything; signing out or being signed out drops the previous account at once',async()=>{
+ const f=fixture(async()=>status(),{guest:true}),root=f.B.mount(),email=f.B.mountEmail();
+ assert.equal(await f.B.load(true),null);assert.equal(f.calls.length,0,'no billing request while not signed in (it could only answer E_LOGIN_REQUIRED)');
+ assert.equal(root.children.length,0,'nothing is drawn: the settings page shows the sign-in explanation instead');assert.equal(email.children.length,0);
+ const g=fixture(async()=>status()),em=g.B.mountEmail();await g.B.load(true);g.B.openOrder(invoice);
+ assert.ok(JSON.stringify(em).includes('one@example.test'),'signed in: the account email is shown');assert.equal(g.modals.length,1);
+ g.emit('account',false);
+ assert.equal(g.modals[0].closed,true,'signing out (or a kick) closes the open invoice');assert.ok(!JSON.stringify(em).includes('one@example.test'),'and the previous account email is gone');
+});
+test('balance purchase and automatic renewal are sent as already confirmed: their own dialogs are the one confirmation (step-up still applies while signed in)',async()=>{
+ const f=fixture(async(m,p)=>m==='GET'?status():p==='/api/billing/auto-renew'?{ok:true,auto_renew:true,charged:false,needs_topup:false,balance:'6.000000',monthly_price:'4.000000'}:{ok:true,expires_at:1900000000});
+ const root=f.B.mount();await f.B.load(true);
+ await find(root,'billing.buy').click();assert.equal(await f.segs[0].pick('wallet'),'picked');assert.equal(await press(f.modals[0],'billing.confirmPay'),true);
+ await flush();await flush();
+ await switchOf(root).click();
+ const sent=posts(f);assert.deepEqual(sent.map(c=>c[1]),['/api/billing/purchase','/api/billing/auto-renew']);
+ assert.ok(sent.every(c=>c[2].confirmed===true),'confirmed:true on both');assert.equal(f.confirmations.length,1,'auto-renew asked once (its own confirmation)');
 });

@@ -10,7 +10,7 @@
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, I = window.I18N, t = I.t, L = I.L;
-  var P = TP.plan = {}, data = null, loadedAt = 0, loading = null;
+  var P = TP.plan = {}, data = null, loadedAt = 0, loading = null, gen = 0;     // gen: 账号变了就 +1, 之前发出的读取晚到了也不用
 
   P.get = function () { return data; };
   P.name = function (key) { return I.has('plan.f.' + key) ? t('plan.f.' + key) : String(key).replace(/[_-]+/g, ' '); };
@@ -26,18 +26,22 @@
     return f.pro ? ui.badge(L('plan.pro'), 'pro', 'pro') : null;
   };
 
-  /* 读取 (登录后 / 打开设置页 / 服务器页时; 5 分钟内不重复读) */
+  /* 读取 (连上本机服务 / 登录或退出账号后 / 打开设置页 / 服务器页时; 5 分钟内不重复读) */
   P.load = function (force) {
     if (S.locked) return Promise.resolve(data);
     if (loading) return loading;
     if (!force && data && Date.now() - loadedAt < 300000) return Promise.resolve(data);
     /* force = 向云端重新取一次 (付款成功 / 余额购买 / 手动刷新之后): 本机辅助服务默认只回本地缓存 (最长 1 小时), 带 refresh=1 才会同步向云端取最新套餐 */
-    loading = TP.helper('GET', '/api/plan', { timeout: force ? 14000 : 8000, q: force ? { refresh: '1' } : undefined }).then(function (r) {
+    var mine = gen, p = TP.helper('GET', '/api/plan', { timeout: force ? 14000 : 8000, q: force ? { refresh: '1' } : undefined }).then(function (r) {
+      if (mine !== gen) return data;
       data = r && r.ok !== false ? r : data; loadedAt = Date.now(); TP.emit('plan', data); return data;
-    }, function (e) { if (!(e && e.kind === 'auth')) TP.emit('plan', data); return data; }).then(function (x) { loading = null; return x; });
-    return loading;
+    }, function (e) { if (mine === gen && !(e && e.kind === 'auth')) TP.emit('plan', data); return data; }).then(function (x) { if (loading === p) loading = null; return x; });
+    loading = p;
+    return p;
   };
   TP.on('auth', function (ok) { if (ok) { data = null; P.load(true); } else { data = null; } });
+  /* 登录 / 退出 enana 账号: 套餐跟着账号走 (没有登录时辅助服务回一个中性的免费版 + logged_in:false), 马上重新读取 (正在进行的读取作废) */
+  TP.on('account', function () { gen++; data = null; loadedAt = 0; loading = null; TP.emit('plan', data); P.load(true); });
   TP.on('lang', function () { /* 套餐名 / 原因由后端按语言头翻译: 下次读取时更新 */ loadedAt = 0; });
 
   /* 为什么这项功能现在不能用 / 它属于什么 -> 弹窗 (不是死按钮) */

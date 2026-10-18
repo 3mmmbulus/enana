@@ -4,7 +4,9 @@
  * 设置 → 会员 (套餐状态在 v-settings.js 的 renderPlan, 功能清单在这块之后): 常驻说明 → 一行操作 (购买会员 / 续费会员 · 充值余额)
  * → 钱包行 (余额 + 按月自动续费开关) → 最近订单 (表格, 每页 10 条, 服务端分页 orders_page / orders_per_page) → 余额明细 (先显示 10 条)。
  * 「购买会员」只打开一个弹窗: 选期限 (单选卡片, 12 个月推荐) + 付款方式 (USDT 付款 | 余额支付)。
- * 订单还能不能付款只看 pay_by (1 小时付款时间), 从不看 expires_at (24 小时的收款金额保留期)。 */
+ * 订单还能不能付款只看 pay_by (1 小时付款时间), 从不看 expires_at (24 小时的收款金额保留期)。
+ * 会员属于 enana 账号: 没有登录时不读取、不渲染 (设置页在这里显示「需要 enana 账号」的说明 + 登录 / 注册); 登录 / 退出 (事件 account) 时丢掉上一个账号的数据和弹窗。
+ * 余额支付和自动续费是敏感操作 (登录时要再输入一次账号密码, TP.sudo): 购买弹窗 / 确认框本身就是确认, 所以请求带 confirmed:true。 */
 (function () {
   'use strict';
   var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, I = window.I18N, t = I.t, L = I.L;
@@ -31,7 +33,8 @@
     }
     return e && e.code && I.has('billing.err.' + e.code) ? t('billing.err.' + e.code) : TP.errMsg(e);
   }
-  function canUse() { return !S.locked && !TP.why.helper(); }
+  function guest() { return !!(TP.auth && TP.auth.guest && TP.auth.guest()); }          // 确定没有登录 (没有 auth.js 时当作登录了)
+  function canUse() { return !S.locked && !TP.why.helper() && !guest(); }
   // 收款地址二维码 (vendor/qrcode.js, 内联 SVG; 不用 data: 图片, 因为生产环境的 CSP 是 img-src 'self'). 只编码地址本身, 金额仍以文字显示.
   function qrBlock(text) {
     if (typeof window.qrcode !== 'function') return null;
@@ -53,6 +56,7 @@
   function payable(o) { return !!o && o.status === 'pending' && +o.pay_by * 1000 > Date.now(); }
   function activeOrder() { return data ? firstOrders.filter(payable)[0] : undefined; }
   function why(payments) {
+    if (guest()) return t('error.E_LOGIN_REQUIRED');
     if (!canUse()) return TP.why.helper() || t('why.locked');
     if (!data) return error ? msg(error) : t('common.loading');
     if (!data.email.verified) return t('billing.verifyFirst');
@@ -120,13 +124,13 @@
     if (scope) { if (!keys[scope]) keys[scope] = newKey(); body.request_key = keys[scope]; }
     busyKeys[key] = true; setBusy(key, true);
     try {
-      var r = await TP.helper('POST', '/api/' + op, { body: JSON.stringify(body), timeout: 18000 });
+      var r = await TP.helper('POST', '/api/' + op, { body: JSON.stringify(body), timeout: 18000, confirmed: true });      // 每个写操作在这之前都已经让用户确认过 (购买弹窗 / 确认框 / 按钮本身)
       if (mine !== epoch) return null;
       if (scope) delete keys[scope];
       refresh();
       return r;
     } catch (e) {
-      if (mine === epoch) { if (e.code === 'E_ORDER_PENDING') { ordersPage = 1; await B.load(true); } ui.toast(msg(e), 'err'); }
+      if (mine === epoch && !(e && e.kind === 'cancel')) { if (e.code === 'E_ORDER_PENDING') { ordersPage = 1; await B.load(true); } ui.toast(msg(e), 'err'); }     // 取消了再次验证 / 需要登录 (登录框已经弹出): 不另报错
       return null;
     } finally { if (mine === epoch) { delete busyKeys[key]; setBusy(key, false); } }
   }
@@ -363,6 +367,7 @@
 
   function render(root) {
     TP.clear(root);
+    if (guest()) return;                                                       // 没有登录: 什么都不画 (设置页另外显示「需要 enana 账号」)
     if (!data) {
       var nb0 = h('div', { class: 'billing-notices' });
       if (error || !canUse()) { renderNotices(nb0); root.appendChild(nb0); } else root.appendChild(h('p', { class: 'muted' }, t('common.loading')));
@@ -381,6 +386,7 @@
   }
   function renderEmail(root) {
     TP.clear(root);
+    if (guest()) return;
     if (!data) { root.appendChild(h('span', { class: 'muted sm' }, error ? msg(error) : t('common.loading'))); return; }
     root.appendChild(h('p', null, ui.badge(L(data.email.verified ? 'billing.emailVerified' : 'billing.emailUnverified'), data.email.verified ? 'ok' : 'warn'), ' ' + data.email.address));
     if (data.email.verified) return;
@@ -490,7 +496,9 @@
     dialogs.push(dlg); paint(); schedule();
     return dlg;
   };
-  TP.on('auth', function () { epoch++; data = null; error = null; pending = null; loadedAt = 0; busyKeys = {}; ordering = false; keys = {}; resendUntil = 0; ordersPage = 1; firstOrders = []; ledgerAll = false; payWatch = 0; dialogs.slice().forEach(function (d) { d.close(); }); redraw(); });
+  /* 和本机服务的连接变了 (auth) / 登录、退出、被下线、换了账号 (account): 丢掉上一个账号的一切 (晚到的回答按 epoch 作废), 关掉付款弹窗 */
+  function forget() { epoch++; data = null; error = null; pending = null; loadedAt = 0; busyKeys = {}; ordering = false; keys = {}; resendUntil = 0; ordersPage = 1; firstOrders = []; ledgerAll = false; payWatch = 0; dialogs.slice().forEach(function (d) { d.close(); }); redraw(); }
+  TP.on('auth', forget); TP.on('account', forget);
   TP.on('lang', redraw);
   TP.on('helper', function () { redraw(); });
   /* 每秒: 重发验证邮件的冷却结束 / 未完成订单的付款时间到了 -> 重画 */
