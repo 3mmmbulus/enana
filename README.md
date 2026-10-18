@@ -46,10 +46,10 @@ Windows 当前为预览版, 使用同一仪表盘和分流规则。安装在 `%L
 
 ## 账号与代理开关
 
-- 后台用 **enana 账号**(邮箱 + 密码)登录;登录页和注册页是两个独立的页面(`/enana/admin/login`、`/enana/admin/register`,页面里互相链接,语言切换在右上角),可以直接注册。代理配置默认保存在本机; 主动启用同步时上传加密备份, 不代表授权将服务器共享给其他用户。
-- 同一账号**同一平台最多同时在线 2 台设备**;第 3 台登录时会列出在线设备,可以下线其中一台后自动登录;被下线的设备会自动退出并关闭代理。
-- **代理默认是关闭的**(所有流量直连,不经过任何代理服务器):登录后在仪表盘里手动打开「代理」总开关,再选 **自动模式**(国内直连、海外按策略分流)或 **全局代理**。**退出账号会自动关闭代理。**
-- 删除服务器、查看凭据、导出备份、清日志、下线设备这类敏感操作,即使已登录也要**再输入一次账号密码**。
+- **仪表盘不需要账号就能用**:服务器、订阅、导入、一键部署自己的服务器、应用 / 网站规则、DNS、日志、测速、更新、代理开关都在本机完成。**enana 账号**(邮箱 + 密码,可选)只用于云端同步、会员 / 余额 / 付款、官方线路、「我的设备」、修改密码和上传诊断;在仪表盘的账号菜单里登录或注册(`/enana/admin/login`、`/enana/admin/register` 打开仪表盘并弹出登录 / 注册框)。代理配置默认保存在本机; 主动启用同步时上传加密备份, 不代表授权将服务器共享给其他用户。
+- 同一账号**同一平台最多同时在线 2 台设备**;第 3 台登录时会列出在线设备,可以下线其中一台后自动登录;被下线的设备会自动退出账号,代理照常用它自己的服务器。
+- **代理默认是关闭的**(所有流量直连,不经过任何代理服务器):在仪表盘里打开「代理」总开关(或终端 `enana on`),再选 **自动模式**(国内直连、海外按策略分流)或 **全局代理**。**登录 / 退出账号都不会改变代理开关**;退出后只有官方线路、同步和会员停止。
+- 删除服务器、查看凭据、导出备份、清日志、下线设备、余额购买这类敏感操作:登录了账号时要**再输入一次账号密码**(5 分钟内不再问),没登录时弹一次确认框。
 
 ## Pro 套餐开发状态
 
@@ -107,7 +107,7 @@ TUN 核心需要管理员授权。macOS 后台使用系统授权弹窗, 终端�
 
 - **SSH 密码 / 私钥只在本次任务期间存在于一个 600 权限的临时文件里,任务结束立即删除** —— 不进命令行、日志、同步,也不会保存。
 - 主机指纹先给你确认,之后固定校验(指纹变了会拒绝连接)。
-- 在服务器上执行的部署脚本由 enana 云端下发并验签(登录后可用),所以云端换协议或升级服务端版本时,本机不用升级。
+- 在服务器上执行的部署脚本由 enana 云端下发并验签(不需要账号),所以云端换协议或升级服务端版本时,本机不用升级。
 
 ### 云端同步(端到端加密)
 
@@ -118,9 +118,9 @@ TUN 核心需要管理员授权。macOS 后台使用系统授权弹窗, 终端�
 ```
 enana                打开控制台:运行状态、一键重启 / 开关代理 / 更新 / 日志 / 诊断 / 退出账号 / 卸载
 enana status         查看状态          enana restart     重启服务
-enana on | off       开启 / 关闭代理 (开启需要已登录)
+enana on | off       开启 / 关闭代理 (不需要账号)
 enana update         更新规则集与订阅   enana upgrade     升级 sing-box (先校验现有配置)
-enana self-update    升级 enana 本体    enana logout      退出账号 (自动关闭代理)
+enana self-update    升级 enana 本体    enana logout      退出账号 (代理照常)
 enana doctor         诊断信息(不含密码,反馈问题时贴出来)
 enana diag [小时]     导出诊断文件(操作记录 + 网站访问 + 代理日志 + 当前状态,同仪表盘「导出」)
 enana env            终端代理变量:eval "$(enana env)"   (命令行工具不读系统代理)
@@ -130,10 +130,10 @@ enana uninstall      完整卸载 (删除全部本机数据)
 ## 安全与隐私
 
 - 仓库与脚本里**没有任何敏感信息**。服务器、订阅、SSH 凭据只在你的电脑上(`~/.enana/`,权限 600);云端从不收到它们(见 [docs/CLOUD_API.md](docs/CLOUD_API.md) 里「客户端向云端发送的全部内容」)。
-- 本地辅助服务只监听 `127.0.0.1`,校验 `Host`、要求自定义请求头 `X-Enana` 和登录令牌、CORS 只放行仪表盘自己的来源,所有参数先白名单校验;敏感操作要二次验证密码。
+- 本地辅助服务只监听 `127.0.0.1`,校验 `Host`、要求自定义请求头 `X-Enana` 和本机令牌(本机打开的仪表盘不登录也能拿到,跨站网页拿不到)、CORS 只放行仪表盘自己的来源,所有参数先白名单校验;登录了账号时敏感操作要二次验证密码。
 - 配置**先校验再应用**:改服务器 / 订阅 / DNS 等时在同一把锁里「备份 → 修改 → 校验 → 重启 → 失败自动回滚」,坏配置不会留在磁盘上。
 - 核心安装包按 `data/core-pins.conf` 校验 SHA-256;云端下发的内容(服务目录、规则库清单、部署脚本)先验 ECDSA 签名、防回滚、校验哈希与文件名白名单。
-- 精选内容和部署脚本在云端,登录后下发;仓库里只有最小可用的基线。设计说明见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+- 精选内容和部署脚本在云端,签名后下发(不需要账号);仓库里只有最小可用的基线。设计说明见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## 开发
 
@@ -141,7 +141,7 @@ enana uninstall      完整卸载 (删除全部本机数据)
 bash tests/run.sh                  # 约 700 条测试: 在隔离目录里完整跑一遍 (需要一个 sing-box 二进制: SINGBOX=/路径/sing-box)
 bash tests/units.sh                # 几秒钟的单元测试: 日志解析 / 自动识别 / 保留期 / 应用扫描 / 规则集拆分 / 诊断导出 (不需要 sing-box; run.sh 末尾也会跑)
 python3 tools/i18n-verify.py       # 检查英文译文覆盖了所有会显示给用户的中文提示
-# tools/ui-audit.js              # 粘进浏览器控制台 (登录本机 mock / 开发实例后): 把每个页面、标签、弹窗点一遍并收集 JS 报错 (发布前跑一遍)
+# tools/ui-audit.js              # 粘进浏览器控制台 (打开本机 mock / 开发实例后): 把每个页面、标签、弹窗点一遍并收集 JS 报错 (发布前跑一遍)
 SINGBOX=/路径/sing-box bash tests/enhanced.sh # System/TUN 配置与路由优先级、绕过代理诊断
 bash tests/tun-service.sh            # 隔离的 root 服务替身: 启动失败/路由冲突回滚, 不改本机网络
 node tests/ui-busy.test.js           # 异步控件与弹窗重复提交回归
@@ -180,10 +180,10 @@ The dashboard and routing rules are shared. See [Windows acceptance and architec
 
 - System Proxy remains the default after upgrades and captures only connections honoring OS proxy settings. Opt into Enhanced/TUN in Settings (or `enana network-mode tun`) to capture public TCP/UDP that bypasses System Proxy. It needs administrator authorization (macOS authorization / Windows UAC), keeps local callbacks/LAN direct, and reuses app/website PIN rules. Shared system processes still require attribution checks. Switch back with `enana network-mode system`; mode selection preserves existing System Proxy settings.
 - All browser policies now act as a fallback after website policies; explicit native app PIN remains higher priority.
-- Sign in with an enana account (at most 2 devices per platform). The proxy is **off by default**; turn it on in the dashboard, choose Auto (rule-based) or Global mode. Signing out turns it off.
+- The dashboard works **without an account**: servers, subscriptions, one-click server deployment, app/site rules, DNS, logs, speed tests, updates and the proxy switch are all local. An enana account (optional; at most 2 devices per platform) adds cloud sync, membership, official lines and My devices. The proxy is **off by default**; turn it on in the dashboard (or `enana on`), choose Auto (rule-based) or Global mode. Signing in or out never changes the proxy switch.
 - Server addresses, passwords, subscription links and SSH credentials **never leave your computer**; optional cloud sync is end-to-end encrypted (the key is derived from your password locally), and SSH passwords / private keys are never stored or synced.
-- Sensitive actions re-ask for your password. Configuration changes are validated and rolled back automatically if they fail.
+- Sensitive actions re-ask for your account password when you are signed in (a single confirmation otherwise). Configuration changes are validated and rolled back automatically if they fail.
 - Logs: operations / site access / proxy log each have their own switch (12 hours – 30 days retention); every connection shows the app, the exit and *why* it went direct. One export button (or `enana diag`) produces a self-describing diagnostics file — see [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md).
-- This repository is the local client. The curated content (service catalog, rule-library list, server provisioning scripts) is delivered from the enana cloud after sign-in as signed bundles.
+- This repository is the local client. The curated content (service catalog, rule-library list, server provisioning scripts) is delivered from the enana cloud as signed bundles (no account needed).
 
 See `docs/` for the API contracts and architecture; run `bash tests/run.sh` for the test suite.
