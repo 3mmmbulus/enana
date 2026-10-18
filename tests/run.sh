@@ -289,7 +289,7 @@ curl -s -X POST "http://127.0.0.1:$A_PORT/_test/mode?m=ok" >/dev/null
 TOKEN=$(login user1@example.test 'New-Passw0rd2' | jp 'print(d["token"])'); [ -n "$TOKEN" ] || TOKEN=$(login user1@example.test 'Passw0rd!' | jp 'print(d["token"])')
 expect "测试夹具: 已重新登录" test -n "$TOKEN"
 
-echo "== 2c. 云端内容 (登录后下发的精选数据: 验签 / 防篡改 / 防回滚 / 文件白名单 / 事务回滚)"
+echo "== 2c. 云端内容 (签名下发的精选数据: 验签 / 防篡改 / 防回滚 / 文件白名单 / 事务回滚)"
 for i in $(seq 1 40); do sleep 0.5; [ "$(api "$A/api/content" | jp 'print(d["source"])' 2>/dev/null)" = cloud ] && break; done
 api "$A/api/content" | chk "登录后自动拉取云端内容: 来源 = cloud, 序号 100, 无错误" 'assert d["source"]=="cloud" and d["seq"]==100 and d["error"]=="" and d["version"]'
 expect "内容已缓存到本机 (符号链接 cloud/content -> content-100)" test "$(readlink "$W/h/cloud/content")" = content-100

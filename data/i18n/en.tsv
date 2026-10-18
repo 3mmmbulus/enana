@@ -796,7 +796,6 @@ sudo 没有通过: sudo 密码不对, 或这个用户没有 sudo 权限	sudo fai
 连接服务器	Connect to the server
 部署脚本异常结束 (退出码 *)	The deployment script ended abnormally (exit code *)
 部署脚本没有返回可用的节点	The deployment script returned no usable nodes
-部署脚本由 enana 云端下发: 请先登录, 并等「云端内容」同步完成后再试	The deployment scripts come from the enana cloud: sign in first and wait for “cloud content” to sync, then try again
 部署脚本由 enana 云端下发 (不需要账号): 请等「云端内容」更新完成后再试 (终端里运行 enana content 可以立即更新)	The deployment scripts come from the enana cloud (no account needed): wait for “cloud content” to finish updating, then try again (run enana content in a terminal to update right now)
 部署超时 (超过 * 分钟), 已中止	Deployment timed out (over * minutes) and was aborted
 需要 root 权限 (当前用户不是 root, 也没有可用的 sudo)	Root privileges are required (this user is not root and has no usable sudo)

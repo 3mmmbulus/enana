@@ -321,7 +321,7 @@ vps_probe_job() { # <凭据文件>
   trap 'vps_cleanup' EXIT
   printf '%s\n' "$$" > "$H/jobs/$JOB_ID.started"
   vps_prepare_connection "$1" || return 1
-  vps_playbook_ok || { VPS_CODE=E_VPS_NO_PLAYBOOK; VPS_ERR="部署脚本由 enana 云端下发: 请先登录, 并等「云端内容」同步完成后再试"; vps_job_error; return 1; }
+  vps_playbook_ok || { VPS_CODE=E_VPS_NO_PLAYBOOK; VPS_ERR="部署脚本由 enana 云端下发 (不需要账号): 请等「云端内容」更新完成后再试 (终端里运行 enana content 可以立即更新)"; vps_job_error; return 1; }
   VPS_ATTEMPTS=3
   for attempt in 1 2 3; do
     VPS_ATTEMPT=$attempt; VPS_CODE=''; VPS_ERR=''; VPS_SEEN=0
@@ -641,7 +641,7 @@ vps_provision_job() { # <凭据文件>
   local rc role name priv os_pretty id ips tags pid ports
   trap 'vps_cleanup' EXIT
   vps_connect "$1" || return 1
-  vps_playbook_ok || { VPS_CODE=E_VPS_NO_PLAYBOOK; VPS_ERR="部署脚本由 enana 云端下发: 请先登录, 并等「云端内容」同步完成后再试"; vps_job_error; return 1; }
+  vps_playbook_ok || { VPS_CODE=E_VPS_NO_PLAYBOOK; VPS_ERR="部署脚本由 enana 云端下发 (不需要账号): 请等「云端内容」更新完成后再试 (终端里运行 enana content 可以立即更新)"; vps_job_error; return 1; }
   [ -n "$V_HOSTKEY" ] || { VPS_CODE=E_SSH_HOSTKEY; VPS_ERR="需要先确认并固定服务器的主机指纹"; vps_job_error; return 1; }
   role=$V_ROLE; case $role in pin|auto) ;; *) role=pin ;; esac
   name=$V_NAME; vps_name_ok "$name" || name="my-vps-$V_HOST"; vps_name_ok "$name" || name=my-vps
@@ -750,7 +750,7 @@ vps_redetect_job() { # <凭据文件>
   vps_prepare || { VPS_CODE=E_INVALID; VPS_ERR="无法创建临时目录"; vps_job_error; return 1; }
   job_step 0 5 "连接服务器"
   vps_hostkey_setup; case $? in 0) ;; 2) VPS_CODE=E_SSH_HOSTKEY; VPS_ERR="服务器的主机指纹与之前固定的不一致 (可能被中间人攻击, 或服务器重装过系统)"; vps_job_error; return 1 ;; *) VPS_CODE=E_SSH_UNREACHABLE; VPS_ERR="连不上 $V_HOST:$V_PORT (SSH): 地址或端口不对, 服务器没开机, 或防火墙挡住了 SSH 端口"; vps_job_error; return 1 ;; esac
-  vps_playbook_ok || { VPS_CODE=E_VPS_NO_PLAYBOOK; VPS_ERR="部署脚本由 enana 云端下发: 请先登录, 并等「云端内容」同步完成后再试"; vps_job_error; return 1; }
+  vps_playbook_ok || { VPS_CODE=E_VPS_NO_PLAYBOOK; VPS_ERR="部署脚本由 enana 云端下发 (不需要账号): 请等「云端内容」更新完成后再试 (终端里运行 enana content 可以立即更新)"; vps_job_error; return 1; }
   vps_progress() { vps_redetect_progress "$1"; }
   if ! vps_run probe user; then vps_job_error 1; return 1; fi
   priv=$(vps_kv privilege)
