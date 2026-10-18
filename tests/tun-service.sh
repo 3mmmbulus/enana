@@ -79,6 +79,7 @@ echo "== 6. 旧版本没有 root 副本: 停止 / 删除走一次性的 inband �
 rf_reset; rf_enana_start; rm -rf "$ROOT/bin"
 enhanced_stop; check "inband 停止成功" test $? = 0
 check "inband 形式: 脚本随命令带进去" grep -q "enana-root '" "$W/sudo.log"
+check "inband 停止同样还原系统 DNS (记录删掉)" test "$(rf_ns_original && echo orig):$(test -e "$ROOT/dns-original" && echo rec || echo none)" = "orig:none"
 
 echo "== 7. 停止成功之后再停止: 不再要管理员授权 (enhanced_idle)"
 rf_reset; rf_enana_start; : > "$W/sudo.log"
@@ -188,6 +189,73 @@ check "enana 的数据包 (只有被引用的 site-claude.json): root 助手校�
 check "…快照里的那一份原地覆盖 (inode 不变): 新域名在, anthropic.com 没了" test "$(stat -f %i "$ROOT/rules/site-claude/site-claude.json"):$(grep -c new-claude.example "$ROOT/rules/site-claude/site-claude.json"):$(grep -c anthropic.com "$ROOT/rules/site-claude/site-claude.json")" = "$ino:1:0"
 rm -rf "$H/rules/site-claude"
 
+echo "== 14. 系统 DNS 接管: TUN 装着时启用的、有网卡的网络服务用 223.5.5.5 (记下原来的), 停止 / 删除 / 回滚到没有 TUN 时还原; 名字只当数据; networksetup 失败不影响 TUN"
+note_lines() { grep -c 'enana-root: note: dns:' "$H/enhanced-check.log"; }
+has_rec() { test -e "$ROOT/dns-original" && echo rec || echo none; }
+set_level info                                    # 第 13 节的配置引用了已经删掉的 site-claude.json (预检会拒绝): 换回只引用 geo 的配置
+rf_reset; rf_enana_start; rc=$?
+check "安装成功 (退出码 0), 没有说明行" test "$rc:$(note_lines)" = "0:0"
+check "启用的、有网卡的服务都是 223.5.5.5 (自动 DNS 的 Wi-Fi · 手动 IPv4 + IPv6 · 名字带空格和中文 · 硬件端口带括号 · 名字里有 shell 代码); 停用的和 VPN 原样" rf_ns_taken
+check "…停用的 (*) 和没有网卡的 VPN 从头到尾没有碰过 (连查询都没有)" rf_ns_untouched
+check "…名字里的 shell 代码没有被执行 (名字只当数据)" test ! -e "$W/ns-canary"
+check "…记录里是每个服务原来的设置: 自动 = Empty, 手动的多个地址按顺序; 一共 5 个服务" test "$(rf_rec | grep -cxF -e 'Wi-Fi=Empty' -e 'USB 10/100/1000 LAN=192.168.10.1,fe80::10%en0' -e 'Thunderbolt 网桥 ✓=Empty' -e 'Ethernet Adapter (en8)=9.9.9.9' -e "$NS_ODD=Empty"):$(rf_rec | wc -l | tr -d ' ')" = "5:5"
+check "…记录归 root (夹具里就是当前用户), 0600" test "$(stat -f '%u %Lp' "$ROOT/dns-original")" = "$ME 600"
+rec1=$(cat "$ROOT/dns-original"); : > "$W/ns.log"
+rf_enana_start; rc=$?
+check "重装: 记录一个字节都没变 (原来的设置没有被 223.5.5.5 盖掉), 已经是 223.5.5.5 的不再设置" test "$rc:$(cat "$ROOT/dns-original"):$(rf_ns_sets)" = "0:$rec1:0"
+enhanced_stop; rc=$?
+check "停止: 全部还原成接管之前的样子 (自动的回到 Empty, 手动的地址按原来的顺序), 记录删掉" test "$rc:$(rf_ns_original && echo orig):$(has_rec)" = "0:orig:none"
+check "…停用的和 VPN 还是没碰过; 名字里的 shell 代码还是没执行" test "$(rf_ns_untouched && echo ok):$(test -e "$W/ns-canary" && echo ran || echo data)" = "ok:data"
+rf_reset; rf_enana_start; enhanced_remove; rc=$?
+check "直接删除 TUN (卸载走的就是它): 先还原系统 DNS, 再删掉根目录 (连同记录)" test "$rc:$(rf_ns_original && echo orig):$(test -e "$ROOT" && echo y || echo n)" = "0:orig:n"
+rf_reset; rf_enana_start
+rf_dns_user Wi-Fi 8.8.8.8; rf_dns_user 'USB 10/100/1000 LAN' 223.5.5.5 1.1.1.1      # 用户在 TUN 开着时自己改了 (第二个不是「正好 223.5.5.5」)
+enhanced_stop; rc=$?
+check "用户之后自己改过的服务停止时不动 (Wi-Fi 8.8.8.8 · 有线 223.5.5.5 1.1.1.1), 别的照常还原, 记录删掉" test "$rc:$(rf_dns Wi-Fi):$(rf_dns 'USB 10/100/1000 LAN'):$(rf_dns 'Ethernet Adapter (en8)'):$(rf_dns 'Thunderbolt 网桥 ✓'):$(has_rec)" = "0:8.8.8.8:223.5.5.5 1.1.1.1:9.9.9.9:Empty:none"
+rf_reset; rf_enana_start; rf_dns_user Wi-Fi 8.8.8.8
+rf_enana_start; rc=$?
+check "TUN 开着时用户改过 Wi-Fi, 之后重装: 又是 223.5.5.5, 记录换成用户改的 8.8.8.8 (别的服务的记录不变)" test "$rc:$(rf_dns Wi-Fi):$(rf_rec | grep '^Wi-Fi='):$(rf_rec | grep '^Ethernet Adapter (en8)=')" = "0:223.5.5.5:Wi-Fi=8.8.8.8:Ethernet Adapter (en8)=9.9.9.9"
+enhanced_stop
+check "…停止: Wi-Fi 回到用户改的 8.8.8.8 (还原的是 enana 最后一次改动之前的样子)" test "$(rf_dns Wi-Fi):$(rf_dns 'Ethernet Adapter (en8)')" = "8.8.8.8:9.9.9.9"
+# 回滚: 这次安装没有接管过 (接管在提交之后); 回滚到「没有 TUN」时还原以前的记录, 旧的 TUN 被重新拉起来时照旧接管
+rf_reset; rf_enana_start
+rm -f "$W/loaded"; set_level debug; : > "$W/fail-bootstrap"      # 守护进程已经不在了 (被别的东西卸掉), 这次重装又失败: 回滚之后没有 TUN
+rf_enana_start; rc=$?
+check "安装失败回滚到没有 TUN: 系统 DNS 还原, 记录删掉 (退出码 1)" test "$rc:$(rf_ns_original && echo orig):$(has_rec)" = "1:orig:none"
+rf_reset; rf_enana_start; rec1=$(cat "$ROOT/dns-original")
+set_level info; : > "$W/fail-bootstrap"
+rf_enana_start; rc=$?
+check "重装失败, 旧的 TUN 重新拉起来了: 系统 DNS 照旧是 223.5.5.5, 记录不变 (退出码 1)" test "$rc:$(rf_ns_taken && echo taken):$(cat "$ROOT/dns-original")" = "1:taken:$rec1"
+rf_reset; : > "$W/fail-bootstrap"
+rf_enana_start; rc=$?
+check "第一次安装就失败: networksetup 一次都没运行, 系统 DNS 原样, 没有记录 (退出码 1)" test "$rc:$(wc -l < "$W/ns.log" | tr -d ' '):$(rf_ns_original && echo orig):$(has_rec)" = "1:0:orig:none"
+# networksetup 失败: TUN 照常装好 / 停掉, 只多一行说明
+rf_reset; printf 'set\n' > "$W/ns-fail"
+rf_enana_start; rc=$?
+check "networksetup 设置全部失败: TUN 照常装好 (退出码 0, 配置一致), 系统 DNS 原样, 只记一行说明" test "$rc:$(cfg_matches && echo cfg):$(rf_ns_original && echo orig):$(note_lines)" = "0:cfg:orig:1"
+: > "$W/ns.log"; enhanced_stop; rc=$?
+check "…停止照常 (退出码 0): 没接管成功的服务不用还原, 记录删掉, 一次设置都没有试" test "$rc:$(has_rec):$(rf_ns_sets)" = "0:none:0"
+rf_reset; printf 'set Wi-Fi\n' > "$W/ns-fail"
+rf_enana_start; rc=$?
+check "只有 Wi-Fi 设置失败: 别的照常接管, Wi-Fi 原样; 退出码 0, 一行说明" test "$rc:$(rf_dns Wi-Fi):$(rf_dns 'USB 10/100/1000 LAN'):$(rf_dns "$NS_ODD"):$(note_lines)" = "0:Empty:223.5.5.5:223.5.5.5:1"
+rf_reset; printf 'list\n' > "$W/ns-fail"
+rf_enana_start; rc=$?
+check "列不出网络服务: TUN 照常装好, 一个 DNS 都不改, 没有记录, 一行说明" test "$rc:$(rf_ns_sets):$(has_rec):$(note_lines)" = "0:0:none:1"
+rf_reset; rf_enana_start; printf 'set USB 10/100/1000 LAN\n' > "$W/ns-fail"
+enhanced_stop; rc=$?
+check "还原时有线网卡设置失败: 停止照常 (退出码 0); 别的都还原了, 只有它的记录留着下次再试" test "$rc:$(rf_dns Wi-Fi):$(rf_dns 'USB 10/100/1000 LAN'):$(rf_rec)" = "0:Empty:223.5.5.5:USB 10/100/1000 LAN=192.168.10.1,fe80::10%en0"
+rm -f "$W/ns-fail"; enhanced_remove; rc=$?
+check "…之后删除 TUN: 剩下的那个也还原了, 根目录删掉" test "$rc:$(rf_ns_original && echo orig):$(test -e "$ROOT" && echo y || echo n)" = "0:orig:n"
+# 记录不可信 (符号链接 / 组和其他人可写): 不读, 不还原 (假的记录要把 Wi-Fi 改成 6.6.6.6)
+rf_reset; rf_enana_start
+mv "$ROOT/dns-original" "$W/rec.real"; printf '%s 6.6.6.6\n' "$(perl -e 'print unpack("H*", $ARGV[0])' Wi-Fi)" > "$W/rec.evil"; ln -s "$W/rec.evil" "$ROOT/dns-original"
+enhanced_stop; rc=$?
+check "记录是符号链接: 不跟过去读 (Wi-Fi 没有变成 6.6.6.6, 还是 223.5.5.5), 停止照常; 链接另一端的文件原样" test "$rc:$(rf_dns Wi-Fi):$(cat "$W/rec.evil")" = "0:223.5.5.5:$(perl -e 'print unpack("H*", $ARGV[0])' Wi-Fi) 6.6.6.6"
+rf_reset; rf_enana_start; cp "$W/rec.evil" "$ROOT/dns-original"; chmod 666 "$ROOT/dns-original"
+enhanced_stop; rc=$?
+check "记录组 / 其他人可写: 同样不用 (Wi-Fi 还是 223.5.5.5)" test "$rc:$(rf_dns Wi-Fi)" = "0:223.5.5.5"
+rm -f "$W/rec.real" "$W/rec.evil"
+
 echo
-if [ "$fails" = 0 ]; then echo 'PASS: root snapshot install, bootstrap / route rollback, staged symlink refusal, stop and remove from the root copy, rollback without a helper backup, past a failed step and without restoring a helper into an unsafe directory, migration from /usr/local/libexec'
+if [ "$fails" = 0 ]; then echo 'PASS: root snapshot install, bootstrap / route rollback, staged symlink refusal, stop and remove from the root copy, rollback without a helper backup, past a failed step and without restoring a helper into an unsafe directory, migration from /usr/local/libexec, system DNS takeover and restore'
 else echo "FAIL: $fails check(s) failed"; exit 1; fi
