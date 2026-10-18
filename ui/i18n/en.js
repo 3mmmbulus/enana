@@ -2241,6 +2241,7 @@
     "help.vps.list.how": "• Re-detect exit IPs: when the server gained public IPs, adds nodes for them (you enter the credentials again)\n• Forget: only removes this record — the nodes already created stay",
     // ---- logs ----
     "logs.dt.openAria": "Details: {time} {what}",
+    "logs.dt.capture": "Capture mode",
     "logs.dt.title": "Log entry",
     "logs.dt.pos": "{i} of {n} on this page",
     "logs.dt.prev": "Previous entry",
@@ -2687,7 +2688,7 @@
     // ---- dns ----
     "dns.intro": "enana uses one DNS for sites in China and another for everything else, so lookups stay fast and hard to tamper with.",
     "dns.scope.title": "What these settings cover",
-    "dns.scope.text": "They only affect lookups the proxy core makes itself (sites reached directly, and rule matching). Sites reached through a proxy are looked up by the server. Other programs on this computer keep using the system DNS, because enana does not change your system DNS.",
+    "dns.scope.text": "They only affect lookups the proxy core makes itself (sites reached directly, and rule matching). Sites reached through a proxy are looked up by the server. Other programs on this computer use the system DNS: in Lightweight mode (system proxy) enana does not change it; while Enhanced mode (TUN) is on in macOS, the system DNS is set to 223.5.5.5 so their lookups are answered by enana, and your setting is restored when you switch back to Lightweight mode.",
     "dns.sum.title": "Current settings",
     "dns.change": "Change DNS settings",
     "dns.notUsed": "Not used",
