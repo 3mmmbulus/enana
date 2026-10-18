@@ -28,7 +28,7 @@ System Proxy 默认不变。Enhanced/TUN 是显式选择, 包含双栈捕获、D
 
 - `tests/exits.sh`: 固定出口分配 (归属表 / 默认出口 / 批量移动与钉住 / 删除与改角色的保护 / 孤儿事件 / 上限 / HTTP 接口 / TUN 任务及回滚), 用假 Clash API。
 - `tests/enhanced.sh`: 默认与已有设置保留、生成配置的真实 sing-box 校验、双栈排除、共享 PIN、浏览器与网站优先级、OS socket 证据。
-- `tests/tun-service.sh`: 临时副本与假系统命令执行真实 helper 逻辑, 校验 bootstrap 失败/外部 VPN 路由冲突回滚、GUI 恢复及 symlink 拒绝。
+- `tests/tun-service.sh`: 临时副本与假系统命令执行真实 helper 逻辑, 校验 bootstrap 失败/外部 VPN 路由冲突回滚、GUI 恢复及 symlink 拒绝, 以及系统 DNS 的接管与还原 (假 networksetup, 见下面「增强模式接管系统 DNS」)。
 - `tests/ui-busy.test.js`: 实际组件回调的重复提交、忙碌状态、错误恢复、切换控件、弹窗按钮重建。
 - `tests/network-mode-ui.test.js`: 原生 App 的接管引导、明确选择有限 System 模式、取消管理员授权、TUN 未就绪及重试。
 - `tests/sysproxy-ui.test.js`: 总开关要先启动核心、而启动要管理员授权时, 跟着后台任务走 (成功 / 失败 / 切换模式)。
@@ -144,3 +144,29 @@ Windows 的 TUN 没有免密助手 (每次完整安装都是 UAC), 指纹的两�
 - 测试: `tests/tunrules.sh` T3d (助手对 `site-*.json` 的接受 / 拒绝)、T5c (两个指纹各算什么)、T10 (真实的 `gen_config` / `apply_config` / `op_txn`: 改域名、自己的网站增删和改线路、恢复网站默认、后台任务都只经助手同步, 服务器变了走完整安装, 2.3.25 快照迁移, 系统代理模式热加载); `tests/enhanced.sh` (每个条目一个规则集、改域名配置不变)、`tests/tun-service.sh` 第 13 节 (完整安装带上 `site-*.json`, enana 的数据包通过 root 助手的检查)、`tests/enhanced-root-integrity.sh` (快照清单与 check-config)。
 
 测试: `tests/tunrules.sh` (T3b 助手 `restart` 的接受 / 拒绝, T4b 记账内容与模式切换不重启, T5b 指纹, T6 重启走助手还是完整安装)、`tests/tun-service.sh` (安装后的助手写死标签 / launchctl 路径并真实执行)、`tests/enhanced.sh` (停止已停掉的守护进程不弹框)、`tests/units.sh` U8 (订阅就地刷新、一次应用)、`tests/sysproxy.sh` S6c2 (系统代理助手写死的端口与当前端口不一致时不信任)。
+
+## 增强模式接管系统 DNS (2.3.27)
+
+本机只读核对: LINE 不走系统代理, 经 TUN 连的是被污染的地址 (243.185.187.39 在 240/4 里, 还有 59.24.3.173、31.13.75.5、104.244.43.208 等), 自动和固定出口模式下二维码都加载不出来。系统 DNS 是路由器 (192.168.10.1 + fe80::10%en0): 私网和链路本地地址在 TUN 的 `route_exclude_address` 里, macOS 也优先用更具体的局域网路由, 查询根本不进 TUN, hijack-dns 一个包都没看到 (当天 24154 条 TUN 连接全是直接连 IP)。sing-box 1.14 的 TUN `dns_mode: hijack` 在苹果平台上只设置网卡自己的 DNS, 没有平台级的劫持 (那只有 Linux / Windows 有)。Windows 的 TUN 用 `strict_route` (WFP 挡住 TUN 之外的 53 端口), 不需要改, 也没有改。
+
+现在 (只在 macOS 的 TUN, `lib/enhanced-root.sh` 的 `DNS_PL`):
+
+- 接管: root 安装成功之后 (守护进程起来、已经提交), 每个启用的、有硬件网卡的网络服务 (`networksetup -listnetworkserviceorder`; 跳过 `(*)` 停用的、没有网卡的 VPN 服务, 以及设备是 utun / ipsec / ppp 一类隧道的) 的 DNS 设成 `223.5.5.5`。它是公网地址: 本机程序的查询走进 TUN, 由已有的 hijack-dns 规则交给核心 (海外域名经代理解析, 国内域名用国内 DNS), 不走系统代理的应用也拿到干净的结果。核心停了 / 崩了, TUN 的路由跟着没了, `223.5.5.5` 照样能直接用, 网络不会断。
+- 记录: 改之前先把每个服务原来的设置 (`-getdnsservers`; 「There aren't any DNS Servers」= 自动, 记成 `Empty`) 写进 root 的目录 (`/Library/Application Support/enana-<uid>/dns-original`, root 所有、`0600`, 服务名存十六进制, 整份重写); 记录写成功了才改 DNS。重装时已经是 `223.5.5.5`、又记过的服务不重记, 原来的设置不会被 `223.5.5.5` 盖掉; TUN 开着时用户自己改过的, 下一次安装记下用户改的 (还原的总是 enana 最后一次改动之前的样子)。设置之后再读一遍, 读到的正是要的才算成功 (不靠 networksetup 的退出码)。
+- 还原: 停止、删除 (卸载走的就是它)、安装失败回滚到「没有 TUN」时, 只还原现在正好是 `223.5.5.5` 的服务 (用户之后改过的不碰), `Empty` 还原成自动; 还原好的从记录里去掉, 读不出来 / 设置失败的留着下次再试, 记录空了就删掉。删除时先还原, 再删根目录。重装失败、旧的 TUN 被重新拉起来时照旧接管, 不还原; 第一次安装就失败时没有记录, networksetup 一次都不运行。
+- 尽力而为: networksetup 失败、列不出服务, 只多一行 `enana-root: note: dns: …` (安装时在 `enhanced-check.log` 里, 停止 / 删除时在 `enhanced-root.log` 里), TUN 照常安装 / 停止, 不回滚。每次 networksetup 最多等 30 秒, root 不会卡住。
+- 安全: 只有要管理员授权的安装 / 停止 / 删除会改系统 DNS; 没有新的管理员命令或免密规则, 免密的规则助手不碰它。networksetup 只用写死的 `/usr/sbin/networksetup`, 以列表形式直接 exec (不经过 shell), 服务名 (空格、中文、引号、`$(…)` 都可以) 只当数据。记录只认 root 自己的普通文件 (不跟符号链接, 组 / 其他人不可写), 根目录也必须是 root 的真目录; 不可信就不读、不还原, 只记一行。已有的检查一条没放松。
+- 配置 (`lib/dns.sh` 的 `dns_tun_takeover`): TUN 下核心里没有 `local` DNS 服务器 —— 系统解析器现在指向 TUN, 再用它解析会绕回核心自己。用域名写的 DNS 服务器 (自定义的 DoH / DoT / UDP) 由直连的 UDP `223.5.5.5` (`dns-boot`) 引导解析; 国内 DNS 选「系统默认」时也是它 (就是接管之后的系统 DNS), 所以 `route.default_domain_resolver` (`dns-cn`) 也不会是 local。核心自己的连接绑在物理网卡上 (`auto_detect_interface`), 不进 TUN。系统代理模式和 Windows 的配置一个字节都不变。
+- 升级: 2.3.27 改了 root 脚本和 TUN 配置 (指纹变了), 升级时本来就有的那一次授权安装顺带完成接管, 不多弹框。
+
+已知的取舍:
+
+- 只有路由器的 DNS 才解析得了的局域网名字 (例如 `nas.lan`、公司内网域名) 在 TUN 开着时解析不了 (查询交给了核心); 关掉 TUN 就恢复。
+- 要网页登录的公共 Wi-Fi (酒店 / 机场) 在登录之前可能弹不出登录页 (手动的 223.5.5.5 和核心的 DNS 都出不去): 先关掉 TUN 登录, 再打开。
+- 核心异常退出、系统又留下了指向已经不在的 utun 的残留路由时 (`tunrules-helper.pl` 的 `cleanup` 处理的就是这种), 公网流量本来就全断了, 223.5.5.5 也一样; 清掉残留路由就恢复。
+- 接管之后才出现的网络服务 (新插的 USB 网卡) 要等下一次授权安装才接管; 切换「网络位置」只影响当前位置的服务。
+- 退回 2.3.26 或更早版本时, 旧的 root 副本不认识记录: 系统 DNS 留在 `223.5.5.5` (照样能用, 只是不是原来的设置), 在系统设置里改回即可。
+
+测试 (都在 CI 里跑, 假 networksetup 管一组假的网络服务, 绝不运行真的; 夹具里还留着 `/usr/sbin/networksetup` 就拒绝运行): `tests/tun-service.sh` 第 14 节 —— 安装时记下原来的再设置 (自动的 Wi-Fi、手动的 IPv4 + IPv6、名字带空格和中文、硬件端口带括号、名字里有 shell 代码), 停用的和 VPN 连查询都没有; 重装不盖掉记录; 停止 / 删除 / inband 停止还原; 用户之后改过的不还原; 重装时记下用户的改动; 回滚到没有 TUN 时还原、旧的 TUN 回来时不还原、第一次安装失败时不运行 networksetup; 设置全部失败 / 部分失败 / 列不出服务时 TUN 照常、只多一行说明; 还原失败的留着、之后删除时还原; 记录是符号链接或可写时不用。`tests/enhanced-root-integrity.sh` —— 拒绝时不改 DNS, networksetup 只有写死的绝对路径 (没有裸的命令名), 免密助手不碰 DNS, `check-config` 接受 `dns-boot`。`tests/enhanced.sh` —— TUN 配置没有 local 服务器、域名写的 DNS 服务器由 `dns-boot` 引导、「系统默认」的国内 DNS 是直连的 UDP 223.5.5.5, 系统代理模式和 Windows TUN 的 DNS 配置和以前一样。
+
+本机验收: 开启 TUN 后 `networksetup -getdnsservers Wi-Fi` 显示 `223.5.5.5` (`scutil --dns` 的 resolver #1 也是它); LINE 的二维码能加载, 日志里 LINE 的连接带域名 (查询被 hijack-dns 接住了); 切回系统代理后 `networksetup -getdnsservers Wi-Fi` 回到原来的设置 (原来是自动的会显示 There aren't any DNS Servers)。
