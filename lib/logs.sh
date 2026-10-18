@@ -139,7 +139,21 @@ logs_rotate_api() {
   return 0
 }
 
-logs_maintain() { logs_rotate; logs_rotate_api; logs_compress; logs_purge >/dev/null; }
+# tick.log (每分钟任务的输出: macOS 由 launchd 追加写, Windows 由辅助服务追加写) 没有别的清理: 超过 1 MB 就只留最后 2000 行。
+#   原地写回 (先取尾部再覆盖同一个文件), 不换文件名: 正在运行的那一次 tick 的输出也还写在同一个文件里
+TICK_LOG_MAX=1048576
+logs_trim_tick() {
+  local f="$H/tick.log" sz tmp
+  [ -f "$f" ] || return 0
+  sz=$(file_size "$f" 2>/dev/null || echo 0)
+  [ "${sz:-0}" -gt "$TICK_LOG_MAX" ] || return 0
+  tmp=$(mktemp) || return 0
+  if tail -n 2000 "$f" > "$tmp"; then cat "$tmp" > "$f"; fi
+  rm -f "$tmp"
+  return 0
+}
+
+logs_maintain() { logs_rotate; logs_rotate_api; logs_trim_tick; logs_compress; logs_purge >/dev/null; }
 
 logs_tick() { # 由 enana tick 每分钟调用一次; 每小时真正做一次 (切分 + 压缩 + 按保留期清理), 所以 12 小时的保留期也准
   local last=0 f="$H/.logs.last"
@@ -149,6 +163,15 @@ logs_tick() { # 由 enana tick 每分钟调用一次; 每小时真正做一次 (
 }
 
 # ---------- 查询 (仪表盘「日志」页) ----------
+# 一天的代理日志可以有 100 MB / 七十多万行, 所以查询不再把整天读进一个 awk (以前一次 3 – 8 秒, 「实时」每 5 秒重复一次):
+#   代理日志: 条数 (全部 / 警告 / 错误) 用 grep 数, 这一页用 tail 取, 只有这一页交给 awk 排版 —— 结果和 2.3.26 逐行读取的逐字节相同
+#             (tests/logs-query.sh 拿 tests/fixtures/logs-2.3.26 里的旧实现对比)。搜索词仍是不分大小写的固定字符串, 和 awk 看到的完全一样 (见 _lq_qe)。
+#   网站访问: 连接要按编号归并 (lib/access.awk), 只读这一天最后的一段 (先 4 MB; 不够这一页就放大再读, 至少 ×4), 读到整天时结果和以前完全相同;
+#             没读完整天时返回 "partial":true, total = 已经读到的条数, 汇总也只算读到的部分 (仪表盘显示「最近的 N 条」和「加载更早的记录」)。
+#             搜索时先用 grep 找出含搜索词的连接编号, 只把这些连接的行交给 access.awk (结果相同)。
+#   日期列表: 实时日志只看第一条和最后一条带时间的行 (它按时间顺序写, 每小时切一次; 中间的日子由已经切分的文件给出), 不再整份扫描。
+# 这些查询只由辅助服务调用 (lib/api.sh 设了 LC_ALL=C): grep / awk 都按字节比较, 大小写只认 ASCII, 和以前的 awk 一致。
+# 诊断导出 (logs_bundle) 和旧的单类导出 (logs_export) 仍按原来的方式整天读取 (_logs_stream), 不受影响。
 _logs_stream() { # <类型 proxy|access|ops> <日期>  -> 该天的原始行 (按时间顺序)
   local d=$2 f
   case $1 in
@@ -165,9 +188,38 @@ _logs_stream() { # <类型 proxy|access|ops> <日期>  -> 该天的原始行 (�
   return 0
 }
 
+# 实时日志里的一行「带时间」= 第一个字段以 + / - 开头 (时区), 第二个字段以 4 位数字和 - 开头 (日期); 和 _logs_stream / 以前的 logs_days 用 awk 判断的是同一件事
+_LQ_DAYRE='^[[:blank:]]*[+-][^[:blank:]]*[[:blank:]]+[0-9]{4}-'
+_lq_dnum() { # YYYY-MM-DD -> 按天递增的一个数 (公历; 只用来判断两个日期是不是相邻); 不是这种格式 -> 返回 1
+  local y m d
+  case $1 in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) return 1 ;; esac
+  y=$((10#${1%%-*})); m=${1#*-}; d=$((10#${m#*-})); m=$((10#${m%%-*}))
+  [ "$m" -le 2 ] && { y=$((y - 1)); m=$((m + 12)); }
+  printf '%s' "$(( 365 * y + y / 4 - y / 100 + y / 400 + (153 * (m - 3) + 2) / 5 + d ))"
+}
+_lq_adjacent() { local x y; x=$(_lq_dnum "$1") && y=$(_lq_dnum "$2") || return 1; [ $((x - y)) -le 1 ] && [ $((y - x)) -le 1 ]; }
+_logs_live_days() { # 实时日志里有记录的日期: 只读第一条和最后一条带时间的行 (最后一条从文件末尾往前找, 找不到再往前多读一些), 不整份扫描
+  local f="$H/sing-box.log" a b k=256
+  [ -s "$f" ] || return 0
+  a=$(LC_ALL=C grep -a -m 1 -E "$_LQ_DAYRE" "$f" 2>/dev/null | awk '{ print $2 }')
+  [ -n "$a" ] || return 0
+  while :; do
+    if [ "$k" -gt 4194304 ]; then b=$(LC_ALL=C grep -a -E "$_LQ_DAYRE" "$f" 2>/dev/null | tail -n 1 | awk '{ print $2 }'); break; fi
+    b=$(tail -n "$k" "$f" 2>/dev/null | LC_ALL=C grep -a -E "$_LQ_DAYRE" | tail -n 1 | awk '{ print $2 }')
+    [ -n "$b" ] && break
+    k=$((k * 16))
+  done
+  if [ -n "$b" ] && [ "$b" != "$a" ] && ! _lq_adjacent "$a" "$b"; then          # 首尾隔了不止一天 (每小时的切分没有在运行): 和以前一样整份扫描, 中间的日子不漏
+    awk '{ c = substr($1,1,1); if ((c == "+" || c == "-") && $2 ~ /^[0-9][0-9][0-9][0-9]-/) print $2 }' "$f"
+    return 0
+  fi
+  printf '%s\n' "$a"
+  [ -z "$b" ] || [ "$b" = "$a" ] || printf '%s\n' "$b"
+}
+
 logs_days() { # 打印有记录的日期 (新→旧), 每行一个
   { ls -1 "$LOGS" 2>/dev/null | sed -nE 's/^(ops|proxy)-([0-9]{4}-[0-9]{2}-[0-9]{2})\.log(\.gz)?$/\2/p'
-    [ -s "$H/sing-box.log" ] && awk '{ c = substr($1,1,1); if ((c == "+" || c == "-") && $2 ~ /^[0-9][0-9][0-9][0-9]-/) print $2 }' "$H/sing-box.log"
+    _logs_live_days
     ls -1 "$LOGS"/ops-"$(date +%F)".log >/dev/null 2>&1 && date +%F
   } | sort -ur
 }
@@ -185,18 +237,216 @@ _logs_ops_localized() { # <日期>  -> 操作记录原始行, 其中「动作」
 # 通用 JSON 转义 (awk 函数文本, 供各查询复用)
 _AWK_ESC='function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/[\001-\037]/, " ", s); return s }'
 
-_logs_access_input() { # <日期…>  -> access.awk 的标准输入: 固定出口 / 自动线路节点名 + 这些天的核心日志
-  local d
+_logs_access_head() { # access.awk 输入的开头: 固定出口 / 自动线路节点名 (@@PINS / @@AUTOS 两段), 最后一行 @@LOG (后面接核心日志)
   printf '%s\n' "@@PINS"; srv_list | awk -F'\t' '$5=="pin"{print $1}'
   printf '%s\n' "@@AUTOS"; { srv_list; type official_list >/dev/null 2>&1 && official_list; } | awk -F'\t' '$5=="auto"{print $1}'
   printf '%s\n' "@@LOG"
+}
+_logs_access_input() { # <日期…>  -> access.awk 的标准输入: 固定出口 / 自动线路节点名 + 这些天的核心日志
+  local d
+  _logs_access_head
   for d in "$@"; do _logs_stream access "$d"; done
 }
 
-# logs_query <类型> <日期> <q> <limit> <offset> [筛选]  -> {"ok":true,"days":[…],"total":N,"rows":[…]}   (access 还带 summary)
+# ---- 查询用的「这一天的日志流」: 和 _logs_stream proxy 逐字节相同, 但分成几段文件, 这样可以只读最后一段、用 grep / tail 直接读文件 ----
+#   LQ_P = 各段的文件 (按顺序: 已切分的文件 · 压缩文件解压到 $LQT/gz · 实时日志里这一天的行写到 $LQT/live; 空的不要), LQ_S = 各段的字节数
+_LQ_NL=$'\n'
+_LQ_ESC=$(printf '\033')
+_logs_live_day() { # <日期>  实时日志里属于这一天的行, 和 _logs_stream 的 awk 读法结果相同 (行首字段以 + / - 开头的行决定它和后面的行属于哪一天; 核心日志关闭时只留连接行)
+  local d=$1 f="$H/sing-box.log" hit all n0      #   平时实时日志里「行首是 + / -」的行全是同一天的: 那就是从第一条这样的行到文件末尾, 用 grep 数一数 + tail, 不必逐行跑 awk
+  [ -s "$f" ] || return 0
+  hit=$(LC_ALL=C grep -a -c -E "^[[:blank:]]*[+-][^[:blank:]]*[[:blank:]]+$d([[:blank:]]|\$)" "$f" 2>/dev/null)
+  case $hit in ''|0|*[!0-9]*) return 0 ;; esac                                      # 没有一行是这一天的
+  all=$(LC_ALL=C grep -a -c -E '^[[:blank:]]*[+-]' "$f" 2>/dev/null); n0=''
+  [ "$all" = "$hit" ] && n0=$(LC_ALL=C grep -a -n -m 1 -E '^[[:blank:]]*[+-]' "$f" 2>/dev/null | cut -d: -f1)
+  if [ -n "$n0" ]; then
+    if [ "${LOG_CORE:-1}" = 1 ]; then tail -n +"$n0" "$f"; else tail -n +"$n0" "$f" | LC_ALL=C grep -a -E '[[][0-9]+ [^]]*[]] '; fi
+  else                                                                               # 跨了日期 (半夜到下一次切分之间) 或有别的日期的行: 和 _logs_stream 一样逐行判断
+    awk -v d="$d" -v core="${LOG_CORE:-1}" '{ c = substr($1, 1, 1); if (c == "+" || c == "-") keep = ($2 == d); if (keep && (core == 1 || $0 ~ /\[[0-9]+ [^]]*\] /)) print }' "$f"
+  fi
+  return 0
+}
+_lq_open() { [ -s "$1" ] && [ "$(tail -c 1 "$1" | wc -l | tr -d ' ')" = 0 ]; }        # 最后一个字节不是换行 (最后一行没有写完)
+_lq_endnl() { if _lq_open "$1"; then printf '\n' >> "$1"; fi; return 0; }           # awk 输出的每一行都以换行结尾: tail 直接取的那段补上
+_lq_lines() { local n; n=$(wc -l < "$1" | tr -d ' '); _lq_open "$1" && n=$((n + 1)); printf '%s' "${n:-0}"; }    # 行数 (和 awk 的记录数一样: 最后一行没有换行也算)
+_lq_prep() { # <日期>  准备 LQ_P / LQ_S
+  local d=$1 i n
+  LQ_P=(); LQ_S=()
+  [ -s "$LOGS/proxy-$d.log" ] && LQ_P[${#LQ_P[@]}]="$LOGS/proxy-$d.log"
+  if [ -f "$LOGS/proxy-$d.log.gz" ]; then gzip -dc "$LOGS/proxy-$d.log.gz" > "$LQT/gz" 2>/dev/null; [ -s "$LQT/gz" ] && LQ_P[${#LQ_P[@]}]="$LQT/gz"; fi
+  _logs_live_day "$d" > "$LQT/live"; _lq_endnl "$LQT/live"; [ -s "$LQT/live" ] && LQ_P[${#LQ_P[@]}]="$LQT/live"
+  n=${#LQ_P[@]}; i=0
+  while [ "$i" -lt $((n - 1)) ]; do              # 前面的某段不是以换行结尾 (正常不会): 它的最后半行和下一段的第一行连成一行, 合并成一个文件才和整条流读出来的一样
+    if _lq_open "${LQ_P[$i]}"; then cat "${LQ_P[@]}" > "$LQT/all"; LQ_P=("$LQT/all"); break; fi
+    i=$((i + 1))
+  done
+  n=${#LQ_P[@]}; i=0
+  while [ "$i" -lt "$n" ]; do LQ_S[$i]=$(file_size "${LQ_P[$i]}" 2>/dev/null || echo 0); i=$((i + 1)); done
+  return 0
+}
+_lq_window() { # <字节数>  这一天日志流的最后 N 字节, 从某一行的行首开始 (切到一半的那一行不要); N 不小于全部时就是整条流
+  local want=$1 i n=${#LQ_P[@]} k=-1 off=0
+  [ "$n" -gt 0 ] || return 0
+  i=$((n - 1))
+  while [ "$i" -ge 0 ]; do
+    if [ "$want" -lt "${LQ_S[$i]}" ]; then k=$i; off=$((LQ_S[i] - want)); break; fi
+    want=$((want - LQ_S[i])); i=$((i - 1))
+  done
+  if [ "$k" -lt 0 ]; then cat "${LQ_P[@]}"; return 0; fi
+  tail -c +"$off" "${LQ_P[$k]}" | tail -n +2           # 从窗口前的那个字节读起, 去掉到第一个换行为止
+  i=$((k + 1)); while [ "$i" -lt "$n" ]; do cat "${LQ_P[$i]}"; i=$((i + 1)); done
+  return 0
+}
+_lq_norm() { local v=${1#"${1%%[!0]*}"}; [ -n "$v" ] || v=0; [ ${#v} -gt 9 ] && v=big; printf '%s' "$v"; }      # 条数 / 跳过数: 去掉前导 0; 十亿以上记成 big (比任何一天的行数都多)
+# 搜索词: logs_query 用 tr 转成小写后以 -v q= 交给 awk, -v 还会处理反斜杠转义; 用同一个 awk 读一遍, 得到 awk 真正比较的那个词 (LQ_QE)。
+#   LQ_NEVER=1: 它不可能出现在转成小写的一行里 (含换行 / 大写字母 / NUL), 以前的结果就是一条也没有
+_lq_qe() { # <q>
+  local r len
+  LQ_QE=''; LQ_NEVER=0
+  [ -n "$1" ] || return 0
+  r=$(LC_ALL=C awk -v q="$1" 'BEGIN { printf "%d:%s.", length(q), q }' 2>/dev/null)     # 末尾的点保住结尾的换行; 长度对不上 = 含 NUL (被 shell 丢掉了)
+  len=${r%%:*}; r=${r#*:}; LQ_QE=${r%.}
+  [ "${#LQ_QE}" = "$len" ] || LQ_NEVER=1
+  case $LQ_QE in *"$_LQ_NL"*|*[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*) LQ_NEVER=1 ;; esac
+  return 0
+}
+
+# ---- 代理日志: 以前的 awk 对每一行做的事 —— 去颜色 · 按搜索词 (小写) 过滤 · 认级别 · 数 全部 / 警告 / 错误 · 按筛选留下 · 取最后 offset+limit 行倒序输出 ----
+_LQ_WE='^[+-][0-9]{4} [0-9-]+ [0-9:]+ (ERROR|FATAL|PANIC|WARN|WARNING) '       # 和以前一样: 行头的第 4 个字段是级别
+_LQ_ER='^[+-][0-9]{4} [0-9-]+ [0-9:]+ (ERROR|FATAL|PANIC) '
+_lq_grepq() { if [ -n "$LQ_QE" ]; then LC_ALL=C grep -a -i -F -e "$LQ_QE"; else cat; fi; }
+_lq_wecand() { # 各段里可能是警告 / 错误的行 (按顺序, 一般很少; 先用固定字符串粗筛, 快) 和带颜色控制符的行 -> $LQT/cand
+  local p
+  for p in "${LQ_P[@]}"; do LC_ALL=C grep -a -F -e ' ERROR ' -e ' FATAL ' -e ' PANIC ' -e ' WARN ' -e ' WARNING ' -e "$_LQ_ESC" "$p"; done > "$LQT/cand"
+}
+_lq_proxy() { # <q 小写> <筛选> <条数> <跳过>  -> {"total":…,"rows":[…],"summary":{…}}
+  local f=$2 lim=$3 off=$4 i n c all=0 nwe nerr t k rem ln on
+  local -a cnt take
+  _lq_qe "$1"
+  n=${#LQ_P[@]}; : > "$LQT/we"
+  if [ "$LQ_NEVER" = 0 ] && [ "$n" -gt 0 ]; then
+    _lq_wecand
+    if LC_ALL=C grep -a -q -F -e "$_LQ_ESC" "$LQT/cand"; then     # 有颜色控制符: 和以前一样先去掉再比较 (正常的核心日志没有, 这条慢路几乎不会走)
+      cat "${LQ_P[@]}" | LC_ALL=C awk '{ gsub(/\033\[[0-9;]*m/, ""); print }' > "$LQT/plain"; LQ_P=("$LQT/plain"); n=1
+      _lq_wecand
+    fi
+    LC_ALL=C grep -a -E "$_LQ_WE" "$LQT/cand" | _lq_grepq > "$LQT/we"           # 用和以前相同的行头规则确认级别
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      if [ -z "$LQ_QE" ]; then c=$(_lq_lines "${LQ_P[$i]}"); else c=$(LC_ALL=C grep -a -c -i -F -e "$LQ_QE" "${LQ_P[$i]}"); fi
+      case $c in ''|*[!0-9]*) c=0 ;; esac
+      cnt[$i]=$c; all=$((all + c)); i=$((i + 1))
+    done
+  fi
+  nwe=$(_lq_lines "$LQT/we"); nerr=$(LC_ALL=C grep -a -c -E "$_LQ_ER" "$LQT/we"); case $nerr in ''|*[!0-9]*) nerr=0 ;; esac
+  case $f in error) t=$nerr ;; warn) t=$nwe ;; *) t=$all ;; esac
+  ln=$(_lq_norm "$lim"); on=$(_lq_norm "$off")                     # 这一页要的是筛选后最后 offset+limit 行里较早的 limit 行
+  if [ "$ln" = 0 ] || [ "$on" = big ]; then k=0
+  elif [ "$on" -ge "$t" ]; then k=0
+  elif [ "$ln" = big ]; then k=$t
+  else k=$((on + ln)); [ "$k" -gt "$t" ] && k=$t; fi
+  : > "$LQT/page"
+  if [ "$k" -gt 0 ]; then
+    case $f in
+      error) LC_ALL=C grep -a -E "$_LQ_ER" "$LQT/we" | tail -n "$k" > "$LQT/page" ;;
+      warn) tail -n "$k" "$LQT/we" > "$LQT/page" ;;
+      *) rem=$k; i=$((n - 1))                                       # 从最后一段往前取, 每段取它自己的最后几行 (实时日志那段通常就够了)
+         while [ "$i" -ge 0 ] && [ "$rem" -gt 0 ]; do c=${cnt[$i]}; [ "$c" -gt "$rem" ] && c=$rem; take[$i]=$c; rem=$((rem - c)); i=$((i - 1)); done
+         i=$((i + 1))
+         while [ "$i" -lt "$n" ]; do
+           c=${take[$i]:-0}
+           if [ "$c" -gt 0 ]; then
+             if [ -z "$LQ_QE" ]; then tail -n "$c" "${LQ_P[$i]}"; else LC_ALL=C grep -a -i -F -e "$LQ_QE" "${LQ_P[$i]}" | tail -n "$c"; fi
+           fi
+           i=$((i + 1))
+         done > "$LQT/page" ;;
+    esac
+  fi
+  LC_ALL=C awk -v lim="$lim" -v off="$off" -v n="$t" -v all="$all" -v nwarn="$((nwe - nerr))" -v nerr="$nerr" "$_AWK_ESC"'
+    { a[NR] = $0 }
+    END { printf "{\"total\":%d,\"rows\":[", n; c = 0
+      for (i = NR - off; i >= 1 && c < lim; i--) { l = a[i]; ts = ""; lv = ""; msg = l
+        if (match(l, /^[+-][0-9][0-9][0-9][0-9] [0-9-]+ [0-9:]+ [A-Z]+ /)) { split(substr(l, RSTART, RLENGTH), p, " "); ts = p[2] " " p[3]; lv = p[4]; msg = substr(l, RLENGTH + 1) }
+        printf "%s{\"ts\":\"%s\",\"level\":\"%s\",\"msg\":\"%s\"}", (c++ ? "," : ""), esc(ts), esc(lv), esc(msg) }
+      printf "],\"summary\":{\"all\":%d,\"warn\":%d,\"error\":%d}}", all + 0, nwarn + 0, nerr + 0 }' "$LQT/page"
+}
+
+# ---- 网站访问: 只读这一天最后的一段, 不够这一页就放大 ----
+_LQ_HDR='^[+-][0-9]{4} [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]+ [A-Z]+ '         # access.awk 认的行头
+_lq_ids() { # stdin: 日志行 -> 这些行的连接编号, 每行一个 (和 access.awk 一样: 行头之后紧跟 [编号 耗时])
+  LC_ALL=C awk 'match($0, /^[+-][0-9][0-9][0-9][0-9] [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9:]+ [A-Z]+ \[[0-9]+ [^]]*\] /) { s = substr($0, RSTART, RLENGTH); s = substr(s, index(s, "[") + 1); print substr(s, 1, index(s, " ") - 1) }'
+}
+_lq_pick() { # <编号文件>  stdin -> 只留这些连接的行 (行头里没有 "[", 所以第一个 " [" 后面就是编号; 不是连接的行 access.awk 本来就不看)
+  LQ_IDS=$1 LC_ALL=C awk 'BEGIN { f = ENVIRON["LQ_IDS"]; while ((getline l < f) > 0) s[l] = 1; close(f) }
+    { if ((i = index($0, " [")) > 0) { r = substr($0, i + 2, 24); j = index(r, " "); if (j > 1 && (substr(r, 1, j - 1) in s)) print } }'
+}
+_lq_acc_awk() { # <窗口模式 0|1> <窗口第一行的时间|空>  stdin -> access.awk 的 JSON (其余参数和以前的查询一样)
+  LC_ALL=C awk -f "$LIB/access.awk" -v mode=json -v q="$LQ_Q" -v f="$LQ_F" -v lim="$LQ_LIM" -v off="$LQ_OFF" -v since= -v mask=0 -v win="$1" -v t0="$2"
+}
+_lq_cands() { # <字节数> <按搜索词 0|1>  这一段里「可能符合」的行数 (每条符合的连接至少有一行这样的行); 不搜索也不筛选时不输出
+  local p d
+  if [ "$2" = 1 ]; then _lq_window "$1" | LC_ALL=C grep -a -c -i -F -e "$LQ_QE"; return 0; fi
+  case $LQ_F in
+    error) _lq_window "$1" | LC_ALL=C grep -a -c -F -e '] dns: lookup failed' -e '] dns: exchange failed' -e '] connection: open ' ;;
+    direct) _lq_window "$1" | LC_ALL=C grep -a -c -F -e '[direct' ;;
+    proxy) p=$(_lq_window "$1" | LC_ALL=C grep -a -c -F -e ']: outbound connection to ' -e ']: outbound packet connection to ')
+           d=$(_lq_window "$1" | LC_ALL=C grep -a -c -E '[[]direct(-[a-z]+)?[]]: outbound (packet )?connection to ')
+           printf '%s\n' "$(( ${p:-0} - ${d:-0} ))" ;;
+  esac
+  return 0
+}
+_lq_grow() { # <窗口> <读到的条数> <需要的条数>  -> 下一次的窗口: 至少 ×4; 照读到的密度估计还差得多时, 一次放到估计值的 1.5 倍 (一条都没读到 = 整天)
+  local w=$1 got=$2 need=$3 x y
+  x=$((w * 4))
+  if [ "$got" -le 0 ]; then y=$((x * 1024)); else y=$(( (w / got + 1) * need * 3 / 2 )); fi
+  [ "$y" -gt "$x" ] && x=$y
+  printf '%s' "$x"
+}
+_lq_access() { # <q 小写> <筛选> <条数> <跳过>  -> access.awk 的 JSON; 没有读完整天时创建 $LQT/partial
+  local B=0 i W need ln on whole=0 pre=0 esc=0 usepre=0 out tot t0 cand
+  LQ_Q=$1 LQ_F=$2 LQ_LIM=$3 LQ_OFF=$4
+  _logs_access_head > "$LQT/hdr"
+  i=0; while [ "$i" -lt "${#LQ_P[@]}" ]; do B=$((B + ${LQ_S[$i]:-0})); i=$((i + 1)); done
+  ln=$(_lq_norm "$LQ_LIM"); on=$(_lq_norm "$LQ_OFF")
+  if [ "$ln" = big ] || [ "$on" = big ]; then need=all; else need=$((on + ln)); fi
+  _lq_qe "$LQ_Q"
+  if [ "$LQ_NEVER" = 1 ]; then _lq_acc_awk 0 '' < "$LQT/hdr"; return 0; fi            # 搜索词不可能出现在任何连接里: 和读完整天一样, 一条也没有
+  if [ -n "$LQ_QE" ]; then                     # 只把含搜索词的连接交给 access.awk. 搜索比较的是「网站 应用 出口 原因 失败类型 地址」用空格连起来的文字 (都转成小写):
+    pre=1                                      #   网站 / 应用 / 出口 / 地址都是原始行里的原文, 所以符合的连接一定有一行含这个词 (不分大小写)。例外的不预选:
+    case $LQ_QE in *' '*) pre=0 ;; esac        #   带空格的词可能跨字段; 原因 (policy …) / 失败类型 (timeout …) 是推算出来的, 原始行里不一定有
+    case 'policy timeout refused reset unreachable dns tls eof rejected other' in *"$LQ_QE"*) pre=0 ;; esac
+  fi
+  W=$(test_env ENANA_LOGS_WINDOW 4194304); case $W in ''|*[!0-9]*|0) W=4194304 ;; esac
+  while :; do
+    whole=0; if [ "$need" = all ] || [ "$W" -ge "$B" ]; then whole=1; W=$B; fi
+    esc=0; usepre=0                            # 这一段有颜色控制符 (ESC; 正常没有) 时原始行和 access.awk 看到的不一样: 不预选, 也不用行数估计
+    if [ "$pre" = 1 ] || { [ -n "$LQ_F" ] && [ "$whole" = 0 ]; }; then _lq_window "$W" | LC_ALL=C grep -a -q -F -e "$_LQ_ESC" && esc=1; fi
+    [ "$pre" = 1 ] && [ "$esc" = 0 ] && usepre=1
+    if [ "$whole" = 0 ] && [ "$esc" = 0 ]; then
+      cand=$(_lq_cands "$W" "$usepre")
+      if [ -n "$cand" ] && [ "$cand" -lt "$need" ]; then W=$((W * 4)); continue; fi      # 这一段里可能符合的行都不够这一页: 不必跑 access.awk, 直接放大
+    fi
+    if [ "$usepre" = 1 ]; then
+      _lq_window "$W" | LC_ALL=C grep -a -i -F -e "$LQ_QE" | _lq_ids > "$LQT/ids"
+      t0=''; [ "$whole" = 1 ] || t0=$(_lq_window "$W" | LC_ALL=C grep -a -m 1 -E "$_LQ_HDR" | cut -d' ' -f3)
+      out=$({ cat "$LQT/hdr"; if [ -s "$LQT/ids" ]; then _lq_window "$W" | _lq_pick "$LQT/ids"; fi; } | _lq_acc_awk "$((1 - whole))" "$t0")
+    else
+      out=$({ cat "$LQT/hdr"; _lq_window "$W"; } | _lq_acc_awk "$((1 - whole))" '')
+    fi
+    tot=${out#\{\"total\":}; tot=${tot%%,*}; case $tot in ''|*[!0-9]*) tot=0 ;; esac
+    if [ "$whole" = 0 ] && [ "$tot" -lt "$need" ]; then W=$(_lq_grow "$W" "$tot" "$need"); continue; fi
+    break
+  done
+  [ "$whole" = 1 ] || : > "$LQT/partial"
+  printf '%s' "$out"
+}
+
+# logs_query <类型> <日期> <q> <limit> <offset> [筛选]  -> {"ok":true,"days":[…],"total":N,"rows":[…],"summary":{…}}
 #   筛选: ops: error | dashboard | terminal | auto   access: direct | proxy | error   proxy: warn (警告和错误) | error
+#   access 没读完整天时多一个 "partial":true (total / summary 只算读到的部分); 读完整天时和以前的结果逐字节相同
 logs_query() {
-  local type=$1 day=$2 q=$3 limit=$4 off=$5 f=${6:-} rows
+  local type=$1 day=$2 q=$3 limit=$4 off=$5 f=${6:-} rows part='' LQT LQ_QE LQ_NEVER LQ_Q LQ_F LQ_LIM LQ_OFF
+  local -a LQ_P LQ_S
   case $limit in ''|*[!0-9]*) limit=500 ;; esac; [ "$limit" -gt 2000 ] && limit=2000
   case $off in ''|*[!0-9]*) off=0 ;; esac
   case $f in ''|error|warn|direct|proxy|dashboard|terminal|auto) ;; *) f='' ;; esac
@@ -213,24 +463,16 @@ logs_query() {
         END { printf "{\"total\":%d,\"rows\":[", n; c = 0
           for (i = n - off; i >= 1 && c < lim; i--) { split(a[i], x, "\t"); printf "%s{\"ts\":\"%s\",\"who\":\"%s\",\"action\":\"%s\",\"detail\":\"%s\",\"result\":\"%s\"}", (c++ ? "," : ""), esc(x[1]), esc(x[2]), esc(x[3]), esc(x[4]), esc(x[5]) }
           printf "],\"summary\":{\"all\":%d,\"error\":%d}}", all + 0, nerr + 0 }') ;;
-    proxy)
-      rows=$(_logs_stream proxy "$day" | awk -v q="$q" -v f="$f" -v lim="$limit" -v off="$off" "$_AWK_ESC"'
-        { gsub(/\033\[[0-9;]*m/, ""); line = tolower($0); if (q != "" && index(line, q) == 0) next
-          lv = ""; if (match($0, /^[+-][0-9][0-9][0-9][0-9] [0-9-]+ [0-9:]+ [A-Z]+ /)) { split(substr($0, RSTART, RLENGTH), p, " "); lv = p[4] }
-          all++; if (lv == "ERROR" || lv == "FATAL" || lv == "PANIC") nerr++; else if (lv == "WARN" || lv == "WARNING") nwarn++
-          if (f == "error" && !(lv == "ERROR" || lv == "FATAL" || lv == "PANIC")) next
-          if (f == "warn" && !(lv == "ERROR" || lv == "FATAL" || lv == "PANIC" || lv == "WARN" || lv == "WARNING")) next
-          n++; a[n] = $0 }
-        END { printf "{\"total\":%d,\"rows\":[", n; c = 0
-          for (i = n - off; i >= 1 && c < lim; i--) { l = a[i]; ts = ""; lv = ""; msg = l
-            if (match(l, /^[+-][0-9][0-9][0-9][0-9] [0-9-]+ [0-9:]+ [A-Z]+ /)) { split(substr(l, RSTART, RLENGTH), p, " "); ts = p[2] " " p[3]; lv = p[4]; msg = substr(l, RLENGTH + 1) }
-            printf "%s{\"ts\":\"%s\",\"level\":\"%s\",\"msg\":\"%s\"}", (c++ ? "," : ""), esc(ts), esc(lv), esc(msg) }
-          printf "],\"summary\":{\"all\":%d,\"warn\":%d,\"error\":%d}}", all + 0, nwarn + 0, nerr + 0 }') ;;
-    access)
-      rows=$(_logs_access_input "$day" | LC_ALL=C awk -f "$LIB/access.awk" -v mode=json -v q="$q" -v f="$f" -v lim="$limit" -v off="$off" -v since= -v mask=0) ;;
+    proxy|access)
+      LQT=$(mktemp -d 2>/dev/null) || LQT="$H/.logs-query.$$"
+      mkdir -p "$LQT"
+      _lq_prep "$day"
+      if [ "$type" = proxy ]; then rows=$(_lq_proxy "$q" "$f" "$limit" "$off"); else rows=$(_lq_access "$q" "$f" "$limit" "$off"); fi
+      [ -e "$LQT/partial" ] && part='"partial":true,'
+      rm -rf "$LQT" ;;
     *) printf '{"ok":false,"error":"日志类型无效"}'; return ;;
   esac
-  printf '{"ok":true,"days":%s,%s}' "$(_logs_days_json)" "$(printf '%s' "$rows" | sed 's/^{//; s/}$//')"
+  printf '{"ok":true,"days":%s,%s%s}' "$(_logs_days_json)" "$part" "$(printf '%s' "$rows" | sed 's/^{//; s/}$//')"
 }
 
 logs_export() { # <类型> <日期>  -> 纯文本 (旧接口; 仪表盘现在用 logs_bundle)

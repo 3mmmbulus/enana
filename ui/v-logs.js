@@ -4,7 +4,9 @@
  *   菜单项没有「暂不可用」状态, 每个菜单项的处理函数自己先检查能不能做 (辅助服务 / 有没有日志), 不能做就提示原因;
  *   列表按页浏览, 点一行 (或时间按钮) 打开详情弹窗 (可用 ‹ › 在本页的各条之间切换, 可复制)。
  *   网站访问: 每条连接 = 时间 · 网站 (失败时带失败类型) · 应用 (图标) · 线路 · 出口 (直连时写「为什么直连」); 上面一行汇总 (直连 / 代理 / 失败 + 直连原因分布 + 失败最多的网站)。
- *   GET  /api/logs?type&day&q&limit&offset&f -> {total, days[], rows[], summary}  (新→旧; f = 筛选: ops error | access direct proxy error | proxy warn error)
+ *   GET  /api/logs?type&day&q&limit&offset&f -> {total, days[], rows[], summary[, partial]}  (新→旧; f = 筛选: ops error | access direct proxy error | proxy warn error)
+ *     partial (只有网站访问, 2.3.27): 很大的一天后端只读了最近的一段 (够这一页为止), total / summary 是「已经读到的」。这时摘要写「最近的 N 条」, 筛选按钮上的数字带「+」,
+ *     不再用总数推算翻页期间新增了多少条 (读的范围会变); 翻到已读部分的最后一页时显示「加载更早的记录」: 请求下一页, 后端会接着往前读。
  *   GET  /api/logs/bundle?hours=<1..720|all>&sections=ops,access,proxy,snapshot -> 纯文本 (诊断导出: 自描述的一个文件, 格式见 docs/DIAGNOSTICS.md)
  *   POST /api/logs/clear 表单 type(+before) -> {freed}      (需要再次输入登录密码: TP.helper 自己弹出密码框, 取消 = e.kind 'cancel', 安静地忽略)
  * 日志设置 (TP.logs): 设置页与日志页共用 —— 保留时长 (12 小时 – 30 天) / 操作记录 / 网站访问 / 代理核心日志 (三个开关) / 占用空间。
@@ -44,8 +46,8 @@
   TYPES.forEach(function (k) { T[k] = fresh(); });
 
   /* 每个类型一份状态。rows = 当前这一页 (服务端的顺序: 新→旧); view = 实际显示的顺序 (列头排序之后; 点行打开详情时按它翻页); pos = 行 -> 它在 rows 里的序号 (排序时间相同的行时保持新旧次序); base = 最近一次「新读取」时的总数 (分页的基准, 翻页期间日志又新增的在最新一端, 另外提示); total = 最近一次响应里的总数;
-   * gen = rows 被整体替换的次数 (DOM 据此决定要不要重建); f = 筛选; sum = 服务端给的汇总 (筛选按钮上的数字) */
-  function fresh() { return { rows: [], view: [], pos: null, total: 0, base: 0, q: '', f: '', sum: null, key: '', loaded: false, loading: false, err: null, seq: 0, gen: 0, at: 0, pageNo: 0 }; }
+   * gen = rows 被整体替换的次数 (DOM 据此决定要不要重建); f = 筛选; sum = 服务端给的汇总 (筛选按钮上的数字); partial = 最近一次响应只读了这一天最近的一段 */
+  function fresh() { return { rows: [], view: [], pos: null, total: 0, base: 0, partial: false, q: '', f: '', sum: null, key: '', loaded: false, loading: false, err: null, seq: 0, gen: 0, at: 0, pageNo: 0 }; }
 
   /* ================= 小工具 ================= */
   function active() { return TP.tab === 'logs'; }
@@ -360,19 +362,21 @@
   }
   /* 换了日期 / 清除了日志: 所有标签的数据作废, 页码回到第 1 页 */
   function invalidate() {
-    TYPES.forEach(function (k) { var tb = T[k]; tb.rows = []; tb.total = tb.base = 0; tb.sum = null; tb.key = ''; tb.loaded = tb.loading = false; tb.err = null; tb.gen++; tb.seq++; setPage(k, 1); });
+    TYPES.forEach(function (k) { var tb = T[k]; tb.rows = []; tb.total = tb.base = 0; tb.partial = false; tb.sum = null; tb.key = ''; tb.loaded = tb.loading = false; tb.err = null; tb.gen++; tb.seq++; setPage(k, 1); });
   }
 
   /* mode: 'fresh' = 新读取 (刷新 / 换标签 / 换日期 / 换搜索 / 改每页条数): 返回的总数成为新的基准;
    *       'page'  = 翻页: offset 要加上「翻页期间新增的条数」(日志新→旧, 新增的在最前面, 不加的话相邻两页会重复几行), 总数基准不变, 新增的另外提示。
+   *       'older' = 「加载更早的记录」(只读了一部分时): 读 want 这一页 (已读部分之后的那一页), 分页条按新的总数更新后翻过去。
    * 翻页请求用的「新增条数」是上一次响应里的总数算出来的; 如果这次响应显示又新增了, 读到的这页就偏了几行, 再用新的条数重读一次 (只重读一次)。
+   * 只读了一部分 (partial) 时总数是「已经读到的条数」, 会随读的范围变, 不能用来推算新增: 不加这个偏移, 基准总跟着最新的总数。
    * 过期的响应 (seq 不匹配) 一律丢弃。 */
-  async function load(k, mode, retried) {
+  async function load(k, mode, retried, want) {
     k = k || cur; mode = mode || 'fresh';
-    var tb = T[k], pg = PG[k], my, size, page, off, r, rows, total, today, pr, used;
+    var tb = T[k], pg = PG[k], my, size, page, off, r, rows, total, today, pr, used, part;
     if (S.locked) return;
-    my = ++tb.seq; size = pg.size(); page = pg.page();
-    used = mode === 'page' ? Math.max(0, tb.total - tb.base) : 0;
+    my = ++tb.seq; size = pg.size(); page = want || pg.page();
+    used = mode === 'page' && !tb.partial ? Math.max(0, tb.total - tb.base) : 0;
     off = (page - 1) * size + used;
     tb.loading = true;
     if (k === cur) render();
@@ -391,6 +395,7 @@
     if (my !== tb.seq) return;
     rows = Array.isArray(r && r.rows) ? r.rows : [];
     total = +(r && r.total); if (!(total >= 0)) total = rows.length;
+    part = !!(r && r.partial === true);
     days = cleanDays(r && r.days);
     tb.sum = r && r.summary && typeof r.summary === 'object' ? r.summary : null;
     today = ymd(new Date());                                                                    // 决定显示哪一天 (第一次: 服务端按「今天」回答)
@@ -401,13 +406,14 @@
       day = days.length ? days[0] : '';
       invalidate();
       if (day) return load(k);
-      rows = []; total = 0;
+      rows = []; total = 0; part = false;
     }
-    if (mode === 'page' && !retried && Math.max(0, total - tb.base) !== used) { tb.total = total; return load(k, 'page', true); }
+    if (mode === 'page' && !retried && !part && !tb.partial && Math.max(0, total - tb.base) !== used) { tb.total = total; return load(k, 'page', true); }
     tb.err = null; tb.loading = false; tb.at = Date.now();
-    if (mode !== 'page') tb.base = total;
-    tb.total = total;
+    if (mode !== 'page' || part || tb.partial) tb.base = total;                                // 只读了一部分 (这次或上次): 以这次读到的条数为准
+    tb.total = total; tb.partial = part;
     pr = pg.update(Math.min(tb.base, CAP));                                                     // 分页条按基准总数 (最多 CAP 条); 总数变少了页码会被钳制 -> 重新读那一页
+    if (want && pr.page !== want) { setPage(k, want); pr = { page: pg.page() }; }              // 「加载更早的记录」: 总数变多了才翻得过去; 没有更早的了 -> 下面重读钳制后的那一页
     if (pr.page !== page) return load(k);
     if (!(tb.loaded && tb.key === qkey(k) && sameRows(tb.rows, rows))) { tb.rows = rows; tb.gen++; }
     tb.key = qkey(k); tb.loaded = true; tb.pageNo = page;
@@ -446,8 +452,10 @@
     TYPES.forEach(function (x) { segs[x].el.hidden = x !== k; });
     seg = segs[k];
     FILTERS[k].forEach(function (v) {
-      var n = v === '' ? sm.all : v === 'error' ? sm.error : v === 'warn' ? (+sm.warn || 0) + (+sm.error || 0) : v === 'direct' ? sm.direct : v === 'proxy' ? sm.proxy : null;
-      setSegLabel(seg, v, t('logs.f.' + (v || 'all') + (k === 'proxy' && v === 'error' ? 'Only' : '')) + (n != null && T[k].loaded ? ' ' + fmt.num(+n || 0) : ''));
+      var n = v === '' ? sm.all : v === 'error' ? sm.error : v === 'warn' ? (+sm.warn || 0) + (+sm.error || 0) : v === 'direct' ? sm.direct : v === 'proxy' ? sm.proxy : null, num;
+      num = n != null && T[k].loaded ? fmt.num(+n || 0) : '';
+      if (num && T[k].partial) num = t('logs.f.atLeast', { num: num });                           // 只读了一部分: 数字是「至少这么多」
+      setSegLabel(seg, v, t('logs.f.' + (v || 'all') + (k === 'proxy' && v === 'error' ? 'Only' : '')) + (num ? ' ' + num : ''));
     });
     seg.set(T[k].f);
     renderSummary();
@@ -507,11 +515,13 @@
     } else el.empty.hide();
 
     // 摘要 (总数以「新读取」时的为准; 之后新增的在最新一端, 另外提示) + 超过上限的说明
-    var capped = mode === 'list' && tb.base > CAP, newer = mode === 'list' ? Math.max(0, tb.total - tb.base) : 0;
+    // 只读了一部分 (partial): 写「最近的 N 条」(不是这一天的总数), 不提示新增; 翻到已读部分的最后一页时可以「加载更早的记录」
+    var part = mode === 'list' && tb.partial, capped = mode === 'list' && tb.base > CAP, newer = mode === 'list' && !part ? Math.max(0, tb.total - tb.base) : 0;
     el.sum.hidden = mode !== 'list';
-    if (mode === 'list') setText(el.sumTxt, t('logs.count', { n: tb.base, num: fmt.num(tb.base) }));
+    if (mode === 'list') setText(el.sumTxt, t(part ? 'logs.countPartial' : 'logs.count', { n: tb.base, num: fmt.num(tb.base) }));
     el.newerBtn.hidden = !newer || liveOn();
     if (newer && !liveOn()) ui.setBtn(el.newerBtn, t('logs.newer', { n: newer, num: fmt.num(newer) }), 'refresh');
+    el.older.hidden = !(part && tb.base < CAP && PG[k].page() >= Math.ceil(tb.base / PG[k].size()));
     el.capNote.hidden = !capped;
     if (capped) setText(el.capNote, t('logs.capNote', { n: fmt.num(CAP) }));
   }
@@ -540,6 +550,13 @@
     if (!want || want === day) return;
     day = want; invalidate();
     return load(cur);
+  }
+  /* 「加载更早的记录」(只读了一部分时, 在已读部分的最后一页): 读已读条数之后的那一页, 后端会接着往前读到够这一页为止 (或者读完整天) */
+  function loadOlder() {
+    var k = cur, tb = T[k], size = PG[k].size();
+    if (!tb.partial || tb.loading) return;
+    toTop(el.bar);
+    return load(k, 'older', false, Math.floor(tb.base / size) + 1);
   }
   /* 用户翻页 / 改每页条数 (其它标签的分页条被改 (别的设备同步过来) 时, 只作废它的数据, 下次切过去再读) */
   function onPager(k) {
@@ -726,6 +743,8 @@
     el.list = h('ul', { class: 'log-list', 'aria-label': L('logs.list.aria'), hidden: true });
     el.empty = ui.emptyBox();
     el.capNote = h('p', { class: 'muted sm log-cap', hidden: true });
+    el.olderBtn = ui.btn(L('logs.older'), { sm: true, icon: 'history', title: L('logs.olderTip') }); ui.act(el.olderBtn, loadOlder);
+    el.older = h('div', { class: 'log-sum', hidden: true }, el.olderBtn);
     el.pgBox = h('div', { class: 'log-pg' });
     TYPES.forEach(function (k) {
       SO[k] = ui.sorter('logs.' + k, SORT_COLS[k], { onChange: function () { render(); } });     // 只重排已读到的这一页, 不换页 (服务端分页)
@@ -739,7 +758,7 @@
       segs[k].set('');
     });
     el.filt = h('div', { class: 'log-filt' }, TYPES.map(function (k) { return segs[k].el; }));
-    el.panel = h('div', { class: 'log-panel', role: 'tabpanel' }, el.notice, el.flow, el.info, el.sumx, el.sum, h('section', { class: 'card flush log-card' }, el.head, el.list, el.empty.el, el.pgBox), el.capNote);
+    el.panel = h('div', { class: 'log-panel', role: 'tabpanel' }, el.notice, el.flow, el.info, el.sumx, el.sum, h('section', { class: 'card flush log-card' }, el.head, el.list, el.empty.el, el.pgBox), el.older, el.capNote);
     el.foot = h('p', { class: 'muted sm log-foot' });
     el.bar = h('div', { class: 'toolbar log-bar' }, el.day, el.q, el.filt, el.refresh, el.liveWrap, el.more);
 
@@ -956,12 +975,18 @@
     ui.act(copy, async function () { try { await navigator.clipboard.writeText(code); ui.toast(t('common.copied'), 'ok'); } catch (e) { ui.toast(t('common.copyFail'), 'warn'); } });
     return ui.modal({ title: t('logs.diag.sentTitle'), icon: 'upload', iconKind: 'pri', size: 'sm', body: h('div', null, h('p', null, t('logs.diag.sentMsg')), h('p', null, h('code', { class: 'mono' }, code), ' ', copy)), actions: [{ label: t('common.close'), kind: 'primary', cancel: true }] });
   }
+  /* 上传 / 删除诊断要登录 enana 账号: 没登录时辅助服务回 E_LOGIN_REQUIRED —— 有登录框 (TP.auth.openLogin) 就直接打开它, 不再显示一条「失败」 */
+  function needLogin(e) { return !!(e && e.code === 'E_LOGIN_REQUIRED' && TP.auth && typeof TP.auth.openLogin === 'function'); }
+  function askLogin() { TP.auth.openLogin({ mode: 'login', reason: t('logs.diag.loginWhy') }); }
   async function sendDiag() {
     var why = TP.why.helper(), ok, r, m;
     if (why) { ui.toast(why, 'warn'); return; }
     ok = await ui.confirmDialog({ title: t('logs.diag.sendTitle'), message: t('logs.diag.sendMsg'), detail: [t('logs.diag.sendD1'), t('logs.diag.sendD2')], confirmText: t('logs.diag.sendGo'), kind: 'warning' });
     if (!ok) return;
-    r = await TP.jobs.runInDock(t('logs.diag.job'), function () { return TP.helper('POST', '/api/diag/send', { form: { hours: 24 } }); });
+    r = await TP.jobs.runInDock(t('logs.diag.job'), function () {
+      return TP.helper('POST', '/api/diag/send', { form: { hours: 24 } }).catch(function (e) { if (needLogin(e)) e.kind = 'cancel'; throw e; });     // 'cancel': 任务卡片安静地关掉
+    });
+    if (r && !r.ok && needLogin(r.error)) { askLogin(); return; }
     m = r && r.ok && r.job && /[A-Za-z0-9]{15}/.exec(r.job.msg || '');
     if (m) showReportCode(m[0]);
   }
@@ -971,7 +996,7 @@
     ok = await ui.confirmDialog({ title: t('logs.diag.delTitle'), message: t('logs.diag.delMsg'), confirmText: t('logs.diag.delGo'), kind: 'warning' });
     if (!ok) return;
     try { r = await TP.helper('POST', '/api/diag/delete'); ui.toast(t('logs.diag.delDone', { n: (r && r.deleted) || 0 }), 'ok'); }
-    catch (e) { ui.toast(TP.errMsg(e) || t('logs.diag.delFail'), 'err'); }
+    catch (e) { if (needLogin(e)) askLogin(); else ui.toast(TP.errMsg(e) || t('logs.diag.delFail'), 'err'); }
   }
 
   LG.settingsCard = function () {
