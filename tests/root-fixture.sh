@@ -1,11 +1,15 @@
 #!/bin/bash
 # 测试夹具 (由 tests/tun-service.sh 与 tests/enhanced-root-integrity.sh 引用, 不单独运行):
 #   · lib/enhanced-root.sh 复制一份到临时目录, 固定路径 / 命令换成临时目录里的替身 (ROOT、plist、sudoers、助手目录 $W/Library/PrivilegedHelperTools/com.enana.proxy
-#     和旧位置 $W/usr/local/libexec/enana、launchctl、install、chown、route、ifconfig、sleep); $W/Library 是沙箱里的 /Library (755, 没有 ACL; root 脚本从来不建它)
+#     和旧位置 $W/usr/local/libexec/enana、launchctl、install、chown、route、ifconfig、sleep、networksetup); $W/Library 是沙箱里的 /Library (755, 没有 ACL; root 脚本从来不建它)
+#   · 假 networksetup 管着一组假的网络服务 ($W/ns.tsv, 每个用例前 rf_ns_reset 还原): 自动 DNS 的 Wi-Fi · 手动 IPv4 + IPv6 的有线网卡 · 名字带空格和中文的网桥 ·
+#     硬件端口带括号的网卡 · 名字里有 shell 代码的服务 ($NS_ODD, 被执行就会建出 $W/ns-canary) · 停用的服务 · 没有网卡的 VPN; 副本里还留着真的
+#     /usr/sbin/networksetup 就拒绝运行 (以 root 身份改的是这台电脑的系统 DNS)
 #   · enana 一侧的函数直接用 lib/enhanced.sh 的原文 (LIB 指向夹具里的副本), 所以两边的摘要、渲染、暂存都是真实代码
 #   · 假 sudo 只做两件事: `sudo -n true` 成功; `sudo -n /bin/sh -c CMD` 在本机以当前用户运行 CMD (root 脚本自己的 id 检查已替换成 printf 0)
 #   · 绝不运行真实的 launchctl / sudo / osascript / networksetup; 解析到真实命令的 PATH 由调用方检查
-# 用法: rf_setup <临时目录>; rf_reset (每个用例前清空); rf_enana_start (调用 enhanced_start, 返回其退出码)
+# 用法: rf_setup <临时目录>; rf_reset (每个用例前清空, 网络服务的 DNS 也还原); rf_enana_start (调用 enhanced_start, 返回其退出码);
+#       系统 DNS: rf_dns <服务名> · rf_dns_user <服务名> <Empty|地址…> (模拟用户自己改) · rf_rec (root 的记录) · rf_ns_original / rf_ns_taken / rf_ns_untouched · rf_ns_sets
 
 RF_REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 rf_setup() {
@@ -27,8 +31,48 @@ s|/usr/bin/install|$W/bin/install|g
 s|/sbin/route|$W/bin/route|g
 s|/sbin/ifconfig|$W/bin/ifconfig|g
 s|/bin/sleep|$W/bin/sleep|g
+s|/usr/sbin/networksetup|$W/bin/networksetup|g
 SED
   sed -f "$W/root.sed" "$RF_REPO/lib/enhanced-root.sh" > "$LIBT/enhanced-root.sh"
+  if grep -q '/usr/sbin/networksetup' "$LIBT/enhanced-root.sh" || ! grep -q "^networksetup_bin=\"$W/bin/networksetup\"" "$LIBT/enhanced-root.sh"; then
+    echo 'REFUSING: the fixture copy of lib/enhanced-root.sh would run the real networksetup (it changes the system DNS of this computer)' >&2; exit 1
+  fi
+  NS_ODD="Lab \$(touch $W/ns-canary) 'q' \`touch $W/ns-canary\`"
+  cat > "$W/bin/networksetup" <<'MOCK'
+#!/usr/bin/perl
+# 假 networksetup (见 tests/root-fixture.sh): 只认 root 脚本用到的三个命令, 输出的格式和真的一样。
+#   网络服务在 $RF_W/ns.tsv, 每行「序号 (停用的是 *)<TAB>设备 (VPN 是空的)<TAB>硬件端口<TAB>DNS (Empty 或空格分隔的地址)<TAB>名字」
+#   每次调用记一行到 $RF_W/ns.log (参数之间是 TAB); RF_NS_QUIET=1 时不记 (测试自己查看, 或者模拟用户在系统设置里改动)
+#   $RF_W/ns-fail 的每一行让对应的调用失败: list · get · set (全部), 或「get 名字」「set 名字」(只对这个服务)
+use strict; use warnings;
+my $w = $ENV{RF_W} // die "RF_W not set\n";
+my @a = @ARGV;
+if (!$ENV{RF_NS_QUIET}) { open my $l, ">>", "$w/ns.log" or die "$!\n"; print $l join("\t", @a), "\n"; close $l }
+my %fail; if (open my $f, "<", "$w/ns-fail") { while (my $x = <$f>) { chomp $x; $fail{$x} = 1 } close $f }
+open my $db, "<", "$w/ns.tsv" or die "$!\n"; my @s = map { chomp; [split /\t/, $_, 5] } <$db>; close $db;
+my $cmd = shift(@a) // ""; my $name = $a[0] // "";
+my ($svc) = grep { $_->[4] eq $name } @s;
+if ($cmd eq "-listnetworkserviceorder") {
+  exit 1 if $fail{list};
+  print "An asterisk (*) denotes that a network service is disabled.\n";
+  print "($_->[0]) $_->[4]\n(Hardware Port: $_->[2], Device: $_->[1])\n\n" for @s;
+  exit 0;
+}
+if ($cmd eq "-getdnsservers") {
+  if (!$svc || $fail{get} || $fail{"get $name"}) { print "$name is not a recognized network service.\n** Error: The parameters were not valid.\n"; exit 4 }
+  if ($svc->[3] eq "Empty") { print "There aren't any DNS Servers set on $name.\n" } else { print "$_\n" for split / /, $svc->[3] }
+  exit 0;
+}
+if ($cmd eq "-setdnsservers") {
+  shift @a;
+  if (!$svc || !@a || $fail{set} || $fail{"set $name"}) { print "** Error: The parameters were not valid.\n"; exit 4 }
+  if (@a == 1 && $a[0] eq "Empty") { $svc->[3] = "Empty" }
+  else { for (@a) { /\A[0-9A-Fa-f.:]+(?:%[A-Za-z0-9]+)?\z/ or do { print "$_ is not a valid IP address.\n"; exit 4 } } $svc->[3] = join " ", @a }
+  open my $o, ">", "$w/ns.tsv.new" or die "$!\n"; print $o join("\t", @$_), "\n" for @s; close $o; rename "$w/ns.tsv.new", "$w/ns.tsv" or die "$!\n";
+  exit 0;
+}
+print "** Error: unknown command $cmd\n"; exit 1;
+MOCK
   printf '#!/bin/sh\nexit 0\n' > "$W/bin/chown"; printf '#!/bin/sh\nexit 0\n' > "$W/bin/sleep"
   printf '#!/bin/sh\necho "interface: utun42"\n' > "$W/bin/route"
   printf '#!/bin/sh\necho "inet 172.19.0.1 netmask 0xfffffffc"\n' > "$W/bin/ifconfig"
@@ -76,8 +120,42 @@ MOCK
   shasum -a 256 "$H/sing-box" | awk '{print $1}' > "$H/core-binary.sha256"
   export RF_W=$W RF_ROOT=$ROOT ENANA_TEST=1 ENANA_TUN_ROOT="$ROOT" ENANA_TUN_PLIST_DIR="$W/daemons" ENANA_ROOT_PREFIX="$W" ENANA_TUN_LAUNCHCTL="$W/bin/launchctl"
   export PATH="$W/fakebin:$PATH"
+  rf_ns_reset
   rf_load_enana
 }
+# ---- 假的网络服务 (系统 DNS 的接管 / 还原, 见 lib/enhanced-root.sh 的 DNS_PL) ----
+rf_ns_reset() { # 回到初始状态: 每行 序号 (停用的是 *) · 设备 (VPN 没有) · 硬件端口 · 原来的 DNS · 名字
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    1 en0 Wi-Fi Empty Wi-Fi \
+    2 en7 'USB 10/100/1000 LAN' '192.168.10.1 fe80::10%en0' 'USB 10/100/1000 LAN' \
+    3 bridge0 'Thunderbolt Bridge' Empty 'Thunderbolt 网桥 ✓' \
+    4 en8 'Ethernet Adapter (en8)' 9.9.9.9 'Ethernet Adapter (en8)' \
+    5 en9 Ethernet Empty "$NS_ODD" \
+    '*' en5 'Bluetooth PAN' 8.8.4.4 'Bluetooth PAN' \
+    6 '' com.wireguard.macos Empty 'Corp VPN' > "$W/ns.tsv"
+  rm -f "$W/ns-fail" "$W/ns-canary" "$W/ns.tsv.new"; : > "$W/ns.log"
+}
+rf_dns() { # <服务名> -> 它现在的 DNS (Empty 或空格分隔的地址; 没有这个服务: 空)
+  /usr/bin/perl -e 'open my $f, "<", $ARGV[0] or exit 1; while (my $l = <$f>) { chomp $l; my @c = split /\t/, $l, 5; if (defined $c[4] && $c[4] eq $ARGV[1]) { print $c[3]; exit 0 } } exit 1' "$W/ns.tsv" "$1"
+}
+rf_dns_user() { # <服务名> <Empty | 地址…>: 模拟用户自己在系统设置里改了这个服务的 DNS (不记进 ns.log)
+  local s=$1; shift; RF_NS_QUIET=1 "$W/bin/networksetup" -setdnsservers "$s" "$@" >/dev/null
+}
+rf_rec() { # root 的 DNS 记录 ($ROOT/dns-original), 每行「名字=原来的设置」(名字从十六进制还原; 没有记录: 空)
+  [ -f "$ROOT/dns-original" ] || return 0
+  /usr/bin/perl -ne 'chomp; my ($h, $v) = split / /, $_, 2; print pack("H*", $h), "=", $v, "\n"' "$ROOT/dns-original"
+}
+rf_ns_original() { # 0 = 每个服务都是初始的 DNS (接管之前的样子; 手动的地址按原来的顺序)
+  [ "$(rf_dns Wi-Fi)" = Empty ] && [ "$(rf_dns 'USB 10/100/1000 LAN')" = '192.168.10.1 fe80::10%en0' ] && [ "$(rf_dns 'Thunderbolt 网桥 ✓')" = Empty ] \
+    && [ "$(rf_dns 'Ethernet Adapter (en8)')" = 9.9.9.9 ] && [ "$(rf_dns "$NS_ODD")" = Empty ] && [ "$(rf_dns 'Bluetooth PAN')" = 8.8.4.4 ] && [ "$(rf_dns 'Corp VPN')" = Empty ]
+}
+rf_ns_taken() { # 0 = 启用的、有网卡的五个服务都是 223.5.5.5, 停用的和 VPN 原样
+  local s
+  for s in Wi-Fi 'USB 10/100/1000 LAN' 'Thunderbolt 网桥 ✓' 'Ethernet Adapter (en8)' "$NS_ODD"; do [ "$(rf_dns "$s")" = 223.5.5.5 ] || return 1; done
+  [ "$(rf_dns 'Bluetooth PAN')" = 8.8.4.4 ] && [ "$(rf_dns 'Corp VPN')" = Empty ]
+}
+rf_ns_untouched() { ! grep -qE "$(printf '\t')(Bluetooth PAN|Corp VPN)($(printf '\t')|\$)" "$W/ns.log"; }   # 停用的和 VPN 从没出现在任何一次调用里 (连查询都没有)
+rf_ns_sets() { grep -c '^-setdnsservers' "$W/ns.log"; }                                                         # -setdnsservers 调用的次数
 rf_load_enana() { # 只加载 enana 这一侧的函数 (不跑 install.sh / common.sh 的初始化)
   test_env() { local v=''; [ -n "${ENANA_TEST:-}" ] && v=${!1:-}; printf '%s' "${v:-${2:-}}"; }
   _t() { printf '%s' "$1"; }
@@ -94,6 +172,7 @@ rf_reset() { # 每个用例前: 回到"已经装过"之前的干净状态 (沙�
   rm -rf "$ROOTB"/* "$W/daemons"/* "$W/sudoers.d"/* "$W/usr" "$W/Library" "$W/calls" "$W/sudo.log" "$W/loaded" "$W/fail-bootstrap" "$W/stage.path" "$W/last.cmd" 2>/dev/null
   mkdir -p "$W/usr/local" "$ROOT"; mkdir -m 755 "$W/Library"; : > "$W/calls"; : > "$W/sudo.log"
   unset RF_HOOK
+  rf_ns_reset                                      # 网络服务的 DNS 也回到接管之前 (否则上一个用例的 223.5.5.5 会被当成「原来的设置」记下来)
 }
 # enana 的 TUN 启动 (和 os_service_start 调的是同一个函数); stage 路径记在 $W/stage.path, 用例可以在管理员调用之前改动它 (HOOK)
 mktemp() { if [ "${1:-}" = -d ]; then local d; d=$(command mktemp -d "$W/stg.XXXXXX") && printf '%s\n' "$d" > "$W/stage.path" && printf '%s\n' "$d"; else command mktemp "$@"; fi; }
