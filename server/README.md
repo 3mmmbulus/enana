@@ -122,6 +122,8 @@ PB_BIN=/absolute/path/to/pocketbase node --test \
   tests/billing-plan-ui.test.js tests/billing-smtp-admin.test.js
 python3 tests/billing-bridge.py && python3 tests/official-bridge.py
 bash tests/update-official.sh && bash tests/update-billing.sh   # Linux, root or passwordless sudo: fake host
+ENANA_REQUIRE_NGINX=1 python3 tests/update-nginx-content.py     # the public-content nginx edit; with nginx installed
+bash tests/deploy-content-public.sh                             # Linux, root or passwordless sudo: fake host
 ```
 
 `tests/official-pocketbase.test.js` starts a local HTTPS server that plays the third-party
@@ -381,3 +383,59 @@ signed in)", which is only true once the server hides signed-out devices. Older 
 new hooks, and 2.3.26 clients work with the old hooks (the old hooks ignore the heartbeat body).
 `PB_BIN=/path/to/pocketbase node --test tests/devices-pocketbase.test.js` checks all of this against
 a real PocketBase.
+
+## Public cloud content (2.3.27)
+
+Since 2.3.27 the signed cloud content under `https://api.enana.cc/v1/` (the curated rules and the
+server deployment scripts) is downloaded without an enana account. One nginx block changes:
+`update-nginx-content.py` removes `auth_request /_enana_auth;` and
+`error_page 401 = @enana_unauthorized;` from the api.enana.cc `location /v1/ {` block and puts a
+comment in their place. GET only (`limit_except`), the rate limit (`limit_req zone=enana_apihost`),
+the JSON 403 page, `root` and `expires -1` stay, and so do `location = /_enana_auth`,
+`@enana_unauthorized` and `GET /api/enana/v1/session/check` (harmless; other tooling may use them).
+Public is safe because `/var/www/enana-cloud/v1/` holds only `manifest.json`, `manifest.sig`,
+`content-<seq>.tar.gz` and `ping.json`, and a client uses nothing it has not verified: the manifest
+signature (built-in public key), a sequence that never goes back, the bundle's sha256 and size, and
+the file-name allow-list (`docs/CLOUD_API.md`). No hook, migration, database or download changes.
+
+Deploy it before, or together with, the 2.3.27 client release. Older clients keep working (they still
+send their session headers, which the public location ignores); until it is deployed, 2.3.27 clients
+that are not signed in keep the content they have. Stage the server directory as for
+`update-official.sh` (below it is `/root/enana-stage`) and, as root:
+
+```sh
+S=/root/enana-stage
+bash $S/server/deploy-content-public.sh --check $S   # preconditions, the exact nginx edit, what an anonymous request gets now; changes nothing
+bash $S/server/deploy-content-public.sh $S           # back up, edit, nginx -t, reload, verify anonymously; rolls back by itself on any failure
+```
+
+It refuses, before changing anything, unless `nginx -t` passes now, the edit applies (exactly one
+`location /v1/ {` block with exactly those two lines and no `auth_request` it would inherit), the
+manifest, its signature and the bundle it names exist, and nginx answers an anonymous
+`GET /v1/manifest.json` locally with 401. The local requests go to `https://api.enana.cc` through
+127.0.0.1:443 (`curl --resolve`, so SNI and Host are the real ones; `-k`, because the origin
+certificate need not be valid for that address) and carry no session. The install then takes its own
+lock, keeps a backup (`/var/backups/enana/releases/content-public-<UTC time>-<pid>`, mode 700: the
+previous file, the edited file, before/after snapshots), installs exactly the edited file with the
+previous owner and mode (temp file + `mv`), runs `nginx -t`, reloads nginx (never a restart) and
+checks anonymously that `manifest.json`, `manifest.sig` and the bundle answer 200 with the bytes on
+disk, that `/v1/` lists nothing (403/404), that `/v1/../` variants are refused (400/404) and that a
+POST is refused (403/405); finally that the installed file is still the edited one and that every
+other nginx/systemd file, every running service (nginx keeps its master PID) and every download and
+content file are unchanged. Any failure after the install puts the previous file back (and reloads
+nginx if the edited one had been loaded) and exits non-zero. A second run says the content is public
+already and changes nothing. `tests/update-nginx-content.py` checks the edit (text, and a real nginx
+before and after it) and `tests/deploy-content-public.sh` runs the deployment against a fake host.
+
+Afterwards, from anywhere:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' https://api.enana.cc/v1/manifest.json             # 200
+curl -s -o /dev/null -w '%{http_code}\n' --data '' https://api.enana.cc/v1/manifest.json   # 403
+```
+
+The responses keep `Cache-Control: no-cache` (`expires -1`); keep the Cloudflare cache-bypass rule for
+`api.enana.cc/v1/*`. The rate limit now also applies to clients without an account. It counts per
+address as nginx sees it: behind Cloudflare that is the visitor only when `real_ip` is configured for
+Cloudflare's ranges, otherwise the Cloudflare edge. To undo it by hand, copy `nginx.conf` from the
+backup directory over the configuration, then `nginx -t && systemctl reload nginx`.

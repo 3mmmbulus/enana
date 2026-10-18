@@ -126,8 +126,8 @@ Windows 请用 PowerShell 一行命令安装 (见 README); Linux 计划见 docs/
 已升级到 enana v*	Upgraded to enana v*
 \n%s════════════════ 环境安装完成 ════════════════%s\n	\n%s════════════════ Environment installed ════════════════%s\n
   %s后台地址%s   %s%s%s   (已尝试自动打开; 以后在终端输入 enana open 也能打开)\n	  %sDashboard%s   %s%s%s   (tried to open it automatically; you can also run enana open in a terminal any time)\n
-  %s登录%s     仪表盘需要登录才能使用: 用 enana.cc 账号 (邮箱 + 密码) 登录; 还没有账号? 直接在登录框里点「注册」\n	  %sSign in%s     You need to sign in to use the dashboard: use your enana.cc account (email + password). No account yet? Click “Register” in the sign-in box\n
-  %s代理%s     默认是关闭的 (全部直连): 登录后在仪表盘里打开「代理」总开关才会生效; 退出账号会自动关闭代理\n	  %sProxy%s       Off by default (everything goes direct): it only takes effect after you sign in and turn on the “Proxy” master switch in the dashboard; logging out turns it off automatically\n
+  %s账号%s     不需要账号就能使用仪表盘和你自己的服务器; 云端同步 / 会员 / 官方线路要登录 enana.cc 账号 (在仪表盘的账号菜单里登录, 也可以直接注册)\n	  %sAccount%s     The dashboard and your own servers work without an account; cloud sync, membership and official lines need an enana.cc account (sign in or register from the dashboard’s account menu)\n
+  %s代理%s     默认是关闭的 (全部直连): 在仪表盘里打开「代理」总开关 (或运行 enana on) 才会生效; 退出账号不会关闭代理\n	  %sProxy%s       Off by default (everything goes direct): it takes effect once you turn on the “Proxy” master switch in the dashboard (or run enana on); signing out does not turn it off\n
   接下来在仪表盘里完成 (终端不需要再做任何事):\n	  Next, finish in the dashboard (nothing more to do in the terminal):\n
     ① 添加固定出口服务器 (如日本)    ② 导入其它代理 / 订阅链接 (自动识别)\n	    ① Add a Fixed exit server (e.g. Japan)    ② Import other proxies / subscription links (detected automatically)\n
     ③ 确认应用与网站的推荐设置       ④ 新装的应用会自动识别, 默认关闭\n	    ③ Review the recommended app and site settings    ④ New apps are detected automatically and start off\n
@@ -140,9 +140,9 @@ Windows 请用 PowerShell 一行命令安装 (见 README); Linux 计划见 docs/
 系统代理: 已开启	System proxy: on
 系统代理: 未开启 (enana on)	System proxy: off (enana on)
 账号: 已登录 *	Account: signed in as *
-账号: 未登录 — 打开仪表盘, 用 enana.cc 账号登录 (没有账号可以直接注册)	Account: not signed in — open the dashboard and sign in with your enana.cc account (you can register there if you don’t have one)
+账号: 未登录 (不需要账号也能用; 云端同步 / 会员 / 官方线路要登录 enana.cc 账号)	Account: not signed in (enana works without an account; cloud sync, membership and official lines need an enana.cc account)
 代理: 已开启 (按规则分流)	Proxy: on (routing by rules)
-代理: 已关闭 (全部直连) — 登录后在仪表盘里打开「代理」总开关	Proxy: off (everything goes direct) — sign in, then turn on the “Proxy” master switch in the dashboard
+代理: 已关闭 (全部直连) — 在仪表盘里打开「代理」总开关, 或运行 enana on	Proxy: off (everything goes direct) — turn on the “Proxy” master switch in the dashboard, or run enana on
 有新版本 (enana self-update 更新)	A new version is available (update with enana self-update)
 服务器 * 台 · 后台地址 *	Servers: * · dashboard: *
 已启动	Started
@@ -151,7 +151,6 @@ Windows 请用 PowerShell 一行命令安装 (见 README); Linux 计划见 docs/
 已重启	Restarted
 重启服务	Restart service
 没有在 15 秒内启动: 运行 enana doctor	Didn’t start within 15 seconds — run enana doctor
-还没有登录: 请先打开仪表盘 (*) 用 enana.cc 账号登录, 再开启代理	You’re not signed in yet: open the dashboard (*), sign in with your enana.cc account, then turn the proxy on
 系统代理没有关闭成功 (需要管理员密码), 服务未停止以免断网; 请重试 enana off	Couldn’t turn off the system proxy (it needs your admin password). The service was left running so you don’t lose your connection; try enana off again
 已关闭系统代理并停止服务	System proxy turned off and service stopped
 (暂无日志)	(no logs yet)
@@ -165,8 +164,8 @@ Windows 请用 PowerShell 一行命令安装 (见 README); Linux 计划见 docs/
 重新运行安装命令: curl -fsSL https://enana.cc/get.sh | bash	Run the install command again: curl -fsSL https://enana.cc/get.sh | bash
 已经是最新版本 (v*)	Already on the latest version (v*)
 当前没有登录, 也没有本机登录缓存	You’re not signed in, and there’s no sign-in cache on this computer
-退出账号后: 代理会被关闭 (全部直连), 所有已打开的仪表盘需要重新登录, 本机保存的离线登录缓存也会清除。	After logging out: the proxy is turned off (everything goes direct), every open dashboard has to sign in again, and the offline sign-in cache stored on this computer is cleared.
-之后在仪表盘里用 enana.cc 账号 (可以换另一个账号, 也可以直接注册) 登录, 再手动开启代理。	Afterwards, sign in to the dashboard with an enana.cc account (a different one, or register a new one), then turn the proxy on again by hand.
+退出账号后: 代理照常使用你自己的服务器 (官方线路、云端同步和会员功能会停止), 仪表盘照常打开; 本机保存的离线登录缓存会清除。	After signing out: the proxy keeps using your own servers (official lines, cloud sync and membership stop), and the dashboard stays open; the offline sign-in cache stored on this computer is cleared.
+以后需要时, 在仪表盘里用 enana.cc 账号再登录即可 (可以换另一个账号, 也可以直接注册)。	Whenever you need them again, just sign in to the dashboard with an enana.cc account (a different one, or register a new one).
 确认退出账号?	Log out?
 不支持的语言: *	Unsupported language: *
 可选: *	Available: *
@@ -226,7 +225,7 @@ enana * — 代理环境控制台 (服务器/订阅/应用/网站请在仪表盘
   enana update         更新规则集 + 订阅 (--quiet 只刷新到期的订阅)	  enana update         Update rule sets + subscriptions (--quiet only refreshes subscriptions that are due)
   enana self-update    更新 enana 本体 (先询问确认; --yes 跳过)	  enana self-update    Update enana itself (asks first; --yes skips the question)
   enana upgrade [版本]  升级 sing-box 核心 (先校验现有配置, 不通过自动回退)	  enana upgrade [ver]  Upgrade the sing-box core (validates your configuration first; rolls back on failure)
-  enana logout         退出账号: 关闭代理, 清除本机登录信息 (之后要重新登录才能再开启代理)	  enana logout         Log out: turns off the proxy and clears this computer’s sign-in (sign in again to turn the proxy back on)
+  enana logout         退出 enana 账号: 代理照常使用你自己的服务器, 清除本机登录信息	  enana logout         Sign out of your enana account: the proxy keeps using your own servers; this computer’s sign-in is cleared
   enana lang [zh|en]   切换界面语言 (终端与仪表盘)	  enana lang [zh|en]   Switch the interface language (terminal and dashboard)
   enana doctor         诊断信息 (不含密码, 反馈问题时贴出来)	  enana doctor         Diagnostics (no passwords included; paste it when you report a problem)
   enana logs [行数]     查看日志	  enana logs [lines]   Show the log
@@ -285,12 +284,12 @@ GitHub 不通: 将依次尝试镜像; 也可手动下载安装包 (SINGBOX_TGZ=�
   服务      %s 未运行   (按 2 启动)\n	  Service       %s not running   (press 2 to start)\n
   系统代理  %s 已开启   127.0.0.1:%s\n	  System proxy  %s on   127.0.0.1:%s\n
   系统代理  %s 未开启   (按 s 开启)\n	  System proxy  %s off   (press s to turn on)\n
-  代理      %s已关闭%s — 全部直连 (登录后按 3 或在仪表盘里打开总开关)\n	  Proxy         %soff%s — everything goes direct (sign in, then press 3 or use the dashboard switch)\n
+  代理      %s已关闭%s — 全部直连 (按 3 或在仪表盘里打开总开关)\n	  Proxy         %soff%s — everything goes direct (press 3 or use the dashboard switch)\n
   代理      已开启 (规则分流)\n	  Proxy         on (routing by rules)\n
   固定出口  %s  %s\n	  Fixed exit    %s  %s\n
   自动线路  %s  %s\n	  Auto route    %s  %s\n
   账号      已登录 %s\n	  Account       signed in as %s\n
-  账号      未登录 (打开仪表盘, 用 enana.cc 账号登录或注册)\n	  Account       not signed in (sign in or register with an enana.cc account in the dashboard)\n
+  账号      未登录 (不需要账号也能用; 云端同步 / 会员 / 官方线路要登录)\n	  Account       not signed in (works without an account; sign in for cloud sync, membership and official lines)\n
   后台地址  %s%s%s\n	  Dashboard     %s%s%s\n
 \n  %s提示%s 还没有添加服务器 → 按 1 打开仪表盘, 在「服务器」页添加\n	\n  %sTip%s No servers added yet → press 1 to open the dashboard and add one on the Servers page\n
 \n  %s提示%s 发现 %s 个新应用 (默认关闭) → 按 1 到仪表盘「应用」页处理\n	\n  %sTip%s New apps found: %s (off by default) → press 1 and review them on the dashboard’s Apps page\n
@@ -306,13 +305,16 @@ GitHub 不通: 将依次尝试镜像; 也可手动下载安装包 (SINGBOX_TGZ=�
 无响应	no response
 请选择	Choose
 按任意键返回…	Press any key to go back…
-还没有登录: 请先打开仪表盘用 enana.cc 账号登录, 再开启代理	You’re not signed in yet: open the dashboard, sign in with your enana.cc account, then turn the proxy on
 
 # --- lib/api.sh · request errors and sign-in
 拒绝访问	Access denied
 缺少 X-Enana 请求头	The X-Enana request header is missing
 请求内容过大	The request is too large
 需要登录	Sign-in required
+本机令牌无效, 请刷新仪表盘页面	The dashboard’s local token is missing or invalid; reload the dashboard page
+本机令牌无法生成, 请重新运行安装命令	Couldn’t create the local token; run the install command again
+需要登录 enana 账号才能使用这个功能	Sign in to your enana account to use this feature
+移除官方线路	Remove official lines
 尝试次数过多, 请 * 秒后再试	Too many attempts — please wait * s and try again
 账号或密码错误	Wrong account or password
 这个邮箱已经注册过了, 请直接登录	That email is already registered — sign in instead
@@ -486,6 +488,7 @@ DNS 设置无效	Invalid DNS settings
 订阅「*」刷新 失败: 没有可应用的更改	Refreshing subscription “*” failed: no changes to apply
 订阅「*」已刷新: * 个节点	Subscription “*” refreshed (nodes: *)
 订阅「*」刷新后配置无效, 已保留旧节点	Subscription “*” gave an invalid configuration after refreshing; the old nodes were kept
+订阅「*」有更新, 应用需要管理员授权 (后台任务不弹授权框), 打开仪表盘时可以应用	Subscription “*” has updates; applying them needs administrator authorization (background tasks never show the authorization dialog), so they can be applied when you open the dashboard
 订阅「*」刷新失败 (保留旧节点)	Couldn’t refresh subscription “*” (the old nodes were kept)
 
 # --- lib/ops.sh · restart / rules update / logout / core upgrade / self-update
@@ -495,8 +498,8 @@ DNS 设置无效	Invalid DNS settings
 规则集已更新 (* 个有变化, * 个失败)	Rule sets updated (* changed, * failed)
 全部下载失败	All downloads failed
 所有规则集下载失败, 已保留旧规则	Every rule set failed to download; the old rules were kept
-已退出账号并关闭代理, 所有浏览器需要重新登录	Logged out and turned the proxy off; every browser has to sign in again
-代理已关闭、令牌已更换, 但核心没有成功重启, 运行 enana doctor 查看原因	The proxy is off and the token was replaced, but the core didn’t restart successfully — run enana doctor to see why
+已退出账号 (代理设置保留, 仪表盘照常打开)	Signed out (proxy settings kept; the dashboard stays open)
+已退出账号, 但新配置没有应用到核心 (官方线路可能还在), 运行 enana doctor 查看原因	Signed out, but the new configuration was not applied to the core (official lines may still be there) — run enana doctor to see why
 升级失败, 保持原版本 *	Upgrade failed; staying on version *
 已升级到 sing-box *	Upgraded to sing-box *
 新版本无法加载当前配置, 已回退	The new version can’t load the current configuration; rolled back
@@ -667,8 +670,7 @@ IP 地址格式不正确 (支持 IPv4 和 IPv6)	The IP address is not valid (IPv
 路径不存在	The path does not exist
 路径里有不支持的字符	The path contains unsupported characters
 软件校验失败	App check failed
-还没有登录: 云端内容需要先在仪表盘登录 enana 账号	Not signed in: sign in to your enana account in the dashboard first to get cloud content
-还没有登录云端	Not signed in to the cloud
+云端内容暂时需要登录 enana 账号才能下载, 已保留本机现有的内容	Cloud content currently needs a signed-in enana account to download; the content already on this computer is kept
 这不是有效的应用 (缺少 Info.plist)	Not a valid app (Info.plist is missing)
 这个域名已经删除了	This domain has already been removed
 这个域名已经有解析记录了, 请直接修改它	This domain already has a DNS record; edit that one instead
@@ -794,7 +796,7 @@ sudo 没有通过: sudo 密码不对, 或这个用户没有 sudo 权限	sudo fai
 连接服务器	Connect to the server
 部署脚本异常结束 (退出码 *)	The deployment script ended abnormally (exit code *)
 部署脚本没有返回可用的节点	The deployment script returned no usable nodes
-部署脚本由 enana 云端下发: 请先登录, 并等「云端内容」同步完成后再试	The deployment scripts come from the enana cloud: sign in first and wait for “cloud content” to sync, then try again
+部署脚本由 enana 云端下发 (不需要账号): 请等「云端内容」更新完成后再试 (终端里运行 enana content 可以立即更新)	The deployment scripts come from the enana cloud (no account needed): wait for “cloud content” to finish updating, then try again (run enana content in a terminal to update right now)
 部署超时 (超过 * 分钟), 已中止	Deployment timed out (over * minutes) and was aborted
 需要 root 权限 (当前用户不是 root, 也没有可用的 sudo)	Root privileges are required (this user is not root and has no usable sudo)
 需要 sudo 密码	The sudo password is required
@@ -825,7 +827,7 @@ sudo 没有通过: sudo 密码不对, 或这个用户没有 sudo 权限	sudo fai
   [4] 更新规则/订阅\n	  [4] Update rules/subscriptions\n
   [5] 查看日志\n	  [5] View logs\n
   [6] 诊断\n	  [6] Diagnose\n
-  [7] 退出账号 (关闭代理并清除登录)\n	  [7] Log out (turns the proxy off and clears your sign-in)\n
+  [7] 退出账号 (代理照常, 清除登录)\n	  [7] Log out (the proxy keeps working; clears your sign-in)\n
   [8] 更新 enana\n	  [8] Update enana\n
 %s  [9] 卸载%s\n	%s  [9] Uninstall%s\n
   [s] %s\n	  [s] %s\n
@@ -909,7 +911,7 @@ Enhanced/TUN 需要 sing-box 1.12 或更新版本	Enhanced/TUN requires sing-box
 核心未能重启 (Enhanced/TUN 需要管理员授权)	Core restart failed (Enhanced/TUN requires administrator authorization)
 规则已下载, 但未应用到核心 (Enhanced/TUN 需要管理员授权)	Rules downloaded but not applied (Enhanced/TUN requires administrator authorization)
 另一个配置任务正在运行	Another configuration task is running
-核心令牌尚未更新; Enhanced/TUN 需要管理员授权, 运行 enana doctor 查看原因	The core token has not been updated; Enhanced/TUN requires administrator authorization. Run enana doctor for details
+新配置还没有应用到核心; Enhanced/TUN 需要管理员授权, 运行 enana doctor 查看原因	The new configuration has not been applied to the core yet; Enhanced/TUN requires administrator authorization. Run enana doctor for details
 新版本未就绪, 已回退	New version not ready; rolled back
 新版本未能启动, 已回退到 *	New version failed to start; rolled back to *
 已取消管理员授权, 已回退	Administrator authorization cancelled; rolled back
@@ -1050,3 +1052,5 @@ TUN 没有启动 (*): *	TUN did not start (*): *
 请运行 enana upgrade	run enana upgrade
 原因: *	reason: *
 *; 旧的 TUN 仍在运行	*; the old TUN is still running
+官方线路还没有从增强模式的核心里移除 (需要管理员授权), 代理没有开启	The official lines are still in the Enhanced-mode core (removing them needs administrator authorization), so the proxy was not turned on
+已取消管理员授权, 代理没有开启 (官方线路还留在增强模式的核心里)	Administrator authorization was cancelled; the proxy was not turned on (the official lines are still in the Enhanced-mode core)

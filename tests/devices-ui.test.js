@@ -92,8 +92,9 @@ assert.equal(sudoLines.length, 2, 'TP.sudo.icon and TP.sudo.mark in ui/auth.js')
 vm.runInContext('(function () { var TP = window.TP, h = TP.h, ui = TP.ui, L = window.I18N.L; var sudo = TP.sudo = {};\n' + sudoLines.join('\n') + '\n})();', ctx, { filename: 'auth.js (sudo marker)' });
 vm.runInContext('(function () { var TP = window.TP, h = TP.h, ui = TP.ui, I = window.I18N, t = I.t; var A = TP.auth = {};\n' +
   slice(authSrc, '  function platName(p)', '  /* 下线一台设备前的二次确认 */') + '\n})();', ctx, { filename: 'auth.js (deviceRow)' });
-let answer = true; const confirms = [];
+let answer = true, signedIn = true; const confirms = [];
 TP.auth.confirmKick = (d, loginNow) => { confirms.push(d.uid + ':' + loginNow); return Promise.resolve(answer); };
+TP.auth.signedIn = () => signedIn;                    // 2.3.27: 「我的设备」只在登录了 enana 账号时读取 (没有登录时辅助服务只会回 E_LOGIN_REQUIRED)
 const reqs = [];
 TP.helper = (method, url, o) => { const d = defer(); reqs.push({ call: method + ' ' + url, o: o || null, d }); return d.promise; };
 vm.runInContext('(function () { var TP = window.TP, S = TP.S, h = TP.h, ui = TP.ui, setText = TP.setText, I = window.I18N, t = I.t, L = I.L, el = {};\n  function hl() { return null; }\n' +
@@ -160,6 +161,7 @@ async function answerGet(data) {
   let kicks = reqs.filter(x => x.call === 'POST /api/devices/kick');
   assert.equal(kicks.length, 1);
   assert.deepEqual(kicks[0].o.form, { uid: 'dev-old-0003' }); assert.equal(kicks[0].o.sudoWhy, 'set.dev.sudoWhy:Old MacBook');
+  assert.equal(kicks[0].o.confirmed, true, 'the kick was already confirmed here, so a guest-mode confirmation would never be added on top');
   kicks[0].d.reject(new Error('cloud down')); await flush();
   assert.deepEqual(toasts[toasts.length - 1], ['cloud down', 'err']);
   assert.deepEqual(rows().map(nameOf), ['This Mac', 'Home iMac', 'Old MacBook'], 'a failed sign-out keeps the row');
@@ -182,5 +184,14 @@ async function answerGet(data) {
   const hb2 = buttons(rowOf('Home iMac'));
   assert.equal(hb2.length, 1); assert(hb2[0]._un && hb2[0]._un.reason === 'helper.down'); assert.equal(hb2[0].getAttribute('aria-disabled'), 'true');
   assert.equal(buttons(rowOf('This Mac')).length, 0);
-  console.log('PASS: no Sign out on the device in use, offline devices say they are still signed in, a signed-out device leaves the list at once');
+
+  // 5. 没有登录 enana 账号 (2.3.27): 不读设备列表 (不发 GET /api/devices), 手动刷新也一样; 设备卡片记在 el.devCard 上, 由设置页在未登录时整块隐藏
+  helperWhy = ''; signedIn = false;
+  const gets = () => reqs.filter(x => x.call === 'GET /api/devices').length, n0 = gets();
+  await DV.load(false); await DV.load(true); await flush();
+  assert.equal(gets(), n0, 'no device list request while not signed in');
+  assert(DV.el.devCard && DV.el.devCard.tagName === 'section', 'the devices card is exposed so the settings page can hide it for guests');
+  signedIn = true; DV.load(false); await flush();
+  assert.equal(gets(), n0 + 1, 'signed in again: the list is read');
+  console.log('PASS: no Sign out on the device in use, offline devices say they are still signed in, a signed-out device leaves the list at once, guests never load the list');
 })().catch(e => { console.error(e); process.exitCode = 1; });

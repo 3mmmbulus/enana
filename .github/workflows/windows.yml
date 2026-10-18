@@ -59,6 +59,9 @@ jobs:
         shell: pwsh
         run: |
           foreach ($f in 'get.ps1','tests/windows-bootstrap.ps1') { $e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f).Path, [ref]$null, [ref]$e); if ($e) { $e | ForEach-Object { $_.Message }; throw "$f has syntax errors" } }
+      - name: Log reading with the GNU tools of Git Bash (byte-identical to 2.3.26, tail windows for big days)
+        shell: bash
+        run: bash tests/logs-query.sh
       - name: Install and exercise the real Windows client
         run: ./tests/windows-native.ps1 -HomeDir '${{ runner.temp }}/enana-native-acceptance'
       - name: Retain failure diagnostics without account or server credentials

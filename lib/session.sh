@@ -1,10 +1,11 @@
-# 登录会话 (与云端同步): 设备在线名额、心跳、被其它设备下线、退出登录。依赖 common.sh auth.sh device.sh config.sh(proxy_set_enabled) ops.sh(op_sync_secret)。
+# 登录会话 (与云端同步): 设备在线名额、心跳、被其它设备下线、退出登录。依赖 common.sh auth.sh device.sh ops.sh(op_sync_secret)。
 #
 #   $H/cloud.token   云端令牌 (JWT, 每次心跳刷新; 600)        $H/session   云端会话 id (600)
 #   $H/hb.fail       连续联网失败的起始时间 (成功一次就清除)   $H/notice    这台设备上一次被退出登录的原因 (kicked / offline_expired / limit)
 #   $H/hb.os         系统版本缓存 (心跳带给云端; 一天读一次)
 # 心跳: 定时任务每 ~2 分钟运行 `enana heartbeat`: 告诉云端「我还在线」, 顺带报上 enana 版本和系统版本 (「我的设备」显示的版本随升级更新);
-# 云端说会话被撤销 (被同账号另一台设备下线 / 超限) 时, 本机自动退出登录并关闭代理。连续 7 天连不上云端也会自动退出登录 (离线宽限)。离线登录不会创建云端会话。
+# 云端说会话被撤销 (被同账号另一台设备下线 / 超限) 时, 本机自动退出登录, 回到「不登录」: 代理照常用你自己的服务器, 只有官方线路 / 同步 / 会员停止。
+# 连续 7 天连不上云端也会自动退出登录 (离线宽限), 同样不碰代理。离线登录不会创建云端会话。
 
 HB_OFFLINE_DAYS=7
 
@@ -61,16 +62,24 @@ session_hb_note() { # <HTTP 状态码>
 }
 session_hb_get() { sed -n "s/^$1=//p" "$H/hb.state" 2>/dev/null | head -1; }
 
-# 在本机结束登录 (被下线 / 离线过久): 关闭代理 + 令牌轮换 + 记下原因 (登录框会显示) + 让核心换上新令牌
+# 在本机结束登录 (被下线 / 离线过久): 回到「不登录」+ 记下原因 (仪表盘显示一次) + 有官方节点时在后台把它们从核心里去掉。
+# 代理总开关 / 模式 / 系统代理原样保留, 本机令牌也不换: 你自己的服务器照常工作, 仪表盘照常打开; 停下的只有官方线路、云端同步和会员
 session_local_end() { # <原因> [云端返回的 HTTP 状态码] [补充信息 (k=v …)]
-  local reason=$1 http=${2:-} okts sid; okts=$(session_hb_get ok); sid=$(session_id)
-  oplog auto "已被退出登录" "$(kv reason "$reason" http "$http" proxy_was "${PROXY_ENABLED:-0}" since_ok_s "${okts:+$(( $(date +%s) - okts ))}" session "${sid: -4}" via "$(call_chain 2 5)")${3:+ $3}" ok      # 只有心跳会走到这里 (来源是 auto); since_ok_s = 距上次心跳成功多少秒
-  proxy_set_enabled 0                                 # 被下线 / 离线过久: 关闭代理 (用户主动退出账号不关, 见 ep_logout)
+  local reason=$1 http=${2:-} okts sid official=0; okts=$(session_hb_get ok); sid=$(session_id)
+  oplog auto "已被退出登录" "$(kv reason "$reason" http "$http" proxy_was "${PROXY_ENABLED:-0}" since_ok_s "${okts:+$(( $(date +%s) - okts ))}" session "${sid: -4}" via "$(call_chain 2 5)")${3:+ $3}" ok      # 只有心跳会走到这里 (来源是 auto); since_ok_s = 距上次心跳成功多少秒; proxy_was = 当时的总开关 (现在保持不变)
+  [ -s "$H/official.jsonl" ] && official=1           # 账号的官方节点 (auth_logout_local 会删掉文件): 删之前记下要不要重新生成配置
   auth_logout_local
   mkdir -p "$H"; printf '%s\n' "$reason" > "$H/notice"
-  # 让核心换上新令牌。这是心跳 (后台), 不弹管理员框: TUN 下这一步要授权, 就先不换 (APPS_BG_JOB=1, 见 apply_config) —— 核心已经切到全部直连,
-  # 下一次经过授权的应用 (重新登录后的内容同步、用户的任何一次更改) 自然会带上新令牌
-  APPS_BG_JOB=1 op_sync_secret
+  # 把官方节点从核心里去掉。这是心跳 (后台), 不弹管理员框 (APPS_BG_JOB=1, 见 apply_config)。没有官方节点时配置不会变, 什么都不用做。
+  # TUN 下这一步要授权, 后台做不了: 运行中的核心里还有官方节点 —— 先把代理总开关关掉 (Direct, 不用授权), 官方线路就不再有流量;
+  # 记下 official.stale, 下一次打开代理时先经过授权换掉配置 (op_proxy / cmd_on), 之后照常使用你自己的服务器
+  if [ "$official" = 1 ] && ! APPS_BG_JOB=1 op_sync_secret >/dev/null 2>&1; then
+    : > "$H/official.stale"
+    if [ "${PROXY_ENABLED:-0}" = 1 ]; then
+      proxy_set_enabled 0
+      oplog auto "关闭代理" "$(kv enabled 0 via "$reason" why official-stale)" ok
+    fi
+  fi
 }
 
 # 系统版本 (心跳用): 一天读一次, 缓存在 $H/hb.os (Windows 上每读一次都要启动 PowerShell); 读不到就是空 (云端忽略空值, 下次再读)

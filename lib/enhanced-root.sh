@@ -8,6 +8,8 @@
 #       check-config FILE ROOT  不需要 root: enana 预检用, 和安装时用的是同一段检查代码。
 #   · 拒绝时只向标准错误输出一行 'enana-root: refused: 原因': 2 用法 / 参数 / 不是 root / root 副本不可信, 3 完整性校验不通过,
 #     4 配置或 sing-box check 不通过。拒绝都发生在改动任何正在运行的东西之前; 1 = 启动失败, 已回滚。
+#   · 系统 DNS: 安装成功之后, 启用的、有硬件网卡的网络服务的 DNS 设成 223.5.5.5 (先记下原来的); 停止、删除、安装失败回滚到「没有 TUN」时还原
+#     (只还原现在正好还是 223.5.5.5 的)。尽力而为: 失败只记一行 'enana-root: note: dns: …', 不影响 TUN 本身。见 DNS_PL
 # 由 enana 在一次管理员授权里安装 (lib/enhanced.sh), 卸载时一并删除。
 # 下面几行的值是测试替换的 (tests/enhanced-root-integrity.sh 复制一份再替换); 生产里就是这些值。
 set -eu
@@ -19,6 +21,7 @@ root_base="/Library/Application Support"
 library="/Library"; helper_tools="$library/PrivilegedHelperTools"; helper_dir="$helper_tools/com.enana.proxy"
 usr_local="/usr/local"; legacy_dir="$usr_local/libexec/enana"; sudoers_dir="/etc/sudoers.d"
 launchctl_bin="/bin/launchctl"        # 助手 restart 动作里写死的 launchctl
+networksetup_bin="/usr/sbin/networksetup"   # 系统 DNS 的接管 / 还原 (DNS_PL) 只用这一个写死的路径
 root_owner=0
 
 refuse() { printf 'enana-root: refused: %s\n' "$2" >&2; exit "$1"; }
@@ -200,11 +203,108 @@ legacy_remove() {
 }
 helper_remove() { /bin/rm -f "$helper_dir/tunrules-$uid" "$sudoers_dir/enana-tunrules-$uid"; legacy_remove; }
 
+# ---- 系统 DNS: TUN 装着的时候, 每个启用的、有硬件网卡的网络服务的 DNS 是 223.5.5.5 ----
+# 公网地址: 系统解析器的查询走进 TUN, 由 hijack-dns 交给核心 (不走系统代理的应用也拿到干净的结果); 核心停了它照样能直接用, 网络不会断。
+#   take     安装成功之后: 每个要改的服务先记下现在的设置 X, 记录写成功了才改成 223.5.5.5。已经是 223.5.5.5 又记过的 (重装) 不重记, 原来的设置不会被
+#            223.5.5.5 盖掉; TUN 开着时用户自己改过的, 记下用户改的 (还原的总是 enana 最后一次改动之前的样子)
+#   restore  停止 / 删除 / 回滚到「没有 TUN」之后: 只还原现在正好是 223.5.5.5 的服务 (之后被改过的不碰); Empty = 原来没有手动设置 (用 DHCP / 路由器给的),
+#            还原成 Empty。还原好的、不用还原的从记录里去掉; 读不出来、设置失败的留着下次再试; 记录空了就删掉
+#   · 停用的 ((*)) 和没有硬件网卡的 (VPN 等) 服务不碰。名字只当数据: networksetup 以列表形式直接 exec (不经过 shell), 记录里存名字的十六进制
+#   · 设置之后再读一遍, 读到的正是要的才算成功 (不靠 networksetup 的退出码); 每次调用最多 30 秒 (alarm 跨 exec 保留), root 不会卡住
+#   · 记录 $root/dns-original 只认运行这个脚本的用户 (root) 自己的普通文件: 不跟符号链接, 组 / 其他人不可写; 整份重写 (临时文件 + 改名)
+#   · 失败只向标准错误写一行 'enana-root: note: dns: …' (退出 1); 调用方不因此失败, 也不回滚
+DNS_PL='use strict; use warnings; use Fcntl qw(O_RDONLY O_WRONLY O_CREAT O_EXCL O_NOFOLLOW O_NONBLOCK);
+my ($ns, $act, $rec) = @ARGV; my $T = "223.5.5.5";
+sub note { print STDERR "enana-root: note: dns: $_[0]\n"; exit 1 }
+sub run {
+  my $pid = open(my $fh, "-|"); return ("", -1) unless defined $pid;
+  if (!$pid) { open(STDERR, ">", "/dev/null"); alarm 30; exec { $ns } $ns, @_; exit 127 }
+  local $/; my $out = <$fh>; close $fh; return (defined $out ? $out : "", $?);
+}
+sub ip_ok { my $v = shift; return length($v) <= 64 && $v =~ /\A(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3}|[0-9a-f.]*:[0-9a-f:.]*(?:%[a-z0-9]+)?)\z/ }
+sub state_ok { my $v = shift; return $v eq "Empty" || ($v =~ /\A[^,]+(?:,[^,]+){0,15}\z/ && !grep { !ip_ok($_) } split /,/, $v) }
+sub getdns {
+  my ($out) = run("-getdnsservers", $_[0]);
+  return "Empty" if $out =~ /^There aren\x27t any DNS Servers set on /mi;
+  my @ip; for my $l (split /\n/, $out) { $l =~ s/\s+\z//; push @ip, lc $l if length $l }
+  my $v = join ",", @ip;
+  return @ip && state_ok($v) ? $v : undef;
+}
+sub setdns { my ($s, $v) = @_; run("-setdnsservers", $s, split /,/, $v); my $now = getdns($s); return defined $now && $now eq $v }
+sub services {
+  my ($out, $rc) = run("-listnetworkserviceorder"); return undef if $rc;
+  my @l = split /\n/, $out; my @s;
+  for my $i (0 .. $#l - 1) {
+    next unless $l[$i] =~ /\A\(([0-9]+|\*)\) (.+)\z/; my ($n, $name) = ($1, $2);
+    next unless $l[$i + 1] =~ /\A\(Hardware Port: .*, Device: ([A-Za-z0-9]*)\)\z/; my $dev = $1;
+    push @s, $name if $n ne "*" && length $dev && $dev !~ /\A(?:utun|ipsec|ppp|gif|stf)[0-9]/;
+  }
+  return \@s;
+}
+sub read_rec {
+  my (%r, $fh);
+  return $!{ENOENT} ? \%r : undef unless sysopen($fh, $rec, O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
+  my @st = stat $fh;
+  return undef unless @st && -f _ && $st[4] == $> && !($st[2] & 022);
+  while (my $l = <$fh>) { chomp $l; next unless $l =~ /\A((?:[0-9a-f]{2})+) (\S+)\z/; my ($h, $v) = ($1, $2); $r{pack("H*", $h)} = $v if state_ok($v) }
+  return \%r;
+}
+sub write_rec {
+  my ($r) = @_;
+  return unlink($rec) || $!{ENOENT} unless %$r;
+  my $tmp = "$rec.new"; unlink $tmp;
+  sysopen(my $fh, $tmp, O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0600) or return 0;
+  my $ok = 1; for my $n (sort keys %$r) { $ok &&= print {$fh} unpack("H*", $n), " ", $r->{$n}, "\n" }
+  $ok = close($fh) && $ok && rename($tmp, $rec);
+  unlink $tmp unless $ok;
+  return $ok;
+}
+my $r = read_rec();
+if ($act eq "take") {
+  note("record not trusted; system DNS unchanged") unless $r;
+  my $svc = services(); note("network services unavailable; system DNS unchanged") unless $svc;
+  my ($bad, @todo) = (0);
+  for my $s (@$svc) {
+    my $cur = getdns($s);
+    if (!defined $cur) { $bad++; next }
+    next if $cur eq $T && exists $r->{$s};
+    $r->{$s} = $cur; push @todo, $s unless $cur eq $T;
+  }
+  write_rec($r) or note("record not written; system DNS unchanged");
+  for my $s (@todo) { setdns($s, $T) or $bad++ }
+  note("$bad network service(s) not switched to $T") if $bad;
+  note("no enabled network service with a hardware device") unless @$svc;
+  exit 0;
+}
+if ($act eq "restore") {
+  note("record not trusted; not restored") unless $r;
+  my ($bad, %left) = (0);
+  for my $s (sort keys %$r) {
+    my $cur = getdns($s);
+    next if defined $cur && $cur ne $T;
+    next if defined $cur && ($r->{$s} eq $T || setdns($s, $r->{$s}));
+    $left{$s} = $r->{$s}; $bad++;
+  }
+  write_rec(\%left) or note("record not updated");
+  note("$bad network service(s) not restored") if $bad;
+  exit 0;
+}
+note("bad action")'
+dns_take() { /usr/bin/perl -e "$DNS_PL" "$networksetup_bin" take "$root/dns-original" || true; }
+# 还原只读 root 自己的目录 (真目录、不是链接、归 root) 里的记录; 没有记录 (没接管过 / 已经还原了) 时 networksetup 一次都不运行
+dns_restore() {
+  [ -e "$root/dns-original" ] || [ -L "$root/dns-original" ] || return 0
+  if [ ! -L "$root" ] && [ -d "$root" ] && [ "$(/usr/bin/stat -f %u "$root")" = "$root_owner" ]; then
+    /usr/bin/perl -e "$DNS_PL" "$networksetup_bin" restore "$root/dns-original" || true
+  else echo 'enana-root: note: dns: record not trusted; not restored' >&2; fi
+}
+
 root=''; plist=''; label=''; uid=''; agent=''; work=''; backup=''; self_dir=''; self_sha=''
 changed=0; committed=0; helper_state=0; had_root=0; had_gui=0; gui_plist=''
 cleanup() {
   local rc=$?
   set +e                                             # 回滚的每一步都要做: 某一步失败也接着恢复其余的 (和清掉临时目录), 最后返回原来的退出码
+  local revived=0                                    # 1 = 旧的守护进程重新拉起来了 (还是 TUN: 系统 DNS 照旧接管)
   if [ "$changed" = 1 ] && [ "$committed" = 0 ]; then
     "$launchctl_bin" bootout "system/$label" 2>/dev/null || true
     for name in sing-box config.json rules certs bin; do
@@ -217,6 +317,7 @@ cleanup() {
     if [ -e "$backup/daemon.plist" ]; then
       /bin/mv "$backup/daemon.plist" "$plist"
       if [ "$had_root" = 1 ]; then
+        revived=1
         "$launchctl_bin" enable "system/$label" || true
         "$launchctl_bin" bootstrap system "$plist" || true
         "$launchctl_bin" kickstart "system/$label" || true
@@ -235,6 +336,8 @@ cleanup() {
       "$launchctl_bin" asuser "$uid" "$launchctl_bin" bootstrap "gui/$uid" "$gui_plist" || true
       "$launchctl_bin" asuser "$uid" "$launchctl_bin" kickstart "gui/$uid/$agent" || true
     fi
+    # 回滚之后没有 TUN 了: 系统 DNS 还原 (这次安装还没接管过, 记录是以前的安装留下的); 旧的 TUN 回来了就照旧接管
+    [ "$revived" = 1 ] || dns_restore
   fi
   [ -z "$work" ] || /bin/rm -rf "$work"
   [ -z "$backup" ] || /bin/rm -rf "$backup"
@@ -274,6 +377,7 @@ case $act in
   stop)
     "$launchctl_bin" disable "system/$label"
     "$launchctl_bin" bootout "system/$label" 2>/dev/null || true
+    dns_restore                                               # 守护进程停了 (停不掉的话上面已经退出, 接管照旧): 系统 DNS 还原
     exit 0 ;;
   remove)
     # 删除要碰文件系统: 目录必须是真目录、归 root (和 root 模式的检查一样), 否则拒绝, 不顺着符号链接删到别处
@@ -282,6 +386,7 @@ case $act in
     fi
     "$launchctl_bin" bootout "system/$label" 2>/dev/null || true
     "$launchctl_bin" enable "system/$label" 2>/dev/null || true
+    dns_restore                                               # 记录会跟着根目录一起删掉: 先还原系统 DNS
     /bin/rm -f "$plist"
     helper_remove                                             # 新位置和旧位置的规则助手, 以及免密规则
     /bin/rmdir "$helper_dir" 2>/dev/null || true              # 空了才删 (系统代理助手、别的用户的助手还在就留着); PrivilegedHelperTools 本身不删
@@ -425,7 +530,9 @@ while [ "$n" -lt 15 ]; do
   v6=$(/sbin/route -n get -inet6 2606:4700:4700::1111 2>/dev/null | /usr/bin/awk '/interface:/ {print $2}')
   case $v4 in utun*)
     if [ "$v4" = "$v6" ] && /sbin/ifconfig "$v4" | /usr/bin/grep -q 'inet 172.19.0.1 ' && "$launchctl_bin" print "system/$label" | /usr/bin/grep -q 'pid = '; then
-      committed=1; exit 0
+      committed=1
+      dns_take                                       # f. 守护进程起来了、已提交: 接管系统 DNS (尽力而为, 失败只记一行, 不回滚; 见 DNS_PL)
+      exit 0
     fi ;;
   esac
   n=$((n + 1)); /bin/sleep 1

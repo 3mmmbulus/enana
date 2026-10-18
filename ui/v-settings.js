@@ -1,6 +1,7 @@
 /* enana · v-settings.js — 设置页 (标签页, 一次只显示一个标签的内容; 上次打开的标签记在 prefs 里):
  *   常规 (语言 / 主题) · 代理 (总开关 / 模式 / 重启服务) · 同步 (TP.sync.settingsCard) · 日志 (TP.logs.settingsCard) · 更新 (版本 / 自动更新) · 账号与设备 (账号 / 修改密码 / 我的设备 / 导出备份) · 会员 (套餐) · 关于
- * 账号是 enana.cc 账号 (邮箱 + 密码), 可以在这里直接修改密码; 导出备份 / 下线设备等敏感操作会再要一次登录密码 (TP.sudo)。
+ * 账号是可选的 enana.cc 账号 (邮箱 + 密码)。没有登录时「账号与设备」和「会员」只显示一段说明 + 登录 / 注册 (TP.auth.guestCard), 导出备份照常可用 (确认一次);
+ * 登录了可以在这里直接修改密码, 导出备份 / 下线设备等敏感操作会再要一次账号密码 (TP.sudo)。
  * 其它模块要跳到某个标签: TP.settingsTab('sync')。每个设置项旁边有「!」说明图标 (ui.help)。 */
 (function () {
   function pt(k) { return TP.pt ? TP.pt(k) : k; }   // 平台专用文案 (见 core.js 的 TP.pt)
@@ -27,11 +28,12 @@
     el.tabs = ui.tabs(L('set.tabs.aria'), TABS.map(function (x) { return { id: x[0], label: L('set.tab.' + x[0]), icon: x[1] }; }), function (id) { pick(id, true); });
     el.tabBar = h('div', { class: 'set-tabs' }, el.tabs.el, hl('settings.tabs'));            // 不再在标签上面用一句话把标签名再念一遍; 说明在「!」里
     root.appendChild(el.tabBar);
+    el.acctGuest = TP.auth.guestCard('acct'); el.planGuest = TP.auth.guestCard('plan');       // 没有登录时代替账号卡片 / 会员卡片 (renderAccount 切换)
     var built = {
       general: [generalCard()], proxy: [proxyCard(), autoSitesCard(), resetCard()],
       sync: [gateBanner('sync'), TP.sync && TP.sync.settingsCard ? TP.sync.settingsCard() : missing('sync', 'refresh', L('set.sync.title'))],
       logs: [TP.logs && TP.logs.settingsCard ? TP.logs.settingsCard() : missing('logs', 'nav-logs', L('set.logs.title'))],
-      updates: [updatesCard()], account: [accountCard(), devicesCard(), backupCard()], plan: [planCard()], about: [aboutCard()]
+      updates: [updatesCard()], account: [el.acctGuest, accountCard(), devicesCard(), backupCard()], plan: [el.planGuest, planCard()], about: [aboutCard()]
     };
     TABS.forEach(function (x) {
       var p = panels[x[0]] = h('div', { class: 'set-panel', role: 'tabpanel', id: 'set-p-' + x[0], 'aria-labelledby': el.tabs.btn(x[0]).id, hidden: true }, built[x[0]]);
@@ -48,6 +50,12 @@
     TP.on('clash', function () { if (active()) renderProxy(); });
     TP.on('proxy', function () { if (active()) renderProxy(); });
     TP.on('auth', function (ok) { if (ok) { renderAccount(); if (active()) { loadDevices(false); TP.plan.load(false); if (TP.billing && (cur === 'account' || cur === 'plan')) TP.billing.load(true); } } });
+    /* 登录 / 退出 / 被下线: 页面不动, 账号与设备 / 会员两个标签换成对应的内容; 退出后上一个账号的设备列表不留在页面上 */
+    TP.on('account', function (on) {
+      if (!on) { dev.st = 'idle'; dev.data = null; dev.err = null; }
+      renderAccount(); renderDevices(); renderPlan();
+      if (on && active()) { loadDevices(false); if (TP.billing && (cur === 'account' || cur === 'plan')) TP.billing.load(true); }
+    });
     TP.on('settings', function () { if (active()) { renderAccount(); renderProxy(); renderUpdates(); renderAutoSites(); } });
     TP.on('plan', function () { renderPlan(); });
     TP.on('lang', function () { renderAccount(); renderGeneral(); renderUpdates(); renderAbout(); renderProxy(); renderAutoSites(); renderDevices(); renderPlan(); renderReset(); });
@@ -85,17 +93,18 @@
   /* 其它模块 / 横幅要跳到设置里的某个标签 */
   TP.settingsTab = function (id) { if (panels[id]) pick(id, true); TP.go('settings'); };
 
-  /* 功能被套餐挡住时 (features.<key>.enabled === false) 在这个标签顶部显示一条说明, 并附「了解」按钮 (不是死按钮); 可用时整条隐藏 */
+  /* 功能被套餐挡住时 (features.<key>.enabled === false) 在这个标签顶部显示一条说明, 并附「了解」按钮 (不是死按钮); 可用时整条隐藏。
+   * 没有登录时也隐藏: 套餐属于账号, 这时下面的卡片自己说明「需要 enana 账号」 */
   function gateBanner(key) {
     var b = ui.btn(L('plan.f.more'), { sm: true, icon: 'help-i' }); ui.act(b, function () { TP.plan.explain(key); });
     var txt = h('span'), badge = h('span'), box = h('div', { class: 'hint warn plan-gate', hidden: true }, ui.icon('lock', 15, 'ci'), badge, txt, b);
     function paint() {
-      var f = TP.plan.feature(key); box.hidden = f.enabled;
-      if (f.enabled) return;
+      var f = TP.plan.feature(key); box.hidden = f.enabled || !TP.auth.signedIn();
+      if (box.hidden) return;
       TP.clear(badge); badge.appendChild(f.comingSoon ? ui.badge(L('plan.soon'), 'info', 'clock') : ui.badge(L('plan.pro'), 'pro', 'pro'));
       setText(txt, t(f.comingSoon ? 'plan.gate.soon' : f.reason === 'expired' ? 'plan.gate.expired' : 'plan.gate.upgrade', { name: TP.plan.name(key) }));
     }
-    TP.on('plan', paint); TP.on('lang', paint); paint();
+    TP.on('plan', paint); TP.on('lang', paint); TP.on('account', paint); paint();
     return box;
   }
 
@@ -214,7 +223,7 @@
     if (!d) { ui.toast(t('set.reset.failedWhy'), 'warn'); return; }
     items = resetItems(d); kids = [];
     if (items.length) kids.push(h('p', { class: 'cfm-d' }, h('b', null, t('set.reset.willClear'))), h('ul', { class: 'cfm-list' }, items.map(function (x) { return h('li', null, x); })));
-    kids.push(h('p', { class: 'cfm-d' }, t('set.reset.keeps')), h('p', { class: 'cfm-d' }, t(d.logged_in ? 'set.reset.fromCloud' : 'set.reset.fromLocal')), h('p', { class: 'cfm-d' }, t('set.reset.backupNote')));
+    kids.push(h('p', { class: 'cfm-d' }, t('set.reset.keeps')), h('p', { class: 'cfm-d' }, t('set.reset.fromCloud')), h('p', { class: 'cfm-d' }, t('set.reset.backupNote')));      // 2.3.27 起官方内容不登录也能从云端下载 (签名校验); 下载不到时任务结果说明用的是本机缓存 / 程序自带的哪一份
     if (d.sync && d.sync.enabled) kids.push(h('p', { class: 'cfm-d' }, t('set.reset.syncNote')));
     ok = await ui.confirmDialog({ title: t('set.reset.dlgTitle'), message: d.total ? t('set.reset.msg', { n: d.total }) : t('set.reset.msg0'), detail: TP.tunDetail(h('div', null, kids)), confirmText: t('set.reset.go'), danger: true, confirmIcon: 'rotate-ccw' });
     if (!ok) return;
@@ -332,37 +341,35 @@
     ui.avail(el.auto, TP.why.helper() || (!S.prefs ? t('set.auto.loading') : ''));
   }
 
-  /* ================= 账号与设备 ================= */
+  /* ================= 账号与设备 =================
+   * 登录了: 账号卡片 (邮箱 / 邮箱验证 / 修改密码 / 退出账号) + 我的设备 + 导出备份。没有登录: 说明 + 登录 / 注册 (el.acctGuest) + 导出备份 (本机功能, 不需要账号)。
+   * 还不知道有没有登录 (刚打开页面的一瞬间): 两种卡片都先不显示。 (2.3.27 起没有「无操作多久后需要重新输入密码」: 仪表盘不需要密码就能打开) */
   function accountCard() {
     el.accWho = h('span', { class: 'set-who' });
     el.accNote = h('div', { class: 'muted sm' });
     el.btnPw = ui.btn(L('set.acc.changePw'), { icon: 'password' }); ui.act(el.btnPw, function () { return TP.auth.changePassword(); });
-    el.btnSwitch = ui.btn(L('set.acc.switch'), { icon: 'refresh' }); ui.act(el.btnSwitch, function () { return TP.auth.logout('switch'); });
     el.btnOut = ui.btn(L('set.acc.logout'), { icon: 'logout', kind: 'soft-bad' }); ui.act(el.btnOut, function () { return TP.auth.logout('logout'); });
     var c = card('account', 'account', L('set.acc.title'), L('set.acc.sub'), 'settings.account');
     c.appendChild(row(L('set.acc.signedIn'), el.accWho)); c.appendChild(el.accNote);
     if (TP.billing) c.appendChild(TP.billing.mountEmail());              // 邮箱是否已验证 (+ 发送验证邮件): 只在这里, 会员页的说明里有「去验证邮箱」跳过来
-    /* 无操作多久后需要重新输入密码 (默认 3 天, 1 分钟 ~ 30 天; 偏好 lock.idleMin 会同步到其它电脑) */
-    el.lockSel = h('select', { class: 'sel', 'aria-label': L('set.lock.title') });
-    TP.CFG.LOCK_IDLE_PRESETS.forEach(function (m) { el.lockSel.appendChild(TP.opt(String(m), TP.auth.idleLabel(m) + (m === TP.CFG.LOCK_IDLE_DEFAULT_MIN ? t('set.lock.default') : ''))); });
-    ui.selectAct(el.lockSel, function () { return String(TP.lockIdleMin()); }, function (v) { TP.prefs.set('lock.idleMin', +v); });
-    c.appendChild(row(L('set.lock.title'), el.lockSel)); c.appendChild(h('p', { class: 'hint sm' }, L('set.lock.hint')));
-    c.appendChild(h('div', { class: 'row wrap set-btns' }, el.btnPw, el.btnSwitch, el.btnOut));
+    c.appendChild(h('div', { class: 'row wrap set-btns' }, el.btnPw, el.btnOut));
     c.appendChild(h('p', { class: 'hint sudo-hint' }, ui.icon('lock', 14, 'ci'), h('span', null, L('set.acc.sudoNote'), hl('settings.sudo'))));
+    el.accCard = c;
     return c;
   }
   function renderAccount() {
-    var A = TP.auth;
+    var A = TP.auth, st = A.state();
+    el.acctGuest.hidden = st !== 'guest'; el.accCard.hidden = st !== 'user';
+    if (el.devCard) el.devCard.hidden = st !== 'user';
+    if (el.planGuest) el.planGuest.hidden = st !== 'guest';
+    if (el.planCard) el.planCard.hidden = st !== 'user';
     setText(el.accWho, A.email() || t('set.acc.unknown'));
-    setText(el.accNote, t('set.acc.note'));                  // 只说账号从哪来; 自动锁定的时间就在下面的下拉框里 (不重复三遍)
-    var cur = String(TP.lockIdleMin());      // 同步来的自定义值不在下拉里时补一项, 让显示和实际生效的值一致
-    if (!Array.prototype.some.call(el.lockSel.options, function (o) { return o.value === cur; })) el.lockSel.appendChild(TP.opt(cur, A.idleLabel(+cur)));
-    el.lockSel.value = cur;
+    setText(el.accNote, t('set.acc.note'));
     var why = TP.why.helper();
-    ui.avail(el.btnSwitch, why); ui.avail(el.btnOut, why); ui.avail(el.btnPw, why);
+    ui.avail(el.btnOut, why); ui.avail(el.btnPw, why);
   }
 
-  /* ---- 我的设备: 同一账号、同一平台最多同时在线 2 台; 可以下线其它设备 (敏感操作: 先二次确认, 再要一次登录密码) ---- */
+  /* ---- 我的设备: 同一账号、同一平台最多同时在线 2 台; 可以下线其它设备 (敏感操作: 先二次确认, 再要一次登录密码)。只在登录了 enana 账号时读取 / 显示 ---- */
   var dev = { st: 'idle', data: null, err: null };
   function devicesCard() {
     el.devRefresh = ui.ibtn('refresh', L('set.dev.refresh'), { size: 16 });
@@ -371,10 +378,11 @@
     el.devList = h('div', { class: 'devs' });
     el.devEmpty = ui.emptyBox();
     var c = h('section', { class: 'card set-card', id: 'set-devices' }, h('div', { class: 'card-h' }, ui.icon('monitor', 20, 'ci'), h('h2', null, L('set.dev.title'), hl('settings.devices')), el.devSub, el.devRefresh), el.devList, el.devEmpty.el);
+    el.devCard = c;
     return c;
   }
   async function loadDevices(manual) {
-    if (S.locked) return;
+    if (S.locked || !TP.auth.signedIn()) return;                      // 设备属于账号: 没有登录 (或者还不知道) 时不读, 否则只会得到 E_LOGIN_REQUIRED
     var why = TP.why.helper();
     if (why) { dev.st = 'err'; dev.err = { reason: why, helper: true }; renderDevices(); if (manual) ui.toast(why, 'warn'); return; }
     dev.st = 'load'; renderDevices();
@@ -382,7 +390,7 @@
       dev.data = await TP.helper('GET', '/api/devices');
       dev.st = 'ok'; dev.err = null;
     } catch (e) {
-      if (e && e.kind === 'auth') return;
+      if (e && (e.kind === 'auth' || e.code === 'E_LOGIN_REQUIRED')) return;      // 连接失效 / 刚刚不在登录状态了 (这个卡片随之隐藏)
       dev.st = 'err'; dev.err = { reason: e && e.code === 'E_ACCOUNT_UNREACHABLE' ? t('set.dev.offline') : TP.errMsg(e), cloud: !!(e && e.code === 'E_ACCOUNT_UNREACHABLE') };
     }
     renderDevices();
@@ -390,7 +398,7 @@
   async function kickDevice(d) {
     var ok = await TP.auth.confirmKick(d, false);
     if (!ok) return;
-    await TP.helper('POST', '/api/devices/kick', { form: { uid: d.uid }, sudoWhy: t('set.dev.sudoWhy', { name: d.name }) });
+    await TP.helper('POST', '/api/devices/kick', { form: { uid: d.uid }, sudoWhy: t('set.dev.sudoWhy', { name: d.name }), confirmed: true });
     ui.toast(t('set.dev.kicked', { name: d.name }), 'ok');
     // 下线成功: 这一行马上消失 (云端也不再返回它), 再读一次列表核对
     if (dev.data && dev.data.devices) { dev.data.devices = dev.data.devices.filter(function (x) { return x.uid !== d.uid; }); renderDevices(); }
@@ -427,7 +435,7 @@
     });
   }
 
-  /* ---- 导出配置备份 (含凭据, 敏感操作) ---- */
+  /* ---- 导出配置备份 (含凭据, 敏感操作; 本机功能, 不需要账号: 没有登录时下面的确认就是唯一的一次确认, 登录了之后还要输入账号密码) ---- */
   function backupCard() {
     el.btnBackup = TP.sudo.mark(ui.btn(L('set.bk.btn'), { icon: 'download' }));
     ui.act(el.btnBackup, exportBackup);
@@ -444,9 +452,9 @@
   }
   async function exportBackup() {
     var why = TP.why.helper(); if (why) { ui.toast(why, 'warn'); return; }
-    var ok = await ui.confirmDialog({ title: t('set.bk.title'), message: t('set.bk.msg'), detail: [t('set.bk.d1'), t('set.bk.d2'), t('set.bk.d3')], confirmText: t('set.bk.go'), kind: 'warning', confirmIcon: 'download' });
+    var ok = await ui.confirmDialog({ title: t('set.bk.title'), message: t('set.bk.msg'), detail: [t('set.bk.d1'), t('set.bk.d2'), t('set.bk.d3')], confirmText: t(TP.auth.signedIn() ? 'set.bk.go' : 'set.bk.goGuest'), kind: 'warning', confirmIcon: 'download' });
     if (!ok) return;
-    var r = await TP.helper('GET', '/api/export', { text: true, timeout: 30000, sudoWhy: t('set.bk.sudoWhy') });
+    var r = await TP.helper('GET', '/api/export', { text: true, timeout: 30000, sudoWhy: t('set.bk.sudoWhy'), confirmed: true });
     var text = r && r.text != null ? r.text : '';
     if (!text) throw TP.mkErr('api', t('set.bk.empty'));
     saveFile(text, 'enana-backup-' + stamp() + '.json');
@@ -463,6 +471,7 @@
     var c = h('section', { class: 'card set-card', id: 'set-plan' }, h('div', { class: 'card-h' }, ui.icon('pro', 20, 'ci'), h('h2', null, L('plan.title'), hl('settings.plan')), h('span', { class: 'muted sm' }, L('plan.sub')), el.planRefresh), el.planBox);
     if (TP.billing) c.appendChild(TP.billing.mount());
     c.appendChild(el.planFeats);
+    el.planCard = c;                                                  // 没有登录时隐藏 (换成 el.planGuest), 见 renderAccount
     return c;
   }
   function renderPlan() {

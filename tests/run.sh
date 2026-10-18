@@ -48,7 +48,6 @@ cl()   { curl -s --noproxy '*' -H "Authorization: Bearer $TOKEN" "$@"; }        
 login() { apin -X POST --data-urlencode "user=$1" --data-urlencode "password=$2" "$A/api/login"; }
 job_wait() { local i s; for i in $(seq 1 90); do sleep 0.4; s=$(api "$A/api/job?id=$1" | jp 'print(d["state"])' 2>/dev/null); [ "$s" != running ] && break; done; echo "$s"; }
 logconn() { : > "$W/h/sing-box.log"; curl -s -m 4 -x "socks5h://127.0.0.1:$PORT" "http://$1/" -o /dev/null 2>/dev/null; sleep 1.2; sed 's/\x1b\[[0-9;]*m//g' "$W/h/sing-box.log"; }
-wait_clash_401() { local i; for i in $(seq 1 40); do [ "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H "Authorization: Bearer $1" $U/proxies)" = 401 ] && return 0; sleep 0.5; done; return 1; }
 mkapp() { # mkapp <目录> <名称> [可执行文件来源]: 造一个最小的、带 ad-hoc 签名的 .app
   local app="$1/$2.app" src=${3:-/usr/bin/true}; mkdir -p "$app/Contents/MacOS"; cp "$src" "$app/Contents/MacOS/${2// /-}"
   printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>test.%s</string><key>CFBundleShortVersionString</key><string>1.2.3</string><key>CFBundleExecutable</key><string>%s</string></dict></plist>' "${2// /.}" "${2// /-}" > "$app/Contents/Info.plist"
@@ -168,10 +167,14 @@ expect "每日维护任务已注册" test -f "$ENANA_PLIST_DIR/com.enana.proxy.u
 expect "核心 Clash API 没有令牌时拒绝访问" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' $U/proxies)" = 401
 
 echo "== 2. 账号: 登录 / 注册 / 离线 / 限流 / 退出账号 · 代理总开关 (账号服务是本机模拟的 enana.cc)"
-apin "$A/api/auth/status" | chk "未登录可读 auth/status: 无缓存账号; 没有找回密码入口, 也没有指向网站账号页的链接 (官网只有首页)" 'assert d["ok"] and d["required"] and d["account_hint"]=="" and not d["offline_ok"] and "forgot_url" not in d and "register_url" not in d and "manage_url" not in d and "bound" not in d'
+apin "$A/api/auth/status" | chk "未登录可读 auth/status: 不需要账号 (required=false, logged_in=false, local=true); 无缓存账号; 没有找回密码入口, 也没有指向网站账号页的链接 (官网只有首页)" 'assert d["ok"] and d["required"] is False and d["logged_in"] is False and d["local"] is True and d["account_hint"]=="" and not d["offline_ok"] and "forgot_url" not in d and "register_url" not in d and "manage_url" not in d and "bound" not in d'
 expect "未带令牌访问 /api/state → 401" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H "$X" $A/api/state)" = 401
 expect "错误令牌 → 401" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H "$X" -H 'X-Enana-Token: nope' $A/api/state)" = 401
-expect "未登录时不能开启代理: /api/proxy → 401" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -X POST -H "$X" $A/api/proxy -d on=1)" = 401
+expect "没有本机令牌: /api/proxy → 401" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -X POST -H "$X" $A/api/proxy -d on=1)" = 401
+LT=$(apin -X POST "$A/api/auth/local"); TOKEN=$(echo "$LT" | jp 'print(d["token"])')
+echo "$LT" | chk "不登录也能拿到本机令牌 (POST /api/auth/local = secret 文件 = Clash API 的 secret)" 'assert d["ok"] and d["logged_in"] is False and d["token"]=="'"$(cat "$W/h/secret")"'"'
+api "$A/api/state" | chk "不登录也能读 /api/state (account.email 为空)" 'assert d["ok"] and d["account"]["email"]==""'
+api "$A/api/devices" | chk "没登录时账号功能 → HTTP 200 E_LOGIN_REQUIRED (不是 401)" 'assert not d["ok"] and d["code"]=="E_LOGIN_REQUIRED"'
 login user1@example.test 'wrong-pass' | chk "错误密码 → E_BAD_CREDENTIALS" 'assert not d["ok"] and d["code"]=="E_BAD_CREDENTIALS"'
 login 'not-an-email' 'x' | chk "邮箱格式不对 → E_INVALID" 'assert not d["ok"] and d["code"]=="E_INVALID"'
 reg() { apin -X POST --data-urlencode "user=$1" --data-urlencode "password=$2" "$A/api/register"; }
@@ -187,9 +190,8 @@ TOKEN=$(echo "$R" | jp 'print(d["token"])')
 api "$A/api/state" | chk "state: 当前账号 = 刚注册的邮箱; 刚登录时代理默认是关闭的" 'assert d["account"]["email"]=="new1@example.test" and d["proxy"]["enabled"] is False'
 cl "$U/configs" | chk "核心处于「全部直连」模式 (Direct): 代理默认关闭, 不会断网" 'assert d["mode"]=="Direct"'
 api -X POST "$A/api/logout" | chk "退出账号 → ok" 'assert d["ok"]'
-wait_clash_401 "$TOKEN"
-expect "退出后旧令牌立刻失效: 辅助服务 401" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H "$X" -H "X-Enana-Token: $TOKEN" $A/api/state)" = 401
-expect "退出后旧令牌失效: Clash API 401 (核心已换上新令牌)" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H "Authorization: Bearer $TOKEN" $U/proxies)" = 401
+expect "退出后本机令牌不变: 辅助服务照常 200 (仪表盘照常打开)" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H "$X" -H "X-Enana-Token: $TOKEN" $A/api/state)" = 200
+expect "退出后 Clash API 照常 (令牌没换)" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H "Authorization: Bearer $TOKEN" $U/proxies)" = 200
 expect "退出后已不处于登录状态" test ! -e "$W/h/loggedin"
 R=$(login USER1@Example.Test 'Passw0rd!')
 echo "$R" | chk "任何有效账号都能登录 (大小写不敏感): 在线校验" 'assert d["ok"] and d["via"]=="online" and d["account"]=="user1@example.test" and len(d["token"])==32 and "bound_now" not in d'
@@ -270,10 +272,10 @@ expect "心跳成功: 仍处于登录状态, 没有联网失败记录" sh -c "te
 api "$A/api/devices" | chk "心跳带上了 enana 版本和系统版本: 本机在「我的设备」里显示当前版本 $VER, 不再是登录时写下的旧版本" 'c=[x for x in d["devices"] if x["current"]]; assert len(c)==1 and c[0]["app"]=="'"$VER"'" and c[0]["os"]'
 curl -s -X POST "http://127.0.0.1:$A_PORT/_test/revoke?uid=$(cat "$W/h/device.id")&reason=kicked" >/dev/null
 api -X POST "$A/api/proxy" -d 'on=1' >/dev/null
-rm -f "$W/h/.hb.last"; "$W/shortcut/enana" tick --quiet >/dev/null 2>&1; wait_clash_401 "$TOKEN"
+rm -f "$W/h/.hb.last"; "$W/shortcut/enana" tick --quiet >/dev/null 2>&1
 expect "被其它设备下线后: 本机自动退出登录 (loggedin / 云端会话 / 离线缓存都被清除)" test ! -e "$W/h/loggedin" -a ! -e "$W/h/session" -a ! -e "$W/h/account.conf"
-expect "被其它设备下线后: 代理自动关闭" grep -q '^PROXY_ENABLED=0' "$W/h/settings.env"
-expect "被其它设备下线后: 旧令牌失效" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H "$X" -H "X-Enana-Token: $TOKEN" $A/api/state)" = 401
+expect "被其它设备下线后: 代理设置保留 (总开关仍为 1, 你自己的服务器照常工作)" grep -q '^PROXY_ENABLED=1' "$W/h/settings.env"
+expect "被其它设备下线后: 本机令牌不变 (仪表盘照常打开)" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H "$X" -H "X-Enana-Token: $TOKEN" $A/api/state)" = 200
 apin "$A/api/auth/status" | chk "登录框会提示原因: notice = kicked" 'assert d["notice"]=="kicked"'
 TOKEN=$(login user1@example.test 'New-Passw0rd2' | jp 'print(d["token"])'); [ -z "$TOKEN" ] && TOKEN=$(login user1@example.test 'Passw0rd!' | jp 'print(d["token"])')
 apin "$A/api/auth/status" | chk "重新登录后 notice 清空" 'assert d["notice"]==""'
@@ -282,11 +284,12 @@ rm -f "$W/h/.hb.last"; "$W/shortcut/enana" tick --quiet >/dev/null 2>&1
 expect "云端连不上: 记录首次失败时间, 仍在宽限期内保持登录" sh -c "test -f '$W/h/hb.fail' && test -f '$W/h/loggedin'"
 printf '%s\n' $(( $(date +%s) - 8*86400 )) > "$W/h/hb.fail"; rm -f "$W/h/.hb.last"; "$W/shortcut/enana" tick --quiet >/dev/null 2>&1
 expect "离线超过 7 天: 本机自动退出登录并提示 offline_expired" sh -c "test ! -e '$W/h/loggedin' && grep -q offline_expired '$W/h/notice'"
+expect "…代理设置同样保留" grep -q '^PROXY_ENABLED=1' "$W/h/settings.env"
 curl -s -X POST "http://127.0.0.1:$A_PORT/_test/mode?m=ok" >/dev/null
 TOKEN=$(login user1@example.test 'New-Passw0rd2' | jp 'print(d["token"])'); [ -n "$TOKEN" ] || TOKEN=$(login user1@example.test 'Passw0rd!' | jp 'print(d["token"])')
 expect "测试夹具: 已重新登录" test -n "$TOKEN"
 
-echo "== 2c. 云端内容 (登录后下发的精选数据: 验签 / 防篡改 / 防回滚 / 文件白名单 / 事务回滚)"
+echo "== 2c. 云端内容 (签名下发的精选数据: 验签 / 防篡改 / 防回滚 / 文件白名单 / 事务回滚)"
 for i in $(seq 1 40); do sleep 0.5; [ "$(api "$A/api/content" | jp 'print(d["source"])' 2>/dev/null)" = cloud ] && break; done
 api "$A/api/content" | chk "登录后自动拉取云端内容: 来源 = cloud, 序号 100, 无错误" 'assert d["source"]=="cloud" and d["seq"]==100 and d["error"]=="" and d["version"]'
 expect "内容已缓存到本机 (符号链接 cloud/content -> content-100)" test "$(readlink "$W/h/cloud/content")" = content-100
@@ -318,14 +321,18 @@ BUNDLE "$W/content2" "$W/ckey.pem" 110
 api "$A/api/content" | chk "合法的新内容 (序号 110) 被安装并生效" 'assert d["seq"]==110 and d["error"]==""'
 cat "$W/h/ui/catalog.json" | chk "新内容里新增的 testsvc2 出现在目录里" 'assert any(e["id"]=="testsvc2" for e in d["entries"])'
 expect "只保留当前 + 上一份内容包" test "$(ls -d "$W/h"/cloud/content-* | wc -l | tr -d ' ')" -le 2
-# 未登录 (没有云端会话) 时不拉取
+# 没登录 (没有云端会话): 匿名下载同样的路径, 同样验签。这个模拟云端默认和 2.3.26 的云端一样只对有会话的请求开放 → 被拒绝时平和地说明, 保留现有内容
 BUNDLE "$HERE/fixtures/content" "$W/ckey.pem" 120
 echo y | "$W/shortcut/enana" logout >/dev/null 2>&1; sleep 3
-"$W/shortcut/enana" content > "$W/content.out" 2>&1; expect "没登录时不能拉取云端内容, 已缓存的内容保持不变 (序号 110)" sh -c "grep -q '还没有登录' '$W/content.out' && test \"\$(cat '$W/h/cloud/content/SEQ')\" = 110"
+"$W/shortcut/enana" content > "$W/content.out" 2>&1; expect "没登录 + 云端还要求登录: 匿名下载被拒绝, 平和地说明原因, 已缓存的内容保持不变 (序号 110)" sh -c "grep -q '云端内容暂时需要登录 enana 账号才能下载' '$W/content.out' && ! grep -q '还没有登录' '$W/content.out' && test \"\$(cat '$W/h/cloud/content/SEQ')\" = 110"
+curl -s -X POST "http://127.0.0.1:$A_PORT/_test/v1public?on=1" >/dev/null
+"$W/shortcut/enana" content > "$W/content.out" 2>&1; expect "没登录 + 云端内容公开 (2.3.27 起): 匿名下载并安装 (序号 120, 同样验签)" test "$(cat "$W/h/cloud/content/SEQ")" = 120
+curl -s -X POST "http://127.0.0.1:$A_PORT/_test/v1public?on=0" >/dev/null
+BUNDLE "$HERE/fixtures/content" "$W/ckey.pem" 121
 rm -f "$W/h/.hb.last"
 TOKEN=$(login user1@example.test 'New-Passw0rd2' | jp 'print(d["token"])'); [ -n "$TOKEN" ] || TOKEN=$(login user1@example.test 'Passw0rd!' | jp 'print(d["token"])')
-for i in $(seq 1 40); do sleep 0.5; [ "$(api "$A/api/content" | jp 'print(d["seq"])' 2>/dev/null)" = 120 ] && break; done
-api "$A/api/content" | chk "重新登录后自动拿到更新的内容 (序号 120)" 'assert d["seq"]==120'
+for i in $(seq 1 40); do sleep 0.5; [ "$(api "$A/api/content" | jp 'print(d["seq"])' 2>/dev/null)" = 121 ] && break; done
+api "$A/api/content" | chk "重新登录后 (带会话) 自动拿到更新的内容 (序号 121)" 'assert d["seq"]==121'
 
 echo "== 2d. 网站域名编辑 (弹窗里一行一个域名: 添加 / 修改 / 删除 / 恢复 / 一键重置; 用户改动不被云端内容更新覆盖)"
 sd() { api "$A/api/sites/domains?id=claude"; }
@@ -888,7 +895,7 @@ PY2
 $SP_ "$SYNCPL" seal "$W/h/sync.key" "$SD/cloud-login.json" "$SD/cloud-login.b64"; V=$(remote_v); put_remote "$SD/cloud-login.b64" "$V" >/dev/null
 sed -i '' -e '/^ENABLED=/d' -e '/^AUTO=/d' -e '/^BASE_VERSION=/d' -e '/^SYNCED_HASH=/d' "$W/h/sync.conf"
 ACC_=$(cut -d' ' -f1 "$W/h/loggedin"); PW_=$(sudo_pw)
-api -X POST "$A/api/logout" >/dev/null; wait_clash_401 "$TOKEN"
+api -X POST "$A/api/logout" >/dev/null                   # (退出账号不换本机令牌, 不用等核心换令牌)
 R=$(login "$ACC_" "$PW_"); TOKEN=$(echo "$R" | jp 'print(d["token"])')
 sleep 4
 api "$A/api/state" | chk "还没有确认过: 登录后不会自动取回云端的服务器 (Cloud-New 没有出现), 本机原有的都在" 'ts={s["tag"] for s in d["servers"]}; assert "Cloud-New" not in ts and {"Fix-Pin","Local-Hop"} <= ts'
@@ -902,12 +909,12 @@ expect "云端快照里带来的全部服务器 (包括 Fix-Pin) 都记入同步
 # 在设置里明确关闭过同步 → 登录后不自动取回
 J=$(api -X POST "$A/api/servers/delete?tag=Cloud-New" | jp 'print(d.get("job",""))'); [ -z "$J" ] || job_wait "$J" >/dev/null
 sy settings -d 'enabled=0' >/dev/null; sed -i '' -e '/^BASE_VERSION=/d' -e '/^SYNCED_HASH=/d' "$W/h/sync.conf"; V=$(remote_v)
-api -X POST "$A/api/logout" >/dev/null; wait_clash_401 "$TOKEN"
+api -X POST "$A/api/logout" >/dev/null
 R=$(login "$ACC_" "$PW_"); TOKEN=$(echo "$R" | jp 'print(d["token"])'); sleep 4
 api "$A/api/state" | chk "明确关闭过同步 → 登录后不会自动取回 (Cloud-New 没有出现), ENABLED 仍是 0" 'assert "Cloud-New" not in {s["tag"] for s in d["servers"]}'
 expect "ENABLED=0 没有被登录流程改回去" grep -qx 'ENABLED=0' "$W/h/sync.conf"
 rm -f "$W/h/servers.sync" "$W/h/subs.sync" "$W/h/.sync-pending"
-api -X POST "$A/api/proxy" -d 'on=1' >/dev/null           # 上面退出再登录会关掉代理 (这是设计): 后面的章节要在「代理已开启」的状态下继续
+api -X POST "$A/api/proxy" -d 'on=1' >/dev/null           # 后面的章节要在「代理已开启」的状态下继续 (2.3.27 起退出 / 登录都不碰代理开关, 这里只是保险)
 
 echo "== 7d. 添加自己的服务器 (SSH 一键部署): 探测 / 主机指纹 / 部署 / 重新识别出口 IP / 凭据不落盘"
 if ! waitport "$SSHD_PORT"; then tfail "本机测试用的 sshd 没有起来 (跳过 SSH 部署测试)"; else
@@ -1359,18 +1366,17 @@ api "$A/api/job?id=$J" | chk "任务进度按语言头翻译 (英文步骤名)" 
 api -X POST "$A/api/settings" -d 'lang=en' >/dev/null; grep -q '^LANG_UI=en' "$W/h/settings.env" && tpass "语言选择已保存到 settings.env (终端与仪表盘共用)" || tfail "语言选择已保存"
 api -X POST "$A/api/settings" -d 'lang=zh' >/dev/null
 
-echo "== 13. 退出账号 = 代理设置保留 (仪表盘 + 终端) · 切换账号 / 登录另一个账号 = 关闭代理 · 终端没登录时不能开启代理"
+echo "== 13. 退出账号 = 代理设置保留, 本机令牌不变 (仪表盘 + 终端) · 切换账号 / 登录另一个账号也不碰代理开关 · 终端不登录也能开启代理"
 OLD=$TOKEN
 api "$A/api/state" | chk "退出前: 代理已开启 (按规则分流)" 'assert d["proxy"]["enabled"] is True'
 sudo_tok >/dev/null; expect "退出前有 sudo 令牌文件" test -s "$W/h/sudo.tokens"
 api -X POST "$A/api/logout" | chk "仪表盘退出账号" 'assert d["ok"]'
-wait_clash_401 "$OLD"
 expect "退出后: sudo 令牌全部清除" test ! -e "$W/h/sudo.tokens"
-expect "退出后: 旧令牌失效 (辅助服务 401)" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H "$X" -H "X-Enana-Token: $OLD" $A/api/state)" = 401
-expect "退出后: 旧令牌失效 (Clash API 401)" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H "Authorization: Bearer $OLD" $U/proxies)" = 401
+expect "退出后: 本机令牌不变, 仪表盘照常打开 (辅助服务 200)" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H "$X" -H "X-Enana-Token: $OLD" $A/api/state)" = 200
+expect "退出后: Clash API 照常 (令牌没换)" test "$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H "Authorization: Bearer $OLD" $U/proxies)" = 200
 expect "退出后: 代理总开关保留为 1 (代理设置保留), 配置没有被改成直连" sh -c "grep -q '^PROXY_ENABLED=1' '$W/h/settings.env' && ! grep -q '\"default_mode\":\"Direct\"' '$W/h/config.json'"
 expect "退出后: 核心仍在监听 (系统代理指向它也不会断网)" nc -z 127.0.0.1 "$PORT"
-R=$(login user1@example.test 'New-Passw0rd2'); TOKEN=$(echo "$R" | jp 'print(d["token"])'); [ "$TOKEN" != "$OLD" ] && tpass "重新登录拿到新令牌" || tfail "重新登录拿到新令牌"
+R=$(login user1@example.test 'New-Passw0rd2'); TOKEN=$(echo "$R" | jp 'print(d["token"])'); [ "$TOKEN" = "$OLD" ] && tpass "重新登录拿到的还是同一个本机令牌" || tfail "重新登录拿到的还是同一个本机令牌"
 cl "$U/configs" | chk "重新登录 (同一账号) 后代理仍是开启的" 'assert d["mode"]!="Direct"'
 api "$A/api/state" | chk "state.proxy.enabled 仍为 true" 'assert d["proxy"]["enabled"] is True'
 if "$W/shortcut/enana" status 2>&1 | grep -q '已登录'; then tpass "终端 status 显示已登录"; else tfail "终端 status 显示已登录"; fi
@@ -1378,19 +1384,20 @@ api -X POST "$A/api/proxy" -d 'on=1' >/dev/null
 echo y | "$W/shortcut/enana" logout >/dev/null 2>&1; sleep 3
 expect "终端 enana logout: 登录状态与离线缓存都被清除" test ! -e "$W/h/loggedin" -a ! -e "$W/h/account.conf"
 expect "终端 enana logout: 代理设置保留 (总开关仍为 1)" grep -q '^PROXY_ENABLED=1' "$W/h/settings.env"
-"$W/shortcut/enana" on >"$W/on.out" 2>&1; expect "没登录时终端 enana on 被拒绝并提示先登录" grep -q '还没有登录' "$W/on.out"
-expect "被拒绝的 enana on 没有改变代理状态" grep -q '^PROXY_ENABLED=1' "$W/h/settings.env"
+api -X POST "$A/api/proxy" -d 'on=0' >/dev/null
+"$W/shortcut/enana" on >"$W/on.out" 2>&1; expect "没登录时终端 enana on 照常开启代理 (不需要账号)" grep -q '^PROXY_ENABLED=1' "$W/h/settings.env"
+expect "…也不再提示先登录" sh -c "! grep -q '还没有登录' '$W/on.out'"
 curl -s -X POST "http://127.0.0.1:$A_PORT/_test/mode?m=down" >/dev/null
 login user1@example.test 'New-Passw0rd2' | chk "清除缓存后又连不上 enana.cc: 不能登录 (E_ACCOUNT_UNREACHABLE)" 'assert d["code"]=="E_ACCOUNT_UNREACHABLE"'
 curl -s -X POST "http://127.0.0.1:$A_PORT/_test/mode?m=ok" >/dev/null
 TOKEN=$(login user1@example.test 'New-Passw0rd2' | jp 'print(d["token"])'); [ -n "$TOKEN" ] && tpass "在线后可再次登录" || tfail "在线后可再次登录"
 "$W/shortcut/enana" on >"$W/on.out" 2>&1; expect "登录之后终端 enana on 可以开启代理" grep -q '^PROXY_ENABLED=1' "$W/h/settings.env"
 api -X POST "$A/api/logout?switch=1" | chk "切换账号 (switch=1) 退出 → ok" 'assert d["ok"]'
-expect "切换账号: 代理总开关被关闭 (换账号不继承代理)" grep -q '^PROXY_ENABLED=0' "$W/h/settings.env"
+expect "切换账号: 代理总开关也保留 (代理用的是这台电脑上你自己的服务器, 不属于账号)" grep -q '^PROXY_ENABLED=1' "$W/h/settings.env"
 R=$(login user1@example.test 'New-Passw0rd2'); TOKEN=$(echo "$R" | jp 'print(d["token"])'); api -X POST "$A/api/proxy" -d 'on=1' >/dev/null
 api -X POST "$A/api/logout" | chk "普通退出 → ok" 'assert d["ok"]'
 R=$(login user2@example.test 'Another-Pass1'); TOKEN=$(echo "$R" | jp 'print(d["token"])')
-expect "登录另一个账号: 代理被关闭 (真正换了账号)" grep -q '^PROXY_ENABLED=0' "$W/h/settings.env"
+expect "登录另一个账号: 代理开关不变" grep -q '^PROXY_ENABLED=1' "$W/h/settings.env"
 R=$(login user1@example.test 'New-Passw0rd2'); TOKEN=$(echo "$R" | jp 'print(d["token"])')
 api -X POST "$A/api/proxy" -d 'on=0' >/dev/null
 
@@ -1485,7 +1492,8 @@ if command -v node >/dev/null; then
   if node "$HERE/app-refresh-ui.test.js" > "$W/app-refresh-ui.out" 2>&1; then tpass "Quiet app discovery and visibility/reload cadence"; else tfail "App refresh lifecycle regression"; cat "$W/app-refresh-ui.out"; fi
   if node "$HERE/exits-ui.test.js" > "$W/exits-ui.out" 2>&1; then tpass "Exit assignment UI: overview model, default-switch and remove pre-flight, pickers"; else tfail "Exit assignment UI regression"; cat "$W/exits-ui.out"; fi
   if node "$HERE/billing-qr.test.js" > "$W/billing-qr.out" 2>&1; then tpass "Payment invoice QR code encodes the TRON address (version 3, 29 modules)"; else tfail "Payment QR code regression"; cat "$W/billing-qr.out"; fi
-  if node "$HERE/auto-lock.test.js" > "$W/auto-lock.out" 2>&1; then tpass "Idle lock: default 3 days, clamped between 1 minute and 30 days"; else tfail "Idle lock regression"; cat "$W/auto-lock.out"; fi
+  if node "$HERE/auto-lock.test.js" > "$W/auto-lock.out" 2>&1; then tpass "No idle auto-lock any more (no timer, no listeners, no setting, no texts)"; else tfail "Idle lock removal regression"; cat "$W/auto-lock.out"; fi
+  if node "$HERE/guest-mode-ui.test.js" > "$W/guest-mode-ui.out" 2>&1; then tpass "Dashboard without an account: local token, sign-in dialog, E_LOGIN_REQUIRED, guest confirmation, logout keeps it open"; else tfail "No-account dashboard regression"; cat "$W/guest-mode-ui.out"; fi
   if node "$HERE/sync-first-login.test.js" > "$W/sync-first-login.out" 2>&1; then tpass "First-login sync question: asked once, cancel sends nothing, confirm = enable + merge pull"; else tfail "First-login sync question regression"; cat "$W/sync-first-login.out"; fi
   if node "$HERE/sync-snapshot-version.test.js" > "$W/sync-snapshot-version.out" 2>&1; then tpass "Cloud snapshot: clear keeps the version (no rollback), a stale base conflicts"; else tfail "Cloud snapshot version regression"; cat "$W/sync-snapshot-version.out"; fi
   if node "$HERE/prefs-cloud-version.test.js" > "$W/prefs-cloud-version.out" 2>&1; then tpass "Preferences in the cloud: newer change wins, a stale write conflicts"; else tfail "Preferences cloud version regression"; cat "$W/prefs-cloud-version.out"; fi

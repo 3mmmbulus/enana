@@ -22,6 +22,9 @@ LANG_UI=zh; i18n_init
 VERSION=test; PORT=17890; UI_URL=http://127.0.0.1:17891/
 console_gather() {{ CS_svc=0;CS_pid=;CS_up=;CS_ver=test;CS_sp=0;CS_srv=0;CS_new=0;CS_acc=;CS_upd=;CS_mode=Direct; }}
 os_open() {{ printf opened >> "$H/action"; }}
+auth_logged_in() {{ return 1; }}
+proxy_set_enabled() {{ printf 'proxy=%s' "$1" > "$H/proxy"; }}
+oplog() {{ :; }}; kv() {{ :; }}
 console_main
 ''')
     master, slave = pty.openpty()
@@ -36,6 +39,12 @@ console_main
                 raise AssertionError(f'terminal did not show {token!r}: {captured!r}')
             if select.select([master], [], [], 0.1)[0]:
                 captured.extend(os.read(master, 65536))
+
+    def drain(quiet=0.3, timeout=3):
+        """Read whatever the console has already written, until it stays quiet for a moment."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and select.select([master], [], [], quiet)[0]:
+            captured.extend(os.read(master, 65536))
 
     try:
         until('输入选项后按 Enter'.encode())
@@ -56,6 +65,18 @@ console_main
         os.write(master, b'12\n')
         time.sleep(0.2)
         assert (root / 'action').read_text() == 'opened', 'multi-character input triggered a partial option'
+        # [3] turns the proxy on without an enana account (2.3.27: your own servers need no account; no "sign in first" stop)
+        drain()
+        prompt = '输入选项后按 Enter'.encode()
+        prompts = captured.count(prompt)
+        os.write(master, b'3\n')
+        deadline = time.monotonic() + 5
+        while (not (root / 'proxy').exists() or captured.count(prompt) <= prompts) and time.monotonic() < deadline:
+            if select.select([master], [], [], 0.1)[0]:
+                captured.extend(os.read(master, 65536))
+        assert (root / 'proxy').exists() and (root / 'proxy').read_text() == 'proxy=1', 'option 3 did not turn the proxy on while signed out'
+        assert captured.count(prompt) > prompts, 'the console did not come back to the menu after option 3'
+        assert '还没有登录'.encode() not in captured, 'option 3 still asks to sign in first'
         os.write(master, b'q')
         time.sleep(0.2)
         assert process.poll() is None, 'quit executed without Enter'
@@ -68,7 +89,7 @@ console_main
                 except OSError:
                     break
         assert process.wait(timeout=3) == 0
-        print('PASS: 13 separate actions, red uninstall, no command footer, Enter required, whole-line dispatch and clean quit')
+        print('PASS: 13 separate actions, red uninstall, no command footer, Enter required, whole-line dispatch, proxy on without an account and clean quit')
     finally:
         if process.poll() is None:
             process.kill()

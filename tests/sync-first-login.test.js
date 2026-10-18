@@ -42,6 +42,7 @@ function fixture(o) {
       throw Error('Unexpected request: ' + method + ' ' + url);
     }
   };
+  if (o.guest) TP.auth = { guest: () => true };        // 2.3.27: 这台电脑没有登录 enana 账号 (ui/auth.js 的 TP.auth.guest())
   const context = vm.createContext({ window, document: { contains: () => false }, console, setTimeout: () => 0, clearTimeout() {} });
   window.TP = TP; context.window = window;
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../ui/v-sync.js'), 'utf8'), context);
@@ -109,5 +110,15 @@ const pulls = f => f.calls.filter(c => c.url === '/api/sync/pull').map(c => ({ f
   await f.SY.offerAfterLogin();
   assert(f.dialogs[0].detail.join('\n').includes('sync.first.localNote{"n":"1"}'), 'local servers are disclosed');
 
-  console.log('PASS: first-login sync question only when asked; cancel makes no request; confirm runs enable + merge pull; failure reverts; summary from preview');
+  // 8. 没有登录 enana 账号 (2.3.27): 云端同步需要账号 —— 不读状态、不问、不发任何同步请求; 添加服务器时「保存到云端」默认不勾选
+  f = fixture({ ask: true, answer: true, guest: true });
+  await f.SY.offerAfterLogin();
+  assert.strictEqual(f.calls.length, 0, 'no sync request at all without an account');
+  assert.strictEqual(f.dialogs.length, 0);
+  assert.deepStrictEqual(plain(await f.SY.prime()), { checked: false, off: true }, '"save to the cloud" is not ticked for a guest');
+  assert.strictEqual(f.calls.length, 0);
+  f = fixture({ ask: false });
+  assert.deepStrictEqual(plain(await f.SY.prime()), { checked: true, off: false }, 'signed in and never turned off: ticked as before');
+
+  console.log('PASS: first-login sync question only when asked; cancel makes no request; confirm runs enable + merge pull; failure reverts; summary from preview; nothing at all without an account');
 })().catch(error => { console.error(error); process.exitCode = 1; });

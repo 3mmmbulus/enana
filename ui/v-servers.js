@@ -97,9 +97,10 @@
     /* 出口分配: 每个固定出口上有哪些应用 / 网站 / 服务, 跟随默认的, 指定的出口已不存在的 (exits.js) */
     panels.exits.appendChild(TP.exits.card());
 
-    /* enana 官方线路 (会员): 以后订阅用户登录后自动出现; 现在是「即将推出」占位卡片 (读 GET /api/plan 的 features.official_proxy) */
+    /* enana 官方线路 (会员): 订阅用户登录后自动出现; 上线之前是「即将推出」占位卡片 (读 GET /api/plan 的 features.official_proxy)。没有登录 enana 账号时卡片里只有说明 + 登录 / 注册 */
     panels.official.appendChild(officialCard());
-    panels.official.appendChild(h('section', { class: 'card srv-off' }, h('div', { class: 'card-h' }, ui.icon('pro', 20, 'ci'), h('h3', null, L('billing.dedicatedTitle')), ui.badge(L('billing.none'), 'neutral')), h('p', { class: 'muted' }, L('billing.dedicatedNote'))));
+    el.dedicated = h('section', { class: 'card srv-off' }, h('div', { class: 'card-h' }, ui.icon('pro', 20, 'ci'), h('h3', null, L('billing.dedicatedTitle')), ui.badge(L('billing.none'), 'neutral')), h('p', { class: 'muted' }, L('billing.dedicatedNote')));
+    panels.official.appendChild(el.dedicated);
 
     /* 订阅 */
     el.subs = h('div', { class: 'rows' });
@@ -118,6 +119,7 @@
     TP.on('clash', function () { if (active()) V.render(); });
     TP.on('lang', function () { el.pinSel._sig = null; el.autoSel._sig = null; V.render(); });
     TP.on('plan', function () { paintOfficial(); });
+    TP.on('account', function () { paintOfficial(); });
     TP.on('auth', function (ok) { if (ok && active()) V.render(); });
     setInterval(function () { if (active() && !document.hidden) paintTest(); }, 1000);
     V.render();
@@ -302,8 +304,8 @@
       if (!ok) return;
     }
     pendingDel[s.tag] = true; renderTable();
-    try {
-      await TP.jobs.runInDock(t('servers.del.job', { tag: s.tag }), function () { return TP.helper('POST', '/api/servers/delete', { q: q }); });
+    try {      // 上面已经确认过 (确认框或删除前的影响检查): 没有登录账号时不再另外确认 (confirmed); 登录了照样要再输入一次账号密码
+      await TP.jobs.runInDock(t('servers.del.job', { tag: s.tag }), function () { return TP.helper('POST', '/api/servers/delete', { q: q, confirmed: true }); });
     } finally { delete pendingDel[s.tag]; await TP.loadState(); renderTable(); }
   }
 
@@ -446,7 +448,7 @@
     }
     var ok = await ui.confirmDialog({ title: t('servers.subs.delTitle'), message: t('servers.subs.delMsg', { name: x.name }), detail: TP.tunDetail(detail), confirmText: t('common.delete'), danger: true });
     if (!ok) return;
-    var done = await TP.jobs.runInDock(t('servers.subs.delJob', { name: x.name }), function () { return TP.helper('POST', '/api/sub/delete', { q: q }); });
+    var done = await TP.jobs.runInDock(t('servers.subs.delJob', { name: x.name }), function () { return TP.helper('POST', '/api/sub/delete', { q: q, confirmed: true }); });     // 已经确认过 (见上面的确认框)
     if (done && done.ok) pendSet(x.name, null);
     await TP.loadState();
     V.render();
@@ -635,16 +637,22 @@
     setTimeout(function () { try { inp.select(); } catch (e) { /* 忽略 */ } }, 80);
   }
 
-  /* ================= enana 官方线路 (会员) 占位卡片 ================= */
+  /* ================= enana 官方线路 (会员) 占位卡片 =================
+   * 官方线路属于 enana 账号的会员: 没有登录时卡片里只有说明 + 登录 / 注册 (TP.auth.guestBlock), 徽标 / 「了解」/「专属线路」都不显示 */
   function officialCard() {
     el.offBadge = h('span', { class: 'srv-off-b' }); el.offDesc = h('p', { class: 'muted' });
     el.offBtn = ui.btn(L('servers.off.more'), { sm: true, kind: 'ghost', icon: 'help-i' });
     ui.act(el.offBtn, function () { TP.plan.explain('official_proxy'); });
-    el.off = h('section', { class: 'card srv-off is-soon' }, h('div', { class: 'card-h' }, ui.icon('pro', 20, 'ci pro-ic'), h('h3', null, L('servers.off.title'), ui.help('servers.official')), el.offBadge, el.offBtn), el.offDesc);
+    el.offGuest = TP.auth && TP.auth.guestBlock ? TP.auth.guestBlock('official') : h('div', { hidden: true });
+    el.off = h('section', { class: 'card srv-off is-soon' }, h('div', { class: 'card-h' }, ui.icon('pro', 20, 'ci pro-ic'), h('h3', null, L('servers.off.title'), ui.help('servers.official')), el.offBadge, el.offBtn), el.offDesc, el.offGuest);
     return el.off;
   }
   function paintOfficial() {
     if (!el.off) return;
+    var guest = !!(TP.auth && TP.auth.guest && TP.auth.guest());
+    el.offGuest.hidden = !guest; el.offBadge.hidden = guest; el.offBtn.hidden = guest; el.offDesc.hidden = guest;
+    if (el.dedicated) el.dedicated.hidden = guest;
+    if (guest) { el.off.hidden = false; el.off.classList.remove('is-soon'); return; }
     var d = TP.plan.get(), f = TP.plan.feature('official_proxy');
     el.off.hidden = !!(d && !f.known);                                     // 云端没有这一项权益: 不显示占位卡片
     var on = !!(f.enabled && d && d.official && d.official.available);

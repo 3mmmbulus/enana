@@ -2,18 +2,22 @@
 /* enana 开发用模拟服务器 (无依赖, 仅监听 127.0.0.1) —— 仪表盘 (ui/) 开发时的假后端。
  * 严格对照 docs/API.md: 本地辅助服务 API (/api/*) + 代理核心的 Clash API (同源) + 静态仪表盘 (/ui/)。
  *
- *   node tools/mock-server.js [--port 18090] [--split] [--first-run] [--unbound] [--stale-sub] [--fast [N]] [--selftest] [--help]
+ *   node tools/mock-server.js [--port 18090] [--split] [--first-run] [--unbound] [--demo] [--stale-sub] [--fast [N]] [--selftest] [--help]
  *
- * 打开  http://127.0.0.1:18090/ui/
+ * 打开  http://127.0.0.1:18090/ui/   (不需要任何密码: 和真机一样, 仪表盘先 POST /api/auth/local 拿到本机令牌; enana 账号是可选的)
  *   --split       辅助服务 API 放在另一个端口 (端口+1, 默认 18091), 带 CORS (只放行仪表盘自己的来源), 用来验证跨域与自定义请求头
  *   --first-run   「全新安装」: 没有服务器 / 订阅 (首次向导会出现); 与 --unbound 搭配就是完全没用过的电脑
  *   --unbound     这台电脑上还没有人登录过 (account_hint 为空, enana.cc 连不上时没有离线缓存可用)
+ *   --demo        启动时就登录着 demo@example.com (默认是没有登录 enana 账号的「本机模式」; 运行中用 /mock/ctl?acct=demo|guest 切换)
  *   --stale-sub   让已保存的订阅过期, 以验证「打开仪表盘时自动刷新订阅」
  *   --fast [N]    模拟时间加速 N 倍 (默认 20): 任务进度 / 测速 / 核心重启中断 / 登录耗时都按它缩短 (自测用)
  *   --selftest    在 18090-18099 里找一个空闲端口启动, 跑内置检查 (HTTP), 打印 ok / FAIL, 失败则退出码非 0
  *
- * 账号模型 (docs/API.md): 没有「绑定」, 任何有效的 enana.cc 账号都能在这台电脑上登录; 注册也在这里 (POST /api/register);
- * 在线时向 enana.cc (模拟) 校验, 连不上时只有「当前仍处于登录状态」的账号 (令牌丢了 / 换了浏览器) 能用本机缓存离线登录。代理总开关初始为关, 退出账号会关闭它。
+ * 账号模型 (docs/API.md, 2.3.27 起): 仪表盘不需要密码就能打开; 本机令牌 (= Clash API 的 secret) 由公开的 POST /api/auth/local 发给仪表盘 ({ok, token, logged_in}),
+ * GET /api/auth/status 带 logged_in / local:true, required 永远是 false。enana.cc 账号 (可选) 只给 同步 / 会员 / 官方线路 / 我的设备 / 改密码 / 上传诊断 用:
+ * 没有登录时这些接口回 HTTP 200 {ok:false, code:"E_LOGIN_REQUIRED"} (ACCOUNT_ROUTES); GET /api/sync 和 GET /api/plan 回一个中性的状态 + logged_in:false; GET /api/state 的 account.email 是 ""。
+ * 没有「绑定」, 任何有效的 enana.cc 账号都能在这台电脑上登录; 注册也在这里 (POST /api/register); 在线时向 enana.cc (模拟) 校验, 连不上时只有「当前仍处于登录状态」的账号能用本机缓存离线登录。
+ * 代理总开关初始为关; 登录 / 退出账号 (POST /api/logout, 也包括 switch=1) / 被其它设备下线都不改变它, 也不换令牌 (退出 = 官方节点消失, 同步和会员停止)。启动时默认没有登录 (--demo 除外)。
  * 设备限制: 同一账号、同一平台 (macOS / Windows) 最多同时 2 台设备在线 (这台电脑登录后算 1 台); 超出时登录得到 E_DEVICE_LIMIT + 在线设备列表, 带 kick=<uid> 重新提交即可下线其中一台并完成登录。
  * 测试账号 (只存在于这个模拟服务器): demo@example.com / demo1234 (登录框里提示的「上一次登录的账号」, 带 3 台设备), other@example.com / other1234 (1 台设备)。
  * 令牌 = Clash API 的 secret (服务器随机生成); 辅助服务请求头 X-Enana: 1 (旧名 X-TProxy), X-Enana-Token, X-Enana-Lang, X-Enana-Sudo (步骤验证令牌, 见下)。
@@ -25,8 +29,9 @@
  *   conns=N                       模拟的连接数 (0-2000)                      os=windows|darwin   平台 (Windows: 路径带反斜杠 / .exe)
  *   net=normal|limited|blocked|unknown|unreachable|none|noservers            本机 IP 检测的场景 (GET /api/net/info?mock=<场景> 可单次覆盖)
  *   central=up|down               enana.cc 是否可达                          lastacct=none|demo|other   谁算「上一次登录的账号」(登录框提示 + 本机离线校验缓存; 离线登录还要求该账号当前处于登录状态)
+ *   acct=guest|demo               没有登录 enana 账号 (默认) / 登录着 demo@example.com —— 不经过登录框, 令牌不变 (像在终端或别的浏览器里登录 / 退出; 仪表盘最多 10 秒后从 /api/state 看到)
  *   proxy=on|off                  代理总开关 (关: 所有连接直连)               lock=reset      清除登录 / 注册限流        locksec=N   锁定时长 (秒, 默认 300)
- *   expire=1                      令牌全部失效 (下一个请求 401)               update=on|off|fail   更新场景: 有新版本(默认) / 已是最新 / 检查失败
+ *   expire=1                      令牌全部失效 (下一个请求 401; 像重新安装后 secret 变了: 仪表盘会悄悄 POST /api/auth/local 换新的)       update=on|off|fail   更新场景: 有新版本(默认) / 已是最新 / 检查失败
  *   failnext=/api/路径前缀         该路径的下一个请求失败一次 (E_NETWORK); failnext=1 = 下一个后台任务失败并回滚 (旧用法)
  *   speedlast=seed|none           预置一条昨天的测速结果 / 清空                 env=bad|ok      环境异常 (规则缺失 / 无系统代理) / 恢复
  *   stale=1                       让第一个订阅过期                            tick=N          立刻生成 N 条「实时」访问 / 代理日志
@@ -36,7 +41,8 @@
  *   stats=normal|short|empty      流量统计 (GET /api/stats?range=today|3d|7d|30d|90d): normal (默认) = 最早的数据在 41 天前 (90d 只有一部分有数据); short = 2 天前开始; empty = 没有任何数据 (since:"", 全是 0, nodes:[])
  *   statsfail=1                   下一个 /api/stats 请求失败一次 (E_NETWORK; 与 failnext=/api/stats 相同)
  *   devices=free|full|reset       设备限制: free (默认) = demo 账号只有一台 macOS 设备在线, 正常登录; full = 两台 macOS 设备都在线, 这台电脑下一次登录得到 E_DEVICE_LIMIT; reset = 恢复种子数据
- *   kickme=1|password             模拟「被账号下的另一台设备下线」(password = 因为另一台设备改了密码): 令牌全部失效 (下一个请求 401), 代理关闭, auth/status.notice 提示直到下一次登录成功; auth/status.notice_code = kicked | password_changed
+ *   kickme=1|password             模拟「被账号下的另一台设备下线」(password = 因为另一台设备改了密码): 这台电脑退出账号 (令牌不变, 代理开关不变, 官方节点消失),
+ *                                 auth/status.notice 提示直到下一次登录成功; auth/status.notice_code = kicked | password_changed
  *   notice=文字                    直接设置 auth/status.notice (如「离线时间过长, 已自动退出登录」); notice= 清除
  *   vps=reset                     清空「我的服务器」记录 (已添加的节点不动)
  *   sync=reset                    云端同步恢复初始状态: 未开启, 云端有数据 (版本 7), 本机版本 6 且有未上传的改动 (--first-run 时本机版本 0)
@@ -44,15 +50,16 @@
  *   syncoffline=0|1               同步时 enana.cc 不可达 (GET /api/sync 的 online=false; 推送 / 拉取 / 清除 -> E_ACCOUNT_UNREACHABLE)
  *   billing=closed|open|unverified|nomail|pending|orders|limit|auth|server   会员付款页 (GET /api/billing 等): closed (默认, 和线上一致: 服务器关闭收款) / open / unverified (邮箱未验证) / nomail (未验证且服务器发不出验证邮件) / pending (有一笔还在 1 小时付款时间内的订单) / orders (23 个历史订单, 可以翻页) / limit (24 小时内已有 5 个订单, 下单 -> E_ORDER_LIMIT) / auth (云端会话失效 E_AUTH) / server (云端 5xx E_SERVER_ERROR)
  *   balance=N                     钱包余额 (USDT, 最多 6 位小数; 写在 billing= 之后): 测余额支付 / 自动续费的「余额不足」(< 4) 和「立即扣款」
- *   plan=soon|free|pro|expired|verify 套餐 (GET /api/plan; verify = Pro 但邮箱未验证, 官方线路 reason "verify"): soon (默认) = 免费版, 官方线路「即将推出」; free = 免费版, Pro 功能已上线但需要升级; pro = 专业版 (30 天后到期, 设备上限 5, 服务器列表多出 2 个 official:true 的官方节点); expired = 订阅已过期 (reason "expired", 官方节点消失)
+ *   plan=soon|free|pro|expired|verify 登录着的账号的套餐 (GET /api/plan; verify = Pro 但邮箱未验证, 官方线路 reason "verify"): soon (默认) = 免费版, 官方线路「即将推出」; free = 免费版, Pro 功能已上线但需要升级; pro = 专业版 (30 天后到期, 设备上限 5, 服务器列表多出 2 个 official:true 的官方节点); expired = 订阅已过期 (reason "expired", 官方节点消失)。没有登录时 GET /api/plan 一律是中性的免费版 + logged_in:false, 也没有官方节点
  *   prefs=reset|bump              偏好设置 (GET / POST /api/prefs): reset = 清空 (version 0); bump = 模拟「另一台设备同步来了改动」: version +1, 并写入 "ui.fromOtherDevice": true (state.prefs_version 随之变化)
  *   sudottl=N                     步骤验证令牌 (X-Enana-Sudo) 的有效期, 真实秒数 (默认 300; 设成 1-2 来测「过期后重新弹出密码框」)       sudo=clear   让所有步骤验证令牌立刻失效
  *   icons=progressive|all|none    应用图标: progressive (默认) = 启动 / 重置时的应用 0-6 秒内陆续出现, 新扫描到的应用 2-6 秒后出现 (按 --fast 缩短); all = 立刻都有; none = 都没有 (图片也 404)
  *   vpsport=open|closed           203.0.113.70 的部署: closed (默认) = 「验证连通」失败 E_VPS_VERIFY, open = 成功 (测「放行端口后重新验证」)
  * 出口分配 (docs/API.md「出口分配」): GET /api/exits (每个固定出口上的应用 / 网站 / 服务 · 跟随默认 · 自动选 · 孤儿 · 默认出口) · GET /api/exits/impact?op=remove|default&tag= · POST /api/exits/move?from=&to=[&kind=] · POST /api/exits/freeze;
  *   POST /api/servers/delete | role (新角色不是 pin) 和 POST /api/sub/delete 在有应用 / 网站 / 服务用着固定出口时返回 E_EXIT_IN_USE + impact, 除非带 reassign= (改派; freeze=1) / accept_orphans=1; 固定出口上限 32 (和 lib/apps.sh 的 OVR_PIN_MAX 一致)。
- * 步骤验证 (sudo): 8 个敏感接口 (POST /api/servers/delete | sub/delete | logs/clear | devices/kick | sync/clear, GET /api/servers/secret | sub/url | export) 没带有效的 X-Enana-Sudo 头 -> HTTP 403
- *   {ok:false, code:"E_SUDO_REQUIRED", error} (检查顺序: 401 令牌 -> 403 sudo -> 接口自己的校验; 白名单是 SUDO_ROUTES 这张表)。POST /api/auth/verify (表单 password = 当前账号的密码, 和登录 / 注册共用失败计数) -> {sudo, ttl:300};
+ * 步骤验证 (sudo): 10 个敏感接口 (POST /api/servers/delete | sub/delete | logs/clear | devices/kick | sync/clear | billing/purchase | billing/auto-renew, GET /api/servers/secret | sub/url | export)
+ *   只在登录了 enana 账号时检查 (没有账号可以验证: 没有登录时不需要 X-Enana-Sudo, 仪表盘改为确认一次); 登录时没带有效的 X-Enana-Sudo 头 -> HTTP 403
+ *   {ok:false, code:"E_SUDO_REQUIRED", error} (检查顺序: 401 令牌 -> E_LOGIN_REQUIRED (只限账号接口) -> 403 sudo -> 接口自己的校验; 白名单是 SUDO_ROUTES 这张表)。POST /api/auth/verify (表单 password = 当前账号的密码, 和登录 / 注册共用失败计数) -> {sudo, ttl:300};
  *   退出 / 登录 / 注册 / 改密码 / expire=1 / kickme / sudo=clear 都会让所有 sudo 令牌失效。GET /api/servers/secret?tag= 返回按节点类型生成的确定性占位凭据 (官方节点 -> E_INVALID); GET /api/sub/url?name= 返回保存订阅时的链接;
  *   GET /api/export 返回文本 (JSON) 备份 (含占位凭据, 不含官方节点; 带 Content-Disposition 文件名 enana-backup-YYYYMMDD.json)。POST /api/password (表单 old / new, 不需要 sudo) 修改这个模拟服务器里的账号密码 (reset=1 恢复种子密码):
  *   校验顺序同 lib/auth.sh (旧密码为空 -> E_INVALID; 新密码 < 8 / > 71 位或与旧密码相同 -> E_WEAK_PASSWORD; 被锁定 -> E_LOCKED; enana.cc 连不上 -> E_ACCOUNT_UNREACHABLE; 旧密码不对 -> E_BAD_CREDENTIALS (+wait)); 成功后本机令牌保持有效, 账号下的其它设备全部下线, sudo 令牌清空。
@@ -113,17 +120,19 @@ const HELP = [
   '  --split        serve the helper API (/api/*) on a second port (default PORT+1 = 18091) with CORS, like production',
   '  --first-run    start as a fresh install: no servers, no subscriptions (add --unbound for a pristine computer)',
   '  --unbound      start with nobody having logged in on this computer before (empty account_hint, no offline login)',
+  '  --demo         start signed in as demo@example.com (default: no enana account, the dashboard still opens without a password)',
   '  --stale-sub    make the saved subscription overdue for auto refresh',
   '  --fast [N]     run simulated time N times faster (default 20): jobs, speed test, outages, login latency',
   '  --selftest     boot on a free port in 18090-18099, run the built-in checks, print ok/FAIL, exit non-zero on failure',
   '  --help         show this text', '',
-  'Open http://127.0.0.1:18090/ui/   Test accounts: demo@example.com / demo1234, other@example.com / other1234 (mock only)',
-  'Runtime switches: GET or POST /mock/ctl?helper=down&clash=down&conns=N&os=windows&net=limited&central=down&lastacct=other&proxy=on',
+  'Open http://127.0.0.1:18090/ui/ (no password: POST /api/auth/local hands out the local token)   Test accounts: demo@example.com / demo1234, other@example.com / other1234 (mock only)',
+  'Runtime switches: GET or POST /mock/ctl?acct=guest|demo&helper=down&clash=down&conns=N&os=windows&net=limited&central=down&lastacct=other&proxy=on',
   '  &lock=reset&locksec=N&expire=1&update=on|off|fail&failnext=/api/x&speedlast=seed&env=bad&tick=N&newapp=Name&reset=1',
   '  &vps=reset&sync=reset&syncremote=none|exists|newer&synckey=ok|bad&syncoffline=0|1&devices=free|full|reset&kickme=1&notice=text',
   '  &stats=normal|short|empty (traffic statistics history: 41 days / 2 days / none)&statsfail=1 (next /api/stats fails once)',
   '  &plan=soon|free|pro|expired|verify&billing=closed|open|unverified|nomail|pending|orders|limit|auth|server&balance=N (wallet USDT)&prefs=reset|bump&sudottl=N (seconds)&sudo=clear&icons=progressive|all|none&vpsport=open|closed&kickme=1|password',
-  'Sudo (step-up password): POST /api/auth/verify -> X-Enana-Sudo for servers/delete, sub/delete, servers/secret, sub/url, logs/clear, devices/kick, sync/clear, export (403 E_SUDO_REQUIRED without it)',
+  'Sudo (step-up password, only while signed in): POST /api/auth/verify -> X-Enana-Sudo for servers/delete, sub/delete, servers/secret, sub/url, logs/clear, devices/kick, sync/clear, export, billing/purchase, billing/auto-renew (403 E_SUDO_REQUIRED without it)',
+  'Without an enana account: devices, password, auth/verify, sync/*, billing/*, email/*, diag/* answer {ok:false, code:"E_LOGIN_REQUIRED"} (HTTP 200)',
   'Magic VPS hosts (probe/provision): 203.0.113.10 20 30 31 40 50 51 60-65 70 (70 fails with E_VPS_VERIFY until vpsport=open; see the file header)',
   'Magic app inspect inputs: /Applications/Cursor.app /Applications/Slack.app (exists) /usr/local/bin/mytool (unsigned bin) /opt/homebrew/bin/node /etc/hosts /private/var/root/secret.app; names: cursor (1 hit) code (5) zzz (none)',
   '(full list and the subscription URL conventions are in the header of tools/mock-server.js)'].join('\n');
@@ -165,6 +174,7 @@ const maskEmail = (e) => { const i = e.indexOf('@'); if (i < 0) return '***'; co
 /* ===================== 2. 文案 (中文, English) —— 错误 / 任务步骤 / 更新说明 / 测速提示 ===================== */
 const S = {
   'err.E_AUTH': ['未登录或登录已失效, 请重新登录', 'Not signed in, or the session has expired. Please sign in again.'],
+  'err.E_LOGIN_REQUIRED': ['需要登录 enana 账号才能使用这个功能', 'This feature needs an enana account. Please sign in.'],
   'err.E_BAD_CREDENTIALS': ['账号或密码错误', 'Wrong account or password.'],
   'err.E_LOCKED': ['尝试次数过多, 登录和注册已暂时锁定, 请 {wait} 秒后再试', 'Too many attempts. Sign-in and sign-up are locked temporarily; try again in {wait} s.'],
   'err.E_DEVICE_LIMIT': ['这个账号在本平台已有 {limit} 台设备在线, 请先下线其中一台再登录', 'This account already has {limit} devices online on this platform. Sign one of them out first, then log in.'],
@@ -186,7 +196,7 @@ const S = {
   'err.E_VPS_DEPS': ['服务器缺少必要的软件, 而你选择了不安装依赖', 'The server is missing required packages and you chose not to install dependencies.'],
   'err.E_SYNC_KEY': ['无法解密云端数据: 账号密码在网站上改过, 请输入旧密码后重试', 'The cloud data cannot be decrypted: the account password was changed on the website. Enter the old password and retry.'],
   'err.E_SYNC_CONFLICT': ['云端的数据比本机新, 请选择「用云端覆盖本机」或「用本机覆盖云端」', 'The cloud data is newer than this computer. Choose to overwrite this computer with the cloud, or the cloud with this computer.'],
-  'dev.this': ['这台电脑', 'This computer'], 'notice.kicked': ['这台设备已被你账号下的另一台设备下线, 代理已关闭', 'This device was signed out from another device on your account, and the proxy was turned off'],
+  'dev.this': ['这台电脑', 'This computer'], 'notice.kicked': ['这台设备已被你账号下的另一台设备下线; 代理照常使用你自己的服务器, 官方线路、同步和会员已停止', 'This device was signed out from another device on your account; the proxy keeps using your own servers, while official routes, sync and membership have stopped'],
   'e.devUid': ['缺少设备 uid', 'The device uid is missing.'], 'e.devSelf': ['不能下线当前这台设备 (请用「退出登录」)', 'You cannot sign out this device itself (use log out instead).'],
   'e.noDevice': ['找不到这台设备', 'Device not found.'], 'e.devKick': ['这台设备不在可下线的在线设备名单里', 'That device is not one of the online devices that can be signed out.'],
   'e.devOffline': ['连不上 enana.cc, 暂时无法读取或管理设备, 请稍后重试', 'Cannot reach enana.cc, so devices cannot be listed or managed right now. Please try again later.'],
@@ -252,7 +262,8 @@ const S = {
   'e.billInvalid': ['付款参数无效', 'Invalid payment details'], 'e.billPage': ['参数无效', 'Invalid parameter'], 'e.billConflict': ['此操作编号已用于其他订单', 'This request key was used for another order'], 'e.billExpired': ['订单已过期', 'This order has expired'],
   'e.billLimit': ['24 小时内最多创建 {n} 个订单，请稍后再试', 'At most {n} orders can be created in 24 hours; try again later'], 'e.billRate': ['请求过于频繁，请稍后再试', 'Too many requests; try again shortly'], 'e.billCapacity': ['目前无法分配付款金额，请稍后重试', 'No payment amount is available right now; retry later'],
   'plan.free': ['免费版', 'Free'], 'plan.pro': ['专业版', 'Pro'],
-  'notice.pwChanged': ['你的登录密码已在另一台设备上修改, 请用新密码重新登录, 代理已关闭', 'Your password was changed on another device. Sign in again with the new password; the proxy was turned off.'],
+  'notice.pwChanged': ['你的登录密码已在另一台设备上修改, 请用新密码重新登录; 代理照常使用你自己的服务器', 'Your password was changed on another device. Sign in again with the new password; the proxy keeps using your own servers.'],
+  'js.diagPack': ['打包完整诊断', 'Pack the full diagnostics'], 'js.diagUpload': ['上传', 'Upload'], 'jd.diagSent': ['诊断已上传, 报告编号 {code}', 'Diagnostics uploaded, report {code}'],
   /* 新增: 网站域名 (也用于 DNS 自定义解析) */
   'e.noEntry': ['找不到这个网站条目', 'That site entry was not found'], 'e.entryId': ['条目编号无效', 'Invalid entry ID'], 'e.entryRs': ['自定义规则集条目没有可编辑的域名', 'Custom rule set entries have no editable domains.'], 'e.badAction': ['操作无效', 'Invalid action'],
   'e.domEmpty': ['请输入域名', 'Enter a domain name.'], 'e.domSpace': ['域名不能包含空格', 'A domain cannot contain spaces.'],
@@ -905,8 +916,18 @@ function lockCheck() { const w = lockWait(); if (w > 0) throw E('E_LOCKED', null
 function noteAttempt(list) { const t = now(); M[list] = M[list].filter((x) => t - x < 300000); M[list].push(t); if (M[list].length >= 5) M.lockUntil = t + M.locksec * 1000; }
 const acctPwOk = (acc, pw) => (acc.hash ? pbk(pw, acc.salt) === acc.hash : acc.pw === pw);
 const cred = (c) => ({ email: String(c.form.user || '').trim().toLowerCase(), pw: String(c.form.password || '') });     // 密码只读请求体, 绝不看 URL
-route('GET', '/api/auth/status', (c) => ({ ok: true, required: true, account_hint: M.lastAcct ? maskEmail(M.lastAcct.email) : '', offline_ok: !!(M.account && M.lastAcct && M.lastAcct.email === M.account), notice: noticeText(c.lang), notice_code: M.notice ? (M.notice.code || '') : '',
+/* 这台电脑登录 / 退出 enana 账号 (登录 / 注册 / 退出 / 被其它设备下线 / ctl acct= 共用): 令牌 (= Clash secret) 和代理总开关都不变; 官方节点跟着账号出现 / 消失。
+ * 退出时有官方节点要从配置里拿掉: 核心在后台重启一次 (约 2.5 秒, 和真机的后台 apply 一样, 从不弹授权框) */
+function signIn(email) { M.account = email; M.fails = []; M.notice = null; sudoClear(); setThisOnline(email, true); applyPlan(); }
+function signOut(notice) {
+  const had = M.servers.some((s) => s.official);
+  M.account = null; sudoClear(); setThisOnline(null, false); if (notice !== undefined) M.notice = notice; applyPlan();
+  if (had) { const t = now(); M.clashWins.push([t + D(150), t + D(150 + 2500)]); }
+}
+route('GET', '/api/auth/status', (c) => ({ ok: true, required: false, local: true, logged_in: !!M.account, official_stale: false, account_hint: M.lastAcct ? maskEmail(M.lastAcct.email) : '', offline_ok: !!(M.account && M.lastAcct && M.lastAcct.email === M.account), notice: noticeText(c.lang), notice_code: M.notice ? (M.notice.code || '') : '',
   account_url: CENTRAL, register_url: CENTRAL + '/register', manage_url: CENTRAL + '/account', wait: lockWait() }), { pub: true });
+/* 本机令牌: 仪表盘不需要任何密码就能拿到 (公开接口; 请求头 X-Enana / 跨域来源照样检查, 见 helperEntry / corsHeaders)。登录与否只看 logged_in */
+route('POST', '/api/auth/local', () => ({ ok: true, token: M.secret, logged_in: !!M.account }), { pub: true });
 route('POST', '/api/login', async (c) => {
   const a = cred(c), kick = String(c.form.kick || ''); await sleep(rnd(600, 1200));      // 向 enana.cc 校验的往返
   if (!validEmail(a.email) || a.pw.length < 1 || a.pw.length > 128) throw E('E_INVALID', 'e.loginFormat');
@@ -919,7 +940,7 @@ route('POST', '/api/login', async (c) => {
     if (others.length >= devLimit()) {
       if (!kick) { oplog('dashboard', 'login.fail', kv({ code: 'E_DEVICE_LIMIT' }), 'error'); throw E('E_DEVICE_LIMIT', null, null, { platform: plat, limit: devLimit(), devices: others.map((d) => devView(d, c.lang)) }); }     // 不算密码错误, 不计入限流
       const target = others.filter((d) => d.uid === kick)[0]; if (!target) throw E('E_INVALID', 'e.devKick');
-      target.online = false; target.revoked = true;                         // 被下线的设备稍后 (<= 2 分钟) 自动退出登录并关闭代理
+      target.online = false; target.revoked = true;                         // 被下线的设备稍后 (<= 2 分钟) 自动退出账号 (它的代理照常使用自己的服务器)
     }
     M.lastAcct = cacheRec(a.email, a.pw);                                  // 在线成功: 刷新本机的离线校验值
   } else {                                                                 // enana.cc 连不上: 只有「当前仍处于登录状态」的账号能用本机缓存离线登录; 退出过的 / 其它账号必须在线校验
@@ -927,7 +948,7 @@ route('POST', '/api/login', async (c) => {
     if (pbk(a.pw, M.lastAcct.salt) !== M.lastAcct.hash) bad('E_BAD_CREDENTIALS', true);
     via = 'offline';
   }
-  M.account = a.email; M.fails = []; M.notice = null; sudoClear(); setThisOnline(a.email, true); oplog('dashboard', 'login', kv(kick && via === 'online' ? { via, kick } : { via }));
+  signIn(a.email); oplog('dashboard', 'login', kv(kick && via === 'online' ? { via, kick } : { via }));           // 换成另一个账号也不关代理 (2.3.27)
   return { ok: true, token: M.secret, account: a.email, via };
 }, { pub: true });
 route('POST', '/api/register', async (c) => {
@@ -938,14 +959,15 @@ route('POST', '/api/register', async (c) => {
   if (M.central !== 'up') throw E('E_ACCOUNT_UNREACHABLE');
   if (M.dir[a.email]) throw E('E_EMAIL_TAKEN');
   const salt = randHex(8); M.dir[a.email] = { id: 'acc_' + randHex(4), salt, hash: pbk(a.pw, salt) };       // 假的 enana.cc 只存加盐哈希
-  M.lastAcct = cacheRec(a.email, a.pw); M.account = a.email; M.fails = []; M.notice = null; sudoClear(); setThisOnline(a.email, true);
+  M.lastAcct = cacheRec(a.email, a.pw); signIn(a.email);
   oplog('dashboard', 'login', kv({ via: 'online', registered: 1 }));      // API.md 没有「注册」操作码: 注册后的自动登录记为 login
   return { ok: true, registered: true, token: M.secret, account: a.email, via: 'online' };
 }, { pub: true });
+/* 退出账号 (switch=1 也一样): 令牌不变 (仪表盘照常开着), 代理开关不变, 官方节点消失, 释放这台电脑的在线名额; 没有登录时什么都不做 */
 route('POST', '/api/logout', () => {
+  if (!M.account) return { ok: true };
   oplog('dashboard', 'logout', '');
-  M.proxyOn = false; M.account = null; M.secret = randHex(16); sudoClear(); setThisOnline(null, false);       // 代理关闭 + 令牌立刻失效 (所有浏览器) + 释放这台电脑的在线名额
-  const t = now(); M.clashWins.push([t + D(150), t + D(150 + 2500)]);      // 核心在后台重启一次, 换上新令牌 (约 2.5 秒)
+  signOut();
   return { ok: true };
 });
 route('POST', '/api/proxy', async (c) => {
@@ -1009,10 +1031,16 @@ route('POST', '/api/devices/kick', (c) => {
 });
 
 /* ---- 步骤验证 (sudo): 敏感的操作 / 显示要再输一次「当前登录账号」的密码 (docs/API.md「敏感操作需要再次输入登录密码」) ----
- * POST /api/auth/verify -> {sudo, ttl}; 之后带 X-Enana-Sudo 头重试。白名单就是下面这张表 (以后加功能往表里加一行)。
- * 检查顺序同 lib/api.sh: 请求头 (403) -> 请求体 (413) -> 路由 (404) -> 令牌 (401) -> sudo (403 E_SUDO_REQUIRED) -> 接口自己的校验。
+ * POST /api/auth/verify -> {sudo, ttl}; 之后带 X-Enana-Sudo 头重试。白名单就是下面这张表 (以后加功能往表里加一行)。只在登录了 enana 账号时检查 (没有账号可以验证; 仪表盘改为确认一次)。
+ * 检查顺序同 lib/api.sh: 请求头 (403) -> 请求体 (413) -> 路由 (404) -> 令牌 (401) -> 需要账号 (E_LOGIN_REQUIRED) -> sudo (403 E_SUDO_REQUIRED) -> 接口自己的校验。
  * sudo 令牌只存在这个进程的内存里 (M.sudo: 令牌 -> 到期时间, 真实秒数, 不随 --fast 缩短); 退出账号 / 登录 / 注册 / 改密码 / expire=1 / kickme=1 都会让它们全部失效。 */
-const SUDO_ROUTES = { 'POST /api/servers/delete': 1, 'POST /api/sub/delete': 1, 'GET /api/servers/secret': 1, 'GET /api/sub/url': 1, 'POST /api/logs/clear': 1, 'POST /api/devices/kick': 1, 'POST /api/sync/clear': 1, 'GET /api/export': 1 };
+const SUDO_ROUTES = { 'POST /api/servers/delete': 1, 'POST /api/sub/delete': 1, 'GET /api/servers/secret': 1, 'GET /api/sub/url': 1, 'POST /api/logs/clear': 1, 'POST /api/devices/kick': 1, 'POST /api/sync/clear': 1, 'GET /api/export': 1,
+  'POST /api/billing/purchase': 1, 'POST /api/billing/auto-renew': 1,
+  'POST /api/logout': 1 };      // 退出账号也要 (登录时): 否则先退出账号就绕过了上面这些。lib/api.sh 还把登录 / 注册列进去 (登录状态下换账号), 仪表盘只在没登录时用它们, 这里不模拟
+/* 只有 enana 账号能用的接口: 没有登录时 HTTP 200 {ok:false, code:"E_LOGIN_REQUIRED"} (docs/API.md 的共同约定; 读页面用的 GET /api/sync、GET /api/plan、GET /api/state 不在这里, 它们回中性的状态) */
+const ACCOUNT_ROUTES = { 'GET /api/devices': 1, 'POST /api/devices/kick': 1, 'POST /api/password': 1, 'POST /api/auth/verify': 1, 'POST /api/sync/settings': 1, 'POST /api/sync/push': 1, 'POST /api/sync/pull': 1,
+  'POST /api/sync/preview': 1, 'POST /api/sync/clear': 1, 'POST /api/diag/send': 1, 'POST /api/diag/delete': 1 };
+const accountRoute = (key) => !!ACCOUNT_ROUTES[key] || /^(GET|POST) \/api\/(billing|email)(\/|$)/.test(key);     // 加上 /api/billing 和 /api/email 下面的每一个接口
 const sudoClear = () => { M.sudo = Object.create(null); };
 function sudoOk(req) {
   const t = String(req.headers['x-enana-sudo'] || ''), exp = t ? M.sudo[t] : 0;
@@ -1090,16 +1118,16 @@ route('POST', '/api/prefs', (c) => {
 
 /* ---- 会员 / 套餐 (GET /api/plan; ctl plan=soon (默认) | free | pro | expired | verify; 余额支付 / 自动续费扣款后是 pro, 到期时间 M.planUntil 按购买的月数累加) ---- */
 const OFFICIAL_NODES = [{ tag: '官方-东京', type: 'vless', server: '', port: 0, role: 'auto', sub: '', official: true }, { tag: '官方-新加坡', type: 'vless', server: '', port: 0, role: 'auto', sub: '', official: true }];     // 官方节点的地址 / 端口不返回给界面 (lib/api.sh 的 servers_json); 保留前缀 官方-
-function applyPlan() {                                                     // 套餐 -> 官方线路: pro 时服务器列表多出 2 个 official:true 的节点 (进核心配置), 其它套餐 (含过期) 没有
+function applyPlan() {                                                     // 套餐 -> 官方线路: 登录着 pro 账号时服务器列表多出 2 个 official:true 的节点 (进核心配置), 其它套餐 (含过期) 和没有登录时没有
   M.servers = M.servers.filter((s) => !s.official); M.applied = M.applied.filter((s) => !s.official);
-  if (M.plan === 'pro') OFFICIAL_NODES.forEach((n) => { M.servers.push(Object.assign({}, n)); M.applied.push(Object.assign({}, n)); });
+  if (M.plan === 'pro' && M.account) OFFICIAL_NODES.forEach((n) => { M.servers.push(Object.assign({}, n)); M.applied.push(Object.assign({}, n)); });
 }
 const devLimit = () => (M.plan === 'pro' || M.plan === 'verify' ? 5 : DEVICE_LIMIT);
-route('GET', '/api/plan', (c) => {
-  const p = M.plan, pro = p === 'pro' || p === 'verify', exp = p === 'expired', t = sec(), free = { enabled: true, tier: 'free' };
+route('GET', '/api/plan', (c) => {                                         // 没有登录: 中性的免费版 (官方线路有没有上线照 M.plan: soon = 即将推出, 其它 = 需要升级) + logged_in:false
+  const p = M.account ? M.plan : (M.plan === 'soon' ? 'soon' : 'free'), pro = p === 'pro' || p === 'verify', exp = p === 'expired', t = sec(), free = { enabled: true, tier: 'free' };
   const gated = () => (pro ? { enabled: true, tier: 'pro' } : { enabled: false, tier: 'pro', reason: exp ? 'expired' : 'upgrade', coming_soon: p === 'soon' });
   const official = p === 'verify' ? { enabled: false, tier: 'pro', reason: 'verify' } : gated();               // verify: Pro, official routes are live, but the account email is not verified yet
-  return { ok: true, plan: { code: pro ? 'pro' : 'free', title: tr(c.lang, pro ? 'plan.pro' : 'plan.free') }, expires_at: pro ? (M.planUntil > t ? M.planUntil : t + 30 * 86400) : exp ? t - 2 * 86400 : null, checked: t - 120, limits: { devices_per_platform: devLimit() },
+  return { ok: true, logged_in: !!M.account, plan: { code: pro ? 'pro' : 'free', title: tr(c.lang, pro ? 'plan.pro' : 'plan.free') }, expires_at: pro ? (M.planUntil > t ? M.planUntil : t + 30 * 86400) : exp ? t - 2 * 86400 : null, checked: t - 120, limits: { devices_per_platform: M.account ? devLimit() : DEVICE_LIMIT },
     features: { core: free, sync: free, vps_deploy: free, custom_dns: free, official_proxy: official, unlimited_devices: gated(), priority_support: gated() }, official: { available: p === 'pro', nodes: p === 'pro' ? OFFICIAL_NODES.length : 0 } };
 });
 
@@ -2399,7 +2427,8 @@ function remoteSnapshot() {
 const syncNeedOnline = () => { if (!syncOnline()) throw E('E_ACCOUNT_UNREACHABLE', 'e.syncOffline'); };
 const syncNeedOn = () => { if (!M.sync.enabled) throw E('E_INVALID', 'e.syncOff'); };
 route('GET', '/api/sync', () => { const s = M.sync, r = s.remote.exists ? s.remote : NO_REMOTE;
-  return { ok: true, enabled: s.enabled, auto: s.auto, account: M.account || '', remote: { exists: r.exists, version: r.version, updated: r.updated, size: r.size, device: r.device }, local: { version: s.local.version, dirty: s.local.dirty },
+  if (!M.account) return { ok: true, logged_in: false, enabled: false, auto: false, decided: false, ask: false, account: '', remote: Object.assign({}, NO_REMOTE), local: { version: s.local.version, dirty: false }, last_pull: 0, last_push: 0, online: syncOnline() };     // 没有登录: 中性的状态
+  return { ok: true, logged_in: true, enabled: s.enabled, auto: s.auto, account: M.account || '', remote: { exists: r.exists, version: r.version, updated: r.updated, size: r.size, device: r.device }, local: { version: s.local.version, dirty: s.local.dirty },
     last_pull: s.lastPull, last_push: s.lastPush, online: syncOnline() }; });
 route('POST', '/api/sync/settings', (c) => {
   const s = M.sync, en = c.p('enabled'), au = c.p('auto');
@@ -2442,6 +2471,21 @@ function syncPullJob(s, mode, keyWasBad, keyOk) {                               
     } }) };
 }
 route('POST', '/api/sync/clear', () => { syncNeedOnline(); M.sync.remote = Object.assign({}, NO_REMOTE); oplog('dashboard', 'sync.clear', ''); return { ok: true }; });
+/* 云端里有什么 (新电脑第一次登录时的「是否同步到这台电脑」用它列出数量; 只读, 不改任何东西) */
+route('POST', '/api/sync/preview', () => {
+  const s = M.sync; syncNeedOnline();
+  if (!s.remote.exists) throw E('E_NOT_FOUND', 'e.syncNoRemote');
+  if (s.keyBad) throw E('E_SYNC_KEY');
+  const snap = remoteSnapshot();
+  return { ok: true, summary: { servers: snap.servers.length, subs: snap.subs.length, custom_rulesets: 0, custom_apps: 0, site_domains: 0, vps: 0, prefs: true }, remote: { version: s.remote.version } };
+});
+
+/* ---- 上传诊断 (设置 → 日志; 需要 enana 账号, 见 ACCOUNT_ROUTES): 任务完成消息里带 15 位报告编号; 删除 = 删掉自己上传过的全部诊断。模拟里不写操作记录 ---- */
+route('POST', '/api/diag/send', () => {
+  const code = randHex(8).slice(0, 15).toUpperCase();
+  return { ok: true, job: newJob('diag-send', ['js.diagPack', 'js.diagUpload'], 2400, { outage: false, noFail: true, msg: 'jd.diagSent', done: () => ({ vars: { code }, result: { id: code } }) }) };
+});
+route('POST', '/api/diag/delete', () => ({ ok: true, deleted: 2 }));
 
 /* ===================== 9. Clash API (与页面同源, 需要 Authorization: Bearer <令牌>) ===================== */
 const baseDelay = (tag) => { const h = hash(tag); return h % 11 === 0 ? 0 : 35 + (h % 290); };     // 0 = 超时 (核心里测不通的节点)
@@ -2662,6 +2706,11 @@ async function mockCtl(req, res, u) {
   sw('net', NET_STATES, (v) => { M.net = v; M.netChecked = v === 'none' ? 0 : (M.netChecked || sec() - 60); });
   sw('central', ['up', 'down'], (v) => { M.central = v; });
   sw('lastacct', ['none', 'demo', 'other'], (v) => { M.lastAcct = v === 'none' ? null : cacheRec(v + '@example.com', ACCOUNTS[v + '@example.com'].pw); });
+  /* 在这台电脑上登录 / 退出 enana 账号, 但不经过仪表盘 (像在终端或另一个浏览器里): 令牌不变; 仪表盘从 /api/state 的 account.email 看到变化 */
+  sw('acct', ['guest', 'demo'], (v) => {
+    if (v === 'guest') { if (M.account) signOut(); return; }
+    const D1 = 'demo@example.com'; M.lastAcct = cacheRec(D1, ACCOUNTS[D1].pw); signIn(D1);
+  });
   sw('proxy', ['on', 'off'], (v) => { if (M.proxyOn !== (v === 'on')) { M.proxyOn = v === 'on'; M.conns = []; } });
   sw('proxymode', ['auto', 'global'], (v) => { if (M.proxyMode !== v) { M.proxyMode = v; if (M.proxyOn) M.conns = []; } });
   sw('network', ['system', 'tun'], (v) => { M.network = v; });             // 接管方式: system (默认) / tun (增强模式: 订阅有变化时自动刷新不替用户应用, 只提示「应用更新」)
@@ -2683,10 +2732,9 @@ async function mockCtl(req, res, u) {
     const air = devicesOf('demo@example.com').filter((d) => d.uid === 'd-air')[0]; if (air) { air.online = v === 'full'; air.revoked = false; air.last_seen = sec() - (v === 'full' ? 20 : 5 * 3600); }
     const mbp = devicesOf('demo@example.com').filter((d) => d.uid === 'd-mbp')[0]; if (mbp) { mbp.online = true; mbp.revoked = false; mbp.last_seen = sec() - 90; }
   });
-  if (g('kickme') === '1' || g('kickme') === 'password') {               // 模拟「这台电脑被账号下的另一台设备下线了」(kickme=password: 因为另一台设备改了密码): 令牌全部失效, 代理关闭, 登录框上显示提示 (notice + notice_code)
+  if (g('kickme') === '1' || g('kickme') === 'password') {               // 模拟「这台电脑被账号下的另一台设备下线了」(kickme=password: 因为另一台设备改了密码): 退出账号 + notice (+ notice_code); 令牌和代理开关不变, 官方节点消失
     const pwc = g('kickme') === 'password';
-    M.secret = randHex(16); sudoClear(); M.proxyOn = false; M.account = null; M.conns = []; setThisOnline(null, false); M.notice = pwc ? { key: 'notice.pwChanged', code: 'password_changed' } : { key: 'notice.kicked', code: 'kicked' };
-    const t = now(); M.clashWins.push([t + D(150), t + D(150 + 2500)]);
+    signOut(pwc ? { key: 'notice.pwChanged', code: 'password_changed' } : { key: 'notice.kicked', code: 'kicked' });
   }
   if (q.has('notice')) M.notice = g('notice') ? { text: g('notice').slice(0, 300) } : null;
   sw('vps', ['reset'], () => { M.vps = []; M.vpsPending = []; });
@@ -2714,7 +2762,8 @@ async function mockCtl(req, res, u) {
   if (g('newapp')) M.pendingApps.push(g('newapp').slice(0, 80));
   if (g('content')) M.resetContent = ['cached', 'baseline'].indexOf(g('content')) >= 0 ? g('content') : null;          // 「恢复默认规则」任务的结果: cloud (默认) / cached (离线, 用本机缓存) / baseline (从没拿到过云端内容)
   jsonRes(req, res, 200, { ok: true, helper: helperIsDown() ? 'down' : 'up', clash: clashIsDown() ? 'down' : 'up', helperDown: M.helperDown, clashDown: M.clashDown, conns: M.connTarget, os: M.os, net: M.net, central: M.central,
-    lastacct: M.lastAcct ? (M.lastAcct.email === 'demo@example.com' ? 'demo' : M.lastAcct.email === 'other@example.com' ? 'other' : 'custom') : 'none', proxy: M.proxyOn ? 'on' : 'off', proxymode: M.proxyMode, network: M.network === 'tun' ? 'tun' : 'system', account: M.account ? maskEmail(M.account) : '', locked: lockWait(), locksec: M.locksec,
+    lastacct: M.lastAcct ? (M.lastAcct.email === 'demo@example.com' ? 'demo' : M.lastAcct.email === 'other@example.com' ? 'other' : 'custom') : 'none', proxy: M.proxyOn ? 'on' : 'off', proxymode: M.proxyMode, network: M.network === 'tun' ? 'tun' : 'system',
+    acct: !M.account ? 'guest' : M.account === 'demo@example.com' ? 'demo' : M.account === 'other@example.com' ? 'other' : 'custom', account: M.account ? maskEmail(M.account) : '', locked: lockWait(), locksec: M.locksec,
     devices: Object.keys(M.devices).reduce((o, e) => { o[maskEmail(e)] = M.devices[e].filter((d) => d.online).map((d) => d.uid); return o; }, {}), notice: M.notice ? noticeText('en') : '',
     vps: M.vps.length, sync: { enabled: M.sync.enabled, remote: M.sync.remote.exists ? (M.sync.remote.version > M.sync.local.version ? 'newer' : 'exists') : 'none', key: M.sync.keyBad ? 'bad' : 'ok', offline: M.sync.offline, dirty: M.sync.local.dirty }, autoUpdate: M.autoUpdate,
     update: M.upd.fail ? 'fail' : M.upd.on ? 'on' : 'off', failnext: M.failNext.concat(M.failJob ? ['1'] : []), failNext: M.failJob, speedlast: M.speed.last ? M.speed.last.id : 'none', servers: M.servers.length, firstRun: M.servers.length === 0,
@@ -2733,7 +2782,8 @@ async function mockEntry(req, res, u) {
   }
   return notFound(req, res);
 }
-/* 辅助服务入口. 检查顺序同 lib/api.sh: 请求头 (403) -> 请求体大小 (413) -> 路由 (404) -> 令牌 (401) -> sudo (403, 仅白名单里的接口) -> 处理 */
+/* 辅助服务入口. 检查顺序同 lib/api.sh: 请求头 (403) -> 请求体大小 (413) -> 路由 (404) -> 令牌 (401) -> 需要账号 (E_LOGIN_REQUIRED, 只限 ACCOUNT_ROUTES, 没有登录时)
+ * -> sudo (403, 仅白名单里的接口, 只在登录时) -> 处理 */
 async function helperEntry(req, res, u) {
   if (req.method === 'OPTIONS') { res.writeHead(204, corsHeaders(req)); return res.end(); }
   settle();
@@ -2746,7 +2796,8 @@ async function helperEntry(req, res, u) {
   const key = req.method + ' ' + u.pathname, r = R[key];
   if (!r) return fail(E('E_NOT_FOUND', 'e.noRoute', null, null, 404));
   if (!r.pub && req.headers['x-enana-token'] !== M.secret) return fail(E('E_AUTH', null, null, null, 401));
-  if (SUDO_ROUTES[key] && !sudoOk(req)) return fail(E('E_SUDO_REQUIRED', null, null, null, 403));       // 401 之后、接口自己的校验之前
+  if (accountRoute(key) && !M.account) return fail(E('E_LOGIN_REQUIRED'));                            // 只有 enana 账号能用 (HTTP 200)
+  if (SUDO_ROUTES[key] && M.account && !sudoOk(req)) return fail(E('E_SUDO_REQUIRED', null, null, null, 403));       // 401 之后、接口自己的校验之前; 没有登录时不检查 (没有账号可以验证)
   const ct = String(req.headers['content-type'] || ''), form = Object.create(null);
   if (/x-www-form-urlencoded/i.test(ct) || (!ct && body.text.indexOf('=') >= 0 && !/^\s*[\[{<-]/.test(body.text))) new URLSearchParams(body.text).forEach((v, k) => { form[k] = v; });
   const has = (n) => Object.prototype.hasOwnProperty.call(form, n) || u.searchParams.has(n);
@@ -2839,10 +2890,39 @@ async function selftest() {
   r = await rq('GET', '/api/auth/status', { noHdr: true, headers: { 'X-TProxy': '1' } });
   ck('legacy X-TProxy header still accepted', r.status === 200 && jx(r).ok === true);
   r = await rq('GET', '/api/auth/status');
-  ck('auth/status shape: hint of the last account, offline_ok false until someone is logged in on this machine, empty notice, no binding fields', jx(r).required === true && jx(r).account_hint === 'd***@e***.com' && jx(r).offline_ok === false && jx(r).notice === '' && jx(r).account_url === 'https://enana.cc'
+  ck('auth/status shape: never required (2.3.27), local:true, logged_in:false at start, hint of the last account, offline_ok false until someone is logged in on this machine, empty notice, no binding fields', jx(r).required === false && jx(r).local === true && jx(r).logged_in === false
+    && jx(r).account_hint === 'd***@e***.com' && jx(r).offline_ok === false && jx(r).notice === '' && jx(r).account_url === 'https://enana.cc'
     && jx(r).register_url === 'https://enana.cc/register' && jx(r).manage_url === 'https://enana.cc/account' && jx(r).wait === 0 && !('bound' in jx(r)) && !('forgot_url' in jx(r)), r.text);
   r = await rq('GET', '/api/state'); ck('state without token -> 401 E_AUTH', r.status === 401 && jx(r).code === 'E_AUTH' && jx(r).ok === false);
   r = await rq('GET', '/api/state', { token: 'wrong' }); ck('state with a wrong token -> 401', r.status === 401);
+  /* ---- 2.3.27: 不需要账号也能用 —— 本机令牌 (POST /api/auth/local) · 账号接口 E_LOGIN_REQUIRED · 没有登录时不要 sudo · 退出不换令牌 ---- */
+  r = await rq('POST', '/api/auth/local', { noHdr: true }); ck('auth/local: 403 without X-Enana (the usual header check still applies)', r.status === 403 && jx(r).ok === false && !('token' in jx(r)));
+  r = await rq('POST', '/api/auth/local'); T = jx(r).token;
+  ck('auth/local (public, no password): {ok, token (32 hex), logged_in:false} while nobody is signed in; the token opens the dashboard', jx(r).ok === true && /^[0-9a-f]{32}$/.test(T) && jx(r).logged_in === false && (await api('GET', '/api/state')).status === 200, r.text.replace(T, '<token>'));
+  r = await api('GET', '/api/state'); ck('guest: GET /api/state works, account.email is ""', r.status === 200 && jx(r).account.email === '' && jx(r).servers.length === 27, r.text.slice(0, 120));
+  {
+    const ONLY = [['GET', '/api/devices'], ['POST', '/api/devices/kick'], ['POST', '/api/password'], ['POST', '/api/auth/verify'], ['POST', '/api/sync/settings'], ['POST', '/api/sync/push'], ['POST', '/api/sync/pull'], ['POST', '/api/sync/preview'], ['POST', '/api/sync/clear'],
+      ['GET', '/api/billing'], ['GET', '/api/billing/order'], ['POST', '/api/billing/checkout'], ['POST', '/api/billing/cancel'], ['POST', '/api/billing/order/recheck'], ['POST', '/api/billing/purchase'], ['POST', '/api/billing/auto-renew'],
+      ['GET', '/api/email/status'], ['POST', '/api/email/send'], ['POST', '/api/diag/send'], ['POST', '/api/diag/delete']], lr = [];
+    for (const x of ONLY) lr.push(await rq(x[0], x[1], { token: T }));
+    ck('guest: every account-only endpoint answers HTTP 200 {ok:false, code:E_LOGIN_REQUIRED, translated error} (also the ones on the step-up list: no 403 without an account)', lr.every((x) => x.status === 200 && jx(x).ok === false && jx(x).code === 'E_LOGIN_REQUIRED' && jx(x).error === '需要登录 enana 账号才能使用这个功能'), lr.map((x) => x.status + ':' + jx(x).code));
+    r = await rq('GET', '/api/devices', { token: T, lang: 'en' }); r2 = await rq('GET', '/api/devices'); ck('E_LOGIN_REQUIRED follows X-Enana-Lang; the token is still checked first (401 without it)', /needs an enana account/.test(jx(r).error) && r2.status === 401);
+    r = await api('GET', '/api/sync'); r2 = await api('GET', '/api/plan');
+    ck('guest: GET /api/sync and GET /api/plan stay usable: a neutral state with logged_in:false (sync off, no remote, free plan, no official routes)', jx(r).ok === true && jx(r).logged_in === false && jx(r).enabled === false && jx(r).remote.exists === false && jx(r).account === ''
+      && jx(r2).ok === true && jx(r2).logged_in === false && jx(r2).plan.code === 'free' && jx(r2).official.available === false, [r.text.slice(0, 120), r2.text.slice(0, 120)]);
+    r = await rq('GET', '/api/export', { token: T }); r2 = await rq('GET', '/api/servers/secret', { token: T, q: { tag: '东京 专线 A' } });
+    ck('guest: the step-up list is not enforced without an account (no X-Enana-Sudo): export and reveal answer at once', r.status === 200 && /"kind":"backup"/.test(r.text) && r2.status === 200 && jx(r2).ok === true && jx(r2).fields.length > 0, [r.status, r2.status]);
+    r = await api('POST', '/api/logout'); ck('guest: logout is a harmless no-op {ok:true}; the token keeps working', jx(r).ok === true && (await api('GET', '/api/state')).status === 200);
+    r = await api('POST', '/api/proxy', { form: { on: '1' } }); r2 = await api('GET', '/api/state');
+    ck('guest: the proxy switch works without an account', jx(r).ok === true && jx(r).enabled === true && jx(r2).proxy.enabled === true);
+    await api('POST', '/api/proxy', { form: { on: '0' } });                                        // 恢复成开始时的「关」, 后面的检查照旧
+    await ctl('acct=demo'); r = await rq('POST', '/api/auth/local'); r2 = await rq('GET', '/api/auth/status');
+    ck('ctl acct=demo signs this computer in without the dashboard: auth/local says logged_in:true with the same token, auth/status logged_in:true, state shows the email', jx(r).logged_in === true && jx(r).token === T && jx(r2).logged_in === true && jx(await api('GET', '/api/state')).account.email === D1);
+    r = await rq('GET', '/api/export', { token: T }); r2 = await rq('POST', '/api/billing/purchase', { token: T, body: '{}' }); const r3 = await rq('POST', '/api/billing/auto-renew', { token: T, body: '{"enabled":true}' });
+    ck('signed in: the step-up list is enforced again (403 E_SUDO_REQUIRED), and it now includes billing/purchase and billing/auto-renew', [r, r2, r3].every((x) => x.status === 403 && jx(x).code === 'E_SUDO_REQUIRED'), [r.status, r2.status, r3.status]);
+    await ctl('acct=guest'); r = await rq('POST', '/api/auth/local');
+    ck('ctl acct=guest signs out again: same token, logged_in:false, account endpoints back to E_LOGIN_REQUIRED', jx(r).logged_in === false && jx(r).token === T && jx(await rq('GET', '/api/devices', { token: T })).code === 'E_LOGIN_REQUIRED');
+  }
   r = await login('no-at-sign', ''); ck('login: invalid format -> E_INVALID', jx(r).code === 'E_INVALID' && r.status === 200);
   r = await login(D1, 'nope'); ck('login: wrong password -> E_BAD_CREDENTIALS', jx(r).code === 'E_BAD_CREDENTIALS' && !!jx(r).error);
   r = await login(D2, P2); T = jx(r).token;
@@ -2897,9 +2977,15 @@ async function selftest() {
   r = await api('POST', '/api/proxy', { form: { on: '1' } }); ck('turning on keeps the saved mode', jx(r).enabled === true && jx(r).mode === 'global');
   await api('POST', '/api/proxy', { form: { mode: 'auto' } });
   r = await api('POST', '/api/logout'); const old = T; ck('logout -> {ok:true}', jx(r).ok === true && r.status === 200, r.text);
-  r = await api('GET', '/api/state', { token: old }); ck('logout: old token is dead (401)', r.status === 401);
-  r = await login(D1, P1); T = jx(r).token; r = await api('GET', '/api/state'); ck('logout switched the proxy OFF; a new token works', jx(r).proxy.enabled === false && T !== old);
-  await ctl('expire=1'); r = await api('GET', '/api/state'); ck('expire=1 invalidates every token', r.status === 401); r = await login(D1, P1); T = jx(r).token;
+  r = await api('GET', '/api/state', { token: old });
+  ck('logout keeps the dashboard token and the proxy setting (2.3.27): the old token still works, the proxy is still ON, account.email is ""', r.status === 200 && jx(r).proxy.enabled === true && jx(r).account.email === '', r.text.slice(0, 120));
+  r = await rq('GET', '/api/auth/status'); r2 = await api('GET', '/api/devices'); ck('after logout: auth/status logged_in:false, account endpoints answer E_LOGIN_REQUIRED', jx(r).logged_in === false && jx(r2).code === 'E_LOGIN_REQUIRED');
+  r = await login(D1, P1); T = jx(r).token; r = await api('GET', '/api/state'); ck('signing in again returns the same token and leaves the proxy switch alone', T === old && jx(r).proxy.enabled === true);
+  r = await api('POST', '/api/logout', { q: { switch: '1' } }); r2 = await api('GET', '/api/state'); ck('logout?switch=1 also keeps the token and the proxy ON', jx(r).ok === true && r2.status === 200 && jx(r2).proxy.enabled === true && jx(r2).account.email === '');
+  r = await login(D1, P1); T = jx(r).token; await api('POST', '/api/proxy', { form: { on: '0' } });          // 后面的检查照旧从「关」开始
+  await ctl('expire=1'); r = await api('GET', '/api/state'); ck('expire=1 invalidates every token', r.status === 401);
+  r = await rq('POST', '/api/auth/local'); r2 = await login(D1, P1); T = jx(r2).token;
+  ck('after the secret changed (expire=1) the dashboard gets the new token from auth/local without a password; login returns the same one', /^[0-9a-f]{32}$/.test(jx(r).token) && jx(r).token !== old && jx(r).token === T && jx(r).logged_in === true);
 
   /* ---- 设备数量限制 (同账号同平台最多 2 台在线) / 下线 / 我的设备 / 被下线的提示 / 离线登录规则 ---- */
   {
@@ -2929,9 +3015,12 @@ async function selftest() {
     ck('the limit is per platform: on Windows the two online macOS devices do not block the login; platform follows os=windows', jx(r).ok === true && dw.platform === 'windows' && dw.devices[0].platform === 'windows' && dw.devices[0].current === true);
     await ctl('devices=reset&expire=1'); r = await login(D1, P1); T = jx(r).token; await api('POST', '/api/proxy', { form: { on: '1' } });
     await ctl('kickme=1'); r = await api('GET', '/api/state'); const ns = await rq('GET', '/api/auth/status'), nsEn = await rq('GET', '/api/auth/status', { lang: 'en' });
-    ck('kickme=1 (signed out from another device): every token dies (401) and auth/status.notice explains it, in zh and en', r.status === 401 && jx(ns).notice === '这台设备已被你账号下的另一台设备下线, 代理已关闭' && /signed out from another device/.test(jx(nsEn).notice) && jx(ns).offline_ok === false);
+    ck('kickme=1 (signed out from another device, 2.3.27): the token keeps working, the proxy stays ON (own servers), account.email is "", auth/status logged_in:false and the notice explains it, in zh and en',
+      r.status === 200 && jx(r).proxy.enabled === true && jx(r).account.email === '' && jx(ns).logged_in === false && jx(ns).notice === '这台设备已被你账号下的另一台设备下线; 代理照常使用你自己的服务器, 官方线路、同步和会员已停止'
+      && /signed out from another device/.test(jx(nsEn).notice) && jx(ns).offline_ok === false, [r.status, jx(ns).notice]);
     r = await login(D1, P1); T = jx(r).token; const ns2 = await rq('GET', '/api/auth/status'), stt = jx(await api('GET', '/api/state'));
-    ck('the next successful login clears the notice; the proxy was turned off by the kick and stays off', jx(ns2).notice === '' && stt.proxy.enabled === false);
+    ck('the next successful login clears the notice; the proxy stayed ON through the kick', jx(ns2).notice === '' && jx(ns2).logged_in === true && stt.proxy.enabled === true);
+    await api('POST', '/api/proxy', { form: { on: '0' } });                                        // 后面的检查照旧从「关」开始
     await ctl('notice=' + encodeURIComponent('离线时间过长, 已自动退出登录')); const ns3 = await rq('GET', '/api/auth/status'); await ctl('notice='); const ns4 = await rq('GET', '/api/auth/status');
     ck('/mock/ctl notice=<text> sets any notice, notice= clears it', jx(ns3).notice === '离线时间过长, 已自动退出登录' && jx(ns4).notice === '');
     ck('offline_ok is true while this machine is logged in', jx(await rq('GET', '/api/auth/status')).offline_ok === true);
@@ -3470,9 +3559,9 @@ async function selftest() {
 
     /* 步骤验证 (sudo) */
     const WL = [['POST', '/api/servers/delete', { form: { tag: 'no-such' } }], ['POST', '/api/sub/delete', { form: { name: 'no-such' } }], ['GET', '/api/servers/secret', {}], ['GET', '/api/sub/url', {}], ['POST', '/api/logs/clear', { form: { type: 'bogus' } }],
-      ['POST', '/api/devices/kick', {}], ['POST', '/api/sync/clear', {}], ['GET', '/api/export', {}]], w403 = [];
+      ['POST', '/api/devices/kick', {}], ['POST', '/api/sync/clear', {}], ['GET', '/api/export', {}], ['POST', '/api/billing/purchase', { body: 'not json' }], ['POST', '/api/billing/auto-renew', { body: 'not json' }], ['POST', '/api/logout', {}]], w403 = [];
     for (const x of WL) w403.push(await api(x[0], x[1], Object.assign({ sudo: false }, x[2])));
-    ck('sudo: all 8 whitelisted endpoints answer HTTP 403 {ok:false, code:E_SUDO_REQUIRED, error} without X-Enana-Sudo — before their own validation (bogus arguments never reach it)', w403.every((x) => x.status === 403 && jx(x).code === 'E_SUDO_REQUIRED' && jx(x).ok === false && jx(x).error === '此操作需要再次输入登录密码'), w403.map((x) => x.status + ' ' + jx(x).code));
+    ck('sudo (signed in): all 11 whitelisted endpoints (incl. logout) answer HTTP 403 {ok:false, code:E_SUDO_REQUIRED, error} without X-Enana-Sudo — before their own validation (bogus arguments never reach it)', w403.length === 11 && w403.every((x) => x.status === 403 && jx(x).code === 'E_SUDO_REQUIRED' && jx(x).ok === false && jx(x).error === '此操作需要再次输入登录密码'), w403.map((x) => x.status + ' ' + jx(x).code));
     r = await api('GET', '/api/export', { sudo: false, headers: { 'X-Enana-Sudo': 'deadbeef' }, lang: 'en' }); r2 = await rq('GET', '/api/export', { headers: { 'X-Enana-Sudo': 'deadbeef' } });
     ck('sudo: an unknown token is the same 403 (message follows X-Enana-Lang); the login token is checked first (no token -> 401 E_AUTH)', r.status === 403 && jx(r).error === 'This action needs your sign-in password again' && r2.status === 401 && jx(r2).code === 'E_AUTH');
     r = await rq('POST', '/api/auth/verify', { form: { password: P1 } }); r2 = await api('POST', '/api/auth/verify', { form: { password: 'wrong-one' } }); const vEmpty = await api('POST', '/api/auth/verify', { form: {} }), vUrl = await api('POST', '/api/auth/verify', { q: { password: P1 } });
@@ -3529,7 +3618,7 @@ async function selftest() {
     const pwLog = jx(await logs({ type: 'ops', q: 'password.change', limit: '50' })).rows;
     ck('ops log: password.change rows (ok and error), never containing a password', pwLog.some((x) => x.result === 'ok') && pwLog.some((x) => x.result === 'error' && /E_BAD_CREDENTIALS/.test(x.detail)) && pwLog.every((x) => !/newpass99|wrong-old|demo1234/.test(JSON.stringify(x))));
     await ctl('kickme=password'); r = await api('GET', '/api/state'); const nk = jx(await rq('GET', '/api/auth/status')), nkEn = jx(await rq('GET', '/api/auth/status', { lang: 'en' }));
-    ck('kickme=password (password changed on another device): tokens die, notice (zh / en) + notice_code "password_changed"', r.status === 401 && /密码已在另一台设备上修改/.test(nk.notice) && /password was changed on another device/.test(nkEn.notice) && nk.notice_code === 'password_changed');
+    ck('kickme=password (password changed on another device): signed out (the token keeps working, account.email ""), notice (zh / en) + notice_code "password_changed"', r.status === 200 && jx(r).account.email === '' && nk.logged_in === false && /密码已在另一台设备上修改/.test(nk.notice) && /password was changed on another device/.test(nkEn.notice) && nk.notice_code === 'password_changed');
     T = jx(await login(D1, P1)).token; await ctl('kickme=1'); const nk2 = jx(await rq('GET', '/api/auth/status')); T = jx(await login(D1, P1)).token; await ctl('notice=' + encodeURIComponent('hello')); const nk3 = jx(await rq('GET', '/api/auth/status')); await ctl('notice='); const nk4 = jx(await rq('GET', '/api/auth/status'));
     ck('notice_code: kickme=1 -> "kicked", a free-text notice -> "", no notice -> ""; a successful login clears it', nk2.notice_code === 'kicked' && nk3.notice === 'hello' && nk3.notice_code === '' && nk4.notice === '' && nk4.notice_code === '');
   }
@@ -3832,6 +3921,7 @@ async function selftest() {
 /* ===================== 12. 启动 ===================== */
 async function startServers() {
   reset(flag('first-run') ? 'first-run' : 'full');
+  if (flag('demo')) { M.lastAcct = cacheRec('demo@example.com', ACCOUNTS['demo@example.com'].pw); signIn('demo@example.com'); }     // 默认没有登录 enana 账号 (和刚安装的电脑一样)
   setInterval(settle, 150).unref();
   const main = makeMain(); await listenOn(main, PORT);
   let helper = null; if (SPLIT) { helper = makeHelper(); await listenOn(helper, HPORT); }
@@ -3840,6 +3930,7 @@ async function startServers() {
 function banner() {
   console.log('enana mock: http://' + HOST + ':' + PORT + '/ui/' + (SPLIT ? '   (helper API with CORS: http://' + HOST + ':' + HPORT + ')' : '') + (FAST > 1 ? '   [time x' + FAST + ']' : ''));
   console.log('  test accounts (mock only): demo@example.com / demo1234, other@example.com / other1234     --help lists the options, /mock/ctl?... the runtime switches');
+  console.log('  the dashboard opens without a password; enana account: ' + (M.account ? 'signed in as ' + M.account : 'not signed in (sign in from the account menu, or /mock/ctl?acct=demo)'));
 }
 process.on('SIGTERM', () => process.exit(0));
 process.on('SIGINT', () => process.exit(0));

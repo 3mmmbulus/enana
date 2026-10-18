@@ -10,6 +10,6 @@
     if (w >= 760 && (w < 1100 || nv === 'collapsed')) r.setAttribute('data-nav', 'collapsed');
     r.setAttribute('data-navmode', w < 760 ? 'drawer' : (w < 1100 || nv === 'collapsed') ? 'rail' : 'full');
   } catch (e) { /* 隐私模式 / 禁用存储: 忽略, 用默认外观 */ }
-  /* 页面外壳 (.shell) 在登录状态确定之前不显示, 免得退出状态下刷新时先闪一下仪表盘 (auth.js 确定后加 ui-ready); 万一脚本出错, 4 秒后也照常显示 */
+  /* 页面外壳 (.shell) 在拿到本机令牌之前不显示 (auth.js 拿到后加 ui-ready; 2.3.27 起不需要账号, 不再有登录页); 万一脚本出错, 4 秒后也照常显示 */
   setTimeout(function () { document.documentElement.classList.add('ui-ready'); }, 4000);
 })();

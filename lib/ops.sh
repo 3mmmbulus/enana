@@ -350,6 +350,12 @@ txn_reset_undo() { # 撤销最近一次重置: 把当时清掉的文件放回去
 }
 
 op_apply() { op_txn "应用配置" txn_none; }
+# 被下线时官方节点还留在 TUN 的核心里 (见 lib/session.sh 的 session_local_end, official.stale): 终端里打开代理之前先应用一次配置把它们去掉 (可能要管理员授权)
+official_stale_resolve() {
+  [ -f "$H/official.stale" ] || return 0
+  op_apply >/dev/null 2>&1 || return 1
+  rm -f "$H/official.stale"
+}
 
 op_restart() {
   job_step 0 20 "重启服务"
@@ -399,12 +405,25 @@ proxy_switch() { # <on 0|1|''> <mode auto|global|''> <原来的 on> <原来的 m
 }
 # 代理总开关的后台任务: POST /api/proxy 要先启动核心, 而启动要管理员授权时 (TUN, 或者根守护进程还加载着) 交给它 —— 等管理员密码框的时候不能卡住 HTTP 请求
 # (仪表盘 25 秒就放弃, 报告失败)。仪表盘和切换流量接管方式一样跟着任务走; 任务的结果就是平时 /api/proxy 的响应 (enabled / mode / sysproxy)
-op_proxy() { # <on 0|1|''> <mode auto|global|''>
-  local on=${1:-} mode=${2:-} was_on=${PROXY_ENABLED:-0} was_mode=${PROXY_MODE:-auto}
+op_proxy() { # <on 0|1|''> <mode auto|global|''> [stale: 先应用配置, 去掉被下线时留在 TUN 核心里的官方节点 (步骤多一个)]
+  local on=${1:-} mode=${2:-} was_on=${PROXY_ENABLED:-0} was_mode=${PROXY_MODE:-auto} b=0
   case $on in ''|0|1) ;; *) job_fail "参数无效" 0; return 1 ;; esac
   case $mode in ''|auto|global) ;; *) job_fail "代理模式无效" 0; return 1 ;; esac
   op_lock || { job_fail "另一个配置任务正在运行, 请稍后重试" 0; return 1; }
-  job_step 0 20 "启动代理服务"
+  if [ "${3:-}" = stale ]; then
+    b=1; job_step 0 10 "移除官方线路"
+    if [ -f "$H/official.stale" ]; then
+      ENHANCED_ADMIN_ERR=''
+      if ! apply_config >/dev/null 2>&1; then
+        op_unlock
+        if [ "${ENHANCED_ADMIN_ERR:-}" = cancelled ]; then job_fail "已取消管理员授权, 代理没有开启 (官方线路还留在增强模式的核心里)" 0
+        else job_fail "官方线路还没有从增强模式的核心里移除 (需要管理员授权), 代理没有开启" 0; fi
+        return 1
+      fi
+      rm -f "$H/official.stale"
+    fi
+  fi
+  job_step "$b" 20 "启动代理服务"
   ENHANCED_ADMIN_ERR=''; ENHANCED_REFUSED=0; ENHANCED_REFUSED_WHY=''
   if ! os_service_running && ! { os_service_start && wait_port "$PORT" 10 && enhanced_ready; }; then
     op_unlock
@@ -413,7 +432,7 @@ op_proxy() { # <on 0|1|''> <mode auto|global|''>
     else job_fail "代理服务没有运行, 启动也失败了 (运行 enana doctor 查看原因)" 0; fi
     return 1
   fi
-  job_step 1 80 "$([ -n "$on" ] && echo 开启代理 || echo 切换代理模式)"
+  job_step $((b + 1)) 80 "$([ -n "$on" ] && echo 开启代理 || echo 切换代理模式)"
   proxy_switch "$on" "$mode" "$was_on" "$was_mode"
   op_unlock
   job_ok "$([ "$on" = 1 ] && echo 代理已开启 || echo 代理模式已切换)" "{$PROXY_SWITCH_JSON}"
@@ -439,7 +458,13 @@ _subs_refresh_one() { # <批次目录> <序号>
   cp "$dir/$i.jsonl" "$dir/$i.run" || return 1
   JOB_BODY="$dir/$i.run"; TXN_INTERVAL=$iv; TXN_USED=$used; TXN_TOTAL=$total; TXN_EXPIRE=$expire; TXN_SAVE=''
   if op_txn "订阅「$name」刷新" txn_import "$name" replace; then info "订阅「$name」已刷新: $t 个节点"; rc=0
-  else warn "订阅「$name」刷新后配置无效, 已保留旧节点"; rc=1; fi
+  else
+    case ${TXN_ERR:-} in      # 失败的原因决定说法: 后台任务 (每日维护) 在 TUN 下应用要管理员授权、不弹框而撤销 (apply_config 返回 5) 不是「配置无效」, 节点没有问题
+      '需要管理员授权才能应用 (后台任务不弹授权框), 已撤销本次更改') warn "订阅「$name」有更新, 应用需要管理员授权 (后台任务不弹授权框), 打开仪表盘时可以应用" ;;
+      *) warn "订阅「$name」刷新后配置无效, 已保留旧节点" ;;
+    esac
+    rc=1
+  fi
   rm -f "$dir/$i.run"; JOB_BODY=$saved_body; return "$rc"
 }
 # 刷新已保存的订阅 (用 JXA 运行 importer.js, 无需 node). stale_only=1 时只刷新超过刷新间隔的。
@@ -483,7 +508,7 @@ op_subs_refresh() {
   return 0
 }
 
-# 终端「退出账号」: 代理设置保留 + 令牌轮换 (+ purge 时清除离线登录缓存) + 让核心换上新令牌 (所有浏览器立即退出登录)
+# 终端「退出账号」: 代理设置保留, 本机令牌不变 (仪表盘照常打开) + 清除离线登录缓存 + 重新生成配置 (账号的官方节点从核心里去掉; 没有官方节点时配置不变, 不重启)
 op_logout() { # [purge]
   local rc
   job_step 0 20 "退出账号"
@@ -493,15 +518,15 @@ op_logout() { # [purge]
   apply_config >/dev/null 2>&1; rc=$?
   op_unlock
   oplog "${OP_WHO:-terminal}" "退出账号" "" "$([ "$rc" = 0 ] && echo ok || echo error)"
-  if [ "$rc" = 0 ]; then _txn_end ok "已退出账号 (代理设置保留), 所有浏览器需要重新登录"; else _txn_end fail "令牌已更换, 但核心没有成功重启, 运行 enana doctor 查看原因" 3; return 1; fi
+  if [ "$rc" = 0 ]; then _txn_end ok "已退出账号 (代理设置保留, 仪表盘照常打开)"; else _txn_end fail "已退出账号, 但新配置没有应用到核心 (官方线路可能还在), 运行 enana doctor 查看原因" 3; return 1; fi
 }
-# 仪表盘退出账号后的收尾: 令牌已经换了, 让核心也换上 (期间核心已是全部直连, 不会影响上网)
+# 退出账号 / 被下线之后的收尾 (任务 auth-sync), 以及本机令牌刚生成时: 重新生成配置, 让核心去掉账号的官方节点 / 换上令牌 (你自己的服务器照常工作)
 op_sync_secret() {
   local rc
   op_lock || { job_fail "另一个配置任务正在运行" 0; return 1; }
   apply_config >/dev/null 2>&1; rc=$?; op_unlock
   if [ "$rc" = 0 ]; then job_ok "完成"
-  else job_fail "核心令牌尚未更新; Enhanced/TUN 需要管理员授权, 运行 enana doctor 查看原因" 1; return 1; fi
+  else job_fail "新配置还没有应用到核心; Enhanced/TUN 需要管理员授权, 运行 enana doctor 查看原因" 1; return 1; fi
 }
 
 # 发送完整诊断给开发者 (用户在日志页点了按钮): 打包 → 上传, 完成后任务结果里带报告编号
@@ -637,8 +662,10 @@ op_maintain() {
   local last=0 APPS_BG_JOB=1
   logs_maintain; stats_purge
   update_check force >/dev/null 2>&1 || true
-  auth_logged_in && op_txn "更新云端内容" txn_content >/dev/null 2>&1 || true            # 每天顺带检查一次云端内容更新 (没登录就跳过)
-  auth_logged_in && plan_refresh >/dev/null 2>&1 || true                                 # 以及套餐 (订阅到期后界面提示会跟着变)
+  # 每天顺带检查一次云端内容 (签名的服务目录 / 规则库 / 部署脚本), 不管有没有登录: 登录了带账号会话, 没登录匿名下载, 校验一样 (lib/cloud.sh)。
+  # 没登录、而云端上一次拒绝了匿名下载 (还要求登录): 先问一下 (cloud_anon_refused), 还被拒绝就不开事务 —— 操作记录里不会每天多一条错误
+  if ! cloud_anon_refused; then op_txn "更新云端内容" txn_content >/dev/null 2>&1 || true; fi      # 有云端会话时 cloud_anon_refused 直接返回 1 (照常更新); 离线登录 (没有会话) 和没登录一样先问
+  auth_logged_in && plan_refresh >/dev/null 2>&1 || true                                 # 套餐属于账号: 只在登录时刷新 (订阅到期后界面提示会跟着变)
   [ "${AUTO_UPDATE:-1}" = 1 ] || return 0
   [ -f "$H/.maintain-rules" ] && IFS= read -r last < "$H/.maintain-rules"
   if [ $(( $(now) - ${last:-0} )) -ge 259200 ]; then

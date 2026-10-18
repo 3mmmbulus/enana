@@ -4,8 +4,10 @@
 #
 # 安全: ① 只接受 Host=127.0.0.1:端口/localhost:端口 (防 DNS 重绑定)
 #       ② 所有 /api/ 请求必须带自定义头 X-Enana: 1 (跨站网页发不出带自定义头的请求, 预检会被拒)
-#       ③ 除 GET /api/auth/status 与 POST /api/login 外, 都必须带 X-Enana-Token (= 登录后拿到的令牌)
+#       ③ 除 GET /api/auth/status、POST /api/auth/local、POST /api/login、POST /api/register 外, 都必须带 X-Enana-Token (= 本机令牌;
+#          仪表盘不需要账号, 用 POST /api/auth/local 拿到它)。401 只表示本机令牌缺失 / 不对; 没登录 enana 账号时账号功能回 HTTP 200 E_LOGIN_REQUIRED
 #       ④ CORS 只放行仪表盘自己的来源  ⑤ 所有参数先白名单校验再使用  ⑥ 请求体 ≤ 4 MB  ⑦ 密码只从请求体读取, 不进 URL/日志
+#       ⑧ 敏感操作 (SUDO_ENDPOINTS, 包括退出 / 换账号): 登录了 enana 账号时要再输一次账号密码 (X-Enana-Sudo); 没登录时没有密码可验, 仪表盘弹一次确认框
 # launchd 的 inetd 模式: fd 0 是已连接的套接字 (可读可写)。真机实测写到原来的 stdout 客户端收不到响应,
 # 所以先把 stdout 显式指向 fd 0 (在 launchd 与测试里的 inetd 模拟器下都成立)。
 [ "${ENANA_API_PIPE:-0}" = 1 ] || exec 1>&0
@@ -71,7 +73,7 @@ serve_static() {
   case $path in
     /|"$ADMIN_PATH") printf 'HTTP/1.1 302 Found\r\nLocation: %s/\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n' "$ADMIN_PATH"; exit 0 ;;
   esac
-  case $rel in    # 页面路由 (和 ui/app.js 的 NAV 一致, 加上未登录时的 login / register 两个整页): /enana/admin/apps 等直接给 index.html, 由页面里的路由决定显示哪一页; 末尾带斜杠的跳到不带的 (页面里的相对地址要靠它)
+  case $rel in    # 页面路由 (和 ui/app.js 的 NAV 一致, 加上 login / register: 打开仪表盘并弹出登录 / 注册框): /enana/admin/apps 等直接给 index.html, 由页面里的路由决定显示哪一页; 末尾带斜杠的跳到不带的 (页面里的相对地址要靠它)
     /overview|/apps|/sites|/rules|/dns|/servers|/conns|/traffic|/speed|/logs|/settings|/login|/register) rel=/index.html ;;
     /overview/|/apps/|/sites/|/rules/|/dns/|/servers/|/conns/|/traffic/|/speed/|/logs/|/settings/|/login/|/register/)
       printf 'HTTP/1.1 302 Found\r\nLocation: %s%s\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n' "$ADMIN_PATH" "${rel%/}"; exit 0 ;;
@@ -110,15 +112,25 @@ fi
 if [ "$CL" -gt 0 ]; then head -c "$CL" > "$BODY"; fi
 FORM=0; case $CT in application/x-www-form-urlencoded*) FORM=1 ;; esac
 
-# 令牌: 除公开接口外都要求登录
+# 本机令牌: 除公开接口外都要带 (仪表盘打开时用 POST /api/auth/local 拿, 不需要账号)。缺失 / 不对 → 401 (仪表盘重新拿一次令牌再试)
 case "$method $path" in
-  "GET /api/auth/status"|"POST /api/login"|"POST /api/register") ;;
-  *) _s=$(auth_secret); { [ -n "$_s" ] && [ -n "$TOK" ] && [ "$TOK" = "$_s" ]; } || deny 401 E_AUTH "需要登录" ;;
+  "GET /api/auth/status"|"POST /api/auth/local"|"POST /api/login"|"POST /api/register") ;;
+  *) _s=$(auth_secret); { [ -n "$_s" ] && [ -n "$TOK" ] && [ "$TOK" = "$_s" ]; } || deny 401 E_AUTH "本机令牌无效, 请刷新仪表盘页面" ;;
 esac
 
-# 敏感操作 (step-up): 已经登录也要再输一次密码, 换到 X-Enana-Sudo 令牌才能调用。以后加功能只要往这张表里加一项 (格式 方法:路径)。
-SUDO_ENDPOINTS=" POST:/api/servers/delete POST:/api/sub/delete GET:/api/servers/secret GET:/api/sub/url POST:/api/logs/clear POST:/api/devices/kick POST:/api/sync/clear GET:/api/export "
-case "$SUDO_ENDPOINTS" in *" $method:$path "*) auth_sudo_ok "$SUD" || deny 403 E_SUDO_REQUIRED "此操作需要再次输入登录密码" ;; esac
+# 账号功能 (云端同步 / 会员与付款 / 我的设备 / 修改密码 / 二次验证 / 诊断上传): 只在登录了 enana 账号时可用。没登录 → HTTP 200 E_LOGIN_REQUIRED
+# (仪表盘据此弹出登录框; 不用 401, 那表示本机令牌不对)。以后加账号功能只要往这张表里加一项 (格式 方法:路径); /api/billing 与 /api/email/ 下的全部接口自动算在内。
+# 只读的页面数据 (GET /api/sync, GET /api/plan, GET /api/state) 照常返回, 带 logged_in / 空的 account.email, 是中性的状态。
+ACCOUNT_ENDPOINTS=" GET:/api/devices POST:/api/devices/kick POST:/api/password POST:/api/auth/verify POST:/api/sync/settings POST:/api/sync/push POST:/api/sync/pull POST:/api/sync/preview POST:/api/sync/clear POST:/api/diag/send POST:/api/diag/delete "
+_acct=0; case "$ACCOUNT_ENDPOINTS" in *" $method:$path "*) _acct=1 ;; esac
+case $path in /api/billing|/api/billing/*|/api/email/*) _acct=1 ;; esac
+[ "$_acct" = 0 ] || auth_logged_in || fail "需要登录 enana 账号才能使用这个功能" E_LOGIN_REQUIRED
+
+# 敏感操作 (step-up): 登录了 enana 账号时还要再输一次账号密码, 换到 X-Enana-Sudo 令牌才能调用。以后加功能只要往这张表里加一项 (格式 方法:路径)。
+# 没登录时不要求 (没有密码可以验证): 仪表盘在这些操作前弹一次确认框。
+# 退出 / 换成另一个账号 (logout / login / register) 也在表里: 否则登录状态下先退出账号, 后面的敏感操作就只剩一次确认 (或用自己刚注册的账号通过二次验证)
+SUDO_ENDPOINTS=" POST:/api/servers/delete POST:/api/sub/delete GET:/api/servers/secret GET:/api/sub/url POST:/api/logs/clear POST:/api/devices/kick POST:/api/sync/clear GET:/api/export POST:/api/billing/purchase POST:/api/billing/auto-renew POST:/api/logout POST:/api/login POST:/api/register "
+if auth_logged_in; then case "$SUDO_ENDPOINTS" in *" $method:$path "*) auth_sudo_ok "$SUD" || deny 403 E_SUDO_REQUIRED "此操作需要再次输入登录密码" ;; esac; fi
 
 urldecode() { case $1 in *\\*) printf ''; return ;; esac; local s=${1//+/ }; printf '%b' "${s//%/\\x}"; }
 qp() { urldecode "$(printf '%s' "$query" | tr '&' '\n' | sed -n "s/^$1=//p" | head -1)"; }          # 查询参数
@@ -140,6 +152,17 @@ servers_json() { # 用户自己的服务器, 后面接官方线路 (第 7 列 = 
 
 # ---------- 账号 / 代理总开关 ----------
 ep_auth_status() { json "{\"ok\":true,$(auth_status_json)}"; }
+ep_auth_local() { # 仪表盘不需要账号: 把本机令牌 (= 核心 Clash API 的 secret, 登录 / 退出都不换) 交给本机打开的仪表盘。和其它接口一样先过了 Host / X-Enana 检查;
+  # 这里再多拦一道: 带着别的来源 (Origin) 或浏览器标明是跨站 (Sec-Fetch-Site: cross-site) 的请求一律拒绝 —— 仪表盘与辅助服务同源, curl 之类不带 Origin
+  local tok new=0
+  case $ORIGIN in ''|"http://127.0.0.1:$API_PORT"|"http://localhost:$API_PORT") ;; *) deny 403 E_FORBIDDEN "拒绝访问" ;; esac
+  [ "$SFS" != cross-site ] || deny 403 E_FORBIDDEN "拒绝访问"
+  [ -s "$H/secret" ] || { auth_init; new=1; }                                   # 令牌文件不见了 (正常安装不会): 生成一个, 并在后台让核心换上
+  tok=$(auth_secret); [ -n "$tok" ] || fail "本机令牌无法生成, 请重新运行安装命令" E_BUSY
+  [ "$new" = 0 ] || job_spawn auth-sync '同步令牌' >/dev/null
+  if cloud_first_due; then cloud_first_mark; OP_WHO=auto APPS_BG_JOB=1 job_spawn content-sync "$RULE_STEPS" >/dev/null; fi     # 还从没拿到过云端内容 (全新安装): 后台补一次, 不弹管理员框 (见 lib/cloud.sh)
+  okj "\"token\":\"$tok\",\"logged_in\":$(auth_logged_in && echo true || echo false)"
+}
 auth_fail_reply() { # 把 auth_login / auth_register 的失败码翻译成响应 (调用方已设置 AUTH_CODE / AUTH_WAIT)
   case $AUTH_CODE in
     E_LOCKED)               fail "尝试次数过多, 请 $AUTH_WAIT 秒后再试" E_LOCKED "\"wait\":$AUTH_WAIT" ;;
@@ -174,12 +197,14 @@ ep_register() {
   fi
   auth_fail_reply
 }
-ep_logout() { # 退出账号: 代理设置保留 (开关 / 系统代理 / 你自己的服务器与规则), 官方节点与令牌清掉, 释放云端设备名额; 切换账号 (switch=1) 才关闭代理
-  local sw; sw=$(fp switch)
+ep_logout() { # 退出 enana 账号 = 回到「不登录」: 本机令牌不变 (仪表盘照常打开), 代理开关 / 模式 / 系统代理 / 你自己的服务器与规则全部保留 (switch=1「切换账号」也一样);
+  # 账号的官方节点清掉 (有的话在后台重新生成一次配置把它们去掉), 同步密钥 / 会员缓存 / sudo 令牌清掉, 释放云端的设备名额。没有登录时什么都不做
+  local sw official=0; sw=$(fp switch)
+  auth_logged_in || { okj; return; }
+  [ -s "$H/official.jsonl" ] && official=1
   oplog dashboard "退出账号" "$(kv user "$(auth_mask_email "$(auth_current_email)")" switch "${sw:-0}")" ok
-  [ "$sw" = 1 ] && proxy_set_enabled 0
   auth_logout
-  job_spawn auth-sync '同步令牌' >/dev/null
+  [ "$official" = 0 ] || job_spawn auth-sync '移除官方线路' >/dev/null
   okj
 }
 ep_sysproxy() { # 单独开启 / 关闭系统代理 (on=0|1) -> 后台任务 (macOS 可能弹出管理员密码窗口, 要等用户输入, 不能卡住这个请求); 进度用 GET /api/job 查询
@@ -194,6 +219,9 @@ ep_proxy() { # 代理总开关 + 模式 (on=0|1, mode=auto|global; 至少给一�
   [ -n "$on" ] || [ -n "$mode" ] || fail "参数无效"
   case $on in ''|0|1) ;; *) fail "参数无效" ;; esac
   case $mode in ''|auto|global) ;; *) fail "代理模式无效" ;; esac
+  if [ "$on" = 1 ] && [ -f "$H/official.stale" ]; then      # 被下线时官方节点还留在 TUN 的核心里 (见 session_local_end): 先经过授权换掉配置再开 (后台任务, 仪表盘跟着走)
+    okj "\"job\":\"$(job_spawn proxy '移除官方线路|启动代理服务|开启代理' "$on" "$mode" stale)\""; return
+  fi
   if { [ "$on" = 1 ] || { [ -z "$on" ] && [ "${PROXY_ENABLED:-0}" = 1 ]; }; } && ! os_service_running; then
     # 先要启动核心。要管理员授权时它会停在密码框上, 仪表盘等 25 秒就报告失败: 交给后台任务 proxy (lib/ops.sh 的 op_proxy, 和切换流量接管方式一样),
     # 马上返回任务编号, 仪表盘跟着任务走。不要授权的启动 (用户自己的核心, 几秒钟) 照旧在这里做完
@@ -206,8 +234,7 @@ ep_proxy() { # 代理总开关 + 模式 (on=0|1, mode=auto|global; 至少给一�
   proxy_switch "$on" "$mode" "$was_on" "$was_mode"      # 改开关 / 模式, 系统代理跟上, 写操作记录 (lib/ops.sh)
   okj "$PROXY_SWITCH_JSON"
 }
-ep_devices() { # 我的设备 (云端)
-  auth_logged_in || fail "需要登录" E_AUTH
+ep_devices() { # 我的设备 (云端; 没登录的请求已经在上面的账号功能检查里回了 E_LOGIN_REQUIRED)
   local body; body=$(session_devices_json) || fail "连不上云端, 暂时无法读取设备列表" E_ACCOUNT_UNREACHABLE
   json "{\"ok\":true,$body}"
 }
@@ -234,7 +261,7 @@ ep_password() { # 在本机修改账号密码 (旧密码 + 新密码): 云端校
   case $AUTH_CODE in
     E_BAD_CREDENTIALS) oplog dashboard "修改密码失败" "$(kv code E_BAD_CREDENTIALS reason old_password_wrong)" error; fail "当前密码不正确" E_BAD_CREDENTIALS "\"wait\":$(auth_wait_seconds)" ;;
     E_WEAK_PASSWORD)   fail "新密码至少 8 位, 并且不能和旧密码相同" E_WEAK_PASSWORD ;;
-    E_AUTH)            deny 401 E_AUTH "登录已失效, 请重新登录" ;;
+    E_AUTH)            fail "登录已失效, 请重新登录" E_LOGIN_REQUIRED ;;          # 云端会话已撤销 (心跳随即在本机退出登录): 不用 401 —— 401 只表示本机令牌不对
     E_ACCOUNT_UNREACHABLE) fail "连不上 enana.cc, 修改密码必须在线 (离线登录时不能修改)。请检查网络后重试" E_ACCOUNT_UNREACHABLE ;;
     *) auth_fail_reply ;;
   esac
@@ -244,7 +271,7 @@ ep_auth_verify() { # 敏感操作前再次输入密码 -> 5 分钟有效的 sudo
   case $AUTH_CODE in
     E_LOCKED)          fail "尝试次数过多, 请 $AUTH_WAIT 秒后再试" E_LOCKED "\"wait\":$AUTH_WAIT" ;;
     E_BAD_CREDENTIALS) oplog dashboard "二次验证失败" "$(kv code E_BAD_CREDENTIALS)" error; fail "密码不正确" E_BAD_CREDENTIALS "\"wait\":$(auth_wait_seconds)" ;;
-    E_AUTH)            deny 401 E_AUTH "需要登录" ;;
+    E_AUTH)            fail "需要登录 enana 账号才能使用这个功能" E_LOGIN_REQUIRED ;;      # (刚刚被退出登录; 平时没登录的请求在账号功能检查里就回了)
     *)                 fail "请输入登录密码" E_INVALID ;;
   esac
 }
@@ -291,7 +318,7 @@ sync_open_reply() { # sync_open_remote 的返回码 -> 失败响应 (成功时�
   case $1 in
     0) ;;
     1) fail "连不上 enana.cc, 暂时无法同步" E_ACCOUNT_UNREACHABLE ;;
-    2) deny 401 E_AUTH "登录已失效, 请重新登录" ;;
+    2) session_heartbeat >/dev/null 2>&1 || true; fail "登录已失效, 请重新登录" E_LOGIN_REQUIRED ;;      # 云端会话已撤销: 先让心跳在本机结束登录 (和改密码一样), 仪表盘不会在「已登录 / 未登录」之间来回跳; 401 只留给本机令牌
     3) fail "这份云端配置不是用当前密码加密的 (可能在别处改过密码): 请输入旧密码后重试" E_SYNC_KEY ;;
     4) fail "云端还没有数据" E_NOT_FOUND ;;
     6) fail "没有同步密钥: 请退出账号后重新登录一次 (密钥由登录密码派生)" E_SYNC_KEY ;;
@@ -304,7 +331,7 @@ ep_sync_push() {
   sync_have_key || fail "没有同步密钥: 请退出账号后重新登录一次 (密钥由登录密码派生)" E_SYNC_KEY
   if [ "$force" != 1 ]; then      # 先看一眼云端: 有更新的版本就直接告诉前端 (让用户选以哪一份为准)
     sync_remote_forget; sync_remote_meta
-    case $? in 0) ;; 2) deny 401 E_AUTH "登录已失效, 请重新登录" ;; *) fail "连不上 enana.cc, 暂时无法同步" E_ACCOUNT_UNREACHABLE ;; esac
+    case $? in 0) ;; 2) session_heartbeat >/dev/null 2>&1 || true; fail "登录已失效, 请重新登录" E_LOGIN_REQUIRED ;; *) fail "连不上 enana.cc, 暂时无法同步" E_ACCOUNT_UNREACHABLE ;; esac
     base=$(sync_get BASE_VERSION)
     if [ "$R_EXISTS" = 1 ] && [ "$R_VERSION" != "${base:-0}" ]; then
       fail "云端有更新的版本 (来自「$R_DEVICE」): 请选择以云端为准还是以本机为准" E_SYNC_CONFLICT "\"remote\":{\"version\":$R_VERSION,\"updated\":$R_UPDATED,\"device\":\"$(jesc "$R_DEVICE")\"}"
@@ -329,7 +356,7 @@ ep_sync_clear() { # 删除云端的同步数据 (需 sudo)
   local code
   [ -n "$(session_id)" ] || fail "连不上 enana.cc" E_ACCOUNT_UNREACHABLE
   code=$(session_call /dev/null DELETE /api/enana/v1/sync/snapshot)
-  case $code in 200) ;; 401) deny 401 E_AUTH "登录已失效, 请重新登录" ;; *) fail "连不上 enana.cc, 暂时无法清除" E_ACCOUNT_UNREACHABLE ;; esac
+  case $code in 200) ;; 401) session_heartbeat >/dev/null 2>&1 || true; fail "登录已失效, 请重新登录" E_LOGIN_REQUIRED ;; *) fail "连不上 enana.cc, 暂时无法清除" E_ACCOUNT_UNREACHABLE ;; esac
   sync_set BASE_VERSION 0; sync_set SYNCED_HASH ''; sync_set CONFLICT 0; sync_remote_forget
   oplog dashboard "云端同步: 清除云端数据" "$(kv scope cloud)" ok
   okj
@@ -343,7 +370,7 @@ vps_launch() { # <任务名> <步骤> <name> <role> <install_deps> <id> <confirm
   local job=$1 steps=$2 id
   vps_cred_check "$F_HOST" "$F_PORT" "$F_USER" "$F_MODE" "$F_PASSWORD" "$F_KEY" "$F_PASSPHRASE" "$F_SUDOPW" "$F_HOSTKEY" || fail "$VPS_ERR" E_INVALID
   command -v "$(vps_ssh_bin)" >/dev/null 2>&1 || fail "这台电脑上找不到 ssh 命令" E_SSH_NO_CLIENT
-  vps_playbook_ok || fail "部署脚本由 enana 云端下发: 请先登录, 并等「云端内容」同步完成后再试" E_VPS_NO_PLAYBOOK
+  vps_playbook_ok || fail "部署脚本由 enana 云端下发 (不需要账号): 请等「云端内容」更新完成后再试 (终端里运行 enana content 可以立即更新)" E_VPS_NO_PLAYBOOK
   id=$(job_new "$job" "$steps")
   vps_cred_write "$H/jobs/$id.cred" "$F_HOST" "$F_PORT" "$F_USER" "$F_MODE" "$F_PASSWORD" "$F_KEY" "$F_PASSPHRASE" "$F_SUDOPW" "$F_HOSTKEY" "$3" "$4" "$5" "$6" "$7" "${8:-}"
   job_launch "$job" "$id" "$H/jobs/$id.cred"
@@ -410,15 +437,16 @@ ep_prefs_set() { # 正文是 JSON 对象文本
   ( prefs_cloud_sync >/dev/null 2>&1 & ) >/dev/null 2>&1                  # 本机改动后推送到云端 (后台, 不让界面等网络; 未登录时什么都不做)
   okj "\"version\":$PREFS_VERSION"
 }
-ep_plan() {
+ep_plan() { # 套餐属于账号: 没登录时是中性的「免费版」(logged_in:false, 不看缓存、不联网), 页面照常显示
   local c age; c=$(plan_checked); age=$(( $(now) - c ))
+  auth_logged_in || { json "{\"ok\":true,\"logged_in\":false,$(plan_json neutral)}"; return; }
   if [ -n "$(session_id)" ]; then
     if [ "$(qp refresh)" = 1 ] && [ "$age" -ge 3 ]; then plan_refresh || true      # ?refresh=1 (付款 / 余额购买成功后、手动刷新): 同步向云端取最新套餐, 否则刚付款的用户最长 1 小时还看到免费版 (3 秒内刚刷新过就不重复)
     elif [ "$age" -gt "$PLAN_TTL" ]; then
       if [ "$c" = 0 ]; then plan_refresh || true; else ( plan_refresh >/dev/null 2>&1 & ); fi      # 从没取过: 等一下; 过期了: 先用旧的, 后台刷新
     fi
   fi
-  json "{\"ok\":true,$(plan_json)}"
+  json "{\"ok\":true,\"logged_in\":true,$(plan_json)}"
 }
 
 ep_billing() {
@@ -769,13 +797,11 @@ ep_settings_set() {
 }
 
 # ---------- 诊断上传 (设置 → 日志; 说明见 docs/DIAGNOSTICS.md) ----------
-ep_diag_send() { # POST /api/diag/send  hours=…  把完整诊断 (含访问过的域名 / 应用名) 发给开发者: 后台任务, 完成后任务结果里有报告编号
-  auth_logged_in || fail "需要登录" E_AUTH
+ep_diag_send() { # POST /api/diag/send  hours=…  把完整诊断 (含访问过的域名 / 应用名) 发给开发者: 后台任务, 完成后任务结果里有报告编号 (要登录 enana 账号, 见上面的账号功能检查)
   local hours; hours=$(fp hours); case $hours in ''|*[!0-9]*) hours=24 ;; esac
   okj "\"job\":\"$(job_spawn diag-send '打包完整诊断|上传' "$hours")\""
 }
-ep_diag_delete() { # POST /api/diag/delete  删除自己已经上传的全部诊断 (摘要 + 完整诊断)
-  auth_logged_in || fail "需要登录" E_AUTH
+ep_diag_delete() { # POST /api/diag/delete  删除自己已经上传的全部诊断 (摘要 + 完整诊断; 要登录)
   local n; n=$(OP_WHO=dashboard diag_delete) || fail "没能联系上云端, 稍后再试" E_ACCOUNT_UNREACHABLE
   okj "\"deleted\":${n:-0}"
 }
@@ -931,6 +957,7 @@ ep_speed_stop() { local id; id=$(qp id); speed_id_ok "$id" || fail "测速任务
 
 case "$method $path" in
   "GET /api/auth/status")      ep_auth_status ;;
+  "POST /api/auth/local")      ep_auth_local ;;
   "POST /api/login")           ep_login ;;
   "POST /api/register")        ep_register ;;
   "POST /api/logout")          ep_logout ;;

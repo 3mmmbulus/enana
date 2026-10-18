@@ -66,7 +66,7 @@ os_write_plists() { # 写主服务 / 本地辅助服务(inetd) / 每日维护 �
 <key>StandardOutPath</key><string>$H/update.log</string>
 <key>StandardErrorPath</key><string>$H/update.log</string>
 </dict></plist>" && n=$((n+1))
-  # 每分钟一次的定时任务: 流量统计采样 + 登录会话心跳 (被其它设备下线时本机自动退出登录并关闭代理)
+  # 每分钟一次的定时任务: 流量统计采样 + 登录会话心跳 (被其它设备下线时本机自动退出登录; 代理照常使用自己的服务器)
   _write_if_changed "$PLIST_TICK" "$xml_head
 <key>Label</key><string>$LABEL_TICK</string>
 <key>ProgramArguments</key><array><string>$H/enana</string><string>tick</string><string>--quiet</string></array>

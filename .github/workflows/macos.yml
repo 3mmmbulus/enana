@@ -25,6 +25,8 @@ jobs:
         run: bash tests/stats.sh
       - name: Reset to the official default rules (official content refresh, backup, undo, rollback)
         run: bash tests/reset.sh
+      - name: No-account mode (local token, account-only endpoints, step-up only when signed in, sign-out and kick keep the proxy, anonymous cloud content)
+        run: python3 tests/no-account.py
       - name: sing-box fallback download source and signed compatibility manifest
         run: bash tests/core.sh
       - name: Diagnostics summary (allow-list privacy) and upload flow
@@ -37,6 +39,11 @@ jobs:
           node tests/moved-actions-ui.test.js
           node tests/table-rows-ui.test.js
           node tests/sudo-session.test.js
+      - name: Dashboard without an account (local token, sign-in dialog, E_LOGIN_REQUIRED, guest confirmation, logout stays open, no idle lock, sync for guests)
+        run: |
+          node tests/guest-mode-ui.test.js
+          node tests/auto-lock.test.js
+          node tests/sync-first-login.test.js
       - name: Verify terminal waits for Enter and renders one action per line
         run: python3 tests/console-pty.py
       - name: Check protected TUN cleanup and rollback
@@ -53,6 +60,10 @@ jobs:
           node tests/vps-verify-ui.test.js
       - name: Unit tests (log parsing, app scan and times, subscription refresh stability, diagnostics)
         run: bash tests/units.sh
+      - name: Log reading (byte-identical to 2.3.26, tail windows for big days, dates without a full scan, tick.log trim, dashboard paging)
+        run: |
+          bash tests/logs-query.sh
+          node tests/logs-ui.test.js
       - name: Dashboard subscription refresh (dry run first, silent when unchanged, TUN updates wait for the user)
         run: node tests/subs-refresh.test.js
       - name: Foreign sing-box inventory, port ownership and install-time prompts (stubbed ps, lsof, launchctl)

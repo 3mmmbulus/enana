@@ -120,6 +120,12 @@ class BillingBridge(unittest.TestCase):
                     r=subprocess.run(['/bin/bash',str(repo/'lib/api.sh')],env=env,input=request,capture_output=True,timeout=10)
                     self.assertEqual(r.returncode,0,r.stderr.decode());return json.loads(r.stdout.split(b'\r\n\r\n',1)[1])
                 self.assertEqual(cgi('/api/billing',token=False)['code'],'E_AUTH');self.assertEqual(calls,[])
+                # 2.3.27: billing belongs to an enana account. Signed out (no loggedin file, even with a leftover cloud session) every billing / email
+                # route answers HTTP 200 E_LOGIN_REQUIRED and nothing reaches the cloud; the rest of this test is the signed-in bridge.
+                for path,body in [('/api/billing',None),('/api/billing/checkout',{'kind':'plan','sku':'m1','request_key':'a'*32}),('/api/email/send',{})]:
+                    r=cgi(path,body); self.assertEqual((sorted(r),r['ok'],r['code']),(['code','error','ok'],False,'E_LOGIN_REQUIRED'),path); self.assertTrue(r['error'],path)
+                self.assertEqual(calls,[])
+                (home/'loggedin').write_text('user1@example.test 1760000000\n')
                 self.assertEqual(cgi('/api/billing')['wallet']['balance'],'4.000037')
                 self.assertEqual(calls[-1][:3],('/api/enana/v1/billing','Bearer cloud-test-token','device-test-id'))
                 self.assertEqual(cgi('/api/billing/order?id=../../private')['code'],'E_INVALID')

@@ -54,6 +54,7 @@ check "名字就叫 directory 的键 (文件服务的目录) 指向 ROOT 之外 
 check "入站是 hysteria2 (masquerade 能把目录当文件服务器) → 拒绝" cc_fail '{"inbounds":[{"type":"hysteria2","listen":"127.0.0.1","masquerade":"file:///etc"}]}' /inbounds/0/type
 check "…mixed 监听 0.0.0.0 → 拒绝" cc_fail '{"inbounds":[{"type":"mixed","listen":"0.0.0.0","listen_port":1080}]}' /inbounds/0/listen
 check "…tun 加上 127.0.0.1 上的 mixed: 放行" cc_pass '{"inbounds":[{"type":"tun","tag":"tun-in"},{"type":"mixed","tag":"in","listen":"127.0.0.1","listen_port":1080}]}'
+check "TUN 的 DNS 引导 (直连的 UDP 223.5.5.5, 用域名写的 DNS 服务器靠它解析; 见 lib/dns.sh): 放行" cc_pass '{"dns":{"servers":[{"type":"udp","tag":"dns-boot","server":"223.5.5.5"},{"type":"https","tag":"dns-cn","server":"dns.alidns.com","path":"/dns-query","domain_resolver":"dns-boot"}],"final":"dns-cn"},"route":{"default_domain_resolver":"dns-cn"}}'
 
 echo "== B. 快照文件的筛选 (3.4): 规则集 rules/目录/文件, 证书 certs/名字.crt"
 mkdir -p "$H/rules/app/deep" "$H/rules/site-claude" "$H/certs"
@@ -92,7 +93,7 @@ check "命令超过 64 KB: enhanced_admin 返回 6, 不调用 sudo" big_check
 check "命令含换行: enhanced_admin 返回 6, 不调用 sudo" nl_check
 
 echo "== D. 暂存之后被改动: root 在改动任何东西之前拒绝 (退出码 3)"
-rf_reset; rf_enana_start; before=$(root_sig); b0=$(calls_of bootout)
+rf_reset; rf_enana_start; before=$(root_sig); b0=$(calls_of bootout); s0=$(rf_ns_sets)
 export RF_HOOK='printf x >> "$(cat "$RF_W/stage.path")/sing-box"'
 rf_enana_start; rc=$?
 check "核心在暂存之后被换掉: 退出码 3, 没有 bootout" test "$rc:$(calls_of bootout)" = "3:$b0"
@@ -108,6 +109,7 @@ export RF_HOOK='ln -s /etc/hosts "$(cat "$RF_W/stage.path")/link"'
 rf_enana_start; rc=$?; check "暂存目录里有符号链接: 退出码 3, 原因 stage-link" test "$rc:$(grep -c 'refused: stage-link' "$H/enhanced-check.log")" = "3:1"
 export RF_HOOK='mkfifo "$(cat "$RF_W/stage.path")/fifo"'
 rf_enana_start; rc=$?; check "暂存目录里有 FIFO: 立即拒绝 (不会卡住), 原因 stage-extra" test "$rc:$(grep -c 'refused: stage-extra' "$H/enhanced-check.log")" = "3:1"
+check "以上拒绝都没有改系统 DNS (没有新的 -setdnsservers, 网络服务还是第一次安装后的 223.5.5.5)" test "$(rf_ns_sets):$(rf_ns_taken && echo taken)" = "$s0:taken"
 rf_reset; rm -f "$W/stage-leak"
 export RF_HOOK='[ ! -e "$(cat "$RF_W/stage.path")/refs" ] && [ ! -e "$(cat "$RF_W/stage.path")/list" ] || printf x > "$RF_W/stage-leak"'
 rf_enana_start; rc=$?; unset RF_HOOK
@@ -154,9 +156,13 @@ no_lib_argv() { ! grep -q "$LIBT/[^ ']*[.]sh" "$W/sudo.log"; }
 check "管理员命令的 argv 里没有 lib 目录里的 .sh 路径 (sudo -n 不会收到它们)" no_lib_argv
 # 只查 shell 代码: 内嵌的 Perl 程序 (*_PL='…', 交给 /usr/bin/perl -e 运行) 换成空行 (行号不变), 里面的 sort / grep 是 Perl 的内建函数, 不是命令
 root_shell() { awk '/^[A-Z_]+_PL=\047/ {p=1} {print (p ? "" : $0)} p && /\047$/ {p=0}' "$RF_REPO/lib/enhanced-root.sh"; }
-bare_names() { root_shell | grep -nE '(^|[;&|(]) *(chown|install|mkdir|rm|cp|mv|chmod|stat|find|awk|sed|grep|head|tr|dirname|id|touch|base64|shasum|perl|route|ifconfig|sleep|cat|sort|mktemp|visudo|tee|launchctl|env|osascript) ' | grep -qv '^[0-9]*:[[:space:]]*#'; }
+bare_names() { root_shell | grep -nE '(^|[;&|(]) *(chown|install|mkdir|rm|cp|mv|chmod|stat|find|awk|sed|grep|head|tr|dirname|id|touch|base64|shasum|perl|route|ifconfig|sleep|cat|sort|mktemp|visudo|tee|launchctl|env|osascript|networksetup|scutil|dscacheutil|killall) ' | grep -qv '^[0-9]*:[[:space:]]*#'; }
 bare_free() { ! bare_names; }
-check "root 脚本里没有裸的命令名 (每个命令都是绝对路径)" bare_free
+check "root 脚本里没有裸的命令名 (每个命令都是绝对路径; 也包括系统 DNS 用的 networksetup)" bare_free
+# 系统 DNS 只由要管理员授权的安装 / 停止 / 删除改: root 脚本里 networksetup 只有一个写死的绝对路径, 免密的规则助手 (sudo -n 就能运行) 根本不碰它
+ns_fixed() { [ "$(grep -c 'networksetup_bin=' "$RF_REPO/lib/enhanced-root.sh")" = 1 ] && grep -q '^networksetup_bin="/usr/sbin/networksetup"' "$RF_REPO/lib/enhanced-root.sh"; }
+check "root 脚本只用写死的 /usr/sbin/networksetup (变量只定义一次)" ns_fixed
+check "免密的规则助手 (lib/tunrules-helper.pl) 不碰系统 DNS" test "$(grep -cE 'networksetup|setdnsservers' "$RF_REPO/lib/tunrules-helper.pl")" = 0
 
 echo "== F. 弹框分支的拒绝 (M1) · 删除时根目录是符号链接 (M4)"
 rf_reset

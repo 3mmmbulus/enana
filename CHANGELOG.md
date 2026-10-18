@@ -1,5 +1,27 @@
 # Changelog / 更新日志
 
+## 2.3.27 (2026-10-19)
+
+### 中文
+- **控制台不需要登录了:** 打开控制台就能用, 登录了账号的电脑也一样。添加服务器、导入订阅、一键部署自己的服务器、应用和网站分流、DNS、日志、测速、更新都不需要账号; enana 账号只用于云端同步、购买会员、官方线路、我的设备和上传诊断, 用到时再登录。
+- **敏感操作:** 登录了账号时, 删除服务器、查看订阅链接、导出配置、余额付款、开启自动续费等仍要再输一次账号密码 (5 分钟内有效); 没登录时弹一次确认。去掉了「无操作自动锁定」(打开即用之后锁定没有意义)。
+- **退出账号或被其它设备下线后, 代理不再关闭:** 继续使用你自己的服务器, 只停掉官方线路、同步和会员功能。
+- **云端精选规则不需要账号:** 签名的规则包 (服务目录、规则库、应用推荐、一键部署脚本) 不登录也能下载, 照样验签、防回滚。
+- **增强模式 (TUN, macOS) 修复 LINE 等应用打不开:** 这些应用不走系统代理, 以前向路由器查 DNS, 拿到的是被污染的地址 (例如 LINE 的登录二维码一直加载不出来)。现在开启增强模式时把系统 DNS 设为 223.5.5.5, 查询交给 enana 解析; 切回轻量模式或卸载时恢复原来的设置, enana 意外退出时 223.5.5.5 也能直接用。只有路由器才认识的局域网名字 (例如 nas.lan) 和需要网页登录的公共 Wi-Fi, 请先切到轻量模式。Windows 本来就不受影响。
+- **日志页快很多:** 以前每次查询都把一整天的日志 (可能上百 MB) 全部读一遍, 开着「实时刷新」时每 5 秒一次; 现在只读最新的部分。网站访问记录在一天很长时显示「最近的 N 条」, 可以继续「加载更早的记录」。
+- **自动线路更可靠:** Hysteria2 / TUIC 节点改由核心直接测速 (以前被当成「连接被拒绝」), 坏了也会立刻换; 本机网络断开时不再误换节点, 只记一条「本机断网」; 换节点后断开还挂在坏节点上的连接, 应用会自动重连到新节点。
+- **其它修复:** 后台刷新订阅遇到需要管理员授权时如实提示「打开仪表盘时可以应用」(以前误报「配置无效」); tick.log 超过 1 MB 时只保留最近的部分。
+
+### English
+- **The dashboard no longer needs an account:** it opens directly, also on a computer that is signed in. Adding servers, importing subscriptions, one-click server deployment, app and site routing, DNS, logs, speed tests and updates need no account; the enana account is only for cloud sync, membership purchases, official lines, My devices and diagnostic uploads, and you sign in when you need one of them.
+- **Sensitive actions:** when signed in, deleting servers, showing a subscription link, exporting the configuration, paying from the balance and turning on auto-renew still ask for the account password again (valid for 5 minutes); when not signed in they ask for one confirmation. Idle auto-lock is gone (locking is pointless once the dashboard opens directly).
+- **Signing out or being signed out by another device no longer turns the proxy off:** your own servers keep working; only official lines, sync and membership features stop.
+- **Curated cloud rules without an account:** the signed rule package (service catalog, rule sets, app recommendations, one-click deploy scripts) downloads without signing in, with the same signature and anti-rollback checks.
+- **Enhanced mode (TUN, macOS) fixes LINE and similar apps:** these apps ignore the system proxy and used to ask the router's DNS, which returned poisoned addresses (for example LINE's login QR code never loaded). Enhanced mode now sets the system DNS to 223.5.5.5 so lookups are answered by enana, and restores your setting when you switch back to Lightweight mode or uninstall; 223.5.5.5 also works directly if enana stops unexpectedly. For LAN names only your router knows (such as nas.lan) and public Wi-Fi with a login page, switch to Lightweight mode first. Windows was never affected.
+- **Much faster Logs page:** every query used to read the whole day (possibly hundreds of MB), every 5 seconds with live refresh on; now only the newest part is read. On long days site visits show "the most recent N" with "Load older entries".
+- **More reliable automatic route:** Hysteria2 / TUIC nodes are now tested by the core (they used to be logged as "connection refused") and are replaced at once when they fail; a local network outage no longer causes a switch and is logged once; after a switch, connections still stuck on the dead node are closed so apps reconnect through the new one.
+- **Other fixes:** a background subscription refresh that needs administrator authorization now says it can be applied from the dashboard (it used to report an invalid configuration); tick.log keeps only its recent part once it passes 1 MB.
+
 ## 2.3.26 (2026-10-15)
 
 ### 中文
