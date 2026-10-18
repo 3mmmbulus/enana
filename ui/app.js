@@ -190,35 +190,41 @@
     ['state', 'helper', 'auth', 'lang', 'proxy'].forEach(function (ev) { TP.on(ev, paintProxy); });
     paintProxy();
 
-    /* 账号菜单 (头像 + 邮箱; 窄屏只剩头像) */
+    /* 账号菜单 (头像 + 邮箱; 窄屏只剩头像)。没有登录: 「未登录」+ 登录 / 注册; 登录了: 邮箱 (-> 设置 · 账号与设备) · 会员 + 退出账号。仪表盘本身不需要账号 */
     hd.acct = TP.byId('acct-btn'); hd.acctAv = TP.byId('acct-av'); hd.acctT = TP.byId('acct-t'); hd.acctDot = TP.byId('acct-dot');
     hd.acct.insertBefore(ui.icon('chevron-down', 14, 'acct-chev'), hd.acctDot);
     ui.menu(hd.acct, function () {
       function tab(id) { return function () { if (TP.settingsTab) TP.settingsTab(id); else TP.go('settings'); }; }     // 邮箱 -> 设置 · 账号与设备; 会员 -> 设置 · 会员
-      var items = [
-        { label: TP.auth.label(), icon: 'account', onClick: tab('account') },
-        { label: t('plan.menu'), icon: 'pro', onClick: tab('plan') },
-        { label: t('user.settings'), icon: 'nav-settings', onClick: function () { TP.go('settings'); } }
-      ];
+      var A = TP.auth, user = A.signedIn(), items = [];
+      if (user) items.push({ label: A.label(), icon: 'account', onClick: tab('account') }, { label: t('plan.menu'), icon: 'pro', onClick: tab('plan') });
+      else {                                                        // 不等对话框关闭 (菜单项的 Promise 结束得早一点也没关系, 这里不返回它)
+        items.push({ label: t('auth.login'), icon: 'account', onClick: function () { A.openLogin({ mode: 'login' }); } });
+        items.push({ label: t('auth.register'), icon: 'plus', onClick: function () { A.openLogin({ mode: 'register' }); } });
+      }
+      items.push({ label: t('user.settings'), icon: 'nav-settings', onClick: function () { TP.go('settings'); } });
       if (S.update.available) items.push({ label: t('upd.ind.new', { v: S.update.latest }), icon: 'update', onClick: function () { TP.updates.openDialog(); } });
-      items.push({ sep: true });
-      items.push({ label: t('user.switch'), icon: 'refresh', onClick: function () { return TP.auth.logout('switch'); } });
-      items.push({ label: t('user.logout'), icon: 'logout', danger: true, onClick: function () { return TP.auth.logout('logout'); } });
+      if (user) { items.push({ sep: true }); items.push({ label: t('user.logout'), icon: 'logout', danger: true, onClick: function () { return A.logout('logout'); } }); }
       return items;
     }, { label: t('user.menu'), place: 'bottom-end' });
     function paintAcct() {
-      var who = TP.auth.email() || '', label = TP.auth.label();
-      var ch = (who || label).replace(/[^A-Za-z0-9À-￿]/g, '').charAt(0).toUpperCase();
-      setText(hd.acctAv, ch || '?'); setText(hd.acctT, label);
+      var A = TP.auth, guest = A.guest(), who = A.email() || '', label = A.label();
+      hd.acct.classList.toggle('is-guest', guest);
+      if (guest) { if (!hd.acctAv._ic) { TP.clear(hd.acctAv); hd.acctAv.appendChild(ui.icon('account', 16)); hd.acctAv._ic = true; } }     // 没有登录: 头像里是一个人形图标, 不是字母
+      else {
+        var ch = (who || label).replace(/[^A-Za-z0-9À-￿]/g, '').charAt(0).toUpperCase();
+        if (hd.acctAv._ic) { TP.clear(hd.acctAv); hd.acctAv._ic = false; }
+        setText(hd.acctAv, ch || '?');
+      }
+      setText(hd.acctT, label);
       var hue = 0, i; for (i = 0; i < label.length; i++) hue = (hue * 31 + label.charCodeAt(i)) % 360;
       hd.acctAv.style.setProperty('--hue', hue);
       hd.acct.setAttribute('aria-label', t('user.menuOf', { who: label })); hd.acct.title = label;
     }
-    TP.on('lang', paintAcct); TP.on('auth', paintAcct); TP.on('settings', paintAcct); TP.on('state', paintAcct); paintAcct();
+    TP.on('lang', paintAcct); TP.on('auth', paintAcct); TP.on('account', paintAcct); TP.on('settings', paintAcct); TP.on('state', paintAcct); paintAcct();
     TP.on('update', function () { if (hd.acctDot) hd.acctDot.hidden = !S.update.available; });
 
     TP.on('clash', renderStatus); TP.on('core', renderStatus); TP.on('applying', renderStatus); TP.on('helper', renderStatus); TP.on('state', renderStatus); TP.on('lang', renderStatus);
-    TP.on('auth', renderStatus);
+    TP.on('auth', renderStatus); TP.on('conn', renderStatus);
     renderStatus();
   }
   /* 代理总开关: 全部直连 (关) / 按设置分流 (开); 请求进行中显示忙碌状态, 其余时间始终可点 (暂时不能用时点击会说明原因) */
@@ -245,12 +251,12 @@
     mb.title = m ? t(st.on === false ? 'pmode.btnTipOff' : 'pmode.btnTip', { mode: name }) : t('proxy.loading');
   }
   function renderStatus() {
-    var st = S.locked ? 'locked' : TP.isApplying() ? 'applying' : (TP.noHelper() && S.clash == null ? 'nohelper' : S.clash), txt, cls;
+    /* 还没有本机令牌 (S.locked): 正在连接 / 连不上本机服务 (auth.js 的 connState); 和有没有登录 enana 账号无关 */
+    var st = S.locked ? (TP.auth.connState() === 'fail' ? 'nohelper' : 'connecting') : TP.isApplying() ? 'applying' : (TP.noHelper() && S.clash == null ? 'nohelper' : S.clash), txt, cls;
     if (st === 'ok') { txt = t('status.ok'); cls = 'ok'; }
     else if (st === 'applying') { txt = t('status.applying'); cls = 'warn'; }
     else if (st === 'down') { txt = t('status.down'); cls = 'err'; }
     else if (st === 'nohelper') { txt = t('status.noHelper'); cls = 'err'; }
-    else if (st === 'locked') { txt = t('status.locked'); cls = ''; }
     else { txt = t('status.connecting'); cls = ''; }
     TP.setCls(hd.dot, 'dot ' + cls); TP.setCls(hd.sdot, 'dot ' + cls); setText(hd.status, txt);
     var tip = [txt, S.core, TP.cfg.version ? 'enana v' + TP.cfg.version : ''].filter(Boolean).join(' · ');
@@ -260,6 +266,8 @@
   /* ================= 提示条 (所有页面顶部): 同一时间最多一条「出问题了」的提示, 说明受影响的功能 ================= */
   function buildBanners() {
     var box = TP.byId('banners'), out = [];
+    /* 拿不到本机令牌 (POST /api/auth/local 失败: 辅助服务没在运行 / 正在重启): 不挡住页面, 只在顶部说明, auth.js 隔几秒自动重连; 「重试」立刻再连一次 */
+    if (S.locked && TP.auth.connState() === 'fail') out.push({ id: 'local', kind: 'err', icon: 'wifi-off', title: t('banner.local.title'), text: t('banner.local.text'), hint: t('banner.local.hint'), btn: t('banner.retry'), btnIcon: 'refresh', fn: function () { return TP.auth.retryConnect(); } });
     if (!S.locked) {
       if (S.helperUp === false && !TP.updates.applying()) out.push({ id: 'helper', kind: 'err', icon: 'wifi-off', title: t('banner.helper.title'), text: t('banner.helper.text'), hint: t('banner.helper.hint'), btn: t('banner.retry'), btnIcon: 'refresh', fn: function () { TP.loadState(); TP.kickAll(); } });
       else if (S.clash === 'down' && !TP.isApplying()) out.push({ id: 'core', kind: 'err', icon: 'plug', title: t('banner.core.title'), text: t('banner.core.text'), hint: t('banner.core.hint'), start: true });
@@ -320,7 +328,7 @@
         panels[id].appendChild(h('div', { class: 'empty-s' }, ui.icon('warning', 44, 'empty-ic'), h('p', { class: 'empty-t' }, t('app.pageFailed'))));
       }
     });
-    ['clash', 'helper', 'state', 'mode', 'applying', 'auth', 'lang', 'proxy'].forEach(function (ev) { TP.on(ev, buildBanners); });
+    ['clash', 'helper', 'state', 'mode', 'applying', 'auth', 'conn', 'lang', 'proxy'].forEach(function (ev) { TP.on(ev, buildBanners); });
     TP.on('update', buildBanners);
     window.addEventListener('online', function () { buildBanners(); TP.syncBtns(); }); window.addEventListener('offline', function () { buildBanners(); TP.syncBtns(); });
     buildBanners();
@@ -334,6 +342,8 @@
     TP.on('helper', function (up) { if (up && !S.locked) { TP.loadState(); TP.loadApps(false); } });
     TP.on('clash', function (st) { if (st === 'ok') { TP.loadVersion(); } });
     TP.on('auth', function (ok) { if (ok) { TP.loadCatalog(); TP.loadSettings(); TP.updates.check(false); } });
+    /* 登录 / 退出 enana 账号 (仪表盘照常开着): 重新读一次状态和设置 (账号邮箱、官方节点出现 / 消失) */
+    TP.on('account', function () { if (!S.locked) { TP.loadState(); TP.loadSettings(); } });
     /* 新登录之后 (不是页面刷新): 如果云端有配置而本机没有服务器, 提示一键同步 (等状态读到后再判断) */
     var offerPending = false;
     TP.on('login', function () { offerPending = true; });

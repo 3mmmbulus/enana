@@ -1,5 +1,5 @@
 /* enana · core.js
- * 公共基础: 命名空间 / 事件 / DOM 助手 / 格式化 (Intl) / 本地存储 / 请求封装 (含登录令牌与语言头) / 轮询 / 后台任务跟踪。
+ * 公共基础: 命名空间 / 事件 / DOM 助手 / 格式化 (Intl) / 本地存储 / 请求封装 (含本机令牌与语言头) / 轮询 / 后台任务跟踪。
  * 界面组件 (弹窗、确认框、提示、图标按钮、不可用状态) 在 ui.js; 所有文案在 i18n/*.js 词典里。
  * 约定: 来自网络的字符串 (服务器名、域名、应用名) 一律用 textContent 渲染, 绝不拼 HTML。
  * 兼容: ES2018 (不使用 ?. ?? ||= catch{}) */
@@ -8,23 +8,14 @@
 
   var TP = window.TP = {
     cfg: { apiBase: '', clashBase: '', apiPort: 9091, proxyPort: 7890, uiPort: 9090, version: '', probe: {} },      // apiBase / clashBase 为空 = 和页面同源; env.json 可以覆盖 (clashBase: 代理核心控制接口的地址)
-    /* 可调常量 */
+    /* 可调常量 (2.3.27 起没有「无操作自动锁定」: 仪表盘不需要密码就能打开, 锁定没有意义) */
     CFG: {
       ALLOW_SKIP_CONFIRM: true,     // 低风险开关 (策略切换/监控) 的确认框是否提供「本次登录期间不再询问」
-      LOCK_IDLE_DEFAULT_MIN: 4320,  // 无操作多久后需要重新输入密码: 默认 3 天 (设置里可改, 1 分钟 ~ 30 天)
-      LOCK_IDLE_MAX_MIN: 43200,     // 30 天
-      LOCK_IDLE_PRESETS: [1, 15, 60, 1440, 4320, 10080, 43200],   // 设置页下拉: 1 分钟 · 15 分钟 · 1 小时 · 1 天 · 3 天 (默认) · 7 天 · 30 天
       UPDATE_CHECK_HOURS: 6         // 自动检查更新的间隔
-    },
-    /* 空闲锁定的分钟数: 偏好 lock.idleMin (同步到其它电脑); 没有设置、不是数字或越界时取默认值 / 边界值 */
-    lockIdleMin: function () {
-      var v = Math.round(Number(TP.prefs && TP.prefs.get ? TP.prefs.get('lock.idleMin', TP.CFG.LOCK_IDLE_DEFAULT_MIN) : TP.CFG.LOCK_IDLE_DEFAULT_MIN));
-      if (!isFinite(v)) v = TP.CFG.LOCK_IDLE_DEFAULT_MIN;
-      return Math.min(TP.CFG.LOCK_IDLE_MAX_MIN, Math.max(1, v));
     },
     /* 请求头名称 (只在这里定义一次; 后端过渡期内也接受旧名字 X-TProxy / X-TProxy-Token) */
     HDR: { app: 'X-Enana', token: 'X-Enana-Token', lang: 'X-Enana-Lang', sudo: 'X-Enana-Sudo' },
-    S: { helperUp: null, clash: null, locked: true },   // locked: 还没登录 / 已锁定 -> 不轮询、不请求
+    S: { helperUp: null, clash: null, locked: true },   // locked: 还没有拿到本机令牌 (POST /api/auth/local, 见 auth.js) -> 不轮询、不请求; 和有没有登录 enana 账号无关
     V: {}, ui: {}, fmt: {}, ls: {}, ss: {}, jobs: {}
   };
   var S = TP.S, ui = TP.ui, fmt = TP.fmt, enc = encodeURIComponent, I = window.I18N, t = I.t;
@@ -196,7 +187,7 @@
     if (e && e.code && I.has('error.' + e.code)) return t('error.' + e.code);
     return (e && e.message) || t('error.unknown');
   };
-  /* 事件处理器包装: 任何异常都变成 toast, 不产生未处理的 Promise 拒绝。需要登录的错误由登录框处理, 不再弹 toast */
+  /* 事件处理器包装: 任何异常都变成 toast, 不产生未处理的 Promise 拒绝。和本机服务的连接失效 (auth, 顶部提示条会说明) 和取消 (cancel; 也包括「需要 enana 账号」, 登录框已经弹出) 不弹 toast */
   TP.safe = function (fn) {
     return function () {
       var self = this, a = arguments;
@@ -220,7 +211,7 @@
   }
   TP.fetchT = fetchT;
 
-  /* 登录令牌: 只放在 sessionStorage (关闭标签页即失效), 不进 localStorage、不写日志 */
+  /* 本机令牌 (= 核心 Clash API 的 secret; 不登录账号也有, 由 POST /api/auth/local 发给仪表盘): 只放在 sessionStorage (关闭标签页即失效), 不进 localStorage、不写日志 */
   var token = ss.get('token', '');
   TP.getToken = function () { return token; };
   TP.setToken = function (v) { token = v || ''; if (token) ss.set('token', token); else ss.del('token'); };
@@ -230,11 +221,19 @@
   }
   TP.noHelper = function () { return S.helperUp === false; };
 
-  /* 辅助服务 (本页面就是它提供的, 默认同源; env.json 的 apiBase 可以改): 每个请求都带 X-Enana: 1 和 X-Enana-Lang (后端据此本地化任务进度和错误文字), 登录后还带 X-Enana-Token
-   * o: {q:{查询参数}, body:文本, form:{表单字段 (urlencoded)}, timeout:毫秒, text:true -> 返回 {text, headers}, noAuth:true -> 不带令牌且 401 不触发重新登录}
+  /* 辅助服务 (本页面就是它提供的, 默认同源; env.json 的 apiBase 可以改): 每个请求都带 X-Enana: 1 和 X-Enana-Lang (后端据此本地化任务进度和错误文字), 有本机令牌时还带 X-Enana-Token
+   * o: {q:{查询参数}, body:文本, form:{表单字段 (urlencoded)}, timeout:毫秒, text:true -> 返回 {text, headers}, noAuth:true -> 不带令牌且 401 不重新取令牌,
+   *     confirmed:true -> 调用方已经确认过这个敏感操作 (没登录账号时不再弹 TP.sudo.guestOk 的确认框), quiet:true -> 需要账号 (E_LOGIN_REQUIRED) 时不弹登录框}
+   * 401 (令牌缺失 / 不对, 例如重装后 secret 变了): 悄悄 POST /api/auth/local 取一次新令牌再重试一次 (TP.auth.reauth); 还不行才算失去连接 (事件 unauth)。
+   * E_LOGIN_REQUIRED (只有 enana 账号能用的接口, 而这台电脑没有登录): 交给 TP.auth.loginRequired (界面切到未登录状态; 用户的操作 (非 GET) 弹出一次登录框),
+   *   抛出 kind 'cancel' + code E_LOGIN_REQUIRED (和取消一样, 各处的通用错误提示都不再另弹; 要自己处理的调用方看 e.code)。
    * 不信任 Content-Type: 一律按文本读取, 看起来像 JSON 才解析。 */
   TP.helper = async function (method, path, o) {
     o = o || {};
+    /* 敏感操作, 但没有登录 enana 账号: 辅助服务不要求输入密码 (没有账号可以验证), 由一次确认代替它 (auth.js 的 TP.sudo.guestOk: 不用问时直接返回 true, 要问时返回 Promise<是否继续>;
+     * 已经确认过的调用方传 confirmed:true) */
+    var go = TP.sudo && TP.sudo.guestOk && !o._retried && !o._reauth && !o.noSudo ? TP.sudo.guestOk(method, path, o) : true;
+    if (go !== true && !(await go)) throw mkErr('cancel', t('sudo.cancelled'));
     var headers = {}, res, text, j = null, body = o.body;
     headers[TP.HDR.app] = '1'; headers[TP.HDR.lang] = I.lang;
     if (token && !o.noAuth) headers[TP.HDR.token] = token;
@@ -249,7 +248,11 @@
       throw mkErr('unreachable', t(e && e.name === 'AbortError' ? 'error.helperTimeout' : 'error.helperUnreachable'));
     }
     setHelper(true);
-    if (res.status === 401 && !o.noAuth) { TP.emit('unauth'); throw mkErr('auth', t('error.sessionExpired')); }
+    if (res.status === 401 && !o.noAuth) {
+      res.done();
+      if (!o._reauth && TP.auth && TP.auth.reauth && await TP.auth.reauth()) return TP.helper(method, path, Object.assign({}, o, { _reauth: true }));      // 拿到了新的本机令牌: 同一个请求重试一次
+      TP.emit('unauth'); throw mkErr('auth', t('error.sessionExpired'));
+    }
     try { text = await res.text(); }
     catch (e) { if (e && e.name === 'AbortError') throw mkErr('unreachable', t('error.helperTimeout')); throw mkErr('http', t('error.readFailed')); }   // 响应头已经收到, 辅助服务是在线的: 不再标记为未运行
     finally { res.done(); }
@@ -260,13 +263,17 @@
       if (stok) return TP.helper(method, path, Object.assign({}, o, { _retried: true }));
       throw mkErr('cancel', t('sudo.cancelled'), j);
     }
+    if (j && j.code === 'E_LOGIN_REQUIRED') {                          // 只有 enana 账号能用 (HTTP 200): 界面切到未登录状态, 用户的操作弹一次登录框 (不会循环弹: 见 auth.js)
+      if (TP.auth && TP.auth.loginRequired) TP.auth.loginRequired(method, path, o);
+      throw mkErr('cancel', t('error.E_LOGIN_REQUIRED'), j);
+    }
     if (j && j.ok === false) throw mkErr('api', j.error || t('error.generic'), j);
     if (!res.ok) throw mkErr('http', (j && j.error) || t('error.helperStatus', { status: res.status }), j);
     if (o.text) return { text: text, headers: res.headers };
     return j || text;
   };
 
-  /* Clash API (TP.cfg.clashBase; 为空 = 同源): 登录后带 Authorization: Bearer <令牌>。核心重启期间的失败是正常现象: 安静处理。 */
+  /* Clash API (TP.cfg.clashBase; 为空 = 同源): 带 Authorization: Bearer <本机令牌>。核心重启期间的失败是正常现象: 安静处理。401 和 TP.helper 一样先悄悄换一次令牌再重试。 */
   var clashFails = 0, applying = 0, graceUntil = 0, graceTimer = 0, APPLY_GRACE_MS = 3000;
   function setClash(st) { if (S.clash !== st) { S.clash = st; TP.emit('clash', st); } }
   TP.isApplying = function () { return applying > 0 || Date.now() < graceUntil; };
@@ -283,14 +290,18 @@
       throw mkErr('unreachable', t('error.coreUnreachable'));
     }
     clashFails = 0; setClash('ok');
-    if (res.status === 401) { TP.emit('unauth'); throw mkErr('auth', t('error.sessionExpired')); }
+    if (res.status === 401) {
+      res.done();
+      if (!(o && o._reauth) && TP.auth && TP.auth.reauth && await TP.auth.reauth()) return TP.clash(method, path, body, Object.assign({}, o, { _reauth: true }));
+      TP.emit('unauth'); throw mkErr('auth', t('error.sessionExpired'));
+    }
     if (res.status === 204) return null;
     try { data = await res.json(); } catch (e) { data = null; } finally { res.done(); }
     if (!res.ok) throw mkErr('http', (data && data.message) || t('error.coreStatus', { status: res.status }), data);
     return data;
   };
 
-  /* ---------- 轮询 (标签页隐藏时暂停, 回到前台立即补一次; 串行不重叠; 未登录时不请求) ---------- */
+  /* ---------- 轮询 (标签页隐藏时暂停, 回到前台立即补一次; 串行不重叠; 还没有本机令牌时不请求) ---------- */
   var pollers = [];
   TP.poll = function (fn, ms, opt) {
     opt = opt || {};
@@ -326,7 +337,7 @@
       for (;;) {
         try { j = await TP.helper('GET', '/api/job', { q: { id: id }, timeout: 8000 }); fails = 0; }
         catch (e) {
-          if (e.kind === 'api' || e.kind === 'auth' || ++fails > max) throw e;     // 任务不存在 / 需要登录 / 辅助服务长时间无响应
+          if (e.kind === 'api' || e.kind === 'auth' || ++fails > max) throw e;     // 任务不存在 / 和本机服务的连接失效 / 辅助服务长时间无响应
           await TP.sleep(500); continue;
         }
         if (card) card.fromJob(j);

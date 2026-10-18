@@ -39,6 +39,11 @@ jobs:
           node tests/moved-actions-ui.test.js
           node tests/table-rows-ui.test.js
           node tests/sudo-session.test.js
+      - name: Dashboard without an account (local token, sign-in dialog, E_LOGIN_REQUIRED, guest confirmation, logout stays open, no idle lock, sync for guests)
+        run: |
+          node tests/guest-mode-ui.test.js
+          node tests/auto-lock.test.js
+          node tests/sync-first-login.test.js
       - name: Verify terminal waits for Enter and renders one action per line
         run: python3 tests/console-pty.py
       - name: Check protected TUN cleanup and rollback
