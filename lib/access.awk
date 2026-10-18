@@ -11,6 +11,9 @@
 # 出口名 direct-mode / direct-lan / direct-site / direct-app / direct-cn 都是「直连」, 后缀说明为什么直连 (见 lib/config.sh);
 # 单独的 direct = 策略 (网站开关 / 默认出口) 选了直连。
 # 输出 (json): {"total":N (筛选后的条数),"rows":[新→旧, 每行一条连接],"summary":{全部/直连/代理/失败的条数, 直连原因分布, 失败最多的网站}}   (tsv): 表头 + 每行一条连接 (旧→新)
+# 窗口模式 (-v win=1 [-v t0=HH:MM:SS]): 输入只是这一天日志的最后一段 (仪表盘读大的一天时, lib/logs.sh 只读最近的几 MB)。
+#   窗口开头的连接可能只读到了后半截 (它的 inbound 行在窗口之前): 第一次出现的那一行不是 inbound 行、并且按「这一行的时间 - 耗时」
+#   算出来的开始时间不晚于窗口第一行所在的那一秒 (t0; 不给就取窗口里第一行的时间) 的连接整条不要, 不显示、也不计入汇总。不给 win 时和以前完全一样。
 
 function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/[\001-\037]/, " ", s); return s }
 function tsvc(s) { gsub(/[\t\r\n]/, " ", s); return s }
@@ -46,7 +49,22 @@ function appname(pp,   n, parts) {                   # /Applications/Google Chro
   if (match(pp, /[^\/]+\.app\//)) return substr(pp, RSTART, RLENGTH - 5)
   n = split(pp, parts, "/"); return parts[n]
 }
-function mkid(id) { if (!(id in seen)) { seen[id] = 1; ord[++n] = id } }
+function hsec(t,   a) { split(t, a, ":"); return a[1] * 3600 + a[2] * 60 + a[3] }          # "HH:MM:SS" -> 当天的第几秒
+function dsec(d,   s, v) {                               # 核心日志里的耗时 "0ms" / "5.0s" / "1m17s" / "2h3m4s" -> 秒 (µs / ns 这类不到 1 毫秒的忽略)
+  s = 0
+  while (match(d, /^[0-9.]+/)) {
+    v = substr(d, 1, RLENGTH) + 0; d = substr(d, RLENGTH + 1)
+    if (substr(d, 1, 2) == "ms") { s += v / 1000; d = substr(d, 3) }
+    else if (substr(d, 1, 1) == "h") { s += v * 3600; d = substr(d, 2) }
+    else if (substr(d, 1, 1) == "m") { s += v * 60; d = substr(d, 2) }
+    else if (substr(d, 1, 1) == "s") { s += v; d = substr(d, 2) }
+    else sub(/^[^0-9.]+/, "", d)
+  }
+  return s
+}
+function mkid(id) {                                      # 窗口模式: 第一次出现时判断它是不是窗口之前就开始了 (见文件开头)
+  if (!(id in seen)) { seen[id] = 1; ord[++n] = id; if (win && !cur_in && hsec(hd[3]) - dsec(dur) < t0s + 1) cut_[id] = 1 }
+}
 function maskp(s) { gsub(/\\/, "/", s); gsub(/\/Users\/[^\/]+/, "/Users/<user>", s); return s }
 function masku(u) { if (u == "" || u == "root" || substr(u, 1, 1) == "_") return u; return "<user>" }
 
@@ -56,16 +74,19 @@ function masku(u) { if (u == "" || u == "root" || substr(u, 1, 1) == "_") return
 mode_ == 1 { if ($0 != "") pin[$0] = 1; next }
 mode_ == 2 { if ($0 != "") auto[$0] = 1; next }
 mode_ == 3 {
-  line = $0; gsub(/\033\[[0-9;]*m/, "", line)
+  line = $0; if (index(line, "\033") > 0) gsub(/\033\[[0-9;]*m/, "", line)        # 没有 ESC 的行 (几乎全部) 不必跑正则替换
   if (!match(line, /^[+-][0-9][0-9][0-9][0-9] [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9:]+ [A-Z]+ /)) next
   split(substr(line, 1, RLENGTH - 1), hd, " ")
   when = hd[2] " " hd[3]; level = hd[4]
+  if (win && !t0set) { t0set = 1; t0s = hsec(t0 != "" ? t0 : hd[3]) }
   rest = substr(line, RLENGTH + 1)
   if (!match(rest, /^\[[0-9]+ [^]]*\] /)) next
   split(substr(rest, 2, RLENGTH - 3), idt, " "); id = idt[1]; dur = idt[2]
   msg = substr(rest, RLENGTH + 1)
 
+  cur_in = 0
   if ((p = index(msg, ": inbound connection to ")) > 0 || (p = index(msg, ": inbound packet connection to ")) > 0) {
+    cur_in = 1
     if (index(msg, "inbound/tun[") > 0) capture[id] = "tun"; else capture[id] = "mixed"
     mkid(id); isudp = (index(msg, "inbound packet connection to ") > 0)
     hp = msg; sub(/.*inbound (packet )?connection to /, "", hp); hostport(hp)
@@ -105,6 +126,7 @@ END {
   nm = 0
   for (i = 1; i <= n; i++) {
     id = ord[i]
+    if (win && (id in cut_)) continue                    # 窗口模式: 窗口之前就开始了的连接 (只读到后半截)
     if (since != "" && ts[id] < since) continue
     hasout = (id in tag); t = tag[id]                  # 先判断有没有出口: 直接读 tag[id] 会让 awk 凭空建出这个元素
     rt = hasout ? ((t ~ /^direct(-[a-z]+)?$/) ? "direct" : ((t in pin) ? "pin" : ((t in auto) ? "auto" : "other"))) : "none"
