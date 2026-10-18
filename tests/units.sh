@@ -537,29 +537,45 @@ eq "…除了角色, 每一行都原样 (订阅名 / 出站内容不变)" "$(pri
   op_subs_refresh 1 > "$ORDER_LOG" 2>&1
   eq "合并的事务没通过 (订阅 B 的节点让配置无效): 整体回滚, 再逐个订阅重试 —— A 照常刷新, B 保留旧节点" "$(grep -c POISON "$SF"):$(grep -c a2-NEW.example "$SF"):$(grep -c 'b2.example' "$SF"):$SUBS_APPLIED" "0:1:1:1"
   eq "…B 的提示是「刷新后配置无效, 已保留旧节点」, 顺序没乱" "$(grep -c '订阅「B」刷新后配置无效' "$ORDER_LOG"):$(srv_order)" "1:M1,A-1,A-2,B-1,M2,B-2,A-3"
+
+  # 后台任务 (凌晨的每日维护) 在 TUN 下应用要管理员授权: apply_config 不弹框、撤销并返回 5, TXN_ERR 是 lib/config.sh 里那一句 (这里从源码里取, 两边改得不一致就会失败)。
+  # 这不是「配置无效」(节点没有问题), 提示要说清楚: 打开仪表盘时可以授权应用
+  ADMIN_MSG=$(sed -n "s/.*TXN_ERR='\(需要管理员授权才能应用[^']*\)'.*/\1/p" "$LIB/config.sh" | head -1)
+  fresh_state
+  { sline auto A A-1 a1.example; sline auto A A-2 a2-NEW.example; sline auto A A-3 a3.example; } > "$SUBFIX/A.jsonl"
+  apply_config() { TXN_ERR=$ADMIN_MSG; return 5; }
+  op_subs_refresh 1 > "$ORDER_LOG" 2>&1
+  eq "后台应用要管理员授权 (TUN, 每日维护): A / B 各一句「订阅「…」有更新, 应用需要管理员授权 (后台任务不弹授权框), 打开仪表盘时可以应用」, 不再说「刷新后配置无效」; 节点原样保留, 没有应用" \
+    "$([ -n "$ADMIN_MSG" ] && echo msg):$(grep -c '订阅「A」有更新, 应用需要管理员授权 (后台任务不弹授权框), 打开仪表盘时可以应用' "$ORDER_LOG"):$(grep -c '订阅「B」有更新, 应用需要管理员授权 (后台任务不弹授权框), 打开仪表盘时可以应用' "$ORDER_LOG"):$(grep -c '刷新后配置无效' "$ORDER_LOG"):$(grep -c a2-NEW.example "$SF"):$SUBS_APPLIED" "msg:1:1:0:0:0"
 )
 
-# 每日维护: 订阅那一步已经成功应用过配置 (带上了刚下载的规则集), 就不再单独应用一遍; 没有应用过才补一次
+# 每日维护: 订阅那一步已经成功应用过配置 (带上了刚下载的规则集), 就不再单独应用一遍; 没有应用过才补一次。
+# 云端内容 (签名的服务目录 / 部署脚本) 不管有没有登录都每天检查 (2.3.27 起没登录时匿名下载; 被云端拒绝匿名下载的情况见 tests/no-account.py), 套餐属于账号, 只在登录时刷新
 (
   logs_maintain() { :; }; stats_purge() { :; }; update_check() { :; }; auth_logged_in() { return 1; }
   AUTO_UPDATE=1; AC=0; rules_update() { :; }; apply_config() { AC=$((AC + 1)); return 0; }
   op_subs_refresh() { SUBS_APPLIED=$FAKE_APPLIED; }
+  : > "$UW/maint-calls"; op_txn() { printf 'txn %s\n' "$1" >> "$UW/maint-calls"; return 0; }; plan_refresh() { echo plan >> "$UW/maint-calls"; return 0; }
+  cloud_anon_refused() { return 1; }                                   # 匿名下载没有被云端拒绝过 (这里不联网)
   rm -f "$H/.maintain-rules"; FAKE_APPLIED=1; op_maintain
   eq "订阅刷新已经应用过 → 维护不再重复应用" "$AC" "0"
+  eq "…没登录: 云端内容照样检查 (匿名下载), 套餐不刷新 (属于账号)" "$(paste -sd, - < "$UW/maint-calls")" "txn 更新云端内容"
   rm -f "$H/.maintain-rules"; FAKE_APPLIED=0; op_maintain
   eq "订阅没有应用过 (没有订阅要刷新 / 没刷新成功) → 维护应用一次, 把刚下载的规则集带上" "$AC" "1"
   FAKE_APPLIED=0; op_maintain
   eq "3 天内刚做过: 什么都不做" "$AC" "1"
+  eq "…云端内容每天都检查 (三次维护三次), 套餐一次也没刷新" "$(grep -c '^txn 更新云端内容$' "$UW/maint-calls"):$(grep -c '^plan$' "$UW/maint-calls")" "3:0"
 )
 # 每日维护在凌晨的后台运行, 没有人输密码: 里面的每一次应用 (云端内容 / 规则集) 都是后台任务 (APPS_BG_JOB=1), TUN 下要授权就撤销, 不弹框
 (
-  logs_maintain() { :; }; stats_purge() { :; }; update_check() { :; }; auth_logged_in() { return 0; }; plan_refresh() { :; }
+  logs_maintain() { :; }; stats_purge() { :; }; update_check() { :; }; auth_logged_in() { return 0; }; plan_refresh() { echo plan >> "$UW/maintain-plan"; }
   AUTO_UPDATE=1; rules_update() { :; }; op_subs_refresh() { SUBS_APPLIED=0; }
   op_txn() { printf 'txn=%s\n' "${APPS_BG_JOB:-}" >> "$UW/maintain-bg"; return 0; }
   apply_config() { printf 'apply=%s\n' "${APPS_BG_JOB:-}" >> "$UW/maintain-bg"; return 0; }
-  : > "$UW/maintain-bg"; rm -f "$H/.maintain-rules"; unset APPS_BG_JOB
+  : > "$UW/maintain-bg"; : > "$UW/maintain-plan"; rm -f "$H/.maintain-rules"; unset APPS_BG_JOB
   op_maintain
   eq "每日维护: 云端内容的事务和规则集的应用都以后台任务运行 (不弹管理员框); 维护结束后不留在进程里" "$(paste -sd, - < "$UW/maintain-bg"):${APPS_BG_JOB:-unset}" "txn=1,apply=1:unset"
+  eq "…登录了: 套餐照常刷新一次" "$(paste -sd, - < "$UW/maintain-plan")" "plan"
 )
 t "install.sh 的 enana update 同样: 订阅刷新应用过配置就不再 op_apply" grep -q 'SUBS_APPLIED' "$REPO/install.sh"
 echo
@@ -1237,10 +1253,14 @@ echo "== U16. 后台流程绝不弹管理员框: 自动识别网站 (失败也�
 )
 (
   H=$UW/h16c; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"
-  proxy_set_enabled() { :; }; auth_logout_local() { :; }
+  proxy_set_enabled() { echo "proxy $1" >> "$H/calls"; }; auth_logout_local() { rm -f "$H/official.jsonl"; }
   op_sync_secret() { printf '%s' "${APPS_BG_JOB:-}" > "$H/bg"; return 1; }
+  printf '%s\n' '{"role":"auto","official":true,"outbound":{"type":"http","tag":"官方-测试","server":"o.example.invalid","server_port":443}}' > "$H/official.jsonl"
   unset APPS_BG_JOB; session_local_end kicked 401
-  eq "被下线 (心跳里): 让核心换上新令牌的应用是后台任务 (APPS_BG_JOB=1): TUN 下不弹管理员框, 下一次授权的应用再换" "$(cat "$H/bg"):$(cat "$H/notice"):${APPS_BG_JOB:-unset}" "1:kicked:unset"
+  eq "被下线 (心跳里), 有官方节点: 把它们从核心里去掉的应用是后台任务 (APPS_BG_JOB=1): TUN 下不弹管理员框, 下一次授权的应用再去掉" "$(cat "$H/bg"):$(cat "$H/notice"):${APPS_BG_JOB:-unset}" "1:kicked:unset"
+  eq "…代理总开关不动 (2.3.27 起被下线只停官方线路 / 同步 / 会员, 你自己的服务器照常工作)" "$(cat "$H/calls" 2>/dev/null)" ""
+  rm -f "$H/bg"; session_local_end offline_expired 000
+  eq "没有官方节点: 配置不会变, 不重新应用 (心跳里什么都不用做); 原因照样记下" "$([ -e "$H/bg" ] && echo applied || echo none):$(cat "$H/notice"):$(cat "$H/calls" 2>/dev/null)" "none:offline_expired:"
 )
 (
   H=$UW/h16d; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"

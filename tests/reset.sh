@@ -1,7 +1,8 @@
 #!/bin/bash
 # 恢复官方默认规则 (lib/ops.sh 的 txn_reset_official / txn_reset_undo / reset_preview_json): 几秒钟, 不需要 sing-box / 真实云端 / 管理员权限, macOS 和 Linux 都能跑。
 #   · 自己改过的规则全部清掉 (应用 / 网站策略、自动识别、规则集开关、自定义规则集 / 软件 / 域名 / 解析、DNS), 服务器 / 订阅 / 设置 / 偏好不动
-#   · 云端官方内容强制重新下载 (签名校验): 就算序号没变, 本机缓存被改坏的内容也会换回官方的; 离线 / 没登录用本机已验证的内容, 一份都没有用随程序自带的基线
+#   · 云端官方内容强制重新下载 (签名校验): 就算序号没变, 本机缓存被改坏的内容也会换回官方的; 没登录时匿名下载 (同样验签);
+#     离线 / 云端拒绝匿名下载 (还要求登录) 时用本机已验证的内容, 一份都没有用随程序自带的基线
 #   · 应用重新识别 (推荐值来自官方内容, 标记 def), 不会弹出一堆「新应用」
 #   · 重置前备份 (最近 3 份), 可以撤销; 重置失败时整体回滚, 也不留下「可撤销」的假备份
 # 云端用 _cloud_req 的函数替身 + 本机签名的内容包代替 (签名私钥是临时生成的, 公钥通过 ENANA_CLOUD_PUBKEY 交给客户端)。
@@ -34,7 +35,10 @@ apps_installed() { printf 'Claude\t/Applications/Claude.app\nRandom Tool\t/Appli
 app_is_browser() { case $1 in *Safari*) return 0 ;; esac; return 1; }
 os_birth_time() { echo 0; }
 _cloud_req() { # <方法> <路径> <body> <输出文件> <头…>  -> 打印 HTTP 状态码; 路径 /v1/xxx 取本机 $W/v1/xxx
+  # 每个请求记一行「路径 hdrs=头的个数」(0 = 匿名: 没有 Authorization / X-Enana-Session)。ANON_REFUSE=1: 像 2.3.26 的云端, 匿名请求一律 401
   [ "$ONLINE" = 1 ] || { printf '000'; return 0; }
+  printf '%s hdrs=%s\n' "$2" "$(( $# - 4 ))" >> "$W/req.log"
+  if [ "${ANON_REFUSE:-0}" = 1 ] && [ "$#" -le 4 ]; then printf '401'; return 0; fi
   local f="$W/v1/${2#/v1/}"
   if [ -f "$f" ]; then cp "$f" "$4"; printf '200'; else printf '404'; fi
 }
@@ -134,21 +138,28 @@ op_txn "撤销恢复默认" txn_reset_undo >/dev/null 2>&1; rc=$?
 eq "没有备份时撤销被拒绝" "$rc" "1"
 has "并说明原因" "没有可以撤销" "$TXN_ERR"
 
-echo "== R5. 离线 / 没登录: 本地照样重置, 用本机已验证的官方内容; 说明原因"
+echo "== R5. 离线 / 没登录: 本地照样重置; 没登录时匿名下载官方内容 (同样验签), 离线 / 云端拒绝匿名下载时用本机已验证的官方内容; 说明原因"
 customize; ONLINE=0
 op_txn "恢复官方默认规则" txn_reset_official >/dev/null 2>&1; rc=$?
 eq "离线时重置仍然成功" "$rc" "0"
 has "任务结果: 内容用的是本机缓存" '"content":"cached"' "$TXN_RESULT"; has "带上原因 (连不上云端)" '"error":"连不上' "$TXN_RESULT"
 eq "规则已清空 / 应用已重新识别" "$(grep -c '[|]ack[|]' "$H/overrides.tsv"):$(grep -c '[|]def[|]' "$H/overrides.tsv")" "0:4"
 has "云端内容状态里记下了这次的错误 (设置页能看到)" "连不上" "$(sed -n 's/^error=//p' "$H/cloud/state")"
-ONLINE=1; customize; logout; st_before=$(cat "$H/cloud/state")
-op_txn "恢复官方默认规则" txn_reset_official >/dev/null 2>&1; rc=$?
+ONLINE=1; customize; logout; st_before=$(cat "$H/cloud/state"); : > "$W/req.log"
+ANON_REFUSE=1 op_txn "恢复官方默认规则" txn_reset_official >/dev/null 2>&1; rc=$?
 eq "没登录也能重置" "$rc" "0"
-has "任务结果: 本机缓存" '"content":"cached"' "$TXN_RESULT"
-eq "没登录不算云端故障: 不改动云端内容状态" "$(cat "$H/cloud/state")" "$st_before"
-rm -rf "$H/cloud"; customize
+has "云端还要求登录 (匿名下载被拒绝): 用本机缓存" '"content":"cached"' "$TXN_RESULT"
+has "…原因是一句平和的说明, 不是故障" '"error":"云端内容暂时需要登录 enana 账号才能下载' "$TXN_RESULT"
+eq "匿名下载被拒绝不算云端故障: 不改动云端内容状态" "$(cat "$H/cloud/state")" "$st_before"
+eq "…只问了一次清单, 而且是匿名的 (不带 Authorization / X-Enana-Session)" "$(cat "$W/req.log")" "/v1/manifest.json hdrs=0"
+customize; : > "$W/req.log"
 op_txn "恢复官方默认规则" txn_reset_official >/dev/null 2>&1; rc=$?
-eq "从没有过云端内容 (全新安装 / 没登录过): 回到随程序自带的基线" "$rc:$(cloud_seq)" "0:0"
+eq "没登录, 云端内容公开: 重置成功" "$rc" "0"
+has "…用的是匿名下载的云端官方内容 (同样验签)" '"content":"cloud"' "$TXN_RESULT"
+eq "…清单 / 签名 / 内容包三个请求都是匿名的" "$(cut -d' ' -f2 "$W/req.log" | sort | uniq -c | tr -s ' ')" " 3 hdrs=0"
+rm -rf "$H/cloud"; customize
+ANON_REFUSE=1 op_txn "恢复官方默认规则" txn_reset_official >/dev/null 2>&1; rc=$?
+eq "从没有过云端内容 (全新安装), 云端又拒绝匿名下载: 回到随程序自带的基线" "$rc:$(cloud_seq)" "0:0"
 has "任务结果: 基线" '"content":"baseline"' "$TXN_RESULT"
 eq "基线内容的路径" "$(content_file apps.conf)" "$DATA/apps.conf"
 

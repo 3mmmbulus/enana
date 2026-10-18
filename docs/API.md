@@ -10,32 +10,36 @@
 | 项 | 说明 |
 |---|---|
 | 必带请求头 | `X-Enana: 1` (旧名 `X-TProxy: 1` 过渡期内也接受)。没有它一律 403。 |
-| 二次验证头 | `X-Enana-Sudo: <令牌>`。只有「敏感操作」才需要 (见下面「敏感操作需要再次输入登录密码」); 缺失或过期 → HTTP 403 `E_SUDO_REQUIRED`。 |
+| 二次验证头 | `X-Enana-Sudo: <令牌>`。只有「敏感操作」才需要, 而且只在**登录了 enana 账号**时需要 (见下面「敏感操作需要再次输入登录密码」); 缺失或过期 → HTTP 403 `E_SUDO_REQUIRED`。没登录时没有密码可验, 不需要这个头 (仪表盘在这些操作前弹一次确认框)。 |
 | 语言头 | `X-Enana-Lang: zh` 或 `en`。后端据此翻译 `error`、任务进度文字 (`msg`、`steps[].label`)、更新说明。缺省取设置里的语言, 再缺省为 zh。 |
-| 令牌头 | `X-Enana-Token: <token>`。除 `GET /api/auth/status` 与 `POST /api/login` 外都需要; 缺失或不对 → HTTP 401 + `{"ok":false,"code":"E_AUTH"}`。令牌就是核心 Clash API 的 secret (同一个), Clash API 请求用 `Authorization: Bearer <token>`。 |
+| 令牌头 | `X-Enana-Token: <token>` (本机令牌)。除 `GET /api/auth/status`、`POST /api/auth/local`、`POST /api/login`、`POST /api/register` 外都需要; 缺失或不对 → HTTP 401 + `{"ok":false,"code":"E_AUTH"}` (**401 只表示本机令牌不对**: 仪表盘静默地再调一次 `POST /api/auth/local` 然后重试)。仪表盘不需要账号就能拿到令牌 (`POST /api/auth/local`); 令牌就是核心 Clash API 的 secret (同一个, 登录 / 退出 / 被下线都不换), Clash API 请求用 `Authorization: Bearer <token>`。 |
+| 账号功能 | 云端同步、会员 / 余额 / 付款、官方线路、我的设备、修改密码、二次验证、诊断上传要**登录 enana 账号**; 没登录时这些接口回 **HTTP 200** `{"ok":false,"code":"E_LOGIN_REQUIRED","error":"需要登录 enana 账号才能使用这个功能"}` (仪表盘据此弹出登录框)。下文「(需登录)」= 需要本机令牌 (不需要账号); 「(需 enana 账号)」= 没登录时回 `E_LOGIN_REQUIRED`。 |
 | 请求体 | 表单接口用 `application/x-www-form-urlencoded` (**密码等敏感字段只放请求体, 绝不放 URL**); 导入/证书接口用纯文本。查询参数对除登录外的所有 POST 也有效。请求体 ≤ 4 MB。 |
-| 响应 | 一律 JSON: `{"ok":true,...}` 或 `{"ok":false,"error":"已翻译的文字","code":"E_...", ...附加字段}`。HTTP 状态: 业务失败也是 200 (看 `ok`); 401 未登录; 403 来源/请求头不对; 404 接口不存在; 413 请求过大。 |
+| 响应 | 一律 JSON: `{"ok":true,...}` 或 `{"ok":false,"error":"已翻译的文字","code":"E_...", ...附加字段}`。HTTP 状态: 业务失败也是 200 (看 `ok`, 包括没登录 enana 账号的 `E_LOGIN_REQUIRED`); 401 本机令牌缺失或不对; 403 来源/请求头不对 (或缺二次验证); 404 接口不存在; 413 请求过大。 |
 | 长任务 | 会改配置/要下载的操作返回 `{"ok":true,"job":"<id>"}`, 前端轮询 `GET /api/job?id=` (见下)。 |
-| 错误码 | `E_AUTH` `E_BAD_CREDENTIALS` `E_DEVICE_LIMIT`(+`devices`) `E_LOCKED`(+`wait` 秒) `E_EMAIL_TAKEN` `E_WEAK_PASSWORD` `E_ACCOUNT_UNREACHABLE` `E_INVALID` `E_NOT_FOUND` `E_FORBIDDEN` `E_SUDO_REQUIRED` `E_NOT_RUNNING` `E_BUSY` `E_NETWORK` `E_NO_SERVERS` `E_RUNNING` `E_SSH_NO_CLIENT` `E_SSH_UNREACHABLE` `E_SSH_AUTH` `E_SSH_KEY` `E_SSH_HOSTKEY` `E_VPS_NO_PLAYBOOK` `E_VPS_PRIVILEGE` `E_VPS_UNSUPPORTED` `E_VPS_DEPS` `E_VPS_VERIFY` `E_VPS_NOT_DEPLOYED` `E_SYNC_KEY` `E_SYNC_CONFLICT` |
+| 错误码 | `E_AUTH` `E_LOGIN_REQUIRED` `E_BAD_CREDENTIALS` `E_DEVICE_LIMIT`(+`devices`) `E_LOCKED`(+`wait` 秒) `E_EMAIL_TAKEN` `E_WEAK_PASSWORD` `E_ACCOUNT_UNREACHABLE` `E_INVALID` `E_NOT_FOUND` `E_FORBIDDEN` `E_SUDO_REQUIRED` `E_NOT_RUNNING` `E_BUSY` `E_NETWORK` `E_NO_SERVERS` `E_RUNNING` `E_SSH_NO_CLIENT` `E_SSH_UNREACHABLE` `E_SSH_AUTH` `E_SSH_KEY` `E_SSH_HOSTKEY` `E_VPS_NO_PLAYBOOK` `E_VPS_PRIVILEGE` `E_VPS_UNSUPPORTED` `E_VPS_DEPS` `E_VPS_VERIFY` `E_VPS_NOT_DEPLOYED` `E_SYNC_KEY` `E_SYNC_CONFLICT` |
 
 ## 账号 / 登录 / 注册 / 代理总开关 (中心账号: enana.cc)
 
-仪表盘的登录账号就是 **https://enana.cc** 的账号 (邮箱 + 密码); 本机不生成、不保存任何管理员密码。仪表盘里可以直接 **登录** 或 **注册** (注册由本地辅助服务代你向 enana.cc 提交, 用的是本机网络, 不用另开网站)。
+**仪表盘不需要账号就能打开** (2.3.27 起): 打开时用 `POST /api/auth/local` 拿到本机令牌。本机的一切 —— 服务器、订阅、导入、一键部署自己的服务器、应用、网站、DNS、规则、日志、测速、更新、代理开关 —— 都不需要账号。
+**https://enana.cc** 的账号 (邮箱 + 密码, 可选) 只用于: 云端同步、会员 / 余额 / 付款、官方线路、「我的设备」、修改密码、上传诊断。本机不生成、不保存任何管理员密码。仪表盘里可以直接 **登录** 或 **注册** (注册由本地辅助服务代你向 enana.cc 提交, 用的是本机网络, 不用另开网站)。
 
-- 任何有效的 enana.cc 账号都可以在这台电脑上登录 (没有「绑定」限制); 换账号 = 退出账号再登录另一个。
-- **设备数量限制 (服务端强制)**: 同一账号、**同一平台 (macOS / Windows) 最多同时在线 2 台设备**。第 3 台登录时登录被拒绝 (`E_DEVICE_LIMIT`) 并返回该账号下的在线设备列表; 用户可以点某台设备「下线」, 成功后当前设备**自动完成登录**, 被下线的设备在下一次心跳 (≤ 2 分钟) 后**自动退出登录并关闭代理**。
-- 在线时每次登录都向 enana.cc 校验; enana.cc 连不上时, **当前仍处于登录状态的账号** (比如换了浏览器/令牌丢了) 可用本机缓存的「加盐 PBKDF2 校验值」离线登录 (不保存明文密码); 其它账号, 以及已经退出账号的, 必须在线校验。离线连续超过 7 天 (心跳一直连不上) 本机会自动退出登录。
-- **代理总开关**: 代理功能 (真正走代理服务器) 只有「已登录 + 用户在仪表盘里手动开启」时才工作。刚安装、刚登录、退出账号之后默认都是 **关闭** (所有流量直连, 不经过任何代理服务器; 本地 7890 端口和系统代理设置不变, 不会断网)。
-  - **退出账号 (`POST /api/logout`) 不关闭代理**: 代理开关、模式、系统代理、用户自己的服务器与规则保留; 账号的官方节点移除, 令牌失效 (所有浏览器都要重新登录)。**切换账号** (`POST /api/logout?switch=1`) 和**登录到另一个账号**会关闭代理, 需要在仪表盘里再次开启。
-  - 终端的 `enana on` 在没有登录时也会拒绝开启, 并提示先到仪表盘登录。
+- 任何有效的 enana.cc 账号都可以在这台电脑上登录 (没有「绑定」限制); 换账号 = 退出账号再登录另一个, 代理设置不受影响。
+- **设备数量限制 (服务端强制)**: 同一账号、**同一平台 (macOS / Windows) 最多同时在线 2 台设备**。第 3 台登录时登录被拒绝 (`E_DEVICE_LIMIT`) 并返回该账号下的在线设备列表; 用户可以点某台设备「下线」, 成功后当前设备**自动完成登录**, 被下线的设备在下一次心跳 (≤ 2 分钟) 后**自动退出登录** (回到「不登录」, 代理照常用它自己的服务器)。
+- 在线时每次登录都向 enana.cc 校验; enana.cc 连不上时, **当前仍处于登录状态的账号** (比如换了浏览器) 可用本机缓存的「加盐 PBKDF2 校验值」离线登录 (不保存明文密码); 其它账号, 以及已经退出账号的, 必须在线校验。离线连续超过 7 天 (心跳一直连不上) 本机会自动退出登录 (代理照常)。
+- **退出账号 / 被别的设备下线 / 离线太久** = 回到「不登录」: 本机令牌不变 (仪表盘照常打开), 代理开关、模式、系统代理、你自己的服务器与规则全部保留; 账号的官方节点从核心里去掉 (后台重新生成一次配置, 不弹管理员框; Enhanced/TUN 下要授权的话就等下一次经过授权的应用), 同步密钥 / 会员缓存 / sudo 令牌清掉。`GET /api/auth/status` 的 `notice` 说明原因 (`kicked` / `offline_expired` / `limit` …), 仪表盘显示一次。
+- **代理总开关**: 刚安装时默认 **关闭** (所有流量直连, 不经过任何代理服务器; 本地 7890 端口和系统代理设置不变, 不会断网); 在仪表盘里打开 (或终端 `enana on`) 就用你自己的服务器工作, 不需要账号。登录不改变它, 退出账号 (包括 `switch=1`) 也不改变它。
 - 暂不支持找回密码 (以后再做): 仪表盘没有「忘记密码」入口。已登录用户可以在仪表盘里 **本地修改密码** (见 `POST /api/password`)。官网只有一个首页 (介绍 + 一键复制的安装命令), 没有注册 / 登录 / 账号页, 账号的注册、登录、改密码、设备管理都在仪表盘里完成。
 - 服务器只保存账号 (邮箱 + 密码哈希); 服务器地址、订阅、规则、日志等一切代理数据都只在本机。
 
 ### `GET /api/auth/status` (公开)
 ```json
-{"ok":true,"required":true,"account_hint":"e***@g***.com","offline_ok":true,"notice":"","account_url":"https://enana.cc","wait":0}
+{"ok":true,"required":false,"logged_in":false,"local":true,"account_hint":"e***@g***.com","offline_ok":true,"notice":"","account_url":"https://enana.cc","wait":0}
 ```
-`account_hint`: 上一次在这台电脑上登录的账号 (掩码; 没有则 `""`); `offline_ok`: 能否用缓存离线登录该账号; `wait` > 0: 登录/注册被限流, 还需等待的秒数。前端可用 `localStorage` 记住上次输入的邮箱 (绝不记密码) 做预填。
+`required` 一直是 `false` (仪表盘不需要账号就能打开; 老的仪表盘据此不再显示整页登录框); `logged_in`: 是否登录了 enana 账号; `local:true`: 支持 `POST /api/auth/local`。`account_hint`: 上一次在这台电脑上登录的账号 (掩码; 没有则 `""`; 公开接口从不返回完整邮箱); `offline_ok`: 能否用缓存离线登录该账号; `notice`: 上一次被退出登录的原因 (没有则 `""`); `wait` > 0: 登录/注册被限流, 还需等待的秒数。前端可用 `localStorage` 记住上次输入的邮箱 (绝不记密码) 做预填。
+
+### `POST /api/auth/local` (公开) → `{"ok":true,"token":"<本机令牌>","logged_in":false}`
+仪表盘不登录就拿到本机令牌的唯一方式 (令牌就是 `$H/secret` = 核心 Clash API 的 secret; `POST /api/login` / `POST /api/register` 返回的也是它)。和所有接口一样要通过 Host / `X-Enana` / CORS 检查 (跨站网页发不出带自定义头的请求); 另外带着别的来源的 `Origin`、或浏览器标明 `Sec-Fetch-Site: cross-site` 的请求一律 403 `E_FORBIDDEN`。令牌文件丢了 (正常安装不会) 就生成一个并在后台让核心换上。本机还从没拿到过云端内容 (全新安装) 时顺带在后台下载一次 (不弹管理员框, 6 小时内不重复), 一键部署要的脚本不用等到凌晨的每日维护。`logged_in` 同 `GET /api/auth/status`。
 
 ### `POST /api/login` (公开) 表单 `user` (邮箱) `password` `kick` (可选: 要下线的设备 uid)
 成功: `{"ok":true,"token":"…","account":"name@example.com","via":"online|offline"}`
@@ -48,16 +52,16 @@
 失败: `E_EMAIL_TAKEN` (邮箱已注册 → 引导去登录) · `E_WEAK_PASSWORD` (密码至少 8 位) · `E_INVALID` (邮箱格式不对) · `E_LOCKED` (+`wait`: 本机注册过于频繁, 或 enana.cc 限流) · `E_ACCOUNT_UNREACHABLE` (连不上 enana.cc, 稍后重试)。无邮箱验证步骤。同样 ≥ 20 秒超时。
 
 ### `POST /api/logout` (需登录)
-退出账号: 代理设置保留 (不改系统代理、不改代理开关) + 账号的官方节点从本机移除 + 令牌立刻失效 (所有浏览器都要重新登录) + 立即释放这个设备的在线名额 (服务端会话撤销) → `{"ok":true}`。核心会在后台重启一次以换上新令牌 (约 2–3 秒, 期间仪表盘显示登录框即可)。`?switch=1` (「切换账号」) 会额外**关闭代理** (全部直连); 登录到上次登录的另一个账号时也会关闭代理。
+退出 enana 账号 → `{"ok":true}`: **本机令牌不变** (仪表盘照常打开, 不用重新拿令牌), **代理设置保留** (不改系统代理、不改代理开关 / 模式, `?switch=1`「切换账号」也一样) + 账号的官方节点从本机移除 (有的话后台任务 `auth-sync` 重新生成一次配置把它们从核心里去掉) + 同步密钥 / 会员缓存 / sudo 令牌清掉 + 立即释放这个设备的在线名额 (服务端会话撤销)。没有登录时什么都不做, 同样回 `{"ok":true}`。
 
-### `GET /api/devices` (需登录) → 我的设备
-`{"ok":true,"platform":"macos","limit":2,"devices":[{"uid","name","platform","os","app","last_seen","online":true,"ip_hint","current":true}]}`。列出本账号还登录着的设备 (所有平台; 被下线 / 退出登录 / 过期的设备云端不再返回), 当前设备 `current:true`, `online:false` = 离线但仍保持登录; 用于「设置 → 我的设备」(当前设备没有「下线」按钮)。连不上云端 → `E_ACCOUNT_UNREACHABLE` (前端给出原因, 不要做成死按钮)。
-### `POST /api/devices/kick` (需登录) 表单 `uid` → `{"ok":true}` 下线另一台设备 (不能下线自己; 前端先二次确认)。被下线的设备在 ≤ 2 分钟内自动退出登录并关闭代理。
+### `GET /api/devices` (需 enana 账号) → 我的设备
+`{"ok":true,"platform":"macos","limit":2,"devices":[{"uid","name","platform","os","app","last_seen","online":true,"ip_hint","current":true}]}`。列出本账号还登录着的设备 (所有平台; 被下线 / 退出登录 / 过期的设备云端不再返回), 当前设备 `current:true`, `online:false` = 离线但仍保持登录; 用于「设置 → 我的设备」(当前设备没有「下线」按钮)。连不上云端 → `E_ACCOUNT_UNREACHABLE` (前端给出原因, 不要做成死按钮)。没登录 → `E_LOGIN_REQUIRED`。
+### `POST /api/devices/kick` (需 enana 账号 + sudo) 表单 `uid` → `{"ok":true}` 下线另一台设备 (不能下线自己; 前端先二次确认)。被下线的设备在 ≤ 2 分钟内自动退出登录 (代理照常用它自己的服务器)。
 
 ### `POST /api/proxy` (需登录) 表单 `on=0|1` 和/或 `mode=auto|global` (至少给一个)
 代理总开关 + 代理模式 → `{"ok":true,"enabled":true,"mode":"auto"}`。`on=1` 时如果核心没在运行会先启动它 (最多等 10 秒, 失败 → `E_NOT_RUNNING`)。启动要管理员授权时 (Enhanced/TUN, 或者系统代理模式下 TUN 的根守护进程还加载着 / 停它要授权) 不在请求里等密码框, 立刻返回 `{"ok":true,"job":"…"}` (后台任务 `proxy`, 步骤「启动代理服务 | 开启代理」或「启动代理服务 | 切换代理模式」); 任务的 `result` 就是平时的响应 (`enabled` / `mode` / `sysproxy`), 授权被取消时任务失败 (「已取消管理员授权, 代理没有开启」)。仪表盘和 `POST /api/network-mode` 一样跟着任务走。开启/关闭/切换模式都不重启核心 (热切换); `GET /api/state` 里的 `proxy.enabled` / `proxy.mode` 是当前状态。
 三种状态 (前端做成「总开关 + 模式」):
-- **关闭** (默认; 刚安装 / 刚登录 / 退出账号后): 全部直连, 不经过任何代理服务器。
+- **关闭** (默认; 刚安装时): 全部直连, 不经过任何代理服务器。登录 / 退出账号都不改变它。
 - **自动模式** `auto` (开启后的默认模式): 智能分流 —— 国内网站直连, 海外与受限网站按策略走「自动线路」(自动选最快节点) 或「固定出口」(AI/账号类服务), 你对应用/网站的设置全部生效。
 - **全局代理** `global`: 除本地网络、你手动指定的应用/网站、固定出口类服务 (Claude 等, 保证账号安全) 之外, 所有流量都走代理 (自动线路 / 你选的节点), 忽略「国内直连」规则。
 模式设置会记住; 关闭总开关时模式保留, 再次开启沿用。
@@ -72,18 +76,19 @@
 ### `POST /api/sysproxy` (需登录) 表单 `on=0|1` → `{"ok":true,"job":"sysproxy-…"}`
 单独开启 / 关闭系统代理 (仪表盘概览 / 顶部提示条的「一键开启」)。**后台任务**, 步骤 `修改系统代理 → 确认结果`。授权方式依次是: ① 当前用户直接修改 (管理员账户多数不需要密码) ② 终端里用 sudo ③ 已有免密 sudo ④ 弹出 macOS 原生管理员密码框 (仪表盘的后台服务没有终端; 一次修改所有网络服务只弹一次框)。每次修改后回读确认。结果: `done` (`result.method` = `already|direct|sudo|sudo-nopass|dialog|user|tun`) 或 `error` (消息已翻译: 已取消授权 / 密码不正确 / 当前账户不是管理员 / 没有可弹窗的桌面会话 / macOS 未允许自动化 …)。成功与失败都会写进操作记录: 动作 `开启系统代理` / `关闭系统代理`, 详情 `method=… err=… port=… mode=…`。
 
-### `POST /api/password` (需登录) 表单 `old` `new`
-在本机修改 enana 账号的密码 (仪表盘里改, 官网没有账号页): 先在本机校验格式, 再向云端 `POST /api/enana/v1/account/password` 提交 (云端校验旧密码) → 成功后**当前设备保持登录** (云端返回新令牌 / 会话, 本机刷新离线校验值), **账号下其它设备全部被退出登录** (它们下次心跳收到 `session_revoked`, `notice:"password_changed"`, 代理自动关闭); 同时用新密码重新派生「云端同步」的密钥, 并把云端的同步快照用新密钥重新加密。
-成功 `{"ok":true}`; 失败: `E_BAD_CREDENTIALS` (「当前密码不正确」, +`wait`) · `E_WEAK_PASSWORD` (新密码要 8-71 个字符, 且不能与旧密码相同) · `E_LOCKED` (+`wait`, 与登录共用失败计数) · `E_ACCOUNT_UNREACHABLE` (必须在线才能改; 离线登录时没有云端会话也不能改) · `E_AUTH` (HTTP 401: 云端会话已被撤销, 本机随后自动退出登录)。**不需要**额外的 sudo 令牌 (旧密码本身就是验证)。
+### `POST /api/password` (需 enana 账号) 表单 `old` `new`
+在本机修改 enana 账号的密码 (仪表盘里改, 官网没有账号页): 先在本机校验格式, 再向云端 `POST /api/enana/v1/account/password` 提交 (云端校验旧密码) → 成功后**当前设备保持登录** (云端返回新令牌 / 会话, 本机刷新离线校验值), **账号下其它设备全部被退出登录** (它们下次心跳收到 `session_revoked`, `notice:"password_changed"`, 代理照常用它们自己的服务器); 同时用新密码重新派生「云端同步」的密钥, 并把云端的同步快照用新密钥重新加密。
+成功 `{"ok":true}`; 失败: `E_BAD_CREDENTIALS` (「当前密码不正确」, +`wait`) · `E_WEAK_PASSWORD` (新密码要 8-71 个字符, 且不能与旧密码相同) · `E_LOCKED` (+`wait`, 与登录共用失败计数) · `E_ACCOUNT_UNREACHABLE` (必须在线才能改; 离线登录时没有云端会话也不能改) · `E_LOGIN_REQUIRED` (没登录; 或者云端会话已被撤销 —— 「登录已失效, 请重新登录」, HTTP 200, 本机随后自动退出登录)。**不需要**额外的 sudo 令牌 (旧密码本身就是验证)。
+云端同步的 `POST /api/sync/push|pull|preview|clear` 遇到云端会话已被撤销时同样回 HTTP 200 `E_LOGIN_REQUIRED` (以前是 HTTP 401 `E_AUTH`; 401 现在只表示本机令牌不对)。
 
 ## 敏感操作需要再次输入登录密码 (step-up) ★
 
-部分敏感的「操作」和「显示」必须再校验一次**当前登录账号的密码**, 即使已经登录也一样 (防止别人趁你离开时点按钮/看到凭据):
-- 需要再次验证的接口 (后端有一张白名单, 以后加功能只要往表里加一行): `POST /api/servers/delete` · `POST /api/sub/delete` · `GET /api/servers/secret` (显示某个节点的密码/UUID/密钥, 官方节点永远不显示) · `GET /api/sub/url` (显示订阅链接) · `POST /api/logs/clear` · `POST /api/devices/kick` · `POST /api/sync/clear` · `GET /api/export` (导出配置备份, 含凭据)。`POST /api/password` 本身就要输入旧密码, 不再额外要求 sudo。
+**登录了 enana 账号时**, 部分敏感的「操作」和「显示」必须再校验一次**当前登录账号的密码** (防止别人趁你离开时点按钮/看到凭据)。**没登录时**没有密码可以验证: 辅助服务不要求 `X-Enana-Sudo`, 仪表盘在这些操作前**只弹一次确认框** (已经自己确认过的调用方不再重复弹)。
+- 需要再次验证的接口 (后端有一张白名单 `SUDO_ENDPOINTS`, 以后加功能只要往表里加一行): `POST /api/servers/delete` · `POST /api/sub/delete` · `GET /api/servers/secret` (显示某个节点的密码/UUID/密钥, 官方节点永远不显示) · `GET /api/sub/url` (显示订阅链接) · `POST /api/logs/clear` · `POST /api/devices/kick` · `POST /api/sync/clear` · `GET /api/export` (导出配置备份, 含凭据) · `POST /api/billing/purchase` (余额购买) · `POST /api/billing/auto-renew` (开关自动续费)。其中 devices/kick、sync/clear、billing/* 本来就要 enana 账号: 没登录时回 `E_LOGIN_REQUIRED` (不是 `E_SUDO_REQUIRED`)。`POST /api/password` 本身就要输入旧密码, 不再额外要求 sudo。
 - 令牌只存哈希 (`sudo.tokens`, 600), 5 分钟有效, 同时可以有多个 (多个浏览器标签), 退出账号 / 改密码立即全部失效; `POST /api/auth/verify` 的失败计数与登录共用。
-- 流程: 调用需要验证的接口时, 没带有效的 `X-Enana-Sudo` 头 → HTTP 403 `{"ok":false,"code":"E_SUDO_REQUIRED","error":"此操作需要再次输入登录密码"}` → 前端弹出「请输入登录密码以继续」对话框 (说明为什么要验证、验证后 5 分钟内不再询问) → `POST /api/auth/verify` → 拿到 `sudo` 令牌 → 带着 `X-Enana-Sudo: <令牌>` 重试原请求。前端把 sudo 令牌只放内存 (到期/退出登录/锁屏即丢弃), 不落盘。
-### `POST /api/auth/verify` (需登录) 表单 `password` → `{"ok":true,"sudo":"<令牌>","ttl":300}`
-密码在本机用「加盐 PBKDF2 校验值」验证 (登录时在线校验过; 不需要联网); 连续错 5 次锁定 5 分钟 (`E_LOCKED` + `wait`, 和登录共用计数); 错误 `E_BAD_CREDENTIALS`。令牌 5 分钟有效 (`ttl` 秒), 退出账号立即失效。
+- 流程 (已登录): 调用需要验证的接口时, 没带有效的 `X-Enana-Sudo` 头 → HTTP 403 `{"ok":false,"code":"E_SUDO_REQUIRED","error":"此操作需要再次输入登录密码"}` → 前端弹出「请输入登录密码以继续」对话框 (说明为什么要验证、验证后 5 分钟内不再询问) → `POST /api/auth/verify` → 拿到 `sudo` 令牌 → 带着 `X-Enana-Sudo: <令牌>` 重试原请求。前端把 sudo 令牌放在内存和 sessionStorage 里 (刷新页面后 5 分钟内仍然有效; 到期 / 退出登录 / 关闭标签页即丢弃, 不进 localStorage)。
+### `POST /api/auth/verify` (需 enana 账号) 表单 `password` → `{"ok":true,"sudo":"<令牌>","ttl":300}`
+密码在本机用「加盐 PBKDF2 校验值」验证 (登录时在线校验过; 不需要联网); 连续错 5 次锁定 5 分钟 (`E_LOCKED` + `wait`, 和登录共用计数); 错误 `E_BAD_CREDENTIALS`; 没登录 → `E_LOGIN_REQUIRED`。令牌 5 分钟有效 (`ttl` 秒), 退出账号立即失效。
 ### `GET /api/servers/secret?tag=` (需 sudo) → `{"ok":true,"tag":"…","fields":[{"name":"password","value":"…"},{"name":"uuid","value":"…"}]}`
 `fields` 只含凭据类字段 (`username` `password` `uuid` `auth_str` `private_key` `pre_shared_key` `obfs_password`, 有哪个返回哪个); 找不到 → `E_NOT_FOUND`; 官方线路 (会员) 的节点 → `E_FORBIDDEN`。查看会写一条操作记录 (只记节点名, 不记凭据)。
 ### `GET /api/sub/url?name=` (需 sudo) → `{"ok":true,"name":"…","url":"https://…"}`
@@ -95,9 +100,9 @@
 
 目前所有功能免费, 但接口和界面按「以后部分功能按月订阅」设计:
 - **套餐与权益** 在云端 (`plans` / `subscriptions`), 本机缓存一份 (登录时和每天维护时刷新); 本机只用于「界面提示」, **真正的限制在云端**: 受限内容 (如官方线路) 只有云端核对订阅后才会下发。
-- `GET /api/plan` (需登录; 可带 `?refresh=1`) →
+- `GET /api/plan` (需登录; 可带 `?refresh=1`; 没登录 enana 账号时是中性的内置「免费版」: `logged_in:false`, `checked:0`, 不看缓存、不联网) →
 ```json
-{"ok":true,"plan":{"code":"free","title":"免费版"},"expires_at":null,"checked":1760000000,
+{"ok":true,"logged_in":true,"plan":{"code":"free","title":"免费版"},"expires_at":null,"checked":1760000000,
  "limits":{"devices_per_platform":2},
  "features":{"core":{"enabled":true,"tier":"free"},"sync":{"enabled":true,"tier":"free"},"vps_deploy":{"enabled":true,"tier":"free"},
              "official_proxy":{"enabled":false,"tier":"pro","reason":"upgrade","coming_soon":true}},
@@ -133,7 +138,7 @@
 - 每一项是「自己改过的」数量: `apps` 应用的代理设置 · `sites` 自己添加的网站 · `auto_sites` 自动识别添加的网站 · `services` 网站 / 服务的出口开关 (和默认不同的; 开关的选择由代理核心记住, 默认值取当前配置里每个开关的 `default`, 兜底出口 `Final` 也算) · `rulesets` 自定义规则集 · `toggles` 规则集开关 (和默认不同的) · `custom_apps` 自定义软件 · `domains` 网站域名改动 · `hosts` 自定义解析 · `dns` DNS 设置是否被改过 (0 / 1) · `auto_on` 自动识别是否开着 (0 / 1, 不计入 `total`)。
 - `content.source`: `cloud` = 本机有云端下发的官方内容, `baseline` = 只有随程序自带的基线。`backup` = 最近一次重置的备份 (可撤销), 没有时是 `null`。
 
-`POST /api/settings/reset` (需登录, 无参数) → `{"ok":true,"job":"rules-reset-…"}`。后台任务 (同一把配置锁、失败整体回滚): ① 把要清掉的文件打包到 `~/.enana/backups/reset-<时间>.tgz` (权限 600, 只留最近 3 份; 本来就是默认状态时不建备份) ② 清掉 `overrides.tsv autosites.tsv autosites.dismissed rules.state custom-rulesets.tsv custom-apps.tsv site-domains.tsv hosts.tsv dns.conf`, 关闭自动识别 ③ **强制重新下载云端官方内容** (就算序号没变也换一份; 离线 / 没登录就用本机已验证的官方内容, 一份都没有用基线) ④ 网站 / 服务的出口开关和兜底出口通过核心的 API 热切回默认 ⑤ 像第一次安装那样重新识别应用 (推荐值来自官方内容, 标记 `def`, 不会弹出一堆「新应用」) ⑥ 补下默认启用的规则集、生成并应用配置。不动: 服务器 / 订阅 / 账号 / 端口 / 语言 / 日志和更新设置 / 测速自定义目标 / 界面偏好 / 节点选择 (`PIN` `Global`)。任务结果: `{"content":"cloud|cached|baseline","seq":2026100401,"error":""}` —— `cached` = 没连上云端, 用了本机已有的官方内容 (`error` 是原因); `baseline` = 从没拿到过云端内容。失败 (配置没通过校验等) 时所有文件和开关原样恢复, 也不留下备份。
+`POST /api/settings/reset` (需登录, 无参数) → `{"ok":true,"job":"rules-reset-…"}`。后台任务 (同一把配置锁、失败整体回滚): ① 把要清掉的文件打包到 `~/.enana/backups/reset-<时间>.tgz` (权限 600, 只留最近 3 份; 本来就是默认状态时不建备份) ② 清掉 `overrides.tsv autosites.tsv autosites.dismissed rules.state custom-rulesets.tsv custom-apps.tsv site-domains.tsv hosts.tsv dns.conf`, 关闭自动识别 ③ **强制重新下载云端官方内容** (就算序号没变也换一份; 没登录时匿名下载, 同样验签; 离线 / 云端拒绝匿名下载时用本机已验证的官方内容, 一份都没有用基线) ④ 网站 / 服务的出口开关和兜底出口通过核心的 API 热切回默认 ⑤ 像第一次安装那样重新识别应用 (推荐值来自官方内容, 标记 `def`, 不会弹出一堆「新应用」) ⑥ 补下默认启用的规则集、生成并应用配置。不动: 服务器 / 订阅 / 账号 / 端口 / 语言 / 日志和更新设置 / 测速自定义目标 / 界面偏好 / 节点选择 (`PIN` `Global`)。任务结果: `{"content":"cloud|cached|baseline","seq":2026100401,"error":""}` —— `cached` = 没连上云端, 用了本机已有的官方内容 (`error` 是原因); `baseline` = 从没拿到过云端内容。失败 (配置没通过校验等) 时所有文件和开关原样恢复, 也不留下备份。
 
 `POST /api/settings/reset/undo` (需登录, 无参数) → `{"ok":true,"job":"rules-reset-undo-…"}`: 把最近一次重置清掉的文件放回去 (包括自动识别开关、出口开关原来的选择; 自定义规则集按登记的链接重新下载), 备份用完即删; 没有备份 → `E_NOT_FOUND`。
 
@@ -335,7 +340,7 @@
 
 用户在仪表盘里填「IP / 端口 / 用户名 + 密码」或「IP / 端口 / 用户名 + 私钥」, 本机通过 SSH 连上用户的服务器, **自动检测系统与依赖** → (弹窗确认) → **自动安装依赖和服务端** → 生成节点 → **识别服务器的所有出口 IP** → 验证每个节点真的能用 → 把节点添加到本机。
 支持的服务器系统: **Debian 11 / 12 / 13** 与 **Ubuntu 20.04 / 22.04 / 24.04** (x86_64 与 arm64, 需要 systemd); Debian 10 / Ubuntu 18.04 (已停止维护, 软件源可能失效) 和更新的版本尽力支持 (`support:"best_effort"` + 说明); 其它系统 → `supported:false` + 原因。
-**部署脚本在云端**: 在服务器上执行的脚本 (协议选择、依赖清单、服务端版本与校验值、配置生成) 是 enana 云端「签名内容」的一部分, 登录后随「云端内容」下发到本机 (`vps/lib.sh probe.sh provision.sh redetect.sh`), **公开仓库里没有**; 没有登录 / 内容还没同步完 → `E_VPS_NO_PLAYBOOK` (前端提示「请先登录并等云端内容同步完成」)。以后换协议 / 升级服务端版本只需要云端更新内容, 本机不用升级。
+**部署脚本在云端**: 在服务器上执行的脚本 (协议选择、依赖清单、服务端版本与校验值、配置生成) 是 enana 云端「签名内容」的一部分, 随「云端内容」下发到本机 (`vps/lib.sh probe.sh provision.sh redetect.sh`; **不需要账号**: 没登录时匿名下载, 同样验签), **公开仓库里没有**; 内容还没下载完 → `E_VPS_NO_PLAYBOOK` (前端提示「请等云端内容更新完成」; 全新安装时仪表盘一打开就会在后台下载, 见 `POST /api/auth/local`)。以后换协议 / 升级服务端版本只需要云端更新内容, 本机不用升级。
 安全约定: SSH 密码 / 私钥 / 口令 / sudo 密码 **只在请求体里临时传给本地辅助服务, 辅助服务写进一个 600 权限的临时文件交给后台任务, 任务一开始就读走并删除; 任务期间只存在于一个 700 权限的临时目录 (`SSH_ASKPASS` 脚本读取, 不进命令行 / 环境变量), 任务结束立即删除; 绝不写日志、不上传、不同步、不进任务结果、不返回给前端**。表单字段每次请求都要重新带上 (前端在向导期间自己保存在内存里)。
 主机指纹: 用 `ssh-keyscan` 取到服务器公开的主机密钥, 指纹 (`SHA256:…`) 展示给用户确认; 之后的请求带 `hostkey`, 本机只接受**指纹一致**的密钥并用 `StrictHostKeyChecking=yes` 连接 (指纹不一致 → `E_SSH_HOSTKEY`, 不会发送任何凭据)。远端脚本经 ssh 标准输入交给 `bash -c 'eval "$(cat)"'` 执行, 服务器上不留脚本文件; 远端输出只认协议行, 其它一律丢弃、不记录。
 
@@ -410,8 +415,9 @@
 **端到端加密**: 数据在本机加密后才上传到 enana.cc, 服务器只存密文, 看不到服务器地址和密码。密钥 = PBKDF2-HMAC-SHA256(账号密码, 盐 `enana-sync-v1|<账号 id>`, 200000 次) 再拆成「加密口令」和「校验密钥」, **只在登录 (或改密码 / 第一次开启同步时输入密码) 时派生并保存在本机 (`sync.key`, 600), 退出账号即删除**。载荷 = base64(`ENSYNC1` ‖ AES-256-CBC(gzip(快照)) ‖ HMAC-SHA256) (先加密再 MAC, 解密先验 MAC; 加密用 `openssl enc`, 格式在 LibreSSL 与 OpenSSL 3 之间互通)。快照内容与 `GET /api/export` 相同 (白名单里的文件; **SSH 密码 / 私钥永远不同步**; 每台电脑独立的东西 —— 代理总开关、端口、开机自启、令牌 —— 也不同步)。
 在网站上 / 别的电脑上改了密码之后, 新密码派生的密钥解不开旧密文: 拉取返回 `E_SYNC_KEY` → 前端让用户输入「旧密码」(`old_password`) 重试, 成功后会用现在的密钥重新加密上传, 以后就不需要旧密码了。云端被篡改 / 损坏的内容 MAC 校验不过, 同样返回 `E_SYNC_KEY` (无法区分「密钥不对」和「被改动」), 内容格式不对返回 `E_INVALID`。
 
+同步属于账号: 没登录 enana 账号时 `POST /api/sync/settings|push|pull|preview|clear` 回 `E_LOGIN_REQUIRED`, `GET /api/sync` 返回中性的状态 (`logged_in:false`, 全部关闭 / 空, `remote:null`, `online:false`, 不联网)。
 ### `GET /api/sync` →
-`{"ok":true,"enabled":false,"auto":false,"has_key":true,"account":"name@example.com","remote":{"exists":true,"version":7,"updated":1760000000,"size":2048,"device":"MacBook-Pro"},"local":{"version":6,"dirty":true},"conflict":false,"last_pull":0,"last_push":1760000000,"online":true,"decided":false,"ask":false}`
+`{"ok":true,"logged_in":true,"enabled":false,"auto":false,"has_key":true,"account":"name@example.com","remote":{"exists":true,"version":7,"updated":1760000000,"size":2048,"device":"MacBook-Pro"},"local":{"version":6,"dirty":true},"conflict":false,"last_pull":0,"last_push":1760000000,"online":true,"decided":false,"ask":false}`
 `remote`: 云端快照信息 (连不上时是 `null`; 云端没有数据时是 `{"exists":false}`; 结果缓存 20 秒); `local.version` = 本机内容所基于的云端版本; `local.dirty`: 本机有还没上传的改动 (从没同步过且本机已经有自己的配置时也是 true); `has_key`: 本机有同步密钥 (没有 → 退出账号后重新登录一次, 或开启时输入密码); `conflict`: 自动同步发现两边都改了 (或这台电脑从没同步过但已经有自己的配置而云端有数据), 没有自动覆盖, 让用户选; `online=false`: 连不上 enana.cc (按钮要给出原因, 不要做成死按钮)。
 `decided`★: 这个账号在这台电脑上是否已经做过选择 (`ENABLED` 有值)。`ask`★: 这台电脑第一次登录这个账号、还没做过选择、云端有数据 → `true` (仪表盘据此问一次, 见下面 `preview` 一节)。
 ### `POST /api/sync/settings` 表单 `enabled=0|1` `auto=0|1` (至少给一个) `password` (可选: 第一次开启时本机还没有同步密钥 → 用登录密码派生; 没给 → `E_SYNC_KEY`, 密码不对 → `E_BAD_CREDENTIALS`/`E_LOCKED`) → `{ok}` (关闭同步时自动同步一起关, 不会删除云端数据; 云端数据在「设置 → 同步」里清除)
