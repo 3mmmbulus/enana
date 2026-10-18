@@ -54,7 +54,7 @@ ts<TAB>who<TAB>action<TAB>detail<TAB>result      ← tsv 的第一行是列名, 
 | `live` | tsv | 此刻核心里还开着的连接 (最多 60 条, 按下载量): `start net host port app chain rule up down` —— `chain` 是实际走过的出口链, `rule` 是命中的规则 |
 | `health` | tsv | **连接健康记录 (2.3.8)**: `ts kind target result ms detail`, 每分钟一批, 最多最近 6000 行; 见下面「连接健康记录」 |
 | `health_summary` | tsv | 健康记录分桶统计: `bucket kind target n ok fail ms_avg ms_max errors` (范围 ≤ 24 小时 10 分钟一桶, ≤ 72 小时 30 分钟, 更长 1 小时) |
-| `outages` | tsv | 连续失败的时段: `start end minutes kind target result samples` (服务器端口至少连续 2 分钟, 经代理探测至少连续 2 次) |
+| `outages` | tsv | 连续失败的时段: `start end minutes kind target result samples` (服务器端口至少连续 2 分钟, 经代理探测至少连续 2 次; 2.3.27 起本机断网连续 2 分钟以上也单独成段: `kind=state target=network result=outage`) |
 | `apilog` | raw | **辅助服务日志 (`api.log`) 的最后 200 行**, 只含导出时间范围内的行 (带日期时间的按时间筛; 没有时间的行跟随前一行, 同代理日志)。先取上一代 `api.log.1` 再取当前文件 (超过 5 MB 轮转, 保留三代, 超过保留期的一并删除)。打码: 服务器地址和标签 (标签换成 `<server>`), 文字里的 IP (同服务器地址), URL 的用户名 / 密码与路径, 用户名。更新任务写的行带日期时间 |
 | `ops` | tsv | **操作记录**: `ts who action detail result` |
 | `access` | tsv | **网站访问** (一条连接一行): `ts id net host port app user route node reason result err dur ips errmsg path` |
@@ -84,6 +84,8 @@ ts<TAB>who<TAB>action<TAB>detail<TAB>result      ← tsv 的第一行是列名, 
 | `登录` `登录失败` `退出账号` `下线设备` `二次验证` … | — | 账号 (不含密码或令牌) |
 | `开启系统代理` / `关闭系统代理` | `method=direct port=7890 mode=system` / `err=user-canceled` | 系统代理的每一次修改 (2.3.8 起仪表盘也能开): `method` = `already direct sudo sudo-nopass dialog user`; 失败时 `err` = `user-canceled wrong-password not-admin no-gui-session not-authorized backup-failed no-network-service not-applied failed machine-policy`, 结果 `error` |
 | `环境状态变化` | `item=sysproxy from=1 to=0 capture=system` | **来源 `auto`**, 由每分钟的健康检查发现: `item` = `core_running` `core_api` `proxy` (总开关) `sysproxy` `login` `tun_ready` `capture_mode` `net_if` `net_gw` (默认网络接口 / 网关变了) `pin` (固定出口没了) `exit_orphans` (见下) —— 回答「什么时候开始不对的」 |
+| `环境状态变化` (`item=auto_select`, 2.3.26) | `item=auto_select from=Auto-1 to=Auto-2 group=AUTO probe=refused took_s=3 closed=4` | **来源 `auto`**: 每分钟的健康检查发现「自动线路」(`AUTO`) / 「在固定出口里自动选」(`PINAUTO`) 当前选中的节点不通, 请核心当场重测这个组, **真的换了节点**才记。`probe` = 发现问题的那次探测: TCP 探测的结果 (`refused` `timeout` `unreachable` …), 或者 (2.3.27) 走 UDP 的节点由核心测速的结果 `core-timeout` / `core-error`; `took_s` = 重测用了几秒; `closed` (2.3.27) = 旧节点自己的核心测速也失败了, 断开了几条还经这个组用着它的连接 (没有这一项 = 一条也没断开)。见下面「2.3.27: 自动线路的健康检查」 |
+| `环境状态变化` (`item=network`, 2.3.27) | `item=network from=ok to=outage probed=5 failed=5 cn_direct=timeout` | **来源 `auto`**: **本机断网** —— 同一分钟里探测的节点全部失败 (至少探测了 2 个), 或者不经代理的对照站点也失败 (而且有节点失败; `cn_direct` 只在那一分钟做了对照时才有)。这时不换节点 (换哪个都一样)。只在断网开始时记一条 (距上一次断网的那一分钟不到 10 分钟算同一次), 恢复不另记 —— 每分钟的情况看 `health` 里的 `state network outage` 行 |
 | `环境状态变化` (`item=exit_orphans`) | `item=exit_orphans from=- to=2 names=g1.io->Gone-1(deleted),role.io->Auto-1(role)` | **来源 `auto`**: **指定了「已经不是固定出口的服务器」的应用 / 网站个数**变了 (`state` 行里的 `orphans=N`)。这些项目的规则集暂时退回默认固定出口 (不断网), 但出口 IP / 国家可能和你以为的不一样。`names` 是 `名称->指定的出口(原因)`, 原因 `deleted` 已删除 · `role` 不再是固定出口 · `cap` 超出可单独指定的数量上限 (32)。订阅刷新删掉了节点、角色被改、云同步拉取都会造成, 仪表盘「服务器 → 出口分配」会把它们列出来 |
 | `移动固定出口` | `from=DEFAULT to=Pin-B kind= apps=3 sites=1 services=13` | **出口分配**: 批量改派 / 钉住 (`POST /api/exits/move\|freeze`): `from` = `DEFAULT` (跟随默认的) / `PINAUTO` / `ORPHAN` / 某个固定出口, `to` = 去向, `kind` 空 = 全部; 后面是各改了几个 |
 | `固定出口移除前改派` / `固定出口移除时没有改派` | `tag=Pin-A to=Pin-B freeze=1 affected=5` / `tag=Pin-A affected=5 default_changes=1 why=accept_orphans` | 删除 / 改角色的保护: 指明了去向 (`to`; `freeze=1` = 跟随默认的也钉在去向上) / 用户明确接受后果 (`accept_orphans`)。`删除订阅时没有改派固定出口` (`sub=… affected=…`) 同理 |
@@ -169,9 +171,10 @@ python3 tools/diag-summary.py <文件> --app "Google Chrome" --host google.com
 
 | `kind` | 频率 | `target` | `result` | 说明 |
 |---|---|---|---|---|
-| `node` | 每分钟 | 固定出口 / 自动线路里的服务器名 (最多 8 个) | `ok` `timeout` `refused` `unreachable` `dns` `other` | **本机直接连服务器端口的 TCP 连接** (不经任何代理), `ms` = 连接耗时。服务器 / 机房线路是否稳定的客观证据; 只连用户自己的服务器端口, 不发应用数据 |
+| `node` | 每分钟 | 固定出口 / 自动线路里的服务器名 (最多 8 个) | `ok` `timeout` `refused` `unreachable` `dns` `other` | **本机直接连服务器端口的 TCP 连接** (不经任何代理), `ms` = 连接耗时。服务器 / 机房线路是否稳定的客观证据; 只连用户自己的服务器端口, 不发应用数据。2.3.27: 走 UDP 的协议 (hysteria / hysteria2 / tuic / wireguard) **不做 TCP 探测** (服务器上没有对应的 TCP 端口, 以前每分钟都记一条假的 `refused`); 只有 `AUTO` / `PINAUTO` 当前选中的那一个由核心经它测速 (Clash API `GET /proxies/<节点>/delay`, 和组测速同一个地址, 超时 5 秒, 每组每分钟最多一次), `detail` 带 `probe=core`, `result` = `ok` (`ms` = 核心测得的延迟) / `timeout` / `error`; 核心没响应或不认识这个节点时不记这一行。没选中的 UDP 节点没有 `node` 行 |
 | `canary` | 约每 5 分钟 | `google_204` `chatgpt_web` `openai_api` (经本机代理, 仅在总开关开着且核心在运行时) · `cn_direct` (不经代理的苹果 `captive.apple.com`, 本机网络对照) | `ok` · `region-blocked` (`api.openai.com` 返回 403 = 出口 IP 所在地区被 OpenAI 限制) · `http-NNN` · `timeout` `refused` `tls` `reset` `dns` `proxy-handshake` `curl-N` | `detail` 带 `http=` `connect_ms=` `chain=svc-chatgpt>PIN>Tokyo-Fix` (这次实际用了哪个出口)。`chatgpt.com` 返回 403 是 Cloudflare 人机验证页, 算「连得上」 |
 | `state` | 状态变化时 + 约每 9 分钟 | `capture` | `ok` | `core=1 pid=… api=1 proxy=1 mode=auto capture=system sysproxy=1 login=1 tun=- if=en0 gw=…`; `sysproxy` 取的是 `scutil --proxy` 里**当前生效**的系统代理 (应用实际用的那个) |
+| `state` (2.3.27) | 断网的那一分钟 | `network` | `outage` | `probed=5 failed=5 cn_direct=timeout mode=system nodes=A,B,…`: **本机断网** (同一分钟里探测的节点全部失败、至少 2 个, 或对照站点也失败而且有节点失败)。这一分钟各个节点的失败**不再单独记** (免得把本机断网算在服务器头上), 通的节点照常记; `cn_direct` 只在这一分钟做了对照时才有, `nodes` 是失败的节点 |
 | `tick` | 相隔 > 3 分钟 | `gap` | `gap` | `ms` = 秒数: 电脑休眠 / 后台被暂停 |
 
 状态变化 (`state` 行变了) 同时写一条操作记录 (见上面 `环境状态变化`), 所以「系统代理是什么时候被关掉的」「核心是不是崩溃重启过」可以直接在 `ops` 里读到。金丝雀的几条连接会出现在「网站访问」里 (应用 `curl`, 域名 `gstatic.com` / `chatgpt.com` / `api.openai.com` / `captive.apple.com`), 对照 `health` 里的同一时刻即可识别。仅 macOS; Windows 之后跟进 (导出里这几个分区为空)。**没有记录的**: 仪表盘辅助服务 (`com.enana.proxy.api`, 端口 `API_PORT`) 停止 —— 健康记录里的 `api=` 探测的是核心控制端口 (`UI_PORT`), 不是辅助服务; `enana tick` 恢复后才会留下 `tick gap` 行。
@@ -189,9 +192,9 @@ python3 tools/diag-summary.py <文件> --app "Google Chrome" --host google.com
 | `pin-empty` (2.3.9) | client | **固定出口是空的**: 没有任何服务器的角色是 `pin` (`env` 的 `pin.servers=0`), 但有应用 / 网站 / AI 服务选了「固定出口」(`pin.app_policies` / `pin.selectors_on_pin` > 0), 它们全部**直连** (真实 IP 出口)。OpenAI 返回 `unsupported_country_region_territory` 的典型原因, 而且表面上「总开关开着、节点都正常」。有 `policy` 直连连接时置信度 high |
 | `tun-dns-bypass` (2.3.9) | client | TUN 模式下系统 DNS 是局域网地址 (在 `route_exclude_address` 里, DNS 劫持看不到查询), 它对 `www.google.com` 的答案和核心完全不同, 且走 TUN 的 Google 探测失败而经代理端口的探测正常 |
 | `node-connect-timeouts` (2.3.10) | node | 访问记录里经某台服务器 (`node` 列) 的连接有较多**连接超时**: 固定出口 (`route=pin`) 样本 ≥ 30 且 ≥ 3%, 其它 (`auto` 等) 样本 ≥ 50 且 ≥ 8%; 最近 30 分钟内还有超时时置信 `high`, 否则 `medium`。证据 `node=… conns=… timeouts=… (x%) recent30m=a/b`。它补的是服务器端口探测的盲区: 端口探测只说明 TCP 能建立, 不代表每条连接都能建立 |
-| `local-network-down` | network | 最近 30 分钟服务器端口不通, 同时对照站点 `cn_direct` 也失败 |
+| `local-network-down` | network | 最近 30 分钟服务器端口不通, 同时对照站点 `cn_direct` 也失败; 或者 (2.3.27) 最近 30 分钟里有记录的分钟中至少 3 分钟、而且一半以上是断网的分钟 (`state network outage` 行: 这些分钟没有各个节点的失败行), 证据 `network_outage_minutes_30m=断网的分钟/有记录的分钟` |
 | `node-down` | node | 最近 30 分钟**固定出口 / 其它角色**的服务器端口可达率 < 50%, 或**一半以上的自动线路节点**都不可达 (且有对照数据正常; 没有对照数据时置信度降为 medium)。2.3.9 起个别自动线路节点坏了不算故障 (自动选线会避开它), 只作为 `note.node_degraded` 附带说明 —— 以前 38 台里坏 1 台就会被判成主因, 把真正的原因盖住 |
-| `proxy-path-failing` | node | 服务器端口是通的, 但经代理访问 `google_204` 最近 30 分钟失败过半 (服务端代理程序故障 / 配置被改 / 握手被干扰) |
+| `proxy-path-failing` | node | 服务器端口是通的, 但经代理访问 `google_204` 最近 30 分钟失败过半 (服务端代理程序故障 / 配置被改 / 握手被干扰); 对照站点失败或断网的分钟过半时不报 (那时端口本来就连不上) |
 | `node-unstable` | node | 整个范围内服务器端口失败 ≥ 3% 且 ≥ 5 次 (现在可能已恢复; 见 `outages`) |
 | `openai-region-blocked` | exit-ip | 代理正常 (`google_204` ok), 但 `openai_api` 返回 403 过半 |
 | `chatgpt-unreachable-via-proxy` | exit-ip | 代理正常, 但 `chatgpt_web` 连续失败 |
@@ -217,6 +220,15 @@ python3 tools/diag-summary.py <文件> --app "Google Chrome" --host google.com
 - **TUN 下的节点探测** (`health` 的 `node` 行): TUN 在本机应答 TCP 握手, 普通的探测在 TUN 下永远成功 (耗时 ~3-4 ms, 可达率 100%)。2.3.10 起 TUN 下的探测用 `IP_BOUND_IF` 绑定到默认路由的物理网卡 (`ENANA_PROBE_IFINDEX`), 绑定失败时回退到旧方式; `detail` 里带 `probe=bound` 表示可信。导出里旧记录 (`mode=tun` 没有 `probe=bound`) 会在 `verdict` 里多一条 `note.node_probe_tun`, 提醒「100% 可达」不能当证据。
 - **`listen.*`**: TUN 下核心是 root 服务, 普通用户的 `lsof` 看不到它的监听端口, 显示 `root-service(not visible to lsof)`。
 - **TUN 策略同步** (`ops` 的 `同步策略规则`): `via=helper restart=no` 表示通过免密规则助手同步、没有重启; `restart=yes err=no-helper|rejected` 表示助手不可用 / 被拒绝, 退回完整重启 (会弹授权)。完整重启前后的 `重启核心` 记录仍然带调用链。
+
+## 2.3.27: 自动线路的健康检查
+
+「自动线路」(`AUTO`) 和「在固定出口里自动选」(`PINAUTO`) 是核心 (sing-box) 的 urltest 组, 只在每 3 分钟的定时测速时改选: 选中的节点坏了以后, 新连接照样交给它 (连接失败只删掉它的测速记录), 已经建立在它上面的连接也一直挂着; 空闲 30 分钟后不再测速, 第一条连接用的是旧的选择。2.3.26 起每分钟的健康检查 (`enana tick`) 发现选中的节点不通时请核心当场重测这个组 (`GET /group/<组>/delay`, 18 秒), 2.3.27 补上下面几处:
+
+- **走 UDP 的节点** (hysteria / hysteria2 / tuic / wireguard): 不再做 TCP 探测 (服务器上没有对应的 TCP 端口, 以前每天几十条假的 `refused`)。只有组里当前选中的那一个, 每分钟由核心经它测一次速 (`GET /proxies/<节点>/delay?url=<同一个测速地址>&timeout=5000`, 节点名按 UTF-8 逐字节 URL 编码), 结果写成 `node` 行 (`probe=core`)。测速超时 / 出错时和 TCP 节点一样当场重测这个组 (操作记录里 `probe=core-timeout` / `core-error`)。
+- **本机断网不换节点**: 同一分钟里探测的节点全部失败 (至少 2 个), 或者不经代理的对照站点 `cn_direct` 也失败 (而且有节点失败), 说明是本机网络的问题, 换哪个节点都一样 —— 不重测、不换节点; `health` 里记一行 `state network outage` 代替这一分钟各个节点的失败, `ops` 只在断网开始时记一条 `item=network` (10 分钟内再断算同一次)。金丝雀 (约每 5 分钟) 和节点探测同时跑, 所以对照站点的结果就是同一分钟的。
+- **断开坏节点上的连接**: 真的换了节点, 而且**旧节点自己的核心测速也失败了** (组测速结果里没有它; 组测速没给出结论时, UDP 节点用这一分钟的核心测速结果, 其它节点单独再测一次), 就断开核心里还经这个组用着旧节点的连接 (`GET /connections` 里 `chains` 同时有组名和旧节点的, 逐条 `DELETE /connections/<id>`), 应用重连时走新节点。直接选了这个节点的 `Global` / `PIN` 等不动 (重连还是它), 旧节点其实是通的 (只是慢, 或者本机直连它的端口不通) 也不断开。一次最多 200 条 / 10 秒, 接口出错就停; 断开的条数记在 `item=auto_select` 的 `closed=`。
+- 限制不变: 同一个组最多每分钟重测一次 (核心测速也是每组每分钟最多一次); 重测后核心仍选它而且测得通, 同一个节点 5 分钟内不再触发; 只在真的换了节点时记录; 总开关关着 / 核心没运行 / 官方线路 (没有地址) 时什么都不做。
 
 ## 诊断上传 (2.3.9)
 
