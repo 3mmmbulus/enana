@@ -1,9 +1,9 @@
 # enana 云端接口 (客户端 ↔ api.enana.cc)
 
 本地辅助服务 (`lib/*.sh`) 与 enana 云端之间的契约。账号服务的通用实现见 `server/`; 数据库、邮件和支付凭据仍是服务器私有配置。本文描述客户端用到的接口, 方便审计「客户端到底向云端发送了什么」。
-**客户端从不向云端发送服务器地址、订阅链接、代理密码、SSH 凭据、访问记录。** 云端只知道: 账号 (邮箱 + 密码哈希)、设备信息 (见下)、登录会话、(用户自己打开同步时) 一份在本机加密后的配置密文。
+**客户端从不向云端发送服务器地址、订阅链接、代理密码、SSH 凭据、访问记录。** 云端只知道: 账号 (邮箱 + 密码哈希)、设备信息 (见下)、登录会话、(用户自己打开同步时) 一份在本机加密后的配置密文。没有登录时客户端只下载公开的签名内容 (见最后一节), 请求里不带任何账号、会话或设备信息。
 
-基地址 `https://api.enana.cc` (官网提供静态首页与邮箱验证页, 验证页调用受限的邮箱确认接口)。JSON, UTF-8。除登录 / 注册 / 邮箱确认外都要带:
+基地址 `https://api.enana.cc` (官网提供静态首页与邮箱验证页, 验证页调用受限的邮箱确认接口)。JSON, UTF-8。除登录 / 注册 / 邮箱确认和 `/v1/` 下的签名内容外都要带:
 `Authorization: Bearer <token>` 与 `X-Enana-Session: <session id>`。时间一律是 Unix 秒 (整数)。平台 `platform` 取值 `macos | windows | linux`。
 
 ## 数据表 (PocketBase 集合, 命名按领域, 方便以后扩展; 另有 2.3.9 起的 `diag_reports`, 见下面「诊断上传」)
@@ -24,7 +24,7 @@ Pro 订单、余额、到账记录与验证接口见 [BILLING_API.md](BILLING_AP
 
 ## 设备数量限制 (服务端强制)
 同一个账号, **同一平台最多同时在线 2 台设备** (macOS 2 台 + Windows 2 台; 上限来自账号套餐 `plans.max_devices_per_platform`)。
-「在线」= 会话未被撤销、未过期, 且 10 分钟内有过心跳。第 3 台登录时被拒绝并返回在线设备列表, 用户可以在登录界面点某台设备「下线」: 被下线的设备在下一次心跳 (≤ 2 分钟) 收到 `session_revoked` 后自动退出登录并关闭代理; 当前设备随即自动完成登录。
+「在线」= 会话未被撤销、未过期, 且 10 分钟内有过心跳。第 3 台登录时被拒绝并返回在线设备列表, 用户可以在登录界面点某台设备「下线」: 被下线的设备在下一次心跳 (≤ 2 分钟) 收到 `session_revoked` 后自动退出登录 (2.3.27 起代理继续使用用户自己的服务器, 只停官方线路、同步和会员); 当前设备随即自动完成登录。
 
 ## 接口
 ### `POST /api/enana/v1/auth/login` (公开)
@@ -36,11 +36,11 @@ Pro 订单、余额、到账记录与验证接口见 [BILLING_API.md](BILLING_AP
 - 400 `{"code":"bad_credentials"}` · 403 `{"code":"account_disabled"}` · 429 限流
 - `kick_device_uid` 非空: 先撤销该设备 (必须是同账号、同平台) 的会话再登录; 仍然超限 → 再次 409。
 ### `POST /api/collections/users/records` 注册 (PocketBase 原生接口, `{"email","password","passwordConfirm"}`); 服务端自动给新账号创建 free 套餐。
-### `POST /api/enana/v1/session/heartbeat` `{"app":"2.3.26","os":"15.6.1"}` (正文可选) → `{"ok":true,"token":"<刷新后的 jwt>","expires_at":…}`; 会话被撤销/过期 → 401 `{"code":"session_revoked","reason":"kicked|logout|limit|expired"}`。客户端每 ~120 秒一次 (launchd 定时任务), 连续联网失败超过宽限期 (默认 7 天) 后本机自动退出登录。正文里合法的 `app` (`^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]{1,20})?$`, 最多 32 个字符) / `os` (1~64 个可打印字符, 首尾没有空白) 会更新设备记录的 `app_version` / `os_version` (升级后「我的设备」显示新版本); 不合法或没有就忽略, 心跳照样成功 (老客户端发 `{}`)。
+### `POST /api/enana/v1/session/heartbeat` `{"app":"2.3.26","os":"15.6.1"}` (正文可选) → `{"ok":true,"token":"<刷新后的 jwt>","expires_at":…}`; 会话被撤销/过期 → 401 `{"code":"session_revoked","reason":"kicked|logout|limit|expired"}`。客户端每 ~120 秒一次 (launchd 定时任务), 连续联网失败超过宽限期 (默认 7 天) 后本机自动退出登录 (2.3.27 起代理照常使用用户自己的服务器)。正文里合法的 `app` (`^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]{1,20})?$`, 最多 32 个字符) / `os` (1~64 个可打印字符, 首尾没有空白) 会更新设备记录的 `app_version` / `os_version` (升级后「我的设备」显示新版本); 不合法或没有就忽略, 心跳照样成功 (老客户端发 `{}`)。
 ### `POST /api/enana/v1/session/logout` → `{"ok":true}` 立即释放这个设备名额。
 ### `GET /api/enana/v1/devices` → `{"limit":2,"platform":"macos","devices":[{…同上, 另有 "app":"2.1.0","current":true}]}` (用于「设置 → 我的设备」: 只列出还登录着的设备 —— 至少有一个未撤销、未过期的会话 —— 外加当前设备; 被下线 / 退出登录 / 过期 / 因改密码或超限被撤销的设备不再出现。`online` = 10 分钟内有心跳, 所以 `online:false` 的是「离线但仍保持登录」)
 ### `POST /api/enana/v1/devices/kick` `{"device_uid":"…"}` → `{"ok":true,"revoked":1}` (撤销那台设备所有登录着的会话; 已经没有会话时是幂等的 `revoked:0`, 不记审计; 不能下线自己, 自己用 logout)
-### `GET /api/enana/v1/session/check` → 204 / 401 (供网关 auth_request 校验 `/v1/` 下的签名内容)
+### `GET /api/enana/v1/session/check` → 204 / 401 (2.3.26 及以前供网关 auth_request 校验 `/v1/` 下的签名内容; 2.3.27 起 `/v1/` 公开, 网关不再调用它, 接口保留、行为不变)
 ### `POST /api/enana/v1/account/password` `{"old_password":"…","new_password":"…"}`
 → 200 `{"ok":true,"token":"<新 jwt>","session":{"id":"…","expires_at":…}}` (当前设备保持登录, 旧令牌立即作废; 账号下**其它所有会话**被撤销, `reason=password_changed`) · 400 `bad_credentials` (旧密码不对) / `weak_password` (新密码不是 8–71 个字符 / 超过 72 字节 / 与旧密码相同) · 429 (与登录共用失败计数)。密码只在请求体里 (经 TLS), 本机从不落盘。
 ### `GET /api/enana/v1/plan` → `{"plan":{"code":"free","title":"…","max_devices_per_platform":2,"features":[]},"expires_at":null}`
@@ -67,7 +67,10 @@ Pro 订单、余额、到账记录与验证接口见 [BILLING_API.md](BILLING_AP
 - `DELETE /api/enana/v1/diag` → `{"ok":true,"deleted":N}` 删除调用者在云端的全部诊断 (所有设备; 完整诊断的文件一并删除)。
 - 数据: 集合 `diag_reports` (`user` `device` `kind=summary|full` `trigger` `cause` `app_version` `payload` `bundle` `created`), API 规则全是 `null` (只有管理员能读)。保留 7 天 (每天 03:27 清理), 每台设备最多 200 份摘要 / 5 份完整诊断, 账号 / 设备删除时级联删除。nginx 只对这两个精确路径放宽请求体上限 (`server/update-nginx-diag.py`)。
 
-### 签名内容 (登录后下发的精选数据与服务器部署脚本)
-`GET /v1/manifest.json` → `{"channel":"stable","bundles":{"content":{"version":"2026.10.02.1","url":"/v1/content-2026.10.02.1.tar.gz","sha256":"…","sig":"/v1/content-2026.10.02.1.sig","size":123456,"min_client":"2.1.0"}}}`
-每个包用 ECDSA P-256 / SHA-256 签名, 客户端用内置公钥 (`data/cloud-pub.pem`) 验签后才使用; 验签失败 → 丢弃并保留旧版本。
-内容包 (`content-<seq>.tar.gz`) 里只允许白名单里的文件: `services.conf groups.conf rulesets.conf apps.conf SEQ VERSION i18n/<语言>-data.tsv` 与 **`vps/{lib,probe,provision,redetect}.sh`** (SSH 一键部署在服务器上执行的脚本: 协议选择、依赖清单、服务端版本与校验值、配置生成)。客户端的检查顺序: 验证清单签名 → 序号不能比本机已有的小 (防回滚) → sha256 / 大小 → 解包前检查全部文件名 → 逐个文件的格式 → 原子替换。部署脚本只在本机从云端取到并验签之后才会使用, 公开仓库里没有。
+### 签名内容 (精选数据与服务器部署脚本; 2.3.27 起公开下载, 不需要账号)
+`/v1/` 下只有 `manifest.json` `manifest.sig` `content-<seq>.tar.gz` `ping.json`。**不需要令牌 / 会话**: 只读 (GET / HEAD, 其它方法 403), 按来源地址限流 (nginx `limit_req`, zone `enana_apihost`, burst 10), 响应 `Cache-Control: no-cache`; 目录本身不列出, 跳出 `/v1/` 的路径 (`/v1/../`) 一律拒绝。已登录的客户端照旧带 `Authorization` / `X-Enana-Session` (网关忽略), 没有登录的客户端什么都不带。服务器上的改动和部署步骤见 `server/README.md` 的「Public cloud content (2.3.27)」。
+- `GET /v1/manifest.json` → `{"channel":"stable","bundles":{"content":{"seq":202610021230,"version":"2026.10.02.30","url":"/v1/content-202610021230.tar.gz","sha256":"…","size":123456,"min_client":"2.1.0"}}}`
+- `GET /v1/manifest.sig` → 上面这份清单原始字节的签名 (ECDSA P-256 / SHA-256, DER)。
+- `GET /v1/content-<seq>.tar.gz` → 内容包, 由已签名清单里的 `sha256` 和 `size` 锁定 (≤ 5 MiB)。
+公开是安全的: 客户端使用前全部自己验证, 清单签名用内置公钥 (`data/cloud-pub.pem`, 可以放多把公钥以便换钥) 验证, 检查顺序见下; 任何一步失败都丢弃并保留旧内容。
+内容包 (`content-<seq>.tar.gz`) 里只允许白名单里的文件: `services.conf groups.conf rulesets.conf apps.conf SEQ VERSION i18n/<语言>-data.tsv` 与 **`vps/{lib,probe,provision,redetect}.sh`** (SSH 一键部署在服务器上执行的脚本: 协议选择、依赖清单、服务端版本与校验值、配置生成)。客户端的检查顺序: 验证清单签名 → 序号不能比本机已有的小 (防回滚) → sha256 / 大小 → 解包前检查全部文件名 → 逐个文件的格式 → 原子替换。部署脚本只在本机从云端取到并验签之后才会使用; 公开仓库里没有 (但和其它云端内容一样, 2.3.27 起不需要账号就能下载)。
