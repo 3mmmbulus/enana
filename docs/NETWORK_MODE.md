@@ -147,7 +147,7 @@ Windows 的 TUN 没有免密助手 (每次完整安装都是 UAC), 指纹的两�
 
 ## 增强模式接管系统 DNS (2.3.27)
 
-本机只读核对: LINE 不走系统代理, 经 TUN 连的是被污染的地址 (243.185.187.39 在 240/4 里, 还有 59.24.3.173、31.13.75.5、104.244.43.208 等), 自动和固定出口模式下二维码都加载不出来。系统 DNS 是路由器 (192.168.10.1 + fe80::10%en0): 私网和链路本地地址在 TUN 的 `route_exclude_address` 里, macOS 也优先用更具体的局域网路由, 查询根本不进 TUN, hijack-dns 一个包都没看到 (当天 24154 条 TUN 连接全是直接连 IP)。sing-box 1.14 的 TUN `dns_mode: hijack` 在苹果平台上只设置网卡自己的 DNS, 没有平台级的劫持 (那只有 Linux / Windows 有)。Windows 的 TUN 用 `strict_route` (WFP 挡住 TUN 之外的 53 端口), 不需要改, 也没有改。
+本机只读核对: LINE 不走系统代理, 经 TUN 连的是被污染的地址 (243.185.187.39 在 240/4 里, 还有 59.24.3.173、31.13.75.5、104.244.43.208 等), 自动和固定出口模式下二维码都加载不出来。系统 DNS 是路由器 (192.168.1.1 + fe80::1%en0): 私网和链路本地地址在 TUN 的 `route_exclude_address` 里, macOS 也优先用更具体的局域网路由, 查询根本不进 TUN, hijack-dns 一个包都没看到 (当天 24154 条 TUN 连接全是直接连 IP)。sing-box 1.14 的 TUN `dns_mode: hijack` 在苹果平台上只设置网卡自己的 DNS, 没有平台级的劫持 (那只有 Linux / Windows 有)。Windows 的 TUN 用 `strict_route` (WFP 挡住 TUN 之外的 53 端口), 不需要改, 也没有改。
 
 现在 (只在 macOS 的 TUN, `lib/enhanced-root.sh` 的 `DNS_PL`):
 

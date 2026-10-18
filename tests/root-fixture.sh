@@ -127,7 +127,7 @@ MOCK
 rf_ns_reset() { # 回到初始状态: 每行 序号 (停用的是 *) · 设备 (VPN 没有) · 硬件端口 · 原来的 DNS · 名字
   printf '%s\t%s\t%s\t%s\t%s\n' \
     1 en0 Wi-Fi Empty Wi-Fi \
-    2 en7 'USB 10/100/1000 LAN' '192.168.10.1 fe80::10%en0' 'USB 10/100/1000 LAN' \
+    2 en7 'USB 10/100/1000 LAN' '192.168.1.1 fe80::1%en0' 'USB 10/100/1000 LAN' \
     3 bridge0 'Thunderbolt Bridge' Empty 'Thunderbolt 网桥 ✓' \
     4 en8 'Ethernet Adapter (en8)' 9.9.9.9 'Ethernet Adapter (en8)' \
     5 en9 Ethernet Empty "$NS_ODD" \
@@ -146,7 +146,7 @@ rf_rec() { # root 的 DNS 记录 ($ROOT/dns-original), 每行「名字=原来的
   /usr/bin/perl -ne 'chomp; my ($h, $v) = split / /, $_, 2; print pack("H*", $h), "=", $v, "\n"' "$ROOT/dns-original"
 }
 rf_ns_original() { # 0 = 每个服务都是初始的 DNS (接管之前的样子; 手动的地址按原来的顺序)
-  [ "$(rf_dns Wi-Fi)" = Empty ] && [ "$(rf_dns 'USB 10/100/1000 LAN')" = '192.168.10.1 fe80::10%en0' ] && [ "$(rf_dns 'Thunderbolt 网桥 ✓')" = Empty ] \
+  [ "$(rf_dns Wi-Fi)" = Empty ] && [ "$(rf_dns 'USB 10/100/1000 LAN')" = '192.168.1.1 fe80::1%en0' ] && [ "$(rf_dns 'Thunderbolt 网桥 ✓')" = Empty ] \
     && [ "$(rf_dns 'Ethernet Adapter (en8)')" = 9.9.9.9 ] && [ "$(rf_dns "$NS_ODD")" = Empty ] && [ "$(rf_dns 'Bluetooth PAN')" = 8.8.4.4 ] && [ "$(rf_dns 'Corp VPN')" = Empty ]
 }
 rf_ns_taken() { # 0 = 启用的、有网卡的五个服务都是 223.5.5.5, 停用的和 VPN 原样

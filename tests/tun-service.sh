@@ -198,7 +198,7 @@ check "安装成功 (退出码 0), 没有说明行" test "$rc:$(note_lines)" = "
 check "启用的、有网卡的服务都是 223.5.5.5 (自动 DNS 的 Wi-Fi · 手动 IPv4 + IPv6 · 名字带空格和中文 · 硬件端口带括号 · 名字里有 shell 代码); 停用的和 VPN 原样" rf_ns_taken
 check "…停用的 (*) 和没有网卡的 VPN 从头到尾没有碰过 (连查询都没有)" rf_ns_untouched
 check "…名字里的 shell 代码没有被执行 (名字只当数据)" test ! -e "$W/ns-canary"
-check "…记录里是每个服务原来的设置: 自动 = Empty, 手动的多个地址按顺序; 一共 5 个服务" test "$(rf_rec | grep -cxF -e 'Wi-Fi=Empty' -e 'USB 10/100/1000 LAN=192.168.10.1,fe80::10%en0' -e 'Thunderbolt 网桥 ✓=Empty' -e 'Ethernet Adapter (en8)=9.9.9.9' -e "$NS_ODD=Empty"):$(rf_rec | wc -l | tr -d ' ')" = "5:5"
+check "…记录里是每个服务原来的设置: 自动 = Empty, 手动的多个地址按顺序; 一共 5 个服务" test "$(rf_rec | grep -cxF -e 'Wi-Fi=Empty' -e 'USB 10/100/1000 LAN=192.168.1.1,fe80::1%en0' -e 'Thunderbolt 网桥 ✓=Empty' -e 'Ethernet Adapter (en8)=9.9.9.9' -e "$NS_ODD=Empty"):$(rf_rec | wc -l | tr -d ' ')" = "5:5"
 check "…记录归 root (夹具里就是当前用户), 0600" test "$(stat -f '%u %Lp' "$ROOT/dns-original")" = "$ME 600"
 rec1=$(cat "$ROOT/dns-original"); : > "$W/ns.log"
 rf_enana_start; rc=$?
@@ -243,7 +243,7 @@ rf_enana_start; rc=$?
 check "列不出网络服务: TUN 照常装好, 一个 DNS 都不改, 没有记录, 一行说明" test "$rc:$(rf_ns_sets):$(has_rec):$(note_lines)" = "0:0:none:1"
 rf_reset; rf_enana_start; printf 'set USB 10/100/1000 LAN\n' > "$W/ns-fail"
 enhanced_stop; rc=$?
-check "还原时有线网卡设置失败: 停止照常 (退出码 0); 别的都还原了, 只有它的记录留着下次再试" test "$rc:$(rf_dns Wi-Fi):$(rf_dns 'USB 10/100/1000 LAN'):$(rf_rec)" = "0:Empty:223.5.5.5:USB 10/100/1000 LAN=192.168.10.1,fe80::10%en0"
+check "还原时有线网卡设置失败: 停止照常 (退出码 0); 别的都还原了, 只有它的记录留着下次再试" test "$rc:$(rf_dns Wi-Fi):$(rf_dns 'USB 10/100/1000 LAN'):$(rf_rec)" = "0:Empty:223.5.5.5:USB 10/100/1000 LAN=192.168.1.1,fe80::1%en0"
 rm -f "$W/ns-fail"; enhanced_remove; rc=$?
 check "…之后删除 TUN: 剩下的那个也还原了, 根目录删掉" test "$rc:$(rf_ns_original && echo orig):$(test -e "$ROOT" && echo y || echo n)" = "0:orig:n"
 # 记录不可信 (符号链接 / 组和其他人可写): 不读, 不还原 (假的记录要把 Wi-Fi 改成 6.6.6.6)
