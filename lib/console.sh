@@ -1,5 +1,5 @@
-# 命令行控制台: 在任何终端输入 `enana` 即可打开。显示运行状态, 一键重启 / 暂停 / 更新 / 诊断 / 解除账号绑定 / 卸载。
-# 服务器、订阅、应用和网站设置都在仪表盘里操作, 这里只负责「环境」。依赖 config.sh (clash) 与 os-darwin.sh。
+# 命令行控制台: 在任何终端输入 `enana` 即可打开。显示运行状态, 一键重启 / 开关代理 / 更新 / 诊断 / 退出账号 / 卸载。
+# 服务器、订阅、应用和网站设置都在仪表盘里操作, 这里只负责「环境」。不需要 enana 账号 (账号只用于同步 / 会员 / 官方线路)。依赖 config.sh (clash) 与 os-darwin.sh。
 
 _cs_delay() { # 标签 outfile : 测延迟 (毫秒), 失败写空
   local r; r=$(clash GET "/proxies/$1/delay?url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=3000" 2>/dev/null)
@@ -39,14 +39,14 @@ console_draw() {
   else pf '  服务      %s 未运行   (按 2 启动)\n' "$(_cs_dot 0)"; fi
   if [ "$CS_sp" = 1 ]; then pf '  系统代理  %s 已开启   127.0.0.1:%s\n' "$(_cs_dot 1)" "$PORT"
   else pf '  系统代理  %s 未开启   (按 s 开启)\n' "$(_cs_dot 0)"; fi
-  if [ "$CS_mode" = Direct ]; then pf '  代理      %s已关闭%s — 全部直连 (登录后按 3 或在仪表盘里打开总开关)\n' "$Y" "$N"; elif [ -n "$CS_mode" ]; then pf '  代理      已开启 (规则分流)\n'; fi
+  if [ "$CS_mode" = Direct ]; then pf '  代理      %s已关闭%s — 全部直连 (按 3 或在仪表盘里打开总开关)\n' "$Y" "$N"; elif [ -n "$CS_mode" ]; then pf '  代理      已开启 (规则分流)\n'; fi
   if [ "$CS_srv" -gt 0 ] && [ "$CS_svc" = 1 ]; then
     pf '  固定出口  %s  %s\n' "${CS_pin:-—}" "$(_cs_ms "$CS_pin_ms")"
     [ "$(health_pin_state)" != empty ] || pf '            %s⚠ 没有设置固定出口: 选了「固定出口」的应用 / 服务 (如 ChatGPT) 现在会直连 (真实 IP); 到仪表盘「服务器」页设置%s\n' "$Y" "$N"
     [ "$(health_orphans)" = 0 ] || pf '            %s⚠ 有 %s 个应用 / 网站指定的固定出口已经不存在, 暂时在用默认固定出口 (出口 IP 可能变了); 到仪表盘「服务器」页的「出口分配」处理%s\n' "$Y" "$(health_orphans)" "$N"
     [ -n "$CS_auto" ] && pf '  自动线路  %s  %s\n' "$CS_auto" "$(_cs_ms "$CS_auto_ms")"
   fi
-  if [ -n "$CS_acc" ]; then pf '  账号      已登录 %s\n' "$CS_acc"; else pf '  账号      未登录 (打开仪表盘, 用 enana.cc 账号登录或注册)\n'; fi
+  if [ -n "$CS_acc" ]; then pf '  账号      已登录 %s\n' "$CS_acc"; else pf '  账号      未登录 (不需要账号也能用; 云端同步 / 会员 / 官方线路要登录)\n'; fi
   pf '  后台地址  %s%s%s\n' "$C" "$UI_URL" "$N"
   if [ "$CS_srv" -eq 0 ]; then pf '\n  %s提示%s 还没有添加服务器 → 按 1 打开仪表盘, 在「服务器」页添加\n' "$Y" "$N"
   elif [ "$CS_new" -gt 0 ]; then pf '\n  %s提示%s 发现 %s 个新应用 (默认关闭) → 按 1 到仪表盘「应用」页处理\n' "$Y" "$N" "$CS_new"; fi
@@ -57,7 +57,7 @@ console_draw() {
   pf '  [4] 更新规则/订阅\n'
   pf '  [5] 查看日志\n'
   pf '  [6] 诊断\n'
-  pf '  [7] 退出账号 (关闭代理并清除登录)\n'
+  pf '  [7] 退出账号 (代理照常, 清除登录)\n'
   pf '  [8] 更新 enana\n'
   pf '%s  [9] 卸载%s\n' "$R" "$N"
   pf '  [s] %s\n' "$([ "$CS_sp" = 1 ] && _t '关闭系统代理' || _t '开启系统代理')"
@@ -82,8 +82,7 @@ console_main() {
     case $key in
       1) os_open "$UI_URL" ;;
       2) printf '\033[?25h\n'; cmd_restart; console_pause; printf '\033[?25l'; console_gather ;;
-      3) if [ "$CS_mode" = Direct ]; then
-           if auth_logged_in; then proxy_set_enabled 1; oplog terminal "开启代理" "$(kv enabled 1 via console)" ok; else printf '\033[?25h\n'; warn "还没有登录: 请先打开仪表盘用 enana.cc 账号登录, 再开启代理"; console_pause; printf '\033[?25l'; fi
+      3) if [ "$CS_mode" = Direct ]; then proxy_set_enabled 1; oplog terminal "开启代理" "$(kv enabled 1 via console)" ok      # 不需要账号: 用你自己的服务器
          else proxy_set_enabled 0; oplog terminal "关闭代理" "$(kv enabled 0 via console)" ok; fi
          console_gather ;;
       4) printf '\033[?25h\n'; cmd_update; console_pause; printf '\033[?25l'; console_gather ;;

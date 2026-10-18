@@ -1,17 +1,20 @@
-# 仪表盘登录 / 注册: 使用 enana.cc 的中心账号 (邮箱 + 密码)。依赖 common.sh (config.sh 的 proxy_set_enabled 在退出账号时用)。
+# 本机令牌 + enana 账号 (可选)。仪表盘不需要账号就能打开, 本机的一切 (服务器 / 订阅 / 导入 / 一键部署 / 应用 / 网站 / DNS / 规则 / 日志 / 测速 / 更新 / 代理开关)
+# 都不需要账号; enana.cc 的中心账号 (邮箱 + 密码) 只用于: 云端同步、会员 / 余额 / 付款、官方线路、「我的设备」、修改密码、上传诊断。依赖 common.sh (session.sh / sync.sh 在登录 / 退出时用)。
 #
 # 本机不生成、不保存任何管理员密码。流程:
-#   登录 → 向 ACCOUNT_URL (默认 https://api.enana.cc) 的 PocketBase 账号服务校验 → 通过后记为「已登录」, 返回令牌 (= 核心 Clash API 的 secret)。
+#   打开仪表盘 → POST /api/auth/local 拿到本机令牌 (= 核心 Clash API 的 secret)。只有过了 Host / X-Enana / CORS 检查的本机请求才拿得到 (跨站网页发不出带自定义头的请求)。
+#   登录 → 向 ACCOUNT_URL (默认 https://api.enana.cc) 的 PocketBase 账号服务校验 → 通过后记为「已登录」, 返回同一个令牌。
 #   注册 → 本地辅助服务代用户向 enana.cc 创建账号 (邮箱 + 密码, 用本机网络) → 成功后自动登录。
-#   任何有效的 enana.cc 账号都可以在这台电脑上登录; 换账号 = 退出账号再登录另一个。
+#   任何有效的 enana.cc 账号都可以在这台电脑上登录; 换账号 = 退出账号再登录另一个 (代理设置不受影响)。
 #   在线时每次登录都向服务器校验 (密码在网站上改了立刻生效); 连不上服务器时, 「上一次在这台电脑上登录成功的账号」
 #   可用本机缓存的「加盐 PBKDF2 校验值」离线登录 (不保存明文密码); 其它账号必须在线校验。暂不支持找回密码。
 #   设备限制: 同一账号同一平台最多同时在线 2 台设备 (云端强制); 超出时登录被拒并列出在线设备, 用户可下线其中一台后自动登录。
-#   退出账号 = 自动关闭代理 (全部直连) + 令牌立刻失效 (所有浏览器都要重新登录) + 释放云端的设备名额; 必须重新登录后才能在仪表盘里再次开启代理。
+#   退出账号 (自己退出 / 被别的设备下线 / 离线太久, 见 session.sh) = 回到「不登录」: 本机令牌不变 (仪表盘照常打开), 代理开关 / 模式 / 系统代理和你自己的服务器
+#   照常工作; 账号的官方节点、云端同步密钥、会员缓存、sudo 令牌清掉, 释放云端的设备名额。
 #
 #   $H/account.conf  当前登录账号的离线校验信息: id= email= salt= iter= hash= updated=   权限 600 (hash 仅用于离线校验; 退出账号即删除)
-#   $H/loggedin      存在 = 当前处于登录状态 (内容: 邮箱 时间戳); 终端的 enana on 靠它判断能不能开启代理
-#   $H/secret        32 位十六进制随机串 = sing-box Clash API 的 secret = 仪表盘登录后拿到的令牌 (安装时生成)
+#   $H/loggedin      存在 = 已登录 enana 账号 (内容: 邮箱 时间戳); 账号功能 (同步 / 会员 / 设备 / 改密码 / 诊断上传) 和敏感操作的二次验证靠它判断
+#   $H/secret        32 位十六进制随机串 = sing-box Clash API 的 secret = 仪表盘的本机令牌 (安装时生成; 登录 / 退出 / 被下线都不换)
 #   $H/auth.fail / reg.log  最近失败登录 / 注册尝试的时间戳 (本机限流用)
 # 密码通过 stdin 传给 perl / curl (不进命令行与环境变量, `ps` 看不到); 绝不写日志。macOS 自带 /usr/bin/perl (含 Digest::SHA)。
 
@@ -23,7 +26,7 @@ AUTH_REG_SEC=600
 
 auth_rand_hex() { od -An -N"${1:-16}" -tx1 /dev/urandom | tr -d ' \n'; }
 auth_secret() { local s; [ -s "$H/secret" ] && IFS= read -r s < "$H/secret"; printf '%s' "${s:-}"; }
-auth_secret_new() { # 生成新的令牌 (调用方随后 apply_config 让核心换上)
+auth_secret_new() { # 生成新的令牌 (调用方随后 apply_config 让核心换上; 只在令牌还不存在时用, 登录 / 退出不再换它)
   mkdir -p "$H"; auth_rand_hex 16 > "$H/secret.new" && chmod 600 "$H/secret.new" && mv "$H/secret.new" "$H/secret"
 }
 auth_init() { [ -s "$H/secret" ] || auth_secret_new; }   # 安装时调用: 保证核心的 Clash API 从一开始就有密钥保护
@@ -190,9 +193,7 @@ auth_login() {
        session_save "$CLOUD_TOKEN" "$SESS_ID"
        rm -f "$H/notice" "$H/hb.fail"
        auth_mark_in "$(auth_lower "$ACC_EMAIL")"; auth_unlock
-       local prev; prev=$(sed -n 1p "$H/last-account" 2>/dev/null)                    # 这台电脑上次登录的账号 (退出账号不清它)
-       if [ -n "$prev" ] && [ "$prev" != "$ACC_ID" ] && [ "${PROXY_ENABLED:-0}" = 1 ]; then proxy_set_enabled 0; fi   # 换了另一个账号: 关代理; 同一账号退出再登录则保留
-       printf '%s\n' "$ACC_ID" > "$H/last-account"
+       # 换了另一个账号也不碰代理开关: 代理用的是这台电脑上你自己的服务器, 不属于账号 (账号的官方节点在退出时已经清掉, 新账号的由套餐刷新后同步)
        AUTH_VIA=online; AUTH_EMAIL=$ACC_EMAIL; auth_fail_clear
        sync_on_login "$ACC_ID" "$pw"                                     # 端到端同步的密钥由登录密码派生 (只在本机, 退出账号即删除)
        ! type diag_kick >/dev/null 2>&1 || diag_kick login                # 诊断摘要: 登录成功后在后台传一份 (设置里可关; 不含网站 / 应用名 / IP / 服务器地址)
@@ -228,19 +229,21 @@ auth_register() {
   esac
 }
 
-# 本机退出登录 (不通知云端; 云端已经撤销了会话时用): 令牌轮换 + 清除登录状态 / 会话 / 离线缓存 / 提示。代理设置保留 (退出账号不关代理; 换账号 / 被下线时由调用方关)
+# 本机退出登录 (不通知云端; 云端已经撤销了会话时也用): 清除登录状态 / 会话 / 离线缓存 / 提示 / sudo 令牌 / 同步密钥 / 会员缓存。
+# 本机令牌不换 (仪表盘照常打开, 不用重新拿令牌), 代理设置原样保留 (开关 / 模式 / 系统代理 / 你自己的服务器与规则都不属于账号)
 auth_logout_local() {
-  rm -f "$H/loggedin" "$H/auth.fail" "$H/account.conf" "$H/notice" "$H/sudo.tokens" "$H/official.jsonl" "$H/official.jsonl.prev" "$H/official.state"      # 官方节点属于账号: 退出就清掉 (随后的 apply_config 把它们从核心配置里去掉)
+  rm -f "$H/loggedin" "$H/auth.fail" "$H/account.conf" "$H/notice" "$H/sudo.tokens" "$H/official.jsonl" "$H/official.jsonl.prev" "$H/official.state"      # 官方节点属于账号: 退出就清掉 (调用方随后 apply_config 把它们从核心配置里去掉)
+  rm -f "$H/plan.json" "$H/plan.checked" "$H/last-account"                  # 套餐缓存也属于账号: 没登录时 GET /api/plan 是中性的「免费版」, 下一个账号登录后重新取 (last-account: 2.3.26 及更早换账号关代理用的, 不再读)
   sync_on_logout
   session_clear
-  auth_secret_new
 }
-# 用户主动退出账号: 通知云端释放设备名额 (后台) + 本机退出登录 (调用方随后 apply_config 让核心换上新令牌, 期间核心已是全部直连)
+# 用户主动退出账号: 通知云端释放设备名额 (后台) + 本机退出登录 (有官方节点时调用方随后 apply_config 把它们从核心里去掉)
 auth_logout() { session_logout_remote; auth_logout_local; }
 
 # ---------- 敏感操作需要再次输入登录密码 (step-up) ----------
-# 已经登录的情况下, 删除服务器 / 查看凭据 / 导出备份 / 清日志 / 下线设备 … 还要再验证一次当前账号的密码 (防止别人趁你离开时点按钮或看到凭据)。
+# 已经登录的情况下, 删除服务器 / 查看凭据 / 导出备份 / 清日志 / 下线设备 / 余额购买 … 还要再验证一次当前账号的密码 (防止别人趁你离开时点按钮或看到凭据)。
 # 流程: POST /api/auth/verify 密码正确 → 发一个 5 分钟有效的 sudo 令牌 → 敏感接口要带 X-Enana-Sudo 头 (api.sh 里有一张白名单)。
+# 没有登录 enana 账号时没有密码可以验证: 辅助服务不要求 sudo 令牌, 仪表盘在这些操作前弹一次确认框。
 # 密码在本机用「加盐 PBKDF2 校验值」验证 (登录时在线校验过, 不需要联网); 失败与登录共用同一个锁定计数 (连续错 5 次锁 5 分钟)。令牌只存哈希, 退出账号即清空。
 SUDO_TTL=300
 auth_sudo_hash() { printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1; }
@@ -292,16 +295,19 @@ auth_change_password() {
     400)
       if grep -q '"code":"weak_password"' "$tmp"; then AUTH_CODE=E_WEAK_PASSWORD; else auth_fail_record; AUTH_CODE=E_BAD_CREDENTIALS; fi
       rm -f "$tmp"; return 1 ;;
-    401)    # 会话已经被云端撤销: 让心跳来收尾 (本机退出登录并关闭代理), 这里只告诉前端登录已失效
+    401)    # 会话已经被云端撤销: 让心跳来收尾 (本机退出登录, 代理照常), 这里只告诉前端登录已失效
       rm -f "$tmp"; session_heartbeat >/dev/null 2>&1 || true; AUTH_CODE=E_AUTH; return 1 ;;
     429) rm -f "$tmp"; AUTH_CODE=E_LOCKED; AUTH_WAIT=30; return 1 ;;
     *)   rm -f "$tmp"; AUTH_CODE=E_ACCOUNT_UNREACHABLE; return 1 ;;
   esac
 }
 
-auth_status_json() { # GET /api/auth/status 的主体
-  local hint='' offline=false w; w=$(auth_wait_seconds)
+auth_status_json() { # GET /api/auth/status 的主体 (公开)
+  # required 一直是 false: 仪表盘不需要账号就能打开 (本机令牌用 POST /api/auth/local 拿, local:true 表示支持它); logged_in = 是否登录了 enana 账号;
+  # notice = 上一次被退出登录的原因 (kicked / offline_expired …, 被下线之后代理照常用你自己的服务器)。不返回完整邮箱 (公开接口只给掩码)
+  local hint='' offline=false w li=false; w=$(auth_wait_seconds)
+  auth_logged_in && li=true
   if auth_cache_has; then hint=$(auth_hint); [ -n "$(auth_acc_get hash)" ] && offline=true; fi
-  printf '"required":true,"account_hint":"%s","offline_ok":%s,"notice":"%s","account_url":"%s","wait":%s' \
-    "$(jesc "$hint")" "$offline" "$(jesc "$(session_notice)")" "$(jesc "${ACCOUNT_SITE%/}")" "${w:-0}"
+  printf '"required":false,"logged_in":%s,"local":true,"account_hint":"%s","offline_ok":%s,"notice":"%s","account_url":"%s","wait":%s' \
+    "$li" "$(jesc "$hint")" "$offline" "$(jesc "$(session_notice)")" "$(jesc "${ACCOUNT_SITE%/}")" "${w:-0}"
 }

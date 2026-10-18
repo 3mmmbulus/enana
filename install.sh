@@ -6,7 +6,7 @@
 #   enana <命令>           status start stop restart on off update upgrade self-update doctor diag logs open env logout lang uninstall help
 #
 # 终端只负责「安装环境」。服务器、订阅、应用与网站设置全部在仪表盘 (后台) 里完成: http://127.0.0.1:<端口>/enana/admin/ (安装完成后会打印; enana open 也能打开)
-# 仪表盘的登录账号是你在 https://enana.cc 注册的账号 (本机不生成任何密码)。本仓库不含任何服务器地址/密码。
+# 仪表盘不需要账号就能用; https://enana.cc 的账号 (可选) 只用于云端同步 / 会员 / 官方线路 / 我的设备 (本机不生成任何密码)。本仓库不含任何服务器地址/密码。
 [ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"          # 被 zsh/sh 误调用时切回 bash
 set -u
 
@@ -257,7 +257,7 @@ st_config() {
   if [ "$SRC" != "$H" ] && [ -f "$H/VERSION" ]; then snapshot_program; trap 'restore_on_fail $?' EXIT; fi   # 升级: 配置失败时还原旧程序文件 (N5)
   info "正在生成配置并用 sing-box 校验…"
   install_files
-  auth_init                                   # 令牌 (= 核心 Clash API 的密钥) 从一开始就存在; 仪表盘登录成功后才会拿到它
+  auth_init                                   # 令牌 (= 核心 Clash API 的密钥) 从一开始就存在; 仪表盘打开时用 POST /api/auth/local 拿到它 (不需要账号)
   if srv_migrate_v1; then ok "已从 v1 迁移你的服务器配置 (无需重新输入, 在仪表盘「服务器」页可见)"; fi
   migrate_v1_domains
   sb_ver
@@ -379,8 +379,8 @@ cmd_install() {
   if [ -n "$UPGRADE" ]; then ok "已升级到 enana v$VERSION"; return 0; fi
   pf '\n%s════════════════ 环境安装完成 ════════════════%s\n' "$G$B" "$N"
   pf '  %s后台地址%s   %s%s%s   (已尝试自动打开; 以后在终端输入 enana open 也能打开)\n' "$B" "$N" "$C$B" "$UI_URL" "$N"
-  pf '  %s登录%s     仪表盘需要登录才能使用: 用 enana.cc 账号 (邮箱 + 密码) 登录; 还没有账号? 直接在登录框里点「注册」\n' "$B" "$N"
-  pf '  %s代理%s     默认是关闭的 (全部直连): 登录后在仪表盘里打开「代理」总开关才会生效; 退出账号会自动关闭代理\n' "$B" "$N"
+  pf '  %s账号%s     不需要账号就能使用仪表盘和你自己的服务器; 云端同步 / 会员 / 官方线路要登录 enana.cc 账号 (在仪表盘的账号菜单里登录, 也可以直接注册)\n' "$B" "$N"
+  pf '  %s代理%s     默认是关闭的 (全部直连): 在仪表盘里打开「代理」总开关 (或运行 enana on) 才会生效; 退出账号不会关闭代理\n' "$B" "$N"
   pf '  接下来在仪表盘里完成 (终端不需要再做任何事):\n'
   pf '    ① 添加固定出口服务器 (如日本)    ② 导入其它代理 / 订阅链接 (自动识别)\n'
   pf '    ③ 确认应用与网站的推荐设置       ④ 新装的应用会自动识别, 默认关闭\n'
@@ -409,16 +409,15 @@ cmd_status() {
   info "capture.mode=${NETWORK_MODE:-system}"
   if os_service_running; then ok "服务运行中 (sing-box $(core_version))"; else warn "服务未运行 (enana start)"; fi
   if os_sysproxy_ok; then ok "系统代理: 已开启"; else warn "系统代理: 未开启 (enana on)"; fi
-  if auth_logged_in; then ok "账号: 已登录 $(auth_mask_email "$(auth_current_email)")"; else info "账号: 未登录 — 打开仪表盘, 用 enana.cc 账号登录 (没有账号可以直接注册)"; fi
-  if [ "${PROXY_ENABLED:-0}" = 1 ]; then ok "代理: 已开启 (按规则分流)"; else info "代理: 已关闭 (全部直连) — 登录后在仪表盘里打开「代理」总开关"; fi
+  if auth_logged_in; then ok "账号: 已登录 $(auth_mask_email "$(auth_current_email)")"; else info "账号: 未登录 (不需要账号也能用; 云端同步 / 会员 / 官方线路要登录 enana.cc 账号)"; fi
+  if [ "${PROXY_ENABLED:-0}" = 1 ]; then ok "代理: 已开启 (按规则分流)"; else info "代理: 已关闭 (全部直连) — 在仪表盘里打开「代理」总开关, 或运行 enana on"; fi
   update_has_new && warn "有新版本 (enana self-update 更新)"
   info "服务器 $(srv_count) 台 · 后台地址 $UI_URL"
 }
 cmd_start() { os_service_start && wait_port "$PORT" 15 && enhanced_ready && { proxy_sync_mode; ok "已启动"; } || warn "启动失败: enana doctor"; }
 cmd_restart() { info "正在重启服务…"; if os_service_restart && wait_port "$PORT" 15 && enhanced_ready; then proxy_sync_mode; ok "已重启"; oplog terminal "重启服务" "" ok; else warn "没有在 15 秒内启动: 运行 enana doctor"; fi; }
 cmd_network_mode() { network_mode_set "$ARG1"; }
-cmd_on() { # 开启代理: 必须先在仪表盘登录 enana.cc 账号
-  if ! auth_logged_in; then warn "还没有登录: 请先打开仪表盘 ($UI_URL) 用 enana.cc 账号登录, 再开启代理"; return 1; fi
+cmd_on() { # 开启代理 (不需要账号: 用你自己的服务器; 登录了 enana 账号的话, 官方线路也在自动线路里)
   cmd_start && proxy_set_enabled 1 && { oplog terminal "开启代理" "$(kv enabled 1 via 'enana on')" ok; [ "$NETWORK_MODE" = tun ] || os_sysproxy_set on; }
 }
 cmd_off() { proxy_set_enabled 0; oplog terminal "关闭代理" "$(kv enabled 0 via 'enana off')" ok; if os_sysproxy_mine; then os_sysproxy_set off || { warn "系统代理没有关闭成功 (需要管理员密码), 服务未停止以免断网; 请重试 enana off"; return 1; }; fi; os_service_stop || return 1; ok "已关闭系统代理并停止服务"; }
@@ -469,8 +468,7 @@ cmd_update() {
   else op_apply >/dev/null 2>&1 && ok "已更新" || warn "应用配置失败: enana doctor"; fi
 }
 cmd_maintain() { op_maintain; }
-cmd_content() { # 拉取并应用云端内容 (登录后下发的服务目录 / 规则库 / 应用推荐), 然后显示状态
-  auth_logged_in || { warn "还没有登录: 云端内容需要先在仪表盘登录 enana 账号"; return 1; }
+cmd_content() { # 拉取并应用云端内容 (服务目录 / 规则库 / 应用推荐 / 部署脚本; 不需要账号: 没登录时匿名下载, 同样验签), 然后显示状态
   TXN_FORCE=${FORCE:+1}; op_txn "更新云端内容" txn_content
   info "内容来源: $(cloud_status_json | sed -n 's/.*"source":"\([a-z]*\)".*/\1/p') · 序号 $(cloud_seq) $(cloud_version)"
 }
@@ -502,10 +500,10 @@ cmd_self_update() { # 升级 enana 本体: 交给 get.sh (下载 → SHA-256 校
   exec bash "$H/get.sh" --upgrade ${ENANA_YES:+--yes}
 }
 
-cmd_logout() { # 退出账号: 关闭代理 + 令牌立刻失效 + 清除本机的离线登录缓存; 之后要重新登录才能再开启代理
+cmd_logout() { # 退出 enana 账号: 代理照常用你自己的服务器 (开关不变), 本机令牌不变 (仪表盘照常打开), 清除本机的离线登录缓存; 官方线路 / 同步 / 会员停止
   if ! auth_logged_in && ! auth_cache_has; then info "当前没有登录, 也没有本机登录缓存"; return 0; fi
-  info "退出账号后: 代理会被关闭 (全部直连), 所有已打开的仪表盘需要重新登录, 本机保存的离线登录缓存也会清除。"
-  info "之后在仪表盘里用 enana.cc 账号 (可以换另一个账号, 也可以直接注册) 登录, 再手动开启代理。"
+  info "退出账号后: 代理照常使用你自己的服务器 (官方线路、云端同步和会员功能会停止), 仪表盘照常打开; 本机保存的离线登录缓存会清除。"
+  info "以后需要时, 在仪表盘里用 enana.cc 账号再登录即可 (可以换另一个账号, 也可以直接注册)。"
   confirm "确认退出账号?" n || { info "已取消"; return 1; }
   op_logout purge
 }
@@ -583,7 +581,7 @@ $(_t "  enana start | stop   仅启动 / 停止服务 (stop 同时会关闭系�
 $(_t "  enana update         更新规则集 + 订阅 (--quiet 只刷新到期的订阅)")
 $(_t "  enana self-update    更新 enana 本体 (先询问确认; --yes 跳过)")
 $(_t "  enana upgrade [版本]  升级 sing-box 核心 (先校验现有配置, 不通过自动回退)")
-$(_t "  enana logout         退出账号: 关闭代理, 清除本机登录信息 (之后要重新登录才能再开启代理)")
+$(_t "  enana logout         退出 enana 账号: 代理照常使用你自己的服务器, 清除本机登录信息")
 $(_t "  enana lang [zh|en]   切换界面语言 (终端与仪表盘)")
   enana network-mode system|tun   System Proxy / Enhanced (管理员授权)
 $(_t "  enana doctor         诊断信息 (不含密码, 反馈问题时贴出来)")

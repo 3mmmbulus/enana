@@ -17,8 +17,9 @@ plan_refresh() { # 从云端取最新套餐 (短超时); 0 = 已刷新; 没有�
   return $rc
 }
 
-plan_json() { # GET /api/plan 的主体 (不含最外层 ok); 没有缓存时是内置的「免费版」
-  local f=$H/plan.json; [ -s "$f" ] || f=/dev/null
+plan_json() { # [neutral]  GET /api/plan 的主体 (不含最外层 ok); 没有缓存时是内置的「免费版」。neutral (没登录 enana 账号): 不看缓存, 一律是内置的免费版, checked = 0
+  local f=$H/plan.json c; c=$(plan_checked)
+  if [ "${1:-}" = neutral ]; then f=/dev/null; c=0; else [ -s "$f" ] || f=/dev/null; fi
   /usr/bin/perl -CA -MJSON::PP -e '
     my ($f, $checked, $t_free, $t_pro) = @ARGV; local $/; my $raw = ""; if (open my $fh, "<", $f) { $raw = <$fh> // "" }
     my $d = eval { JSON::PP->new->utf8->decode($raw) }; $d = {} unless ref $d eq "HASH";
@@ -30,5 +31,5 @@ plan_json() { # GET /api/plan 的主体 (不含最外层 ok); 没有缓存时是
     my $feat = ref $d->{features} eq "HASH" ? $d->{features} : { core => { enabled => $t, tier => "free" }, sync => { enabled => $t, tier => "free" }, vps_deploy => { enabled => $t, tier => "free" }, official_proxy => { enabled => $f_, tier => "pro", reason => "upgrade", coming_soon => $t } };
     my $off  = ref $d->{official} eq "HASH" ? $d->{official} : { available => $f_, nodes => 0 };
     my $j = JSON::PP->new->utf8->canonical->encode({ plan => { code => $code, title => $title }, expires_at => $d->{expires_at}, checked => $checked + 0, limits => $lim, features => $feat, official => $off });
-    $j =~ s/^\{//; $j =~ s/\}$//; print $j;' "$f" "$(plan_checked)" "$(_t "免费版")" "$(_t "专业版")"
+    $j =~ s/^\{//; $j =~ s/\}$//; print $j;' "$f" "$c" "$(_t "免费版")" "$(_t "专业版")"
 }

@@ -134,8 +134,13 @@ sync_rekey() { # <新密码>
 }
 
 # ---------- 状态 (GET /api/sync 的主体) ----------
+# logged_in = 是否登录了 enana 账号。没登录时同步 (属于账号) 是中性的状态: 不联网、不读上一个账号的设置, 仪表盘据此显示「登录后可以同步」
 sync_state_json() {
   local en=false au=false online=true remote=null dirty=false lv lh nowh lp lq
+  if ! auth_logged_in; then
+    printf '"logged_in":false,"enabled":false,"auto":false,"decided":false,"has_key":false,"account":"","remote":null,"local":{"version":0,"dirty":false},"conflict":false,"last_pull":0,"last_push":0,"online":false,"ask":false'
+    return 0
+  fi
   sync_enabled && en=true; sync_auto && au=true
   if sync_remote_meta; then
     if [ "$R_EXISTS" = 1 ]; then remote="{\"exists\":true,\"version\":$R_VERSION,\"updated\":$R_UPDATED,\"size\":$R_SIZE,\"device\":\"$(jesc "$R_DEVICE")\"}"; else remote='{"exists":false}'; fi
@@ -143,7 +148,7 @@ sync_state_json() {
   lv=$(sync_get BASE_VERSION); lh=$(sync_get SYNCED_HASH); nowh=$(snap_hash)
   if [ -n "$lh" ]; then [ "$lh" != "$nowh" ] && dirty=true; else sync_local_has_data && dirty=true; fi       # 从没同步过: 本机有数据才算「有没上传的改动」
   lp=$(sync_get LAST_PULL); lq=$(sync_get LAST_PUSH)
-  printf '"enabled":%s,"auto":%s,"decided":%s,"has_key":%s,"account":"%s","remote":%s,"local":{"version":%s,"dirty":%s},"conflict":%s,"last_pull":%s,"last_push":%s,"online":%s,"ask":%s' \
+  printf '"logged_in":true,"enabled":%s,"auto":%s,"decided":%s,"has_key":%s,"account":"%s","remote":%s,"local":{"version":%s,"dirty":%s},"conflict":%s,"last_pull":%s,"last_push":%s,"online":%s,"ask":%s' \
     "$en" "$au" "$([ -n "$(sync_get ENABLED)" ] && echo true || echo false)" "$(sync_have_key && echo true || echo false)" "$(jesc "$(auth_current_email)")" "$remote" "${lv:-0}" "$dirty" \
     "$([ "$(sync_get CONFLICT)" = 1 ] && echo true || echo false)" "${lp:-0}" "${lq:-0}" "$online" "$(sync_ask_pending && echo true || echo false)"
 }
