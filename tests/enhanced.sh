@@ -100,6 +100,52 @@ for a,b in zip(before['route'].get('rule_set',[]),after['route'].get('rule_set',
  if 'path' in a: assert b['path']==root+a['path'][len(h):]
 print('PASS: actual privileged snapshot isolates log/cache/rule paths and preserves outbounds')
 PY
+# macOS TUN takes over the system DNS (lib/enhanced-root.sh sets 223.5.5.5 and restores it on stop / remove): the system resolver's queries come back into
+# the core through hijack-dns, so the TUN configuration has no `local` DNS server at all. DNS servers given by host name bootstrap through the direct UDP
+# 223.5.5.5 (dns-boot), and a China DNS set to `system` is that same direct server. System Proxy mode and Windows (strict_route, system DNS untouched)
+# keep exactly the configuration they had.
+(
+  printf 'CN=custom\nCN_CUSTOM=https://dns.alidns.com/dns-query\nGLOBAL=custom\nGLOBAL_CUSTOM=tls://dns.google\n' > "$H/dns.conf"
+  NETWORK_MODE=system; gen_config --no-rulesets || exit 1; cp "$H/config.json.new" "$W/dns-system.json"
+  NETWORK_MODE=tun; gen_config --no-rulesets || exit 1; cp "$H/config.json.new" "$W/dns-tun.json"
+  ( ENANA_PLATFORM=windows; windows_node() { [ "$1" = paths ]; }; cygpath() { printf '%s' "${2:-}"; }
+    NETWORK_MODE=tun; gen_config --no-rulesets ) || exit 1
+  cp "$H/config.json.new" "$W/dns-win-tun.json"
+  printf 'CN=system\n' > "$H/dns.conf"
+  NETWORK_MODE=system; gen_config --no-rulesets || exit 1; cp "$H/config.json.new" "$W/dns-system-sys.json"
+  NETWORK_MODE=tun; gen_config --no-rulesets || exit 1; cp "$H/config.json.new" "$W/dns-tun-sys.json"
+  rm -f "$H/dns.conf" "$H/config.json.new"
+) || { echo 'FAIL: configuration generation for the DNS bootstrap checks'; exit 1; }
+python3 - "$W" <<'PY'
+import json,sys
+w=sys.argv[1]; L=lambda f:json.load(open(w+'/'+f))
+S,T,WT,SS,TS=L('dns-system.json'),L('dns-tun.json'),L('dns-win-tun.json'),L('dns-system-sys.json'),L('dns-tun-sys.json')
+srv=lambda c:{x['tag']:x for x in c['dns']['servers']}
+# System Proxy: exactly as before - the local server bootstraps the DNS servers given by host name
+assert S['dns']['servers']==[{'type':'local','tag':'dns-local'},
+ {'type':'https','tag':'dns-cn','server':'dns.alidns.com','path':'/dns-query','domain_resolver':'dns-local'},
+ {'type':'tls','tag':'dns-global','server':'dns.google','domain_resolver':'dns-local','detour':'Global'}], S['dns']['servers']
+assert S['route']['default_domain_resolver']=='dns-cn'
+# TUN: no local server; the host-name servers bootstrap through the direct UDP 223.5.5.5 (no detour: the core's own dial is bound to the physical interface)
+assert T['dns']['servers']==[{'type':'udp','tag':'dns-boot','server':'223.5.5.5'},
+ {'type':'https','tag':'dns-cn','server':'dns.alidns.com','path':'/dns-query','domain_resolver':'dns-boot'},
+ {'type':'tls','tag':'dns-global','server':'dns.google','domain_resolver':'dns-boot','detour':'Global'}], T['dns']['servers']
+assert T['route']['default_domain_resolver']=='dns-cn'
+assert {k:v for k,v in T['dns'].items() if k!='servers'}=={k:v for k,v in S['dns'].items() if k!='servers'}, (T['dns'],S['dns'])
+assert any(r.get('action')=='hijack-dns' and r.get('port')==53 for r in T['route']['rules'])
+# China DNS = system: the local server in System Proxy; in TUN the direct UDP 223.5.5.5 (what the system DNS is while TUN is installed)
+assert srv(SS)['dns-cn']=={'type':'local','tag':'dns-cn'} and srv(SS)['dns-local']=={'type':'local','tag':'dns-local'} and SS['route']['default_domain_resolver']=='dns-cn'
+assert srv(TS)['dns-cn']=={'type':'udp','tag':'dns-cn','server':'223.5.5.5'} and TS['route']['default_domain_resolver']=='dns-cn'
+# in TUN no resolver reference can lead to a local server: there is none, and every reference exists
+for c in (T,TS):
+ m=srv(c); refs=[x['domain_resolver'] for x in c['dns']['servers'] if 'domain_resolver' in x]+[c['route']['default_domain_resolver']]
+ assert not any(x['type']=='local' for x in c['dns']['servers']), c['dns']['servers']
+ assert refs and all(r in m and m[r]['type']!='local' for r in refs), refs
+# Windows TUN keeps the DNS block System Proxy has (and the local bootstrap): its configuration is unchanged
+assert WT['dns']==S['dns'] and WT['route']['default_domain_resolver']=='dns-cn', WT['dns']
+assert any(i['type']=='tun' and i.get('strict_route') for i in WT['inbounds'])
+print('PASS: TUN bootstraps DNS through the direct UDP 223.5.5.5 and has no local server; System Proxy and Windows keep the local bootstrap')
+PY
 # Exercise the installer port decision with a root core and only a helper GUI
 # job. A TUN upgrade must keep the ports already used by System Proxy/UI.
 (

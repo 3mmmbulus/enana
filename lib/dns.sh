@@ -2,6 +2,8 @@
 #
 # 注意范围: 这里只管「代理核心自己发起的解析」(直连网站、规则匹配时的解析)。通过代理访问的网站由服务器解析,
 # 本机其它程序仍用系统 DNS (系统代理模式不改系统 DNS)。设置保存在 $H/dns.conf (KEY=VALUE, 不会被当作脚本执行)。
+# 例外是 macOS 的增强模式 (TUN): root 安装时把网络服务的系统 DNS 接管成 223.5.5.5 (lib/enhanced-root.sh 的 DNS_PL, 停止 / 卸载时还原),
+# 本机程序的查询走进 TUN、由 hijack-dns 交给核心; 这时核心自己不能再用 local (系统解析器) 解析, 见 dns_tun_takeover。
 
 DNS_KEYS="CN CN_CUSTOM GLOBAL GLOBAL_CUSTOM VIA STRATEGY LEAK ADS"
 DNS_PRESETS=${ENANA_DNS_PRESETS:-$DATA/dns-presets.conf}      # 测试时可指向本地的预设表
@@ -31,8 +33,14 @@ dns_valid_url() { # system / udp:// tls:// https://  (自定义 URL 的白名单
   [ ${#1} -le 200 ] && printf '%s' "$1" | LC_ALL=C grep -Eq '^(udp|tls|https)://(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?(/[A-Za-z0-9._~/%-]*)?$'
 }
 
-dns_server_json() { # dns_server_json <tag> <url> [detour]  -> 一个 sing-box DNS 服务器对象
-  local tag=$1 url=$2 detour=${3:-} scheme rest hostport host port path='' extra=''
+# macOS 的 TUN 接管了系统 DNS (见文件开头; Windows 由 strict_route 拦 DNS, 系统 DNS 不改): 系统解析器的查询会绕回核心自己, 所以核心里不放 local 服务器 ——
+#   · 用域名写的 DNS 服务器 (自定义的 DoH / DoT / UDP) 由直连的 UDP 223.5.5.5 (dns-boot) 引导解析, 不用 dns-local
+#   · 国内 DNS 选「系统默认」(system) 时同样是直连的 UDP 223.5.5.5: 接管之后的系统 DNS 就是它; route.default_domain_resolver (dns-cn) 也就不会是 local
+# 核心自己的连接绑在物理网卡上 (auto_detect_interface), 不进 TUN, 不会绕回来; 核心停了, 系统 DNS 223.5.5.5 照样能直接用。系统代理模式和 Windows 的配置一个字节都不变
+DNS_TUN_IP=223.5.5.5            # 和 lib/enhanced-root.sh (DNS_PL) 接管系统 DNS 用的是同一个地址
+dns_tun_takeover() { [ "${NETWORK_MODE:-system}" = tun ] && [ "${ENANA_PLATFORM:-darwin}" != windows ]; }
+dns_server_json() { # dns_server_json <tag> <url> [detour] [引导解析器 (默认 dns-local)]  -> 一个 sing-box DNS 服务器对象
+  local tag=$1 url=$2 detour=${3:-} boot=${4:-dns-local} scheme rest hostport host port path='' extra=''
   case $url in system|'') printf '{"type":"local","tag":"%s"}' "$tag"; return ;; esac
   scheme=${url%%://*}; rest=${url#*://}; hostport=${rest%%/*}
   case $rest in */*) path=/${rest#*/} ;; esac
@@ -42,7 +50,7 @@ dns_server_json() { # dns_server_json <tag> <url> [detour]  -> 一个 sing-box D
   esac
   [ -n "$port" ] && extra=",\"server_port\":$port"
   if [ "$scheme" = https ]; then extra="$extra,\"path\":\"${path:-/dns-query}\""; fi
-  case $host in *[!0-9.]*:*|*:*) ;; *[!0-9.]*) extra="$extra,\"domain_resolver\":\"dns-local\"" ;; esac     # 域名需要引导解析, IP 不需要
+  case $host in *[!0-9.]*:*|*:*) ;; *[!0-9.]*) extra="$extra,\"domain_resolver\":\"$boot\"" ;; esac     # 域名需要引导解析, IP 不需要
   [ -n "$detour" ] && extra="$extra,\"detour\":\"$detour\""
   printf '{"type":"%s","tag":"%s","server":"%s"%s}' "$scheme" "$tag" "$host" "$extra"
 }
@@ -151,12 +159,16 @@ dns_bench() { # 后台任务: 逐个测 (并行会互相抢带宽, 数字偏大)
 
 dns_block_json() { # dns_block_json <have 文件(已就绪且启用的规则集 tag)>  -> 整个 "dns":{...} 片段 (无结尾逗号)
   dns_load
-  local cn_url gl_url servers rules='' final
+  local cn_url gl_url servers rules='' final boot=dns-local
   cn_url=$(dns_url_for cn); gl_url=$(dns_url_for global)
   dns_valid_url "$cn_url" || cn_url=system; dns_valid_url "$gl_url" || gl_url=https://1.1.1.1/dns-query
   servers='{"type":"local","tag":"dns-local"}'
-  servers="$servers,$(dns_server_json dns-cn "$cn_url")"
-  if [ "$DNS_LEAK" = 1 ]; then servers="$servers,$(dns_server_json dns-global "$gl_url" "$DNS_VIA")"; fi
+  if dns_tun_takeover; then       # 没有 local 服务器 (见 dns_tun_takeover)
+    boot=dns-boot; servers="{\"type\":\"udp\",\"tag\":\"dns-boot\",\"server\":\"$DNS_TUN_IP\"}"
+    [ "$cn_url" != system ] || cn_url="udp://$DNS_TUN_IP"
+  fi
+  servers="$servers,$(dns_server_json dns-cn "$cn_url" '' "$boot")"
+  if [ "$DNS_LEAK" = 1 ]; then servers="$servers,$(dns_server_json dns-global "$gl_url" "$DNS_VIA" "$boot")"; fi
   if [ "$(dns_hosts_count)" -gt 0 ]; then       # 自定义解析排在最前面: 命中的域名直接用你填的 IP
     servers="$servers,$(dns_hosts_server_json)"
     rules="{\"domain\":[$(dns_hosts_list | awk -F'|' "$_HOSTS_OK"'{ printf "%s\"%s\"", (n++ ? "," : ""), $1 }')],\"action\":\"route\",\"server\":\"dns-hosts\"}"
