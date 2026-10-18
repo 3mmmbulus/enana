@@ -612,6 +612,22 @@ auth_login other@example.test 'Passw0rd!x'; echo "rc=$? via=$AUTH_VIA"''')
         self.assertEqual({(c['auth'], c['session']) for c in self.cloud.v1_calls()}, {('Bearer cloud-tok', 'sid-1')})
         self.assertEqual(self.applies().count('1'), len(self.applies()), 'every apply in the maintenance is a background one')
 
+    def test_daily_maintenance_offline_sign_in_stays_quiet_while_refused(self):
+        # an offline sign-in has `loggedin` but no cloud session: the content is fetched anonymously, so it must get the same
+        # "ask first, no daily error" treatment as signed out (it used to skip the check because it counted as signed in)
+        self.settings(AUTO_UPDATE=0)
+        self.cloud.private = True
+        self.sh(MAINTAIN)
+        self.assertEqual(self.ops_results('更新云端内容'), ['error'])
+        (self.home / 'loggedin').write_text('user1@example.test %d\n' % int(time.time()))
+        self.assertFalse((self.home / 'session').exists() or (self.home / 'cloud.token').exists())
+        with self.cloud.lock:
+            self.cloud.calls.clear()
+        for _ in range(2):
+            self.assertIn('maintained rc=0', self.sh(MAINTAIN).stdout)
+        self.assertEqual(self.ops_results('更新云端内容'), ['error'], 'no new error line per day for an offline sign-in')
+        self.assertEqual([(c['path'], c['auth'], c['session']) for c in self.cloud.v1_calls()], [('/v1/manifest.json', None, None)] * 2)
+
     # ---------- the terminal ----------
     def test_enana_on_without_signing_in(self):
         r = self.sh('''eval "$(sed -n '/^cmd_on() {/,/^}/p' "$REPO/install.sh")"

@@ -464,7 +464,9 @@ logs_query() {
           for (i = n - off; i >= 1 && c < lim; i--) { split(a[i], x, "\t"); printf "%s{\"ts\":\"%s\",\"who\":\"%s\",\"action\":\"%s\",\"detail\":\"%s\",\"result\":\"%s\"}", (c++ ? "," : ""), esc(x[1]), esc(x[2]), esc(x[3]), esc(x[4]), esc(x[5]) }
           printf "],\"summary\":{\"all\":%d,\"error\":%d}}", all + 0, nerr + 0 }') ;;
     proxy|access)
-      LQT=$(mktemp -d 2>/dev/null) || LQT="$H/.logs-query.$$"
+      # 临时目录放在 $H 下固定的前缀里: Windows 的辅助服务在连接断开 / 超时时会直接结束这个进程 (来不及清理), 下一次查询顺手删掉 10 分钟以前留下的
+      find "$H" -maxdepth 1 -type d -name '.logs-query.*' -mmin +10 -exec rm -rf {} + 2>/dev/null
+      LQT=$(mktemp -d "$H/.logs-query.XXXXXX" 2>/dev/null) || LQT="$H/.logs-query.$$"
       mkdir -p "$LQT"
       _lq_prep "$day"
       if [ "$type" = proxy ]; then rows=$(_lq_proxy "$q" "$f" "$limit" "$off"); else rows=$(_lq_access "$q" "$f" "$limit" "$off"); fi

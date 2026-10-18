@@ -664,7 +664,7 @@ op_maintain() {
   update_check force >/dev/null 2>&1 || true
   # 每天顺带检查一次云端内容 (签名的服务目录 / 规则库 / 部署脚本), 不管有没有登录: 登录了带账号会话, 没登录匿名下载, 校验一样 (lib/cloud.sh)。
   # 没登录、而云端上一次拒绝了匿名下载 (还要求登录): 先问一下 (cloud_anon_refused), 还被拒绝就不开事务 —— 操作记录里不会每天多一条错误
-  if auth_logged_in || ! cloud_anon_refused; then op_txn "更新云端内容" txn_content >/dev/null 2>&1 || true; fi
+  if ! cloud_anon_refused; then op_txn "更新云端内容" txn_content >/dev/null 2>&1 || true; fi      # 有云端会话时 cloud_anon_refused 直接返回 1 (照常更新); 离线登录 (没有会话) 和没登录一样先问
   auth_logged_in && plan_refresh >/dev/null 2>&1 || true                                 # 套餐属于账号: 只在登录时刷新 (订阅到期后界面提示会跟着变)
   [ "${AUTO_UPDATE:-1}" = 1 ] || return 0
   [ -f "$H/.maintain-rules" ] && IFS= read -r last < "$H/.maintain-rules"
