@@ -1254,13 +1254,20 @@ echo "== U16. 后台流程绝不弹管理员框: 自动识别网站 (失败也�
 (
   H=$UW/h16c; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"
   proxy_set_enabled() { echo "proxy $1" >> "$H/calls"; }; auth_logout_local() { rm -f "$H/official.jsonl"; }
-  op_sync_secret() { printf '%s' "${APPS_BG_JOB:-}" > "$H/bg"; return 1; }
-  printf '%s\n' '{"role":"auto","official":true,"outbound":{"type":"http","tag":"官方-测试","server":"o.example.invalid","server_port":443}}' > "$H/official.jsonl"
+  OFFL='{"role":"auto","official":true,"outbound":{"type":"http","tag":"官方-测试","server":"o.example.invalid","server_port":443}}'
+  stale() { [ -e "$H/official.stale" ] && echo stale || echo clean; }
+  op_sync_secret() { printf '%s' "${APPS_BG_JOB:-}" > "$H/bg"; return 0; }
+  printf '%s\n' "$OFFL" > "$H/official.jsonl"; PROXY_ENABLED=1
   unset APPS_BG_JOB; session_local_end kicked 401
-  eq "被下线 (心跳里), 有官方节点: 把它们从核心里去掉的应用是后台任务 (APPS_BG_JOB=1): TUN 下不弹管理员框, 下一次授权的应用再去掉" "$(cat "$H/bg"):$(cat "$H/notice"):${APPS_BG_JOB:-unset}" "1:kicked:unset"
-  eq "…代理总开关不动 (2.3.27 起被下线只停官方线路 / 同步 / 会员, 你自己的服务器照常工作)" "$(cat "$H/calls" 2>/dev/null)" ""
-  rm -f "$H/bg"; session_local_end offline_expired 000
-  eq "没有官方节点: 配置不会变, 不重新应用 (心跳里什么都不用做); 原因照样记下" "$([ -e "$H/bg" ] && echo applied || echo none):$(cat "$H/notice"):$(cat "$H/calls" 2>/dev/null)" "none:offline_expired:"
+  eq "被下线 (心跳里), 有官方节点, 后台应用去掉了它们 (系统代理模式): 应用是后台任务 (APPS_BG_JOB=1, 不弹管理员框); 代理总开关不动, 不留 official.stale" "$(cat "$H/bg"):$(cat "$H/notice"):${APPS_BG_JOB:-unset}:$(cat "$H/calls" 2>/dev/null):$(stale)" "1:kicked:unset::clean"
+  # 2.3.26 在这里一律关代理; 2.3.27 起被下线照常用你自己的服务器 —— 只有官方节点去不掉的时候 (TUN: 后台不能授权) 才关, 否则官方线路会一直有流量
+  op_sync_secret() { printf '%s' "${APPS_BG_JOB:-}" > "$H/bg"; return 1; }
+  printf '%s\n' "$OFFL" > "$H/official.jsonl"; rm -f "$H/bg" "$H/calls"
+  session_local_end kicked 401
+  eq "…后台应用做不了 (TUN 要授权): 官方节点还在运行中的核心里 → 代理总开关关掉一次 (Direct, 不用授权), 记下 official.stale (下一次打开代理先授权换掉配置)" "$(cat "$H/bg"):$(cat "$H/calls" 2>/dev/null):$(stale)" "1:proxy 0:stale"
+  eq "…操作记录写明为什么关了代理" "$(grep -c 'why=official-stale' "$LOGS"/ops-*.log 2>/dev/null | awk -F: '{s+=$NF} END {print s+0}')" "1"
+  rm -f "$H/bg" "$H/calls" "$H/official.stale"; session_local_end offline_expired 000
+  eq "没有官方节点: 配置不会变, 不重新应用 (心跳里什么都不用做), 代理不动, 不留 official.stale; 原因照样记下" "$([ -e "$H/bg" ] && echo applied || echo none):$(cat "$H/notice"):$(cat "$H/calls" 2>/dev/null):$(stale)" "none:offline_expired::clean"
 )
 (
   H=$UW/h16d; LOGS=$H/logs; rm -rf "$H"; mkdir -p "$LOGS"

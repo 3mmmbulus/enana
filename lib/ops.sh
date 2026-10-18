@@ -350,6 +350,12 @@ txn_reset_undo() { # 撤销最近一次重置: 把当时清掉的文件放回去
 }
 
 op_apply() { op_txn "应用配置" txn_none; }
+# 被下线时官方节点还留在 TUN 的核心里 (见 lib/session.sh 的 session_local_end, official.stale): 终端里打开代理之前先应用一次配置把它们去掉 (可能要管理员授权)
+official_stale_resolve() {
+  [ -f "$H/official.stale" ] || return 0
+  op_apply >/dev/null 2>&1 || return 1
+  rm -f "$H/official.stale"
+}
 
 op_restart() {
   job_step 0 20 "重启服务"
@@ -399,12 +405,25 @@ proxy_switch() { # <on 0|1|''> <mode auto|global|''> <原来的 on> <原来的 m
 }
 # 代理总开关的后台任务: POST /api/proxy 要先启动核心, 而启动要管理员授权时 (TUN, 或者根守护进程还加载着) 交给它 —— 等管理员密码框的时候不能卡住 HTTP 请求
 # (仪表盘 25 秒就放弃, 报告失败)。仪表盘和切换流量接管方式一样跟着任务走; 任务的结果就是平时 /api/proxy 的响应 (enabled / mode / sysproxy)
-op_proxy() { # <on 0|1|''> <mode auto|global|''>
-  local on=${1:-} mode=${2:-} was_on=${PROXY_ENABLED:-0} was_mode=${PROXY_MODE:-auto}
+op_proxy() { # <on 0|1|''> <mode auto|global|''> [stale: 先应用配置, 去掉被下线时留在 TUN 核心里的官方节点 (步骤多一个)]
+  local on=${1:-} mode=${2:-} was_on=${PROXY_ENABLED:-0} was_mode=${PROXY_MODE:-auto} b=0
   case $on in ''|0|1) ;; *) job_fail "参数无效" 0; return 1 ;; esac
   case $mode in ''|auto|global) ;; *) job_fail "代理模式无效" 0; return 1 ;; esac
   op_lock || { job_fail "另一个配置任务正在运行, 请稍后重试" 0; return 1; }
-  job_step 0 20 "启动代理服务"
+  if [ "${3:-}" = stale ]; then
+    b=1; job_step 0 10 "移除官方线路"
+    if [ -f "$H/official.stale" ]; then
+      ENHANCED_ADMIN_ERR=''
+      if ! apply_config >/dev/null 2>&1; then
+        op_unlock
+        if [ "${ENHANCED_ADMIN_ERR:-}" = cancelled ]; then job_fail "已取消管理员授权, 代理没有开启 (官方线路还留在增强模式的核心里)" 0
+        else job_fail "官方线路还没有从增强模式的核心里移除 (需要管理员授权), 代理没有开启" 0; fi
+        return 1
+      fi
+      rm -f "$H/official.stale"
+    fi
+  fi
+  job_step "$b" 20 "启动代理服务"
   ENHANCED_ADMIN_ERR=''; ENHANCED_REFUSED=0; ENHANCED_REFUSED_WHY=''
   if ! os_service_running && ! { os_service_start && wait_port "$PORT" 10 && enhanced_ready; }; then
     op_unlock
@@ -413,7 +432,7 @@ op_proxy() { # <on 0|1|''> <mode auto|global|''>
     else job_fail "代理服务没有运行, 启动也失败了 (运行 enana doctor 查看原因)" 0; fi
     return 1
   fi
-  job_step 1 80 "$([ -n "$on" ] && echo 开启代理 || echo 切换代理模式)"
+  job_step $((b + 1)) 80 "$([ -n "$on" ] && echo 开启代理 || echo 切换代理模式)"
   proxy_switch "$on" "$mode" "$was_on" "$was_mode"
   op_unlock
   job_ok "$([ "$on" = 1 ] && echo 代理已开启 || echo 代理模式已切换)" "{$PROXY_SWITCH_JSON}"

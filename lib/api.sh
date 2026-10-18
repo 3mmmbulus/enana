@@ -7,7 +7,7 @@
 #       ③ 除 GET /api/auth/status、POST /api/auth/local、POST /api/login、POST /api/register 外, 都必须带 X-Enana-Token (= 本机令牌;
 #          仪表盘不需要账号, 用 POST /api/auth/local 拿到它)。401 只表示本机令牌缺失 / 不对; 没登录 enana 账号时账号功能回 HTTP 200 E_LOGIN_REQUIRED
 #       ④ CORS 只放行仪表盘自己的来源  ⑤ 所有参数先白名单校验再使用  ⑥ 请求体 ≤ 4 MB  ⑦ 密码只从请求体读取, 不进 URL/日志
-#       ⑧ 敏感操作 (SUDO_ENDPOINTS): 登录了 enana 账号时要再输一次账号密码 (X-Enana-Sudo); 没登录时没有密码可验, 仪表盘弹一次确认框
+#       ⑧ 敏感操作 (SUDO_ENDPOINTS, 包括退出 / 换账号): 登录了 enana 账号时要再输一次账号密码 (X-Enana-Sudo); 没登录时没有密码可验, 仪表盘弹一次确认框
 # launchd 的 inetd 模式: fd 0 是已连接的套接字 (可读可写)。真机实测写到原来的 stdout 客户端收不到响应,
 # 所以先把 stdout 显式指向 fd 0 (在 launchd 与测试里的 inetd 模拟器下都成立)。
 [ "${ENANA_API_PIPE:-0}" = 1 ] || exec 1>&0
@@ -128,7 +128,8 @@ case $path in /api/billing|/api/billing/*|/api/email/*) _acct=1 ;; esac
 
 # 敏感操作 (step-up): 登录了 enana 账号时还要再输一次账号密码, 换到 X-Enana-Sudo 令牌才能调用。以后加功能只要往这张表里加一项 (格式 方法:路径)。
 # 没登录时不要求 (没有密码可以验证): 仪表盘在这些操作前弹一次确认框。
-SUDO_ENDPOINTS=" POST:/api/servers/delete POST:/api/sub/delete GET:/api/servers/secret GET:/api/sub/url POST:/api/logs/clear POST:/api/devices/kick POST:/api/sync/clear GET:/api/export POST:/api/billing/purchase POST:/api/billing/auto-renew "
+# 退出 / 换成另一个账号 (logout / login / register) 也在表里: 否则登录状态下先退出账号, 后面的敏感操作就只剩一次确认 (或用自己刚注册的账号通过二次验证)
+SUDO_ENDPOINTS=" POST:/api/servers/delete POST:/api/sub/delete GET:/api/servers/secret GET:/api/sub/url POST:/api/logs/clear POST:/api/devices/kick POST:/api/sync/clear GET:/api/export POST:/api/billing/purchase POST:/api/billing/auto-renew POST:/api/logout POST:/api/login POST:/api/register "
 if auth_logged_in; then case "$SUDO_ENDPOINTS" in *" $method:$path "*) auth_sudo_ok "$SUD" || deny 403 E_SUDO_REQUIRED "此操作需要再次输入登录密码" ;; esac; fi
 
 urldecode() { case $1 in *\\*) printf ''; return ;; esac; local s=${1//+/ }; printf '%b' "${s//%/\\x}"; }
@@ -218,6 +219,9 @@ ep_proxy() { # 代理总开关 + 模式 (on=0|1, mode=auto|global; 至少给一�
   [ -n "$on" ] || [ -n "$mode" ] || fail "参数无效"
   case $on in ''|0|1) ;; *) fail "参数无效" ;; esac
   case $mode in ''|auto|global) ;; *) fail "代理模式无效" ;; esac
+  if [ "$on" = 1 ] && [ -f "$H/official.stale" ]; then      # 被下线时官方节点还留在 TUN 的核心里 (见 session_local_end): 先经过授权换掉配置再开 (后台任务, 仪表盘跟着走)
+    okj "\"job\":\"$(job_spawn proxy '移除官方线路|启动代理服务|开启代理' "$on" "$mode" stale)\""; return
+  fi
   if { [ "$on" = 1 ] || { [ -z "$on" ] && [ "${PROXY_ENABLED:-0}" = 1 ]; }; } && ! os_service_running; then
     # 先要启动核心。要管理员授权时它会停在密码框上, 仪表盘等 25 秒就报告失败: 交给后台任务 proxy (lib/ops.sh 的 op_proxy, 和切换流量接管方式一样),
     # 马上返回任务编号, 仪表盘跟着任务走。不要授权的启动 (用户自己的核心, 几秒钟) 照旧在这里做完
@@ -314,7 +318,7 @@ sync_open_reply() { # sync_open_remote 的返回码 -> 失败响应 (成功时�
   case $1 in
     0) ;;
     1) fail "连不上 enana.cc, 暂时无法同步" E_ACCOUNT_UNREACHABLE ;;
-    2) fail "登录已失效, 请重新登录" E_LOGIN_REQUIRED ;;                      # 云端会话已撤销 (401 只留给本机令牌)
+    2) session_heartbeat >/dev/null 2>&1 || true; fail "登录已失效, 请重新登录" E_LOGIN_REQUIRED ;;      # 云端会话已撤销: 先让心跳在本机结束登录 (和改密码一样), 仪表盘不会在「已登录 / 未登录」之间来回跳; 401 只留给本机令牌
     3) fail "这份云端配置不是用当前密码加密的 (可能在别处改过密码): 请输入旧密码后重试" E_SYNC_KEY ;;
     4) fail "云端还没有数据" E_NOT_FOUND ;;
     6) fail "没有同步密钥: 请退出账号后重新登录一次 (密钥由登录密码派生)" E_SYNC_KEY ;;
@@ -327,7 +331,7 @@ ep_sync_push() {
   sync_have_key || fail "没有同步密钥: 请退出账号后重新登录一次 (密钥由登录密码派生)" E_SYNC_KEY
   if [ "$force" != 1 ]; then      # 先看一眼云端: 有更新的版本就直接告诉前端 (让用户选以哪一份为准)
     sync_remote_forget; sync_remote_meta
-    case $? in 0) ;; 2) fail "登录已失效, 请重新登录" E_LOGIN_REQUIRED ;; *) fail "连不上 enana.cc, 暂时无法同步" E_ACCOUNT_UNREACHABLE ;; esac
+    case $? in 0) ;; 2) session_heartbeat >/dev/null 2>&1 || true; fail "登录已失效, 请重新登录" E_LOGIN_REQUIRED ;; *) fail "连不上 enana.cc, 暂时无法同步" E_ACCOUNT_UNREACHABLE ;; esac
     base=$(sync_get BASE_VERSION)
     if [ "$R_EXISTS" = 1 ] && [ "$R_VERSION" != "${base:-0}" ]; then
       fail "云端有更新的版本 (来自「$R_DEVICE」): 请选择以云端为准还是以本机为准" E_SYNC_CONFLICT "\"remote\":{\"version\":$R_VERSION,\"updated\":$R_UPDATED,\"device\":\"$(jesc "$R_DEVICE")\"}"
@@ -352,7 +356,7 @@ ep_sync_clear() { # 删除云端的同步数据 (需 sudo)
   local code
   [ -n "$(session_id)" ] || fail "连不上 enana.cc" E_ACCOUNT_UNREACHABLE
   code=$(session_call /dev/null DELETE /api/enana/v1/sync/snapshot)
-  case $code in 200) ;; 401) fail "登录已失效, 请重新登录" E_LOGIN_REQUIRED ;; *) fail "连不上 enana.cc, 暂时无法清除" E_ACCOUNT_UNREACHABLE ;; esac
+  case $code in 200) ;; 401) session_heartbeat >/dev/null 2>&1 || true; fail "登录已失效, 请重新登录" E_LOGIN_REQUIRED ;; *) fail "连不上 enana.cc, 暂时无法清除" E_ACCOUNT_UNREACHABLE ;; esac
   sync_set BASE_VERSION 0; sync_set SYNCED_HASH ''; sync_set CONFLICT 0; sync_remote_forget
   oplog dashboard "云端同步: 清除云端数据" "$(kv scope cloud)" ok
   okj

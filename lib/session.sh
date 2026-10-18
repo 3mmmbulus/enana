@@ -70,9 +70,16 @@ session_local_end() { # <原因> [云端返回的 HTTP 状态码] [补充信息 
   [ -s "$H/official.jsonl" ] && official=1           # 账号的官方节点 (auth_logout_local 会删掉文件): 删之前记下要不要重新生成配置
   auth_logout_local
   mkdir -p "$H"; printf '%s\n' "$reason" > "$H/notice"
-  # 把官方节点从核心里去掉。这是心跳 (后台), 不弹管理员框 (APPS_BG_JOB=1, 见 apply_config): TUN 下这一步要授权, 就先不动运行中的核心 ——
-  # official.jsonl 已经删了, 下一次经过授权的应用 (用户的任何一次更改) 自然会去掉它们。没有官方节点时配置不会变, 什么都不用做
-  [ "$official" = 0 ] || APPS_BG_JOB=1 op_sync_secret
+  # 把官方节点从核心里去掉。这是心跳 (后台), 不弹管理员框 (APPS_BG_JOB=1, 见 apply_config)。没有官方节点时配置不会变, 什么都不用做。
+  # TUN 下这一步要授权, 后台做不了: 运行中的核心里还有官方节点 —— 先把代理总开关关掉 (Direct, 不用授权), 官方线路就不再有流量;
+  # 记下 official.stale, 下一次打开代理时先经过授权换掉配置 (op_proxy / cmd_on), 之后照常使用你自己的服务器
+  if [ "$official" = 1 ] && ! APPS_BG_JOB=1 op_sync_secret >/dev/null 2>&1; then
+    : > "$H/official.stale"
+    if [ "${PROXY_ENABLED:-0}" = 1 ]; then
+      proxy_set_enabled 0
+      oplog auto "关闭代理" "$(kv enabled 0 via "$reason" why official-stale)" ok
+    fi
+  fi
 }
 
 # 系统版本 (心跳用): 一天读一次, 缓存在 $H/hb.os (Windows 上每读一次都要启动 PowerShell); 读不到就是空 (云端忽略空值, 下次再读)

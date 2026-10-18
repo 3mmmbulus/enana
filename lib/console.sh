@@ -82,7 +82,9 @@ console_main() {
     case $key in
       1) os_open "$UI_URL" ;;
       2) printf '\033[?25h\n'; cmd_restart; console_pause; printf '\033[?25l'; console_gather ;;
-      3) if [ "$CS_mode" = Direct ]; then proxy_set_enabled 1; oplog terminal "开启代理" "$(kv enabled 1 via console)" ok      # 不需要账号: 用你自己的服务器
+      3) if [ "$CS_mode" = Direct ]; then
+           if official_stale_resolve; then proxy_set_enabled 1; oplog terminal "开启代理" "$(kv enabled 1 via console)" ok      # 不需要账号: 用你自己的服务器
+           else printf '\033[?25h\n'; warn "官方线路还没有从增强模式的核心里移除 (需要管理员授权), 代理没有开启"; console_pause; printf '\033[?25l'; fi
          else proxy_set_enabled 0; oplog terminal "关闭代理" "$(kv enabled 0 via console)" ok; fi
          console_gather ;;
       4) printf '\033[?25h\n'; cmd_update; console_pause; printf '\033[?25l'; console_gather ;;

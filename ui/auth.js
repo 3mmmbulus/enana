@@ -49,12 +49,22 @@
     if (was === true && !on && !own) refreshStatus().then(showNotice);          // 被下线 / 离线过期 / 在别处退出: 说明一次原因
   }
   /* auth/status 的 notice (例如「这台设备已被另一台设备下线, 代理照常使用你自己的服务器」): 没有登录时提示一次; 同一条只提示一次 (记在 localStorage, 下次登录成功后清掉) */
+  /* 辅助服务给的 notice 是原因代码 (kicked / limit / logout / expired / offline_expired, 见 lib/session.sh): 换成一句话; 不认识的代码说一句通用的;
+   * 不是代码的 (自由文字, 例如模拟服务直接给的句子) 原样显示。官方节点还留在 TUN 的核心里 (official_stale) 时再补一句为什么代理暂时关了 */
+  function noticeText() {
+    var n = A.status && A.status.notice ? String(A.status.notice) : '', s;
+    if (!n) return '';
+    s = /^[a-z_]{1,32}$/.test(n) ? (I.has('auth.notice.' + n) ? t('auth.notice.' + n) : t('auth.notice.other')) : n;
+    if (A.status.official_stale === true) s += ' ' + t('auth.notice.officialStale');
+    return s;
+  }
+  A.noticeText = noticeText;
   function showNotice() {
     var n = A.status && A.status.notice ? String(A.status.notice) : '';
     if (!n || A.loggedIn !== false || TP.ls.get('authNotice', '') === n) return;
-    TP.ls.set('authNotice', n);
+    TP.ls.set('authNotice', n);                                                // 去重按原始代码记
     if (login) { login.repaint(); return; }                                    // 登录框开着: 它自己会显示这条说明, 不再另弹提示
-    ui.toast(n, 'warn', 15000, { action: { label: t('auth.login'), fn: function () { A.openLogin({ mode: 'login' }); } } });
+    ui.toast(noticeText(), 'warn', 15000, { action: { label: t('auth.login'), fn: function () { A.openLogin({ mode: 'login' }); } } });
   }
   /* GET /api/state (每 10 秒) 的 account.email; 读到了状态也说明和本机服务的连接是好的 (lost() 的退避计数清零) */
   TP.on('state', function (st) {
@@ -262,7 +272,7 @@
     }
     function setMsg(text) { curMsg = text || ''; TP.setText(msgEl, String(curMsg)); msgEl.hidden = !curMsg; }
     function renderNotice() {
-      var n = A.status && A.status.notice ? String(A.status.notice) : '';
+      var n = noticeText();
       noticeEl.hidden = !n; TP.setText(noticeEl.lastChild, n);
     }
     function renderNote() {                                                // 当前模式的文字: 标题 / 副标题 / 切换链接 / 说明 / 上次账号
@@ -422,8 +432,9 @@
     var m = ui.modal({ title: t(sw ? 'auth.switch.title' : 'auth.logout.title'), icon: 'logout', size: 'sm', static: true, lock: function () { return busy; }, body: card.el, actions: [] });
     m.setBusy(true); card.set({ pct: null, msg: t('job.submitting') });
     try {
-      await TP.helper('POST', '/api/logout', { timeout: 20000, quiet: true });
+      await TP.helper('POST', '/api/logout', { timeout: 20000, quiet: true, sudoWhy: t('auth.logout.sudoWhy') });      // 登录状态下退出也要再验证一次密码 (见 lib/api.sh 的 SUDO_ENDPOINTS)
     } catch (e) {
+      if (e && e.kind === 'cancel' && e.code !== 'E_LOGIN_REQUIRED') { busy = false; m.setBusy(false); m.close('cancel'); return; }      // 取消了密码框: 什么都没做, 安静地收起
       if (!(e && e.code === 'E_LOGIN_REQUIRED')) {                  // 已经不在登录状态 (例如刚被其它设备下线) 也算退出成功
         busy = false; m.setBusy(false);
         card.fail(TP.errMsg(e)); m.setActions([{ label: t('common.close'), kind: 'primary', cancel: true }]);
@@ -450,7 +461,7 @@
    *   自己已经确认过的调用方传 confirmed:true; 没有小锁图标 (CSS: html[data-acct=guest] .sudo-l)。
    * 白名单在后端; 这里的 PATHS 用来「提前带上令牌」、显示小锁图标和没登录时的确认 (登录时多一个少一个都不影响正确性: 漏掉的会走 403 → 弹框流程)。 */
   var sudo = TP.sudo = { tok: '', exp: 0 }, sudoDlg = null;
-  var SUDO_PATHS = ['/api/servers/delete', '/api/sub/delete', '/api/servers/secret', '/api/sub/url', '/api/logs/clear', '/api/devices/kick', '/api/sync/clear', '/api/export', '/api/billing/purchase', '/api/billing/auto-renew'];
+  var SUDO_PATHS = ['/api/servers/delete', '/api/sub/delete', '/api/servers/secret', '/api/sub/url', '/api/logs/clear', '/api/devices/kick', '/api/sync/clear', '/api/export', '/api/billing/purchase', '/api/billing/auto-renew', '/api/logout'];
   var SELF_CONFIRMED = ['/api/logs/clear'];                           // 唯一的调用方 (ui/v-logs.js 的「清除日志」) 发出之前总是先问两次 (选范围 + 危险确认): 没登录时不再加第三次
   var SUDO_KEY = 'sudo', SUDO_MAX_MS = 3600000;                       // sessionStorage 键 (实际是 enana.sudo); 恢复时到期时间最多在一小时以后 (后端只发 5 分钟的令牌, 再远就是改过的 / 时钟跳过的, 不用)
   sudo.PATHS = SUDO_PATHS;

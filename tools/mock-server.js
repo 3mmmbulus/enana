@@ -924,7 +924,7 @@ function signOut(notice) {
   M.account = null; sudoClear(); setThisOnline(null, false); if (notice !== undefined) M.notice = notice; applyPlan();
   if (had) { const t = now(); M.clashWins.push([t + D(150), t + D(150 + 2500)]); }
 }
-route('GET', '/api/auth/status', (c) => ({ ok: true, required: false, local: true, logged_in: !!M.account, account_hint: M.lastAcct ? maskEmail(M.lastAcct.email) : '', offline_ok: !!(M.account && M.lastAcct && M.lastAcct.email === M.account), notice: noticeText(c.lang), notice_code: M.notice ? (M.notice.code || '') : '',
+route('GET', '/api/auth/status', (c) => ({ ok: true, required: false, local: true, logged_in: !!M.account, official_stale: false, account_hint: M.lastAcct ? maskEmail(M.lastAcct.email) : '', offline_ok: !!(M.account && M.lastAcct && M.lastAcct.email === M.account), notice: noticeText(c.lang), notice_code: M.notice ? (M.notice.code || '') : '',
   account_url: CENTRAL, register_url: CENTRAL + '/register', manage_url: CENTRAL + '/account', wait: lockWait() }), { pub: true });
 /* 本机令牌: 仪表盘不需要任何密码就能拿到 (公开接口; 请求头 X-Enana / 跨域来源照样检查, 见 helperEntry / corsHeaders)。登录与否只看 logged_in */
 route('POST', '/api/auth/local', () => ({ ok: true, token: M.secret, logged_in: !!M.account }), { pub: true });
@@ -1035,7 +1035,8 @@ route('POST', '/api/devices/kick', (c) => {
  * 检查顺序同 lib/api.sh: 请求头 (403) -> 请求体 (413) -> 路由 (404) -> 令牌 (401) -> 需要账号 (E_LOGIN_REQUIRED) -> sudo (403 E_SUDO_REQUIRED) -> 接口自己的校验。
  * sudo 令牌只存在这个进程的内存里 (M.sudo: 令牌 -> 到期时间, 真实秒数, 不随 --fast 缩短); 退出账号 / 登录 / 注册 / 改密码 / expire=1 / kickme=1 都会让它们全部失效。 */
 const SUDO_ROUTES = { 'POST /api/servers/delete': 1, 'POST /api/sub/delete': 1, 'GET /api/servers/secret': 1, 'GET /api/sub/url': 1, 'POST /api/logs/clear': 1, 'POST /api/devices/kick': 1, 'POST /api/sync/clear': 1, 'GET /api/export': 1,
-  'POST /api/billing/purchase': 1, 'POST /api/billing/auto-renew': 1 };
+  'POST /api/billing/purchase': 1, 'POST /api/billing/auto-renew': 1,
+  'POST /api/logout': 1 };      // 退出账号也要 (登录时): 否则先退出账号就绕过了上面这些。lib/api.sh 还把登录 / 注册列进去 (登录状态下换账号), 仪表盘只在没登录时用它们, 这里不模拟
 /* 只有 enana 账号能用的接口: 没有登录时 HTTP 200 {ok:false, code:"E_LOGIN_REQUIRED"} (docs/API.md 的共同约定; 读页面用的 GET /api/sync、GET /api/plan、GET /api/state 不在这里, 它们回中性的状态) */
 const ACCOUNT_ROUTES = { 'GET /api/devices': 1, 'POST /api/devices/kick': 1, 'POST /api/password': 1, 'POST /api/auth/verify': 1, 'POST /api/sync/settings': 1, 'POST /api/sync/push': 1, 'POST /api/sync/pull': 1,
   'POST /api/sync/preview': 1, 'POST /api/sync/clear': 1, 'POST /api/diag/send': 1, 'POST /api/diag/delete': 1 };
@@ -3558,9 +3559,9 @@ async function selftest() {
 
     /* 步骤验证 (sudo) */
     const WL = [['POST', '/api/servers/delete', { form: { tag: 'no-such' } }], ['POST', '/api/sub/delete', { form: { name: 'no-such' } }], ['GET', '/api/servers/secret', {}], ['GET', '/api/sub/url', {}], ['POST', '/api/logs/clear', { form: { type: 'bogus' } }],
-      ['POST', '/api/devices/kick', {}], ['POST', '/api/sync/clear', {}], ['GET', '/api/export', {}], ['POST', '/api/billing/purchase', { body: 'not json' }], ['POST', '/api/billing/auto-renew', { body: 'not json' }]], w403 = [];
+      ['POST', '/api/devices/kick', {}], ['POST', '/api/sync/clear', {}], ['GET', '/api/export', {}], ['POST', '/api/billing/purchase', { body: 'not json' }], ['POST', '/api/billing/auto-renew', { body: 'not json' }], ['POST', '/api/logout', {}]], w403 = [];
     for (const x of WL) w403.push(await api(x[0], x[1], Object.assign({ sudo: false }, x[2])));
-    ck('sudo (signed in): all 10 whitelisted endpoints answer HTTP 403 {ok:false, code:E_SUDO_REQUIRED, error} without X-Enana-Sudo — before their own validation (bogus arguments never reach it)', w403.length === 10 && w403.every((x) => x.status === 403 && jx(x).code === 'E_SUDO_REQUIRED' && jx(x).ok === false && jx(x).error === '此操作需要再次输入登录密码'), w403.map((x) => x.status + ' ' + jx(x).code));
+    ck('sudo (signed in): all 11 whitelisted endpoints (incl. logout) answer HTTP 403 {ok:false, code:E_SUDO_REQUIRED, error} without X-Enana-Sudo — before their own validation (bogus arguments never reach it)', w403.length === 11 && w403.every((x) => x.status === 403 && jx(x).code === 'E_SUDO_REQUIRED' && jx(x).ok === false && jx(x).error === '此操作需要再次输入登录密码'), w403.map((x) => x.status + ' ' + jx(x).code));
     r = await api('GET', '/api/export', { sudo: false, headers: { 'X-Enana-Sudo': 'deadbeef' }, lang: 'en' }); r2 = await rq('GET', '/api/export', { headers: { 'X-Enana-Sudo': 'deadbeef' } });
     ck('sudo: an unknown token is the same 403 (message follows X-Enana-Lang); the login token is checked first (no token -> 401 E_AUTH)', r.status === 403 && jx(r).error === 'This action needs your sign-in password again' && r2.status === 401 && jx(r2).code === 'E_AUTH');
     r = await rq('POST', '/api/auth/verify', { form: { password: P1 } }); r2 = await api('POST', '/api/auth/verify', { form: { password: 'wrong-one' } }); const vEmpty = await api('POST', '/api/auth/verify', { form: {} }), vUrl = await api('POST', '/api/auth/verify', { q: { password: P1 } });

@@ -418,6 +418,7 @@ cmd_start() { os_service_start && wait_port "$PORT" 15 && enhanced_ready && { pr
 cmd_restart() { info "正在重启服务…"; if os_service_restart && wait_port "$PORT" 15 && enhanced_ready; then proxy_sync_mode; ok "已重启"; oplog terminal "重启服务" "" ok; else warn "没有在 15 秒内启动: 运行 enana doctor"; fi; }
 cmd_network_mode() { network_mode_set "$ARG1"; }
 cmd_on() { # 开启代理 (不需要账号: 用你自己的服务器; 登录了 enana 账号的话, 官方线路也在自动线路里)
+  official_stale_resolve || { warn "官方线路还没有从增强模式的核心里移除 (需要管理员授权), 代理没有开启"; return 1; }
   cmd_start && proxy_set_enabled 1 && { oplog terminal "开启代理" "$(kv enabled 1 via 'enana on')" ok; [ "$NETWORK_MODE" = tun ] || os_sysproxy_set on; }
 }
 cmd_off() { proxy_set_enabled 0; oplog terminal "关闭代理" "$(kv enabled 0 via 'enana off')" ok; if os_sysproxy_mine; then os_sysproxy_set off || { warn "系统代理没有关闭成功 (需要管理员密码), 服务未停止以免断网; 请重试 enana off"; return 1; }; fi; os_service_stop || return 1; ok "已关闭系统代理并停止服务"; }

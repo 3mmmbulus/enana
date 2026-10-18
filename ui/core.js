@@ -236,6 +236,7 @@
     if (go !== true && !(await go)) throw mkErr('cancel', t('sudo.cancelled'));
     var headers = {}, res, text, j = null, body = o.body;
     headers[TP.HDR.app] = '1'; headers[TP.HDR.lang] = I.lang;
+    var sentTok = token;                                                // 401 时要知道: 这个请求是不是带着已经换掉的旧令牌发出去的
     if (token && !o.noAuth) headers[TP.HDR.token] = token;
     if (TP.sudo && (o._retried || TP.sudo.forPath(path)) && TP.sudo.token()) headers[TP.HDR.sudo] = TP.sudo.token();      // 敏感操作: 再次输入密码后 5 分钟内带上 (只在内存里)
     if (o.form) { body = new URLSearchParams(o.form).toString(); headers['Content-Type'] = 'application/x-www-form-urlencoded'; }
@@ -250,6 +251,7 @@
     setHelper(true);
     if (res.status === 401 && !o.noAuth) {
       res.done();
+      if (!o._reauth && token && token !== sentTok) return TP.helper(method, path, Object.assign({}, o, { _reauth: true }));      // 路上令牌已经换过 (同时发出的另一个请求刚取到新的): 用新的重试一次, 不再取令牌
       if (!o._reauth && TP.auth && TP.auth.reauth && await TP.auth.reauth()) return TP.helper(method, path, Object.assign({}, o, { _reauth: true }));      // 拿到了新的本机令牌: 同一个请求重试一次
       TP.emit('unauth'); throw mkErr('auth', t('error.sessionExpired'));
     }
@@ -279,6 +281,7 @@
   TP.isApplying = function () { return applying > 0 || Date.now() < graceUntil; };
   TP.clash = async function (method, path, body, o) {
     var res, data = null, headers = {};
+    var sentTok = token;
     if (body) headers['Content-Type'] = 'application/json';
     if (token) headers.Authorization = 'Bearer ' + token;
     try {
@@ -292,8 +295,11 @@
     clashFails = 0; setClash('ok');
     if (res.status === 401) {
       res.done();
+      if (!(o && o._reauth) && token && token !== sentTok) return TP.clash(method, path, body, Object.assign({}, o, { _reauth: true }));      // 令牌在路上换过了: 用新的重试一次
       if (!(o && o._reauth) && TP.auth && TP.auth.reauth && await TP.auth.reauth()) return TP.clash(method, path, body, Object.assign({}, o, { _reauth: true }));
-      TP.emit('unauth'); throw mkErr('auth', t('error.sessionExpired'));
+      // 换了本机令牌, 核心还是 401: 核心在用另一个 secret (例如 TUN 下换令牌要授权, 还没换上)。这是核心的问题, 不是和本机服务的连接断了:
+      // 标成核心不可用 (顶部照常提示核心), 不触发「失去连接」—— 否则每次重连都会再撞一次 401, 来回循环
+      setClash('down'); throw mkErr('auth', t('error.coreUnreachable'));
     }
     if (res.status === 204) return null;
     try { data = await res.json(); } catch (e) { data = null; } finally { res.done(); }

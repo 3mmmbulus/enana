@@ -308,6 +308,7 @@ auth_status_json() { # GET /api/auth/status 的主体 (公开)
   local hint='' offline=false w li=false; w=$(auth_wait_seconds)
   auth_logged_in && li=true
   if auth_cache_has; then hint=$(auth_hint); [ -n "$(auth_acc_get hash)" ] && offline=true; fi
-  printf '"required":false,"logged_in":%s,"local":true,"account_hint":"%s","offline_ok":%s,"notice":"%s","account_url":"%s","wait":%s' \
-    "$li" "$(jesc "$hint")" "$offline" "$(jesc "$(session_notice)")" "$(jesc "${ACCOUNT_SITE%/}")" "${w:-0}"
+  # official_stale = 被下线时官方节点还留在 TUN 的核心里, 代理暂时关着 (见 lib/session.sh 的 session_local_end), 下一次打开代理先授权换掉配置
+  printf '"required":false,"logged_in":%s,"local":true,"account_hint":"%s","offline_ok":%s,"notice":"%s","official_stale":%s,"account_url":"%s","wait":%s' \
+    "$li" "$(jesc "$hint")" "$offline" "$(jesc "$(session_notice)")" "$([ -f "$H/official.stale" ] && echo true || echo false)" "$(jesc "${ACCOUNT_SITE%/}")" "${w:-0}"
 }

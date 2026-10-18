@@ -68,6 +68,13 @@ SUDO_ACCOUNT = [
     ('POST', '/api/devices/kick', b'uid=dev-aaaa-1111'), ('POST', '/api/sync/clear', b''),
     ('POST', '/api/billing/purchase', PURCHASE), ('POST', '/api/billing/auto-renew', RENEW),
 ]
+# … and leaving / replacing the signed-in account: guarded too while signed in (otherwise signing out first, or signing in to an
+# account of your own, would skip every step-up above). Signed out they work as usual (logout is a no-op, bad input is refused).
+SUDO_SESSION = [
+    ('POST', '/api/logout', b'', None),
+    ('POST', '/api/login', b'user=not-an-email&password=whatever', 'E_INVALID'),
+    ('POST', '/api/register', b'user=not-an-email&password=longenough1', 'E_INVALID'),
+]
 # shell helpers: no core, no rule downloads, no app scan (only the cloud-content code under test runs for real)
 STUB_APPLY = 'apply_config() { printf "%s\\n" "${APPS_BG_JOB:-}" >> "$ENANA_HOME/applies"; APPLY_CHANGED=1; return 0; }\n'
 STUB_CONTENT = STUB_APPLY + 'rules_update() { :; }; apps_rerecommend() { :; }; ovr_sync() { :; }\n'
@@ -280,8 +287,12 @@ class NoAccount(unittest.TestCase):
     def test_status_says_no_account_needed(self):
         s, d = self.cgij('GET', '/api/auth/status', token=None)
         self.assertEqual(s, 200)
-        self.assertEqual(set(d), {'ok', 'required', 'logged_in', 'local', 'account_hint', 'offline_ok', 'notice', 'account_url', 'wait'})
-        self.assertEqual((d['ok'], d['required'], d['logged_in'], d['local'], d['account_hint'], d['offline_ok']), (True, False, False, True, '', False))
+        self.assertEqual(set(d), {'ok', 'required', 'logged_in', 'local', 'account_hint', 'offline_ok', 'notice', 'official_stale', 'account_url', 'wait'})
+        self.assertEqual((d['ok'], d['required'], d['logged_in'], d['local'], d['account_hint'], d['offline_ok'], d['official_stale']), (True, False, False, True, '', False, False))
+        (self.home / 'official.stale').write_text('')                    # kicked in TUN with official nodes still in the core (session_local_end)
+        s, d = self.cgij('GET', '/api/auth/status', token=None)
+        self.assertIs(d['official_stale'], True)
+        (self.home / 'official.stale').unlink()
         self.sign_in()
         s, d = self.cgij('GET', '/api/auth/status', token=None)
         self.assertEqual((d['required'], d['logged_in'], d['local'], d['offline_ok']), (False, True, True, True))
@@ -350,7 +361,7 @@ class NoAccount(unittest.TestCase):
         self.assertEqual(sorted(table), sorted('%s:%s' % (m, p) for m, p in ACCOUNT_ONLY if not p.startswith(('/api/billing', '/api/email'))))
         self.assertIn('case $path in /api/billing|/api/billing/*|/api/email/*) _acct=1 ;; esac', src)
         sudo = re.search(r'^SUDO_ENDPOINTS=" (.*) "$', src, re.M).group(1).split()
-        self.assertEqual(sorted(sudo), sorted('%s:%s' % (m, p.split('?')[0]) for m, p, *_ in SUDO_LOCAL + SUDO_ACCOUNT))
+        self.assertEqual(sorted(sudo), sorted('%s:%s' % (m, p.split('?')[0]) for m, p, *_ in SUDO_LOCAL + SUDO_ACCOUNT + SUDO_SESSION))
 
     def test_account_only_endpoints_answer_login_required_when_signed_out(self):
         for method, path in ACCOUNT_ONLY:
@@ -405,14 +416,21 @@ class NoAccount(unittest.TestCase):
         for method, path, body in SUDO_ACCOUNT:
             s, d = self.cgij(method, path, body=body)
             self.assertEqual((s, d['code']), (200, 'E_LOGIN_REQUIRED'), path)
+        for method, path, body, code in SUDO_SESSION:
+            s, d = self.cgij(method, path, body=body, ctype='application/x-www-form-urlencoded')
+            if code is None:
+                self.assertEqual((s, d), (200, {'ok': True}), path)
+            else:
+                self.assertEqual((s, d['ok'], d['code']), (200, False, code), path)
         with self.cloud.lock:
             self.assertEqual(self.cloud.calls, [])
 
     def test_step_up_is_enforced_when_signed_in(self):
         self.sign_in()
-        for method, path, body, *_ in SUDO_LOCAL + SUDO_ACCOUNT:
-            s, d = self.cgij(method, path, body=body)
+        for method, path, body, *_ in SUDO_LOCAL + SUDO_ACCOUNT + SUDO_SESSION:
+            s, d = self.cgij(method, path, body=body, ctype='application/x-www-form-urlencoded' if path.startswith(('/api/login', '/api/register')) else None)
             self.assertEqual((s, d['ok'], d['code']), (403, False, 'E_SUDO_REQUIRED'), path)
+        self.assertTrue((self.home / 'loggedin').exists(), 'a refused logout / login / register leaves the account signed in')
         with self.cloud.lock:
             self.assertEqual(self.cloud.calls, [], 'refused before anything reaches the cloud')
         self.grant_sudo()
@@ -438,6 +456,9 @@ class NoAccount(unittest.TestCase):
             (self.home / 'plan.json').write_text('{"plan":{"code":"pro"}}'); (self.home / 'sync.key').write_text('k\nm\n')
             before = len(self.launched())
             s, d = self.cgij('POST', '/api/logout' + switch)
+            self.assertEqual((s, d['code']), (403, 'E_SUDO_REQUIRED'), 'signing out needs the step-up while signed in ' + switch)
+            self.assertTrue((self.home / 'loggedin').exists())
+            s, d = self.cgij('POST', '/api/logout' + switch, sudo=SUDO)
             self.assertEqual((s, d), (200, {'ok': True}), switch)
             self.assertEqual((self.home / 'secret').read_text().strip(), TOKEN, 'the local token does not change')
             self.assertEqual((self.setting('PROXY_ENABLED'), self.setting('PROXY_MODE')), ('1', 'global'), 'the proxy keeps running on your own servers ' + switch)
@@ -463,8 +484,8 @@ class NoAccount(unittest.TestCase):
             self.assertEqual(self.cloud.calls, [])
 
     def test_sign_out_without_official_nodes_changes_nothing_in_the_core(self):
-        self.sign_in(); self.settings(PROXY_ENABLED=1)
-        s, d = self.cgij('POST', '/api/logout')
+        self.sign_in(); self.settings(PROXY_ENABLED=1); self.grant_sudo()
+        s, d = self.cgij('POST', '/api/logout', sudo=SUDO)
         self.assertEqual((s, d), (200, {'ok': True}))
         time.sleep(1)
         self.assertEqual((self.launched(), self.jobs('auth-sync')), ([], []))

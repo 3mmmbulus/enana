@@ -1052,3 +1052,5 @@ TUN 没有启动 (*): *	TUN did not start (*): *
 请运行 enana upgrade	run enana upgrade
 原因: *	reason: *
 *; 旧的 TUN 仍在运行	*; the old TUN is still running
+官方线路还没有从增强模式的核心里移除 (需要管理员授权), 代理没有开启	The official lines are still in the Enhanced-mode core (removing them needs administrator authorization), so the proxy was not turned on
+已取消管理员授权, 代理没有开启 (官方线路还留在增强模式的核心里)	Administrator authorization was cancelled; the proxy was not turned on (the official lines are still in the Enhanced-mode core)

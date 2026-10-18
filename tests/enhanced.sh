@@ -606,6 +606,34 @@ assert run(7,TUN='0',ON='',MODE='global',PROXY_ENABLED='1')==('{"ok":true,"job":
 assert run(8,TUN='0',ON='0')==('{"ok":true,"enabled":true,"mode":"auto"}\n','','SWITCH\n')        # turning off never starts anything
 print('PASS: /api/proxy hands a start that needs administrator rights to a job and keeps every other request immediate')
 PY
+# ...and with official lines still in the TUN core after a kick (official.stale, see session_local_end): switching on goes through the job
+# (it applies the configuration first, which may ask for administrator rights); switching off and requests without the marker are unchanged.
+python3 - "$LIB/api.sh" "$W" <<'PY'
+import os,pathlib,subprocess,sys
+s=pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'); w=sys.argv[2]
+i=s.index('ep_proxy() {'); ep=s[i:s.index('\n}',i)+2]
+h=os.path.join(w,'ep-proxy-stale'); os.makedirs(h,exist_ok=True); open(os.path.join(h,'official.stale'),'w').close()
+stub='''fp() { case $1 in on) printf '%s' "$ON" ;; mode) printf '%s' "$MODE" ;; esac; }
+fail() { printf 'FAIL:%s\\n' "$2"; exit 0; }
+okj() { printf '{"ok":true,%s}\\n' "$1"; }
+job_spawn() { printf '%s\\n' "$@" > "$H/spawn"; printf proxy-job; }
+os_service_running() { return 0; }
+proxy_switch() { echo SWITCH >> "$H/calls"; PROXY_SWITCH_JSON='"enabled":true'; }
+'''
+def run(on):
+    for f in ('spawn','calls'):
+        p=os.path.join(h,f)
+        if os.path.exists(p): os.remove(p)
+    env=dict(PATH=os.environ['PATH'], H=h, ON=on, MODE='', PROXY_ENABLED='0')
+    r=subprocess.run(['/bin/bash','-c',stub+ep+'\nep_proxy\n'],capture_output=True,text=True,encoding='utf-8',check=True,env=env)
+    rd=lambda x: open(os.path.join(h,x),encoding='utf-8').read() if os.path.exists(os.path.join(h,x)) else ''
+    return r.stdout, rd('spawn'), rd('calls')
+assert run('1')==('{"ok":true,"job":"proxy-job"}\n','proxy\n移除官方线路|启动代理服务|开启代理\n1\n\nstale\n',''), run('1')
+assert run('0')==('{"ok":true,"enabled":true}\n','','SWITCH\n'), run('0')
+os.remove(os.path.join(h,'official.stale'))
+assert run('1')==('{"ok":true,"enabled":true}\n','','SWITCH\n'), run('1')
+print('PASS: /api/proxy with official lines still in the TUN core applies the configuration in a job first; off and normal requests unchanged')
+PY
 # The job behind it (op_proxy) and the switch both paths share (proxy_switch). The job starts the core (the administrator dialog is fine here: the
 # dashboard follows the job), reports a cancelled dialog as cancelled, and its result is the usual /api/proxy response.
 (
@@ -629,6 +657,19 @@ PY
   [ "$(cat "$W/proxy-job")" = 'ok|代理已开启|{"enabled":true,"mode":"global"}' ] && [ "$(cat "$W/proxy-calls")" = 'switch|1|global|0|auto' ] || { echo "FAIL: op_proxy success: $(cat "$W/proxy-job") / $(cat "$W/proxy-calls")"; exit 1; }
   op_proxy 2 '' || true
   [ "$(cat "$W/proxy-job")" = 'fail|参数无效' ] || { echo "FAIL: op_proxy accepted on=2: $(cat "$W/proxy-job")"; exit 1; }
+  # official lines left in the TUN core after a kick (official.stale): the job applies the configuration first (removes them), then switches on
+  : > "$H/official.stale"; apply_config() { echo APPLY >> "$W/proxy-calls"; return 0; }; rm -f "$W/proxy-calls"
+  PROXY_ENABLED=0; PROXY_MODE=auto; op_proxy 1 '' stale
+  [ "$(cat "$W/proxy-job")" = 'ok|代理已开启|{"enabled":true,"mode":"global"}' ] && [ "$(paste -sd, - < "$W/proxy-calls")" = 'APPLY,switch|1||0|auto' ] && [ ! -e "$H/official.stale" ] \
+    || { echo "FAIL: op_proxy stale: $(cat "$W/proxy-job") / $(cat "$W/proxy-calls") / $(ls "$H")"; exit 1; }
+  : > "$H/official.stale"; apply_config() { ENHANCED_ADMIN_ERR=cancelled; return 1; }; rm -f "$W/proxy-calls"
+  op_proxy 1 '' stale || true
+  [ "$(cat "$W/proxy-job")" = 'fail|已取消管理员授权, 代理没有开启 (官方线路还留在增强模式的核心里)' ] && [ ! -e "$W/proxy-calls" ] && [ -e "$H/official.stale" ] && [ ! -d "$H/.apply.lock" ] \
+    || { echo "FAIL: op_proxy stale, dialog cancelled: $(cat "$W/proxy-job")"; exit 1; }
+  apply_config() { ENHANCED_ADMIN_ERR=failed; return 3; }
+  op_proxy 1 '' stale || true
+  [ "$(cat "$W/proxy-job")" = 'fail|官方线路还没有从增强模式的核心里移除 (需要管理员授权), 代理没有开启' ] && [ -e "$H/official.stale" ] || { echo "FAIL: op_proxy stale, apply failed: $(cat "$W/proxy-job")"; exit 1; }
+  rm -f "$H/official.stale"; unset -f apply_config
   # proxy_switch itself (the real one): the same response the endpoint always gave; the system proxy only follows in System Proxy mode
   eval "$(sed -n '/^proxy_switch() {/,/^}/p' "$LIB/ops.sh")"
   oplog() { :; }; clash() { :; }; switch_note() { :; }; NETWORK_MODE=system
