@@ -28,7 +28,7 @@ function makeBrowser(o) {
   const phase = opt => (opt === true || !!(opt && opt.capture) ? 'capture' : 'bubble');
   class El {
     constructor(tag) {
-      this.nodeType = tag === '#text' ? 3 : 1; this.tagName = tag; this.nodeName = tag.toUpperCase();
+      this.nodeType = tag === '#text' ? 3 : tag === '#document-fragment' ? 11 : 1; this.tagName = tag; this.nodeName = tag.toUpperCase();
       this.children = []; this.attrs = {}; this.events = {}; this.text = ''; this.className = ''; this.parentNode = null;
       this.disabled = false; this.hidden = false; this.checked = false; this.title = ''; this.value = ''; this.open = false;
       this.style = { setProperty() {}, removeProperty() {} }; this.offsetParent = null; this.offsetWidth = 0; this.offsetHeight = 0;
@@ -41,6 +41,7 @@ function makeBrowser(o) {
     get textContent() { return this.text + this.children.map(x => x.textContent).join(''); }
     set textContent(s) { this.children.forEach(c => { c.parentNode = null; }); this.children = []; this.text = String(s); }
     get firstChild() { return this.children[0] || null; }
+    get childNodes() { return this.children; }                      // ui/v-logs.js (renderSummary) asks childNodes.length, like a real browser
     get lastChild() { return this.children[this.children.length - 1] || null; }
     get nextSibling() { const p = this.parentNode; if (!p) return null; return p.children[p.children.indexOf(this) + 1] || null; }
     get options() { return this.children.filter(c => c.tagName === 'option'); }
@@ -52,8 +53,8 @@ function makeBrowser(o) {
     getAttribute(k) { return k === 'class' ? (this.className || null) : (k in this.attrs ? this.attrs[k] : null); }
     hasAttribute(k) { return this.getAttribute(k) !== null; }
     removeAttribute(k) { if (k === 'title') this.title = ''; delete this.attrs[k]; }
-    appendChild(c) { if (c.parentNode) c.parentNode.removeChild(c); this.children.push(c); c.parentNode = this; return c; }
-    insertBefore(c, ref) { if (!ref) return this.appendChild(c); if (c.parentNode) c.parentNode.removeChild(c); const i = this.children.indexOf(ref); assert(i >= 0, 'insertBefore: ref is not a child'); this.children.splice(i, 0, c); c.parentNode = this; return c; }
+    appendChild(c) { if (c.nodeType === 11) { c.children.slice().forEach(x => this.appendChild(x)); return c; } if (c.parentNode) c.parentNode.removeChild(c); this.children.push(c); c.parentNode = this; return c; }
+    insertBefore(c, ref) { if (!ref) return this.appendChild(c); if (c.nodeType === 11) { c.children.slice().forEach(x => this.insertBefore(x, ref)); return c; } if (c.parentNode) c.parentNode.removeChild(c); const i = this.children.indexOf(ref); assert(i >= 0, 'insertBefore: ref is not a child'); this.children.splice(i, 0, c); c.parentNode = this; return c; }
     removeChild(c) { const i = this.children.indexOf(c); assert(i >= 0, 'removeChild of a node that is not a child'); this.children.splice(i, 1); c.parentNode = null; return c; }
     replaceChild(c, old) { this.insertBefore(c, old); this.removeChild(old); return old; }
     addEventListener(e, fn) { (this.events[e] = this.events[e] || []).push(fn); }
@@ -83,6 +84,7 @@ function makeBrowser(o) {
   const doc = {
     body: new El('body'), documentElement: new El('html'), activeElement: null, hidden: false,
     createTextNode: s => { const x = new El('#text'); x.text = String(s); return x; },
+    createDocumentFragment: () => new El('#document-fragment'),
     createElement: tag => new El(String(tag).toLowerCase()),
     querySelectorAll: sel => doc.body.querySelectorAll(sel), querySelector: sel => doc.body.querySelector(sel),
     getElementById: id => doc.body.querySelectorAll('[id="' + id + '"]')[0] || null,

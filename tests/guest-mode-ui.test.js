@@ -23,7 +23,7 @@ const SUDO_P = ['/api/servers/delete', '/api/sub/delete', '/api/servers/secret',
 
 /* 假的辅助服务: st.token = 本机令牌 (= Clash secret), st.in = 这台电脑有没有登录 enana 账号, st.notice = auth/status 的说明 */
 function helper(o) {
-  const st = Object.assign({ token: 'local-1', in: false, notice: '', localFails: false, rejectAll: false }, o);
+  const st = Object.assign({ token: 'local-tok-1', in: false, notice: '', localFails: false, rejectAll: false }, o);
   st.calls = [];
   st.fetch = (url, opt) => {
     const u = new URL(url, 'http://127.0.0.1'), hd = opt.headers || {}, body = String(opt.body || ''), form = new URLSearchParams(body);
@@ -72,28 +72,28 @@ async function confirmTop(b, yes) { const d = b.dialogs().slice(-1)[0]; assert(d
   let st = helper(), b = await boot(st);
   assert.deepEqual(lines(st), ['POST /api/auth/local', 'GET /api/auth/status'], 'no token yet: the public POST /api/auth/local first, then the public status');
   assert.equal(st.calls[0].token, '', 'auth/local is sent without a token'); assert.equal(st.calls[0].body, '', 'and without any password');
-  assert.equal(b.TP.getToken(), 'local-1'); assert.equal(JSON.parse(b.win.sessionStorage['enana.token']), 'local-1', 'the local token lives in sessionStorage');
-  assert(!Object.keys(b.win.localStorage).some(k => String(b.win.localStorage[k]).indexOf('local-1') >= 0), 'never in localStorage');
+  assert.equal(b.TP.getToken(), 'local-tok-1'); assert.equal(JSON.parse(b.win.sessionStorage['enana.token']), 'local-tok-1', 'the local token lives in sessionStorage');
+  assert(!Object.keys(b.win.localStorage).some(k => String(b.win.localStorage[k]).indexOf('local-tok-1') >= 0), 'never in localStorage');
   assert.equal(b.TP.S.locked, false, 'the dashboard is open'); assert.deepEqual(b.ev.auth, [true]); assert.deepEqual(b.ev.account, [false]);
   assert.equal(b.TP.auth.state(), 'guest'); assert.equal(b.doc.documentElement.getAttribute('data-acct'), 'guest');
   assert(b.doc.documentElement.classList.contains('ui-ready'), 'the shell is shown at once');
   assert.equal(b.dialogs().length, 0, 'no login page and no login dialog'); assert.equal(b.TP.auth.label(), 'auth.guest.label', 'the header says "not signed in"');
   assert.equal(b.TP.auth.email(), '');
   {
-    const s2 = helper({ in: true }), ss = storage(); ss['enana.token'] = JSON.stringify('local-1');
+    const s2 = helper({ in: true }), ss = storage(); ss['enana.token'] = JSON.stringify('local-tok-1');
     const b2 = await boot(s2, { ss });
     assert.deepEqual(lines(s2), ['GET /api/auth/status'], 'a tab that already has its local token does not fetch it again');
     assert.equal(b2.TP.auth.state(), 'user'); assert.equal(b2.doc.documentElement.getAttribute('data-acct'), 'user'); assert.equal(b2.dialogs().length, 0);
   }
 
   /* ================= 2. 401 / 失去连接 / 连不上 ================= */
-  st.token = 'local-2'; st.calls.length = 0;                                      // 辅助服务重新安装过: secret 变了
+  st.token = 'local-tok-2'; st.calls.length = 0;                                      // 辅助服务重新安装过: secret 变了
   assert.deepEqual(await b.TP.helper('GET', '/api/state'), { ok: true, account: { email: '' } });
-  assert.deepEqual(st.calls.map(c => [c.method + ' ' + c.path, c.token]), [['GET /api/state', 'local-1'], ['POST /api/auth/local', ''], ['GET /api/state', 'local-2']], '401: one silent re-fetch, then the same request with the new token');
-  assert.equal(b.TP.getToken(), 'local-2'); assert.equal(b.TP.S.locked, false); assert.deepEqual(b.ev.auth, [true], 'not treated as a lost connection');
-  clock.now += 6000; st.token = 'local-3'; st.calls.length = 0;
+  assert.deepEqual(st.calls.map(c => [c.method + ' ' + c.path, c.token]), [['GET /api/state', 'local-tok-1'], ['POST /api/auth/local', ''], ['GET /api/state', 'local-tok-2']], '401: one silent re-fetch, then the same request with the new token');
+  assert.equal(b.TP.getToken(), 'local-tok-2'); assert.equal(b.TP.S.locked, false); assert.deepEqual(b.ev.auth, [true], 'not treated as a lost connection');
+  clock.now += 6000; st.token = 'local-tok-3'; st.calls.length = 0;
   assert.equal((await b.TP.clash('GET', '/version')).version, 'sing-box 1.14.2');
-  assert.deepEqual(st.calls.map(c => [c.method + ' ' + c.path, c.auth]), [['GET /version', 'Bearer local-2'], ['POST /api/auth/local', ''], ['GET /version', 'Bearer local-3']], 'the Clash API (same secret) re-fetches the same way');
+  assert.deepEqual(st.calls.map(c => [c.method + ' ' + c.path, c.auth]), [['GET /version', 'Bearer local-tok-2'], ['POST /api/auth/local', ''], ['GET /version', 'Bearer local-tok-3']], 'the Clash API (same secret) re-fetches the same way');
   clock.now += 6000; st.calls.length = 0; st.rejectAll = true;                    // 辅助服务坏了: 什么令牌都 401
   await assert.rejects(b.TP.helper('GET', '/api/state'), e => e.kind === 'auth');
   assert.deepEqual(lines(st), ['GET /api/state', 'POST /api/auth/local', 'GET /api/state'], 'exactly one re-fetch, then give up (no loop)');
@@ -101,16 +101,16 @@ async function confirmTop(b, yes) { const d = b.dialogs().slice(-1)[0]; assert(d
   assert.equal(b.TP.getToken(), '', 'the useless token is dropped'); assert.equal(b.dialogs().length, 0, 'never a login page');
   await assert.rejects(b.TP.helper('GET', '/api/state'), e => e.kind === 'auth');
   assert.equal(st.calls.filter(c => c.path === '/api/auth/local').length, 1, 'another 401 within 5 s does not fetch again (no request storm)');
-  st.rejectAll = false; st.token = 'local-5';
+  st.rejectAll = false; st.token = 'local-tok-5';
   b.timers.filter(x => x.ms === 2000).pop().fn(); await settle();                // 自动重连 (lost() 排的定时器)
-  assert.equal(b.TP.S.locked, false, 'reconnects on its own'); assert.equal(b.TP.getToken(), 'local-5'); assert.equal(b.TP.auth.connState(), 'ok'); assert.deepEqual(b.ev.auth, [true, false, true]);
+  assert.equal(b.TP.S.locked, false, 'reconnects on its own'); assert.equal(b.TP.getToken(), 'local-tok-5'); assert.equal(b.TP.auth.connState(), 'ok'); assert.deepEqual(b.ev.auth, [true, false, true]);
   {
     const s3 = helper({ localFails: true }), b3 = await boot(s3);
     assert.equal(b3.TP.S.locked, true); assert.equal(b3.TP.auth.connState(), 'fail', 'the local service is down at start: a non-blocking state, not a login page');
     assert.equal(b3.dialogs().length, 0); assert(b3.doc.documentElement.classList.contains('ui-ready'), 'the shell is still shown');
     assert.equal(b3.TP.why.helper(), 'why.locked', 'controls explain that the dashboard is still connecting');
     s3.localFails = false; await b3.TP.auth.retryConnect(); await settle();
-    assert.equal(b3.TP.S.locked, false, '"Retry" connects'); assert.equal(b3.TP.auth.connState(), 'ok'); assert.equal(b3.TP.getToken(), 'local-1');
+    assert.equal(b3.TP.S.locked, false, '"Retry" connects'); assert.equal(b3.TP.auth.connState(), 'ok'); assert.equal(b3.TP.getToken(), 'local-tok-1');
   }
 
   /* ================= 3. 登录 / 注册对话框 ================= */
@@ -127,7 +127,7 @@ async function confirmTop(b, yes) { const d = b.dialogs().slice(-1)[0]; assert(d
   pw.value = 'demo1234'; dl[0].querySelector('form').dispatch('submit'); await settle(12);
   assert.equal(await p1, true, 'openLogin resolves true after signing in');
   assert.equal(b.dialogs().length, 0); assert.equal(b.TP.auth.state(), 'user'); assert.equal(b.TP.auth.email(), 'demo@example.com');
-  assert.equal(b.TP.getToken(), 'local-1', 'the same local token; the dashboard did not move'); assert.equal(b.TP.S.locked, false);
+  assert.equal(b.TP.getToken(), 'local-tok-1', 'the same local token; the dashboard did not move'); assert.equal(b.TP.S.locked, false);
   assert.equal(b.ev.login.length, 1); assert.equal(b.ev.login[0].registered, false); assert.deepEqual(b.ev.account, [false, true]);
   const logins = st.calls.filter(c => c.path === '/api/login');
   assert.equal(logins.length, 2); assert.equal(logins[1].token, '', 'sign-in is a public request'); assert.equal(new URLSearchParams(logins[1].body).get('password'), 'demo1234', 'the password only travels in the request body');
@@ -184,10 +184,11 @@ async function confirmTop(b, yes) { const d = b.dialogs().slice(-1)[0]; assert(d
   await confirmTop(b, true);
   assert.deepEqual(await pp, { ok: true }); assert.deepEqual(st.calls.map(c => [c.path, c.sudo]), [['/api/servers/secret', '']], 'sent once, without X-Enana-Sudo');
   assert.equal(b.dialogs().length, 0, 'no second dialog');
-  st.calls.length = 0; pp = b.TP.helper('GET', '/api/sub/url', { q: { name: 's' } }); await settle();
+  st.calls.length = 0; pp = b.TP.helper('GET', '/api/sub/url', { q: { name: 's' } });
+  const ppCancel = assert.rejects(pp, e => e.kind === 'cancel'); await settle();          // the rejection handler is attached before the dialog is cancelled (no unhandled rejection)
   cd = b.dialogs(); assert.equal(cd.length, 1); assert.equal(cd[0].querySelector('.cfm-m').textContent, 'sudo.guest.msg', 'a generic reason when the caller gives none');
   await confirmTop(b, false);
-  await assert.rejects(pp, e => e.kind === 'cancel'); assert.equal(st.calls.length, 0, 'cancel sends nothing');
+  await ppCancel; assert.equal(st.calls.length, 0, 'cancel sends nothing');
   for (const x of [['POST', '/api/servers/delete', { q: { tag: 'n1' }, confirmed: true }], ['POST', '/api/sub/delete', { q: { name: 's' }, confirmed: true }], ['GET', '/api/export', { text: true, confirmed: true }], ['POST', '/api/logs/clear', { form: { type: 'ops' } }]]) {
     st.calls.length = 0; await b.TP.helper(x[0], x[1], x[2]); await settle();
     assert.equal(b.dialogs().length, 0, x[1] + ': the caller already confirmed -> no second confirmation'); assert.deepEqual(lines(st), [x[0] + ' ' + x[1]]);
@@ -209,7 +210,7 @@ async function confirmTop(b, yes) { const d = b.dialogs().slice(-1)[0]; assert(d
   st = helper({ in: true }); b = await boot(st, { ls: ls6, ss: ss6 });
   let lo = b.TP.auth.logout('logout'); await settle(); await confirmTop(b, true); await lo;
   assert.deepEqual(st.calls.filter(c => c.path === '/api/logout').map(c => c.method), ['POST']);
-  assert.equal(b.TP.auth.state(), 'guest'); assert.equal(b.TP.getToken(), 'local-1', 'logout keeps the local token'); assert.equal(b.TP.S.locked, false, 'the dashboard stays open');
+  assert.equal(b.TP.auth.state(), 'guest'); assert.equal(b.TP.getToken(), 'local-tok-1', 'logout keeps the local token'); assert.equal(b.TP.S.locked, false, 'the dashboard stays open');
   assert.equal(b.dialogs().length, 0, 'no login page / dialog after logout'); assert.equal(b.toastsWith('auth.signedOut'), 1, 'a short note says the proxy settings are kept');
   st.in = true; clock.now += 6000; b.TP.emit('state', { ok: true, account: { email: 'demo@example.com' } }); await settle();
   assert.equal(b.TP.auth.state(), 'user');
@@ -217,7 +218,7 @@ async function confirmTop(b, yes) { const d = b.dialogs().slice(-1)[0]; assert(d
   assert.equal(b.TP.auth.state(), 'guest'); dl = b.dialogs();
   assert.equal(dl.length, 1, 'switch account = log out, then the sign-in dialog'); assert.equal(dl[0].querySelector('.login-msg').textContent, 'auth.switched');
   dl[0].querySelector('.dlg-x').click(); await settle();
-  assert.equal(st.calls.filter(c => c.path === '/api/logout').length, 2); assert.equal(b.TP.getToken(), 'local-1');
+  assert.equal(st.calls.filter(c => c.path === '/api/logout').length, 2); assert.equal(b.TP.getToken(), 'local-tok-1');
   /* 被其它设备下线: 下一次 /api/state 的 account.email 是空的 -> 读 auth/status 的 notice, 提示一次 */
   st.in = true; clock.now += 6000; b.TP.emit('state', { ok: true, account: { email: 'demo@example.com' } }); await settle();
   st.in = false; st.notice = 'KICKED-NOTICE'; clock.now += 6000;
