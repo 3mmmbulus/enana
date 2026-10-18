@@ -3,6 +3,7 @@
 #   · 每分钟 tick: 服务器端口 (真实的本机监听端口 / 关闭的端口) · 经代理的金丝雀分类 (ok / region-blocked / timeout …) · 状态变化 → 操作记录 + state 行 · 休眠间隔
 #   · 「操作记录」开关关闭时一并不记 · 心跳失败 / 恢复 / 被踢下线的操作记录
 #   · 自动线路 (AUTO / PINAUTO) 选中的节点探测不通 → 立刻请核心重测这个组 (限频 / 不触发的情形 / 只在真的换了节点时记录)
+#   · 2.3.27: 走 UDP 的节点不做 TCP 探测, 选中的那一个由核心测速 (H11) · 本机断网时不换节点, 只记一行断网 (H12) · 换了节点后断开坏节点上的连接 (H13) · 断网的判定 (H14)
 #   · 自动判定 (verdict): 每种原因都用合成数据验证 —— 系统代理没开 / 节点不可达 / 本机断网 / OpenAI 拒绝出口 IP / 被退出登录 / 代理核心没运行 / 数据不足
 # curl / scutil / route / launchctl / nc 全部用本文件里的函数替身 (函数优先于 PATH 里的命令), 不碰真实系统。
 set -u
@@ -33,10 +34,18 @@ nc()        { return 0; }
 auth_secret() { printf 'stub-secret'; }
 auth_logged_in() { [ "$STUB_LOGIN" = 1 ]; }
 curl() {
-  local url='' a v g
-  for a in "$@"; do case $a in http*) url=$a ;; esac; done
+  local url='' a v g m=GET prev=''
+  for a in "$@"; do case $prev in -X) m=$a ;; esac; case $a in http*) url=$a ;; esac; prev=$a; done
   case $url in
     */version) printf '200'; return 0 ;;
+    # 单个节点测速 (H11-H13: 走 UDP 的选中节点 / 换节点后单独测旧节点): 记下调用 (路径里的节点名保持 URL 编码的原样);
+    # $W/pd.<路径里的名字> 是 HTTP 状态码 (没有这个文件 = 200, 延迟 88; rcN = curl 自己失败, 退出码 N); 照 curl -w '\n%{http_code}' 的样子最后一行输出状态码
+    */proxies/*/delay*) g=${url#*/proxies/}; g=${g%%/delay*}; printf '%s %s\n' "$g" "$url" >> "$W/pdelay.calls"; v=$(cat "$W/pd.$g" 2>/dev/null || printf 200)
+      case $v in rc*) return "${v#rc}" ;; 200) printf '{"delay":88}\n200' ;; 503) printf '{"message":"An error occurred in the delay test"}\n503' ;; 504) printf '{"message":"Timeout"}\n504' ;; *) printf '{"message":"Resource not found"}\n%s' "$v" ;; esac
+      return 0 ;;
+    # 核心里的连接 (H13): GET /connections 返回 $W/conns.json; DELETE /connections/<id> 记下 「方法 id」; 有 $W/del.rc 时断开失败 (curl 退出码)
+    */connections) printf 'x\n' >> "$W/conns.calls"; cat "$W/conns.json" 2>/dev/null; return 0 ;;
+    */connections/*) printf '%s %s\n' "$m" "${url##*/}" >> "$W/closed"; [ ! -f "$W/del.rc" ] || return "$(cat "$W/del.rc")"; return 0 ;;
     */proxies/svc-chatgpt) printf '{"now":"PIN","type":"Selector"}'; return 0 ;;
     */proxies/PIN) printf '{"now":"Pin-A","type":"Selector"}'; return 0 ;;
     */proxies/Final) printf '{"now":"Global","type":"Selector"}'; return 0 ;;
@@ -436,7 +445,7 @@ unset ENANA_PROBE_IFINDEX
 
 
 echo "== H10. 自动线路: 选中的节点探测不通 → 立刻请核心重测这个组 (每组每分钟最多一次; 真的换了节点才记一笔); 探测正常时什么都不做"
-r10() { reset; rm -f "$W"/now.* "$W"/next.* "$W/delay.calls"; printf '{"Auto-Live":120}' > "$W/delay.body"; }
+r10() { reset; rm -f "$W"/now.* "$W"/next.* "$W/delay.calls" "$W"/pd.* "$W/pdelay.calls" "$W/conns.json" "$W/conns.calls" "$W/closed" "$W/del.rc"; printf '{"Auto-Live":120}' > "$W/delay.body"; }
 srvl() { printf '{"role":"%s","outbound":{"type":"%s","tag":"%s","server":"127.0.0.1","server_port":%s}}\n' "$1" "$2" "$3" "$4"; }    # <角色> <类型> <标签> <端口>
 setauto() { { srvl auto socks Auto-Dead "$CLOSED"; srvl auto socks Auto-Live "$OPEN"; } > "$H/servers.jsonl"; }       # 一台不通 (关着的端口) + 一台通的
 calls() { cat "$W/delay.calls" 2>/dev/null | grep -c .; }
@@ -475,7 +484,9 @@ eq "固定出口里自动选 (PINAUTO) 选中的 Pin-Dead 不通: 只重测 PINA
 has "…记一笔 group=PINAUTO" "item=auto_select from=Pin-Dead to=Pin-Live group=PINAUTO probe=refused" "$(ops)"
 r10; { srvl auto hysteria2 Auto-H2 "$CLOSED"; srvl auto socks Auto-Live "$OPEN"; } > "$H/servers.jsonl"; printf 'Auto-H2' > "$W/now.AUTO"
 health_tick
-eq "选中的是 hysteria2 (走 UDP, TCP 端口不通不说明它坏了): 不重测" "$(calls)" "0"
+eq "选中的是 hysteria2 (走 UDP, TCP 端口不通不说明它坏了), 核心经它测得通: 不重测" "$(calls)" "0"
+hasnt "…2.3.27 起根本不做 TCP 探测 (以前每分钟记一条假的 refused)" "	node	Auto-H2	refused	" "$(hf)"
+has "…这一行的结果来自核心 (probe=core, 毫秒 = 核心测得的延迟)" "	node	Auto-H2	ok	88	role=auto mode=system probe=core$" "$(hf)"
 r10; setauto; printf 'Auto-Dead' > "$W/now.AUTO"; PROXY_ENABLED=0
 health_tick
 eq "总开关关着 (流量都直连, 选哪个节点无所谓): 不重测" "$(calls)" "0"
@@ -494,6 +505,183 @@ eq "测试数据本身: 核心返回的 now 里 & 是转义写法" "$(curl -s "h
 health_tick
 has "标签带中文 / 空格 / &: 核心返回的 now 解码后和 servers.jsonl 里的标签对得上, 照样重测并记录" "item=auto_select from=\"东京 & 1\" to=Auto-Live group=AUTO probe=refused" "$(ops)"
 rm -f "$W"/now.* "$W"/next.* "$W/delay.calls" "$W/delay.body"
+
+
+echo "== H11. 走 UDP 的节点 (hysteria2 / tuic, 2.3.27): 不做 TCP 探测; 只有自动选线组选中的那一个请核心经它测速 (probe=core), 测速失败同样当场重测这个组"
+setudp() { { srvl auto hysteria2 Auto-H2 "$CLOSED"; srvl auto socks Auto-Live "$OPEN"; } > "$H/servers.jsonl"; printf 'Auto-H2' > "$W/now.AUTO"; }   # 选中的 hysteria2 + 一台通的 TCP 节点
+pcalls() { cat "$W/pdelay.calls" 2>/dev/null | grep -c .; }
+agec() { printf '%s\n' "$(( $(cat "$H/.health.core-$1") - $2 ))" > "$H/.health.core-$1"; }      # <组> <秒>: 上一次核心测速往前挪 (= 过了这么久)
+r10; { srvl auto hysteria2 Auto-H2 "$CLOSED"; srvl auto tuic Auto-T "$CLOSED"; srvl auto socks Auto-Live "$OPEN"; } > "$H/servers.jsonl"; printf 'Auto-Live' > "$W/now.AUTO"
+health_tick
+hasnt "没选中的 hysteria2: 不做 TCP 探测 (以前一天几十条假的 refused)" "	node	Auto-H2	" "$(hf)"
+hasnt "没选中的 tuic: 同样不探测" "	node	Auto-T	" "$(hf)"
+eq "…也不问核心 (只问选中的那一个); TCP 节点照常探测" "$(pcalls)/$(hf | grep -c '	node	Auto-Live	ok	')" "0/1"
+r10; setudp; health_tick
+eq "选中的 hysteria2: 请核心经它测一次速, 测速地址和组测速一样, 超时 5 秒" "$(cat "$W/pdelay.calls")" "Auto-H2 http://127.0.0.1:$UI_PORT/proxies/Auto-H2/delay?url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=5000"
+r10; setudp; printf 'Auto-Live' > "$W/next.AUTO"; printf 504 > "$W/pd.Auto-H2"
+health_tick
+has "核心测速超时 (504): node 行记 timeout, probe=core" "	node	Auto-H2	timeout	5000	role=auto mode=system probe=core$" "$(hf)"
+eq "…快速切换也覆盖走 UDP 的节点: 当场重测 AUTO (一次)" "$(cut -d' ' -f1 "$W/delay.calls" 2>/dev/null | paste -sd, -)" "AUTO"
+has "…换了节点才记一笔, 写明是核心测速超时 (probe=core-timeout)" "	auto	环境状态变化	item=auto_select from=Auto-H2 to=Auto-Live group=AUTO probe=core-timeout took_s=[0-9][0-9]*	ok$" "$(ops)"
+r10; setudp; printf 'Auto-Live' > "$W/next.AUTO"; printf 503 > "$W/pd.Auto-H2"
+health_tick
+has "核心测速出错 (503): 记 error" "	node	Auto-H2	error	0	role=auto mode=system probe=core$" "$(hf)"
+has "…同样重测并记录 (probe=core-error)" "item=auto_select from=Auto-H2 to=Auto-Live group=AUTO probe=core-error " "$(ops)"
+r10; setudp; health_tick; health_tick
+eq "同一个组每分钟最多问一次核心: 紧接着的第二次 tick 不再问, 也不记这一行" "$(pcalls)/$(hf | grep -c '	node	Auto-H2	')" "1/1"
+agec AUTO 60; health_tick
+eq "…一分钟后再问" "$(pcalls)/$(hf | grep -c '	node	Auto-H2	')" "2/2"
+r10; setudp; printf 404 > "$W/pd.Auto-H2"; health_tick
+eq "核心不认识这个节点 (404): 不记这一行 (不知道就不乱记), 也不重测" "$(pcalls)/$(hf | grep -c '	node	Auto-H2	')/$(calls)" "1/0/0"
+r10; setudp; printf rc28 > "$W/pd.Auto-H2"; health_tick
+eq "控制接口没响应 (curl 超时): 同样不记、不重测; TCP 节点照常记" "$(hf | grep -c '	node	Auto-H2	')/$(calls)/$(hf | grep -c '	node	Auto-Live	ok	')" "0/0/1"
+r10; { srvl pin tuic Pin-T "$CLOSED"; srvl pin socks Pin-Live "$OPEN"; } > "$H/servers.jsonl"; printf 'Pin-T' > "$W/now.PINAUTO"; printf 'Pin-Live' > "$W/next.PINAUTO"; printf 504 > "$W/pd.Pin-T"
+health_tick
+has "固定出口里自动选 (PINAUTO) 选中的 tuic 测速超时: 重测 PINAUTO 并记录" "item=auto_select from=Pin-T to=Pin-Live group=PINAUTO probe=core-timeout" "$(ops)"
+eq "…只问了选中的 tuic 一次" "$(cut -d' ' -f1 "$W/pdelay.calls" | paste -sd, -)" "Pin-T"
+r10; { srvl auto hysteria2 '大阪 & 2' "$CLOSED"; srvl auto socks Auto-Live "$OPEN"; } > "$H/servers.jsonl"
+printf '%s' "大阪 ${BS}u0026 2" > "$W/now.AUTO"; printf 'Auto-Live' > "$W/next.AUTO"; printf 504 > "$W/pd.%E5%A4%A7%E9%98%AA%20%26%202"
+printf '{"connections":[{"id":"cccccccc-0000-0000-0000-000000000001","chains":["大阪 %su0026 2","AUTO","Global","Final"]},{"id":"cccccccc-0000-0000-0000-000000000002","chains":["Auto-Live","AUTO","Global","Final"]}]}' "$BS" > "$W/conns.json"
+health_tick
+eq "标签带中文 / 空格 / &: 路径里的节点名按 UTF-8 逐字节 URL 编码" "$(cut -d' ' -f1 "$W/pdelay.calls")" "%E5%A4%A7%E9%98%AA%20%26%202"
+has "…node 行用原来的标签" "	node	大阪 & 2	timeout	5000	role=auto mode=system probe=core$" "$(hf)"
+has "…照样换节点; chains 里的 \\u0026 解码后对得上, 断开了经 AUTO 用着它的那条连接 (closed=1)" "item=auto_select from=\"大阪 & 2\" to=Auto-Live group=AUTO probe=core-timeout took_s=[0-9][0-9]* closed=1	ok$" "$(ops)"
+eq "…断开的正是那一条" "$(cat "$W/closed")" "DELETE cccccccc-0000-0000-0000-000000000001"
+
+
+echo "== H12. 本机断网 (2.3.27): 这一分钟探测的节点全部失败 (≥ 2 个) 或同一分钟里对照站点也失败 → 不换节点; 只记一行 state network outage, 不记各个节点的失败; 操作记录只在开始时记一条"
+r10; { srvl auto socks Auto-Dead "$CLOSED"; srvl auto socks Auto-Dead2 "$CLOSED"; } > "$H/servers.jsonl"; printf 'Auto-Dead' > "$W/now.AUTO"; printf 'Auto-Dead2' > "$W/next.AUTO"
+health_tick
+eq "探测的 2 个节点全部失败: 不换节点 (换哪个都一样; 10-15 那次本机断网时 AUTO 还是被换了)" "$(calls)/$(ops | grep -c item=auto_select)" "0/0"
+eq "…不记各个节点的失败, 只记一行 state network outage" "$(hf | grep -c '	node	')/$(hf | grep -c '	state	network	outage	')" "0/1"
+has "…这一行带探测数 / 失败数 / 同一分钟的对照站点 / 失败的节点" "	state	network	outage	0	probed=2 failed=2 cn_direct=ok mode=system nodes=Auto-Dead,Auto-Dead2$" "$(hf)"
+has "…操作记录一条「环境状态变化 item=network from=ok to=outage」" "	auto	环境状态变化	item=network from=ok to=outage probed=2 failed=2 cn_direct=ok	ok$" "$(ops)"
+health_tick
+eq "断网持续: 每分钟一行, 操作记录仍只有一条, 仍不换节点" "$(hf | grep -c '	state	network	outage	')/$(ops | grep -c item=network)/$(calls)" "2/1/0"
+{ srvl auto socks Auto-Dead "$OPEN"; srvl auto socks Auto-Dead2 "$OPEN"; } > "$H/servers.jsonl"; health_tick
+eq "网络恢复: 照常记 node 行, 没有新的断网行" "$(hf | grep -c '	node	Auto-Dead	ok	')/$(hf | grep -c '	state	network	')" "1/2"
+{ srvl auto socks Auto-Dead "$CLOSED"; srvl auto socks Auto-Dead2 "$CLOSED"; } > "$H/servers.jsonl"; health_tick
+eq "10 分钟内又断一次: 算同一次, 不再记操作记录 (时断时续的网络不会刷屏), 仍不换节点" "$(ops | grep -c item=network)/$(calls)" "1/0"
+printf '%s\n' "$(( $(now) - 601 ))" > "$H/.health.net"; health_tick
+eq "隔了 10 分钟以上再断: 新的一次, 再记一条" "$(ops | grep -c item=network)" "2"
+r10; srvl auto socks Auto-Dead "$CLOSED" > "$H/servers.jsonl"; printf 'Auto-Dead' > "$W/now.AUTO"; printf 'Auto-X' > "$W/next.AUTO"
+health_tick
+eq "只探测了 1 个节点 (失败): 不算断网 (至少 2 个才这样判断), 照常记它的失败、照常重测" "$(hf | grep -c '	state	network	')/$(hf | grep -c '	node	Auto-Dead	refused	')/$(calls)" "0/1/1"
+r10; setauto; printf 'Auto-Dead' > "$W/now.AUTO"; printf 'Auto-Live' > "$W/next.AUTO"; C_CN=rc28
+health_tick
+eq "同一分钟里对照站点 (cn_direct, 不经代理) 也失败: 不换节点" "$(calls)" "0"
+has "…一行 state network outage, 带对照站点的结果和失败的节点" "	state	network	outage	0	probed=2 failed=1 cn_direct=timeout mode=system nodes=Auto-Dead$" "$(hf)"
+has "…通的节点照常记" "	node	Auto-Live	ok	" "$(hf)"
+hasnt "…失败的那一个不单独记" "	node	Auto-Dead	" "$(hf)"
+health_tick
+eq "…下一分钟 (这一分钟不做对照) 选中的节点仍不通、另一台是通的: 照常重测" "$(calls)" "1"
+r10; { srvl auto socks Auto-Live "$OPEN"; srvl auto socks Auto-L2 "$OPEN"; } > "$H/servers.jsonl"; printf 'Auto-Live' > "$W/now.AUTO"; C_CN=rc28
+health_tick
+eq "对照站点失败但节点都通: 不算断网 (没有节点失败就没有可记的断网)" "$(hf | grep -c '	state	network	')/$(ops | grep -c item=network)/$(hf | grep -c '	node	Auto-')" "0/0/2"
+r10; { srvl auto hysteria2 Auto-H2 "$CLOSED"; srvl auto socks Auto-Dead "$CLOSED"; } > "$H/servers.jsonl"; printf 'Auto-H2' > "$W/now.AUTO"; printf 504 > "$W/pd.Auto-H2"
+health_tick
+has "核心测速超时 + 另一台 TCP 探测失败 (全部 2 个): 同样是断网" "	state	network	outage	0	probed=2 failed=2 cn_direct=ok mode=system nodes=Auto-Dead,Auto-H2$" "$(hf)"
+eq "…不重测" "$(calls)" "0"
+
+
+echo "== H13. 换了节点、而且旧节点自己的核心测速也失败了: 断开核心里还经这个组用着旧节点的连接 (核心自己不会断开: 坏节点上已建立的连接会一直挂着)"
+cat > "$W/conns.fixture" <<'J'
+{"downloadTotal":10,"uploadTotal":10,"connections":[
+ {"id":"aaaaaaaa-0000-0000-0000-000000000001","metadata":{"host":"a.example"},"chains":["Auto-Dead","AUTO","Global","Final"],"rule":"final"},
+ {"id":"aaaaaaaa-0000-0000-0000-000000000002","metadata":{"host":"b.example"},"chains":["Auto-Live","AUTO","Global","Final"],"rule":"final"},
+ {"id":"aaaaaaaa-0000-0000-0000-000000000003","metadata":{"host":"c.example"},"chains":["Auto-Dead","Global","Final"],"rule":"final"},
+ {"id":"aaaaaaaa-0000-0000-0000-000000000004","metadata":{"host":"d.example"},"chains":["Auto-Dead","AUTO","svc-chatgpt"],"rule":"rule_set=geosite-openai"},
+ {"id":"../version","chains":["Auto-Dead","AUTO"]},
+ {"id":"aaaaaaaa-0000-0000-0000-000000000006","chains":"Auto-Dead AUTO"}],"memory":1}
+J
+nclosed() { cat "$W/closed" 2>/dev/null | grep -c .; }
+nconns() { cat "$W/conns.calls" 2>/dev/null | grep -c .; }
+dead() { r10; setauto; printf 'Auto-Dead' > "$W/now.AUTO"; printf 'Auto-Live' > "$W/next.AUTO"; cp "$W/conns.fixture" "$W/conns.json"; }    # 选中的 Auto-Dead 不通, 核心会改选 Auto-Live
+dead; health_tick
+eq "组测速结果里没有旧节点 (它的测速失败了): 只断开经 AUTO 用着它的连接 —— 直接选了它的 Global、id 不合规的、格式不对的都不碰" "$(paste -sd, - < "$W/closed")" "DELETE aaaaaaaa-0000-0000-0000-000000000001,DELETE aaaaaaaa-0000-0000-0000-000000000004"
+has "…换节点的记录带 closed=2" "	auto	环境状态变化	item=auto_select from=Auto-Dead to=Auto-Live group=AUTO probe=refused took_s=[0-9][0-9]* closed=2	ok$" "$(ops)"
+eq "…组测速已经说明旧节点不通: 不再单独测它" "$(pcalls)" "0"
+dead; printf '{"Auto-Dead":300,"Auto-Live":120}' > "$W/delay.body"; health_tick
+eq "换了节点, 但组测速里旧节点自己是通的 (只是本机直连它的端口不通 / 别的更快): 不读也不断开连接" "$(nconns)/$(nclosed)/$(pcalls)" "0/0/0"
+has "…换节点照常记 (没有 closed)" "item=auto_select from=Auto-Dead to=Auto-Live group=AUTO probe=refused took_s=[0-9][0-9]*	ok$" "$(ops)"
+dead; printf '{}' > "$W/delay.body"; printf 504 > "$W/pd.Auto-Dead"; health_tick
+eq "组测速没给出结论 (核心正在自己测速) 但选择变了: 单独请核心测一次旧节点, 超时 → 断开" "$(cut -d' ' -f1 "$W/pdelay.calls")/$(nclosed)" "Auto-Dead/2"
+dead; printf '{}' > "$W/delay.body"; health_tick
+eq "…单独测旧节点是通的: 不断开" "$(pcalls)/$(nclosed)" "1/0"
+r10; setudp; printf 'Auto-Live' > "$W/next.AUTO"; printf 504 > "$W/pd.Auto-H2"; printf '{}' > "$W/delay.body"
+printf '{"connections":[{"id":"bbbbbbbb-0000-0000-0000-000000000001","chains":["Auto-H2","AUTO","Global","Final"]}]}' > "$W/conns.json"
+health_tick
+eq "走 UDP 的旧节点: 这一分钟核心已经测过它 (超时), 组测速没结论时不测第二次, 直接断开" "$(pcalls)/$(cat "$W/closed")" "1/DELETE bbbbbbbb-0000-0000-0000-000000000001"
+r10; { srvl pin socks Pin-Dead "$CLOSED"; srvl pin socks Pin-Live "$OPEN"; } > "$H/servers.jsonl"; printf 'Pin-Dead' > "$W/now.PINAUTO"; printf 'Pin-Live' > "$W/next.PINAUTO"
+printf '{"connections":[{"id":"dddddddd-0000-0000-0000-000000000001","chains":["Pin-Dead","PINAUTO","svc-chatgpt"]},{"id":"dddddddd-0000-0000-0000-000000000002","chains":["Pin-Dead","PIN","svc-claude"]}]}' > "$W/conns.json"
+health_tick
+eq "PINAUTO 换了节点: 只断开经 PINAUTO 的连接; 经 PIN (固定出口本身, 永远不动) 用着它的不碰" "$(cat "$W/closed")" "DELETE dddddddd-0000-0000-0000-000000000001"
+dead; rm -f "$W/next.AUTO"; printf '{"Auto-Dead":90,"Auto-Live":160}' > "$W/delay.body"; health_tick
+eq "核心仍然选它 (没换节点): 不碰任何连接" "$(nconns)/$(nclosed)" "0/0"
+dead; printf 7 > "$W/del.rc"; health_tick
+eq "断开时接口出错: 立刻停下 (不会对着没响应的接口一条条等超时), 记录里没有 closed" "$(nclosed)/$(ops | grep -c 'closed=')" "1/0"
+has "…换节点本身照常记" "item=auto_select from=Auto-Dead to=Auto-Live group=AUTO probe=refused" "$(ops)"
+dead; HEALTH_CLOSE_MAX=1; health_tick; HEALTH_CLOSE_MAX=200
+eq "一次最多断开 HEALTH_CLOSE_MAX 条 (这里设成 1)" "$(nclosed)/$(ops | grep -c 'closed=1	ok$')" "1/1"
+rm -f "$W"/now.* "$W"/next.* "$W/delay.calls" "$W/delay.body" "$W"/pd.* "$W/pdelay.calls" "$W/conns.json" "$W/conns.calls" "$W/closed" "$W/del.rc"
+
+
+echo "== H14. 自动判定 (2.3.27): 断网的分钟 (state network outage) → local-network-down, 不冤枉服务器 · state network 行不影响「自什么时候起」· TUN 下核心测速的行可信"
+python3 - "$SP" "$NOW" <<'PY'
+import sys, datetime as dt
+sp, now = sys.argv[1], int(sys.argv[2])
+def t(m): return dt.datetime.fromtimestamp(now - m * 60).strftime('%Y-%m-%d %H:%M:%S')
+def L(m, kind, target, result, ms, det=''): return f"{t(m)}\t{kind}\t{target}\t{result}\t{ms}\t{det}\n"
+def write(name, rows): open(f'{sp}/{name}', 'w').write(''.join(rows))
+def build(out, cn_down=True):      # out = 断网的分钟: 这些分钟只有一行 state network outage (2.3.27 起不再有各个节点的失败行)
+    rows = []
+    for m in range(60, 0, -1):
+        if m in out: rows.append(L(m, 'state', 'network', 'outage', 0, 'probed=2 failed=2 mode=system nodes=Tokyo-Fix,Auto-1'))
+        else: rows += [L(m, 'node', 'Tokyo-Fix', 'ok', 40, 'role=pin mode=system'), L(m, 'node', 'Auto-1', 'ok', 40, 'role=auto mode=system')]
+        if m % 5 == 0:
+            bad = m in out
+            rows += [L(m, 'canary', 'google_204', 'timeout' if bad else 'ok', 200), L(m, 'canary', 'cn_direct', 'timeout' if bad and cn_down else 'ok', 60)]
+    return rows
+write('O1', build(set(range(1, 21))))                    # 最近 20 分钟断网, 对照站点也不通
+write('O1b', build(set(range(1, 21)), cn_down=False))    # 同上, 但对照站点是通的 (服务器全部同时连不上)
+write('O2', build({7, 8}))                               # 30 分钟里只断了 2 分钟 (一闪而过)
+a = []                                                   # O3: 系统代理 120 分钟前被关 (同 H5 的 A), 最后两分钟又断网
+for m in range(180, 0, -1):
+    a.append(L(m, 'node', 'Tokyo-Fix', 'ok', 40, 'role=pin'))
+    if m % 5 == 0:
+        for n in ('google_204', 'chatgpt_web', 'openai_api', 'cn_direct'): a.append(L(m, 'canary', n, 'ok', 200))
+a += [L(180, 'state', 'capture', 'ok', 0, 'core=1 proxy=1 sysproxy=1'), L(120, 'state', 'capture', 'ok', 0, 'core=1 proxy=1 sysproxy=0'), L(3, 'state', 'capture', 'ok', 0, 'core=1 proxy=1 sysproxy=0')]
+write('O3a', a)
+write('O3', a + [L(2, 'state', 'network', 'outage', 0, 'probed=1 failed=1 cn_direct=timeout mode=system nodes=Tokyo-Fix'), L(1, 'state', 'network', 'outage', 0, 'probed=1 failed=1 mode=system nodes=Tokyo-Fix')])
+o4 = []                                                  # O4: TUN, 节点行是绑定网卡的 TCP 探测 (probe=bound) 和核心测速 (probe=core)
+for m in range(120, 0, -1):
+    o4 += [L(m, 'node', 'Tokyo-Pin', 'ok', 4, 'role=pin mode=tun probe=bound'), L(m, 'node', 'Auto-H2', 'ok', 120, 'role=auto mode=tun probe=core')]
+    if m % 5 == 0: o4 += [L(m, 'canary', 'google_204', 'ok', 200), L(m, 'canary', 'cn_direct', 'ok', 60)]
+write('O4', o4)
+PY
+ROLES14="Tokyo-Fix:pin,Auto-1:auto"
+V=$(V2 O1 /dev/null /dev/null "$SP/meta" "$SP/env.old" "$ROLES14")
+has "O1 最近 20 分钟只有断网行 (没有节点的失败行): cause=local-network-down" "^verdict.cause=local-network-down$" "$V"
+has "O1: blame=network" "^verdict.blame=network$" "$V"
+has "O1: 证据是断网的分钟数 / 最近 30 分钟里有数据的分钟数" "^verdict.evidence.1=network_outage_minutes_30m=20/30$" "$V"
+hasnt "O1: 不冤枉服务器 (没有 node-down)" "node-down" "$V"
+hasnt "O1: …也没有 node-unstable" "node-unstable" "$V"
+has "O1: 故障时段里有这 20 分钟的断网 (state/network, 仍在继续)" "^verdict.outage.*20min state/network outage ONGOING$" "$V"
+V=$(V2 O1b /dev/null /dev/null "$SP/meta" "$SP/env.old" "$ROLES14")
+has "O1b 对照站点是通的、但每分钟服务器全部连不上: 同样判 local-network-down" "^verdict.cause=local-network-down$" "$V"
+hasnt "O1b: 不报 proxy-path-failing (断网时端口本来就连不上, 不是「端口通、代理不通」)" "proxy-path-failing" "$V"
+V=$(V2 O2 /dev/null /dev/null "$SP/meta" "$SP/env.old" "$ROLES14")
+hasnt "O2 30 分钟里只断了 2 分钟: 不算本机网络故障" "local-network-down" "$V"
+has "O2: 结论是没发现明确故障" "^verdict.cause=no-issue-found$" "$V"
+V=$(perl "$LIB/health.pl" outages < "$SP/O1")
+has "outages: 断网时段单独一行 (state network, 20 分钟, 20 个样本)" "	20	state	network	outage	20$" "$V"
+V=$(perl "$LIB/health.pl" summary 10 < "$SP/O1")
+hasnt "summary: 断网行不是样本, 不进分桶统计" "	state	" "$V"
+eq "O3 最后两分钟断网 (state network 行) 不挡住「系统代理自什么时候起没开」" "$(V2 O3 /dev/null /dev/null "$SP/meta" "$SP/env.off" "Tokyo-Fix:pin" | grep '^verdict.since=')" "$(V2 O3a /dev/null /dev/null "$SP/meta" "$SP/env.off" "Tokyo-Fix:pin" | grep '^verdict.since=')"
+has "O3: …而且确实算出了时刻" "^verdict.since=" "$(V2 O3 /dev/null /dev/null "$SP/meta" "$SP/env.off" "Tokyo-Fix:pin")"
+V=$(V2 O4 /dev/null /dev/null "$SP/meta.tunok" "$SP/env.tunok" "Tokyo-Pin:pin,Auto-H2:auto")
+hasnt "O4 TUN 下核心测速的行 (probe=core) 不经过 TUN: 不算「TUN 下的旧探测不可信」" "node_probe_tun" "$V"
+has "O4: 核心测速的节点照常有可达率" "^verdict.node.Auto-H2=role=auto reachable=100.0%" "$V"
 
 P=$(grep -c . "$W/.pass"); F=$(grep -c . "$W/.fail")
 echo; echo "健康记录测试: $P 通过, $F 失败"

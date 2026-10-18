@@ -8,8 +8,10 @@
 #
 # 健康记录一行 (lib/health.sh 写入, 制表符分隔):  时间  种类  目标  结果  毫秒  说明(键=值)
 #   node    <服务器标签>  ok|timeout|refused|unreachable|dns|other   本机直接连服务器端口的 TCP 连接耗时 (每分钟)
+#           走 UDP 的协议 (2.3.27, 说明里 probe=core): 不做 TCP 探测, 只有自动选线组选中的那一个由核心经它测速, 结果 ok|timeout|error, 毫秒 = 核心测得的延迟
 #   canary  google_204|chatgpt_web|openai_api|cn_direct  ok|region-blocked|http-NNN|timeout|dns|refused|tls|reset|curl-N   经本机代理访问关键站点 (每 5 分钟); cn_direct 是不经代理的对照
 #   state   capture  ok  0  core=… proxy=… sysproxy=… …   接管相关状态 (变化时 + 每 10 分钟)
+#   state   network  outage  0  probed=N failed=M [cn_direct=…] mode=… nodes=…   本机断网的那一分钟 (2.3.27): 探测的节点全部失败 (≥ 2 个) 或对照站点也失败; 这一分钟各个节点的失败不再单独记
 #   tick    gap      gap  秒  …   两次定时任务之间隔了很久 (休眠 / 后台被暂停)
 use strict;
 use warnings;
@@ -119,6 +121,7 @@ sub load_health { # 标准输入 → [{e, ts, kind, target, result, ms, detail, 
 }
 sub load_health_file { my ($f) = @_; return [] unless defined $f && length $f && -r $f; local *STDIN; open STDIN, '<', $f or return []; return load_health(); }
 sub is_sample { my ($r) = @_; return $r->{kind} eq 'node' || $r->{kind} eq 'canary'; }
+sub is_net    { my ($r) = @_; return $r->{kind} eq 'state' && ($r->{target} // '') eq 'network'; }     # 断网的那一分钟 (2.3.27): 代替这一分钟各个节点的失败行
 sub errclass { my ($r) = @_; return $r->{ok} ? '' : $r->{result}; }
 
 sub cmd_summary {
@@ -139,12 +142,13 @@ sub cmd_summary {
   }
 }
 
-# 连续失败的时段: 每个 (种类, 目标) 单独算; 节点每分钟一次 (至少连续 2 次失败才算), 金丝雀每 5 分钟一次 (至少连续 2 次)
+# 连续失败的时段: 每个 (种类, 目标) 单独算; 节点每分钟一次 (至少连续 2 次失败才算), 金丝雀每 5 分钟一次 (至少连续 2 次);
+# 断网的分钟 (state network outage, 每分钟一行, 只在断网时写) 也算一个目标: 连续 2 分钟以上断网就是一个时段, 隔了 3 分钟以上没有断网行就算结束
 sub find_outages {
   my ($rows, $now) = @_; my %by; my @out;
-  for my $r (@$rows) { next unless is_sample($r); push @{ $by{ $r->{kind} . "\t" . $r->{target} } }, $r; }
+  for my $r (@$rows) { next unless is_sample($r) || is_net($r); push @{ $by{ $r->{kind} . "\t" . $r->{target} } }, $r; }
   for my $key (sort keys %by) {
-    my ($kind, $target) = split /\t/, $key; my $step = $kind eq 'node' ? 60 : 300; my $run;
+    my ($kind, $target) = split /\t/, $key; my $step = $kind eq 'canary' ? 300 : 60; my $run;
     my $flush = sub { my ($ongoing) = @_; return unless $run; if ($run->{n} >= 2) { my %c; $c{$_}++ for @{ $run->{res} }; my ($top) = sort { $c{$b} <=> $c{$a} || $a cmp $b } keys %c;
         push @out, { start => $run->{start}, end => $run->{last}, minutes => ($run->{last} - $run->{start} + $step) / 60, kind => $kind, target => $target, result => $top, n => $run->{n}, ongoing => $ongoing }; } $run = undef; };
     for my $r (@{ $by{$key} }) {
@@ -187,8 +191,8 @@ sub cmd_verdict {
   my $have_state = scalar(grep { $_->{kind} eq 'state' } @$H);
   my $have_samples = scalar(grep { is_sample($_) } @$H);
 
-  # ---- 状态开始的时间: 从健康记录里的 state 行往回找 (没有就从操作记录里找)
-  my $state_since = sub { my ($key, $want) = @_; my $since; for my $r (reverse grep { $_->{kind} eq 'state' } @$H) { my $d = detail_kv($r->{detail}); last unless defined $d->{$key}; if ($d->{$key} eq $want) { $since = $r->{ts}; } else { last; } } return $since; };
+  # ---- 状态开始的时间: 从健康记录里的 state capture 行往回找 (没有就从操作记录里找); state network 行 (断网) 没有这些键, 不能把它当成「状态行到头了」
+  my $state_since = sub { my ($key, $want) = @_; my $since; for my $r (reverse grep { $_->{kind} eq 'state' && !is_net($_) } @$H) { my $d = detail_kv($r->{detail}); last unless defined $d->{$key}; if ($d->{$key} eq $want) { $since = $r->{ts}; } else { last; } } return $since; };
 
   # ---- 操作记录里和「为什么代理没在工作」有关的事件
   my @events; for my $o (@$ops) { next if @$o < 5; my ($ts, $who, $act, $det, $res) = @$o; next if $ts eq 'ts';
@@ -281,9 +285,9 @@ sub cmd_verdict {
       "Connections through the " . ((($role{$w} // '') eq 'pin') ? 'Fixed exit' : 'line') . " \"$w\" fail to reach that server itself (connect timeout) " . pct($x->{to}, $x->{n}) . " of the time ($x->{to}/$x->{n})" . ($ongoing ? ", and it is still happening in the last 30 minutes" : "") . ": the server, or the path from this computer to it, is unreliable." . ((($role{$w} // '') eq 'pin') ? " The Fixed exit never drifts to another country, so this directly affects ChatGPT / Claude; for resilience add a second server in the same country as a Fixed exit so it picks between them." : "") . " (In TUN mode the health probes of earlier versions were answered locally by TUN, so they may show 100% reachable — trust the connect timeouts.)",
       map { $nct_ev{$_} } @nct);
   }
-  # TUN 模式下用旧版本记录的节点探测不可信 (见 tcp_probe_bound): 有这样的记录就在判定里说一声, 别让「100% 可达」误导
+  # TUN 模式下用旧版本记录的节点探测不可信 (见 tcp_probe_bound): 有这样的记录就在判定里说一声, 别让「100% 可达」误导。probe=core (核心经节点测速, 2.3.27) 不经过 TUN, 是可信的
   if ($cap eq 'tun') {
-    my $unbound = scalar grep { $_->{kind} eq 'node' && $_->{detail} =~ /mode=tun/ && $_->{detail} !~ /probe=bound/ } @$H;
+    my $unbound = scalar grep { $_->{kind} eq 'node' && $_->{detail} =~ /mode=tun/ && $_->{detail} !~ /probe=(?:bound|core)\b/ } @$H;
     push @L, "note.node_probe_tun=$unbound 条节点探测是在 TUN 模式下用旧方式做的 (被 TUN 在本机应答, 耗时只有几毫秒, 不能证明服务器可达); 以访问记录里的连接超时为准" if $unbound;
   }
   # TUN: 系统 DNS 指向局域网地址 (路由器) 时, 这类地址在 TUN 的 route_exclude_address 里, DNS 劫持看不到查询, 拿到被污染的结果; 表现为: 经代理端口访问正常, 走 TUN 的探测却失败
@@ -315,15 +319,24 @@ sub cmd_verdict {
   my @node_down_rel = grep { !$is_auto->($_) || $auto_majority_down } @node_down;
   my @node_degraded = grep { $is_auto->($_) && !$auto_majority_down } @node_down;
   my @node_flaky_rel = grep { !$is_auto->($_) } @node_flaky;
+  # 2.3.27 起断网的那一分钟只有一行 state network outage (这一分钟探测的节点全部失败, 或对照站点也失败), 不再有各个节点的失败行 (上面的 node_down 看不到它):
+  # 最近 30 分钟里有数据的分钟中, 至少 3 分钟、而且一半以上是断网 → 本机网络的问题
+  my %m30; my $net30 = 0;
+  for my $r (@$H) { next unless $r->{e} >= $recent_from && ($r->{kind} eq 'node' || is_net($r)); $m30{ $r->{e} } = 1; $net30++ if is_net($r) && !$r->{ok}; }
+  my $net_down = ($net30 >= 3 && $net30 / scalar(keys %m30) >= .5) ? 1 : 0;
   if (@node_down && $ctl_down) {
     $push->('local-network-down', 'network', 'medium', '', "最近 30 分钟本机网络本身不通 (连苹果的对照站点都访问失败, 同时所有服务器端口也不通), 先检查 Wi-Fi / 网线 / 路由器 —— 不是服务器或 enana 的问题。", "In the last 30 minutes the local network itself was down (even Apple's control site failed along with every server port). Check Wi-Fi / cable / router — not the server or enana.");
+  } elsif ($net_down) {
+    $push->('local-network-down', 'network', 'medium', '', "最近 30 分钟里有 $net30 分钟本机网络不通 (同一分钟里探测的服务器全部连不上, 或者连不经代理的苹果对照站点也失败; 这些分钟不算在各个服务器头上), 先检查 Wi-Fi / 网线 / 路由器 —— 不是某一台服务器或 enana 的问题。",
+      "In $net30 of the last 30 minutes the local network was down (every probed server failed in the same minute, or Apple's direct control site failed too; those minutes are not counted against the servers). Check Wi-Fi / cable / router — not a single server or enana.",
+      "network_outage_minutes_30m=$net30/" . scalar(keys %m30));
   } elsif (@node_down_rel) {
     my $d = join(', ', map { my $y = $n_rec{$_}; "$_ (" . pct($y->{ok}, $y->{n}) . ")" } @node_down_rel);
     $push->('node-down', 'node', ($ctl ? 'high' : 'medium'), '', "服务器端口当前不可达 (最近 30 分钟可达率): $d。" . ($ctl ? "本机网络正常 (对照站点可访问), 说明是这台服务器 / 机房线路的问题" : "(没有本机网络的对照数据, 无法排除是本机断网; 看 health 分区里 cn_direct 是否同时失败)") . " —— 不是 enana 代码。", "Server port(s) currently unreachable (reachability over the last 30 minutes): $d. " . ($ctl ? "The local network is fine (the control site works), so the server or its network is at fault" : "There is no local-network control data, so a local outage cannot be ruled out — check whether cn_direct fails at the same time in the health section") . " — not enana.", map { "node=$_ recent=$n_rec{$_}{ok}/$n_rec{$_}{n}" } @node_down_rel);
   }
   if (!@node_down_rel) {
     my $g = $c_rec{google_204};
-    if ($g && $g->{n} >= 2 && $g->{ok} / $g->{n} < .5 && !$ctl_down) {
+    if ($g && $g->{n} >= 2 && $g->{ok} / $g->{n} < .5 && !$ctl_down && !$net_down) {      # 断网时端口本来就连不上, 不是「端口通、代理不通」
       my $res = join(',', map { "$_×$g->{res}{$_}" } sort keys %{ $g->{res} });
       $push->('proxy-path-failing', 'node', 'medium', '', "服务器端口是通的, 但经过代理访问 Google 的探测连续失败 ($res): 服务器上的代理程序可能故障 / 配置被改 / 握手被干扰。到服务器上检查代理服务是否在运行。", "The server port is reachable but probes through the proxy keep failing ($res): the proxy program on the server may be down, reconfigured or interfered with. Check the service on the server.");
     }
